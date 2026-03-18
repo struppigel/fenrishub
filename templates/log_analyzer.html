@@ -18,6 +18,7 @@
             </div>
         </div>
         <div id="linesMode">
+            <div id="analysisSummary" class="analysis-summary"></div>
             <div id="logLines" class="log-lines-container"></div>
             <div class="panel-actions">
                 <button type="button" onclick="resetToInput()">edit log</button>
@@ -145,6 +146,9 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .log-line:hover {
@@ -173,6 +177,63 @@ body {
     gap: 8px;
 }
 
+.analysis-summary {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #b4b4b4;
+}
+
+.status-badge {
+    min-width: 20px;
+    text-align: center;
+    font-weight: 700;
+    border: 1px solid #2f2f2f;
+    background-color: #0f0f0f;
+    padding: 0 4px;
+    line-height: 1.2;
+}
+
+.status-b {
+    color: #ff0000;
+}
+
+.status-p {
+    color: #ff5f00;
+}
+
+.status-c {
+    color: #00ff00;
+}
+
+.status-w {
+    color: #ff8700;
+}
+
+.status-g {
+    color: #af00ff;
+}
+
+.status-s {
+    color: #00ffff;
+}
+
+.status-i {
+    color: #ffffd7;
+}
+
+.status-j {
+    color: #8a8a8a;
+}
+
+.status-unknown {
+    color: #ffffff;
+}
+
+.log-line.copied .status-badge,
+.log-line.copied .line-text {
+    color: #7a7a7a;
+}
+
 @media (max-width: 980px) {
     .analyzer-grid {
         grid-template-columns: 1fr;
@@ -186,21 +247,67 @@ body {
 </style>
 
 <script>
-let logLines = [];
+let analyzedLines = [];
 let copiedLineIndexes = new Set();
 
-function parseLogs() {
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) {
+        return parts.pop().split(';').shift();
+    }
+    return '';
+}
+
+async function parseLogs() {
     const logInput = document.getElementById('logInput').value;
-    logLines = logInput.split('\n').filter(line => line.trim() !== '');
-    copiedLineIndexes = new Set();
-    
-    if (logLines.length === 0) {
+    if (!logInput.trim()) {
         alert('No lines to parse');
         return;
     }
-    
+
+    const parseButton = document.querySelector('#inputMode button');
+    parseButton.disabled = true;
+    parseButton.textContent = 'analyzing...';
+
+    try {
+        const response = await fetch("{% url 'analyze_log_api' %}", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify({ log: logInput }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || 'Failed to analyze log.');
+        }
+
+        const payload = await response.json();
+        analyzedLines = payload.lines || [];
+        copiedLineIndexes = new Set();
+
+        if (analyzedLines.length === 0) {
+            alert('No non-empty lines were found.');
+            return;
+        }
+
+        const summary = payload.summary || {};
+        const summaryEl = document.getElementById('analysisSummary');
+        summaryEl.textContent = `lines: ${summary.total_lines || analyzedLines.length}, matched: ${summary.matched_lines || 0}, unknown: ${summary.unknown_lines || 0}`;
+
+    } catch (error) {
+        alert(error.message);
+        return;
+    } finally {
+        parseButton.disabled = false;
+        parseButton.textContent = 'parse lines';
+    }
+
     renderLogLines();
-    
+
     // Switch from input mode to lines mode
     document.getElementById('inputMode').style.display = 'none';
     const linesMode = document.getElementById('linesMode');
@@ -215,12 +322,30 @@ function resetToInput() {
 function renderLogLines() {
     const container = document.getElementById('logLines');
     container.innerHTML = '';
-    
-    logLines.forEach((line, index) => {
+
+    analyzedLines.forEach((entry, index) => {
+        const line = entry.line;
+        const cssClass = entry.css_class || 'status-unknown';
+        const status = entry.dominant_status || '?';
+
         const lineDiv = document.createElement('div');
-        lineDiv.className = copiedLineIndexes.has(index) ? 'log-line copied' : 'log-line';
-        lineDiv.textContent = line;
-        lineDiv.title = line;
+        lineDiv.className = copiedLineIndexes.has(index)
+            ? `log-line ${cssClass} copied`
+            : `log-line ${cssClass}`;
+
+        const badge = document.createElement('span');
+        badge.className = 'status-badge';
+        badge.textContent = status;
+
+        const text = document.createElement('span');
+        text.className = 'line-text';
+        text.textContent = line;
+
+        lineDiv.appendChild(badge);
+        lineDiv.appendChild(text);
+
+        const reasons = Array.isArray(entry.reasons) ? entry.reasons : [];
+        lineDiv.title = reasons.length > 0 ? `${line}\n\n${reasons.join('\n')}` : line;
         lineDiv.onclick = () => insertLine(line, index);
         container.appendChild(lineDiv);
     });

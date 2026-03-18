@@ -6,7 +6,7 @@ from django.http import Http404, HttpResponse
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
-from .models import AccessLog, Fixlist
+from .models import AccessLog, ClassificationRule, Fixlist
 from .views import dashboard_view, shared_fixlist_view, view_fixlist
 
 
@@ -253,3 +253,64 @@ class TemplateMarkupTests(TestCase):
 
         self.assertIn('class="action-btn" onclick="copyShareLink', content)
         self.assertIn('class="action-btn">edit</a>', content)
+
+
+class LogAnalyzerApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="analyzer", password="password123")
+
+    def test_analyze_api_requires_login(self):
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data='{"log":"line"}',
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+
+    def test_analyze_api_returns_known_and_unknown_statuses(self):
+        self.client.login(username="analyzer", password="password123")
+        ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="MALICIOUS-LINE",
+            description="known malware marker",
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data='{"log":"MALICIOUS-LINE\\nSOMETHING ELSE"}',
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["lines"]), 2)
+        self.assertEqual(payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+        self.assertEqual(payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_UNKNOWN)
+        self.assertEqual(payload["summary"]["unknown_lines"], 1)
+
+    def test_analyze_api_applies_status_precedence(self):
+        self.client.login(username="analyzer", password="password123")
+        ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_PUP,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="MULTI-MATCH",
+        )
+        ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="MULTI-MATCH",
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data='{"log":"MULTI-MATCH"}',
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["lines"][0]["status_codes"], "BP")
+        self.assertEqual(payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)

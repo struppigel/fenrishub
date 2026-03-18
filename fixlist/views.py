@@ -9,6 +9,7 @@ from django.db.models import F, Q
 from io import BytesIO
 import json
 
+from .analyzer import analyze_log_text
 from .models import Fixlist, AccessLog
 
 
@@ -176,3 +177,20 @@ def copy_to_clipboard_api(request, token):
 def log_analyzer_view(request):
     """Render log analyzer tool."""
     return render(request, 'log_analyzer.html')
+
+
+@login_required
+@require_http_methods(["POST"])
+def analyze_log_api(request):
+    """Analyze pasted FRST log content and return line-level classifications."""
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+
+    log_text = payload.get('log', '')
+    if not isinstance(log_text, str):
+        return JsonResponse({'error': 'Field "log" must be a string.'}, status=400)
+
+    analysis = analyze_log_text(log_text)
+    return JsonResponse(analysis)

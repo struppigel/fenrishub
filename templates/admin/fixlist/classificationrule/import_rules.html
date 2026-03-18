@@ -1,0 +1,106 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+    .import-rules-page .module.aligned .form-row {
+        display: grid;
+        grid-template-columns: 180px minmax(320px, 1fr);
+        align-items: start;
+        column-gap: 16px;
+        row-gap: 6px;
+        padding: 10px 12px;
+    }
+
+    .import-rules-page .module.aligned .form-row > label {
+        margin: 6px 0 0;
+        width: auto;
+        float: none;
+        padding: 0;
+        font-weight: 600;
+    }
+
+    .import-rules-page .module.aligned .form-row > input,
+    .import-rules-page .module.aligned .form-row > select,
+    .import-rules-page .module.aligned .form-row > textarea,
+    .import-rules-page .module.aligned .form-row > div {
+        width: 100%;
+        max-width: 960px;
+        box-sizing: border-box;
+        float: none;
+        margin: 0;
+    }
+
+    .import-rules-page .module.aligned .form-row .help,
+    .import-rules-page .module.aligned .form-row .errorlist {
+        grid-column: 2;
+        margin: 0;
+    }
+
+    .import-rules-page .submit-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        justify-content: flex-start;
+    }
+
+    .import-rules-page .submit-row input,
+    .import-rules-page .submit-row .button {
+        min-width: 140px;
+        height: 34px;
+        padding: 0 14px;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        font-weight: 600;
+    }
+
+    .import-rules-page .submit-row .cancel-link {
+        margin: 0;
+    }
+
+    @media (max-width: 900px) {
+        .import-rules-page .module.aligned .form-row {
+            grid-template-columns: 1fr;
+        }
+
+        .import-rules-page .module.aligned .form-row .help,
+        .import-rules-page .module.aligned .form-row .errorlist {
+            grid-column: 1;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main" class="import-rules-page">
+    <h1>Import Classification Rules</h1>
+    <p>
+        Upload or paste Fenris-format rules and map them to a selected status.
+        This importer supports EXACT, SUBSTRING, REGEX, FILEPATH, and parsed FRST lines.
+    </p>
+
+    <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        <fieldset class="module aligned">
+            {% for field in form %}
+            <div class="form-row">
+                {{ field.errors }}
+                {{ field.label_tag }}
+                {{ field }}
+                {% if field.help_text %}
+                <div class="help">{{ field.help_text }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </fieldset>
+        <div class="submit-row">
+            <input type="submit" value="Import rules" class="default">
+            <a href="{% url 'admin:fixlist_classificationrule_changelist' %}" class="button cancel-link">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -45,3 +45,69 @@ class AccessLog(models.Model):
 
     def __str__(self):
         return f"Access to {self.fixlist.title} at {self.accessed_at}"
+
+
+class ClassificationRule(models.Model):
+    STATUS_MALWARE = 'B'
+    STATUS_PUP = 'P'
+    STATUS_CLEAN = 'C'
+    STATUS_WARNING = '!'
+    STATUS_GRAYWARE = 'G'
+    STATUS_SECURITY = 'S'
+    STATUS_INFO = 'I'
+    STATUS_JUNK = 'J'
+    STATUS_UNKNOWN = '?'
+
+    STATUS_CHOICES = [
+        (STATUS_MALWARE, 'Userdefined malware'),
+        (STATUS_PUP, 'Userdefined potentially unwanted'),
+        (STATUS_CLEAN, 'Userdefined clean entries'),
+        (STATUS_WARNING, 'Userdefined warning'),
+        (STATUS_GRAYWARE, 'Userdefined grayware'),
+        (STATUS_SECURITY, 'Userdefined security software'),
+        (STATUS_INFO, 'Userdefined informational'),
+        (STATUS_JUNK, 'Userdefined junk'),
+        (STATUS_UNKNOWN, 'Unknown'),
+    ]
+
+    MATCH_EXACT = 'exact'
+    MATCH_SUBSTRING = 'substring'
+    MATCH_REGEX = 'regex'
+    MATCH_FILEPATH = 'filepath'
+    MATCH_PARSED_ENTRY = 'parsed'
+
+    MATCH_TYPE_CHOICES = [
+        (MATCH_EXACT, 'Exact line'),
+        (MATCH_SUBSTRING, 'Substring'),
+        (MATCH_REGEX, 'Regex'),
+        (MATCH_FILEPATH, 'File path'),
+        (MATCH_PARSED_ENTRY, 'Parsed FRST entry'),
+    ]
+
+    status = models.CharField(max_length=1, choices=STATUS_CHOICES)
+    match_type = models.CharField(max_length=16, choices=MATCH_TYPE_CHOICES)
+    source_text = models.TextField(help_text='Rule input without description metadata.')
+    description = models.TextField(blank=True)
+    source_name = models.CharField(max_length=128, blank=True)
+    is_enabled = models.BooleanField(default=True)
+
+    # Optional parsed metadata, populated for parsed/filepath rules.
+    entry_type = models.CharField(max_length=64, blank=True)
+    clsid = models.CharField(max_length=128, blank=True)
+    name = models.CharField(max_length=512, blank=True)
+    filepath = models.TextField(blank=True)
+    normalized_filepath = models.TextField(blank=True)
+    filename = models.CharField(max_length=260, blank=True)
+    company = models.CharField(max_length=512, blank=True)
+    arguments = models.TextField(blank=True)
+    file_not_signed = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['status', 'match_type', 'source_text']
+        unique_together = ('status', 'match_type', 'source_text')
+
+    def __str__(self):
+        return f"{self.status} [{self.match_type}] {self.source_text[:80]}"

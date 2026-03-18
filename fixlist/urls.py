@@ -6,6 +6,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard_view, name='dashboard'),
     path('fixlists/create/', views.create_fixlist_view, name='create_fixlist'),
     path('fixlists/analyze/', views.log_analyzer_view, name='log_analyzer'),
+    path('api/analyze-log/', views.analyze_log_api, name='analyze_log_api'),
     path('fixlist/<int:pk>/', views.view_fixlist, name='view_fixlist'),
     path('share/<str:token>/', views.shared_fixlist_view, name='shared_fixlist'),
     path('download/<str:token>/', views.download_fixlist, name='download_fixlist'),
