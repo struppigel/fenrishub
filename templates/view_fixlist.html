@@ -1,0 +1,65 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ fixlist.title }} - FenrisHub{% endblock %}
+
+{% block content %}
+<div>
+    <h2>edit / {{ fixlist.title }}</h2>
+
+    <div class="info-box">
+        token {{ fixlist.share_token }}<br>
+        created {{ fixlist.created_at|date:"Y-m-d H:i" }}<br>
+        updated {{ fixlist.updated_at|date:"Y-m-d H:i" }}
+    </div>
+
+    <div class="success-box">
+        share link<br>
+        <code>{{ share_url }}</code><br>
+        <button type="button" onclick="copyShareLink('{{ share_url }}', this)" style="margin-top: 8px;">copy link</button>
+        <a href="{{ guest_preview_url }}" target="_blank" rel="noopener" style="margin-left: 8px;">
+            <button type="button" style="margin-top: 8px;">preview guest view</button>
+        </a>
+    </div>
+
+    <h3>content</h3>
+
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="update">
+
+        <div class="form-group">
+            <label for="title">title</label>
+            <input type="text" id="title" name="title" value="{{ fixlist.title }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="content">content</label>
+            <textarea id="content" name="content" required>{{ fixlist.content }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="internal_note">internal note</label>
+            <textarea id="internal_note" name="internal_note" class="internal-note" rows="3">{{ fixlist.internal_note }}</textarea>
+        </div>
+
+        <div class="button-group">
+            <button type="submit" name="action" value="update">save</button>
+            <button type="submit" name="action" value="delete" onclick="return confirm('Delete this fixlist?');" style="background-color: #1a1010; color: #d28e8e; border-color: #5a2a2a;">delete</button>
+        </div>
+    </form>
+
+    <div class="divider"></div>
+</div>
+
+<script>
+function copyShareLink(text, button) {
+    const originalText = button.textContent;
+    navigator.clipboard.writeText(text).then(function() {
+        button.textContent = 'copied';
+        setTimeout(() => {
+            button.textContent = originalText;
+        }, 1200);
+    });
+}
+</script>
+{% endblock %}

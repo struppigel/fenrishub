@@ -1,0 +1,263 @@
+{% extends 'base.html' %}
+
+{% block title %}Log Analyzer - FenrisHub{% endblock %}
+
+{% block content %}
+<div class="analyzer-header">
+    <h2>log analyzer / {{ user.username }}</h2>
+</div>
+
+<div class="analyzer-grid">
+    <!-- Left side: Log input and parsed lines -->
+    <div class="analyzer-section">
+        <h3>paste log</h3>
+        <div id="inputMode">
+            <textarea id="logInput" placeholder="Paste your log content here..."></textarea>
+            <div class="panel-actions">
+                <button type="button" onclick="parseLogs()">parse lines</button>
+            </div>
+        </div>
+        <div id="linesMode">
+            <div id="logLines" class="log-lines-container"></div>
+            <div class="panel-actions">
+                <button type="button" onclick="resetToInput()">edit log</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right side: Selected lines (editable) -->
+    <div class="analyzer-section">
+        <h3>selected for fixlist</h3>
+        <textarea id="selectedLines" placeholder="Click lines on the left to add them here, or type directly..."></textarea>
+        <div class="panel-actions button-group">
+            <button type="button" onclick="goToCreateFixlist()">save as fixlist</button>
+            <a href="{% url 'dashboard' %}"><button type="button">back to list</button></a>
+        </div>
+    </div>
+</div>
+
+<style>
+body {
+    overflow-x: hidden;
+}
+
+.container {
+    max-width: 100%;
+}
+
+.content {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+}
+
+.analyzer-header {
+    margin: 0 0 12px;
+}
+
+.analyzer-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 100%;
+    height: calc(100vh - 180px);
+    min-height: 0;
+    overflow: hidden;
+    background-color: #131313;
+    border: 1px solid #2a2a2a;
+    padding: 12px;
+}
+
+.analyzer-section {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.analyzer-section h3 {
+    margin-bottom: 10px;
+}
+
+#inputMode,
+#linesMode {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#linesMode {
+    display: none;
+}
+
+#logInput {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.35;
+    padding: 10px;
+    border: 1px solid #9fcf82;
+    background-color: #131313;
+    color: #9fcf82;
+    overflow: auto;
+    resize: none;
+}
+
+#selectedLines {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.35;
+    padding: 10px;
+    border: 1px solid #9fcf82;
+    background-color: #131313;
+    color: #9fcf82;
+    overflow: auto;
+    resize: none;
+}
+
+.log-lines-container {
+    border: 1px solid #9fcf82;
+    background-color: #131313;
+    overflow-y: auto;
+    overflow-x: auto;
+    padding: 0;
+    flex: 1;
+    min-height: 0;
+}
+
+.log-line {
+    padding: 2px 8px;
+    border-bottom: 1px solid #2a2a2a;
+    cursor: pointer;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.35;
+    color: #9fcf82;
+    white-space: pre;
+    word-break: normal;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+}
+
+.log-line:hover {
+    background-color: #1a1a1a;
+}
+
+.log-line.copied {
+    color: #7a7a7a;
+    background-color: #171717;
+    border-left: 2px solid #3a3a3a;
+}
+
+.log-line.copied:hover {
+    background-color: #1c1c1c;
+}
+
+.log-line:last-child {
+    border-bottom: none;
+}
+
+.panel-actions {
+    margin-top: 10px;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+@media (max-width: 980px) {
+    .analyzer-grid {
+        grid-template-columns: 1fr;
+        min-height: auto;
+    }
+
+    .analyzer-section {
+        min-height: 40vh;
+    }
+}
+</style>
+
+<script>
+let logLines = [];
+let copiedLineIndexes = new Set();
+
+function parseLogs() {
+    const logInput = document.getElementById('logInput').value;
+    logLines = logInput.split('\n').filter(line => line.trim() !== '');
+    copiedLineIndexes = new Set();
+    
+    if (logLines.length === 0) {
+        alert('No lines to parse');
+        return;
+    }
+    
+    renderLogLines();
+    
+    // Switch from input mode to lines mode
+    document.getElementById('inputMode').style.display = 'none';
+    const linesMode = document.getElementById('linesMode');
+    linesMode.style.display = 'flex';
+}
+
+function resetToInput() {
+    document.getElementById('linesMode').style.display = 'none';
+    document.getElementById('inputMode').style.display = 'flex';
+}
+
+function renderLogLines() {
+    const container = document.getElementById('logLines');
+    container.innerHTML = '';
+    
+    logLines.forEach((line, index) => {
+        const lineDiv = document.createElement('div');
+        lineDiv.className = copiedLineIndexes.has(index) ? 'log-line copied' : 'log-line';
+        lineDiv.textContent = line;
+        lineDiv.title = line;
+        lineDiv.onclick = () => insertLine(line, index);
+        container.appendChild(lineDiv);
+    });
+}
+
+function insertLine(line, index) {
+    if (copiedLineIndexes.has(index)) {
+        return;
+    }
+
+    const textarea = document.getElementById('selectedLines');
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = textarea.value;
+    
+    // Insert line at cursor position
+    const newText = text.substring(0, start) + line + '\n' + text.substring(end);
+    textarea.value = newText;
+    
+    // Move cursor after the inserted line
+    textarea.selectionStart = textarea.selectionEnd = start + line.length + 1;
+    textarea.focus();
+
+    copiedLineIndexes.add(index);
+    renderLogLines();
+}
+
+function goToCreateFixlist() {
+    const selected = document.getElementById('selectedLines').value;
+    if (!selected.trim()) {
+        alert('Add at least one line before saving.');
+        return;
+    }
+
+    sessionStorage.setItem('fenrishub_prefill_content', selected);
+    window.location.href = "{% url 'create_fixlist' %}";
+}
+
+</script>
+{% endblock %}

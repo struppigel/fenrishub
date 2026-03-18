@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+
+{% block title %}Dashboard - FenrisHub{% endblock %}
+
+{% block extra_css %}
+<style>
+    .fixlist-actions .action-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 32px;
+        padding: 0 10px;
+        background-color: #101010;
+        color: #9fcf82;
+        border: 1px solid #2f2f2f;
+        font-size: 12px;
+        font-family: inherit;
+        line-height: 1;
+        text-decoration: none;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+
+    .fixlist-actions .action-btn:hover {
+        text-decoration: underline;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div>
+    <h2>fixlists / {{ user.username }}</h2>
+
+    <div class="button-group">
+        <a href="{% url 'create_fixlist' %}"><button type="button">create new</button></a>
+    </div>
+
+    <div class="divider"></div>
+
+    <h3>your fixlists</h3>
+
+    {% if fixlists %}
+        {% for fixlist in fixlists %}
+        <div class="fixlist-item">
+            <div style="flex: 1;">
+                <div class="fixlist-title">{{ fixlist.title }}</div>
+                <div class="fixlist-meta">
+                    created {{ fixlist.created_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }}
+                </div>
+            </div>
+            <div class="fixlist-actions">
+                <button type="button" class="action-btn" onclick="copyShareLink('{% url 'shared_fixlist' fixlist.share_token %}', this)">copy link</button>
+                <a href="{% url 'view_fixlist' fixlist.pk %}" class="action-btn">edit</a>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="info-box">
+            no fixlists yet.
+        </div>
+    {% endif %}
+</div>
+
+<script>
+function copyShareLink(path, button) {
+    const fullLink = `${window.location.origin}${path}`;
+    const originalText = button.textContent;
+    navigator.clipboard.writeText(fullLink).then(function() {
+        button.textContent = 'copied';
+        setTimeout(() => {
+            button.textContent = originalText;
+        }, 1200);
+    });
+}
+</script>
+{% endblock %}

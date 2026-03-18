@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+
+{% block title %}Create Fixlist - FenrisHub{% endblock %}
+
+{% block content %}
+<div>
+    <h2>create fixlist / {{ user.username }}</h2>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="title">title</label>
+            <input type="text" id="title" name="title" placeholder="Enter fixlist title..." required>
+        </div>
+
+        <div class="form-group">
+            <label for="content">content</label>
+            <textarea id="content" name="content" placeholder="Paste or type your fixlist content here..." required></textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="internal_note">internal note</label>
+            <textarea id="internal_note" name="internal_note" class="internal-note" rows="3" placeholder="Only visible to logged in users."></textarea>
+        </div>
+
+        <div class="button-group">
+            <button type="submit">create</button>
+            <a href="{% url 'dashboard' %}"><button type="button">back to list</button></a>
+        </div>
+    </form>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const prefillContent = sessionStorage.getItem('fenrishub_prefill_content');
+    const contentField = document.getElementById('content');
+
+    if (prefillContent && contentField && !contentField.value.trim()) {
+        contentField.value = prefillContent;
+    }
+
+    sessionStorage.removeItem('fenrishub_prefill_content');
+});
+</script>
+{% endblock %}
