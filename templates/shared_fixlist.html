@@ -15,7 +15,7 @@
     .warning-modal-backdrop {
         position: fixed;
         inset: 0;
-        background-color: rgba(0, 0, 0, 0.84);
+        background-color: var(--la-overlay);
         display: none;
         align-items: center;
         justify-content: center;
@@ -30,16 +30,16 @@
     .warning-modal {
         width: 100%;
         max-width: 560px;
-        background-color: #131313;
-        border: 1px solid #5a4428;
+        background-color: var(--la-bg-4);
+        border: 1px solid var(--la-warning-border);
         padding: 0;
     }
 
     .warning-modal .alert-strip {
         padding: 10px 14px;
-        background-color: #261a10;
-        border-bottom: 1px solid #8b6238;
-        color: #ffd7a5;
+        background-color: var(--la-warning-bg);
+        border-bottom: 1px solid var(--la-warning-border);
+        color: var(--la-warning-text);
         font-size: 11px;
         font-weight: 700;
         letter-spacing: 0.5px;
@@ -56,14 +56,14 @@
 
     .warning-modal .alert-body {
         margin-bottom: 8px;
-        color: #d2bea2;
+        color: var(--la-warning-text);
         font-size: 13px;
         line-height: 1.5;
     }
 
     .warning-modal .consent-note {
         margin-bottom: 0;
-        color: #6f6f6f;
+        color: var(--la-text-muted);
         font-size: 11px;
     }
 

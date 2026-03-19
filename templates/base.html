@@ -1,9 +1,11 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}FenrisHub{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'css/theme.css' %}">
     <style>
         * {
             margin: 0;
@@ -12,8 +14,8 @@
         }
 
         body {
-            background-color: #0f0f0f;
-            color: #d8d8d8;
+            background-color: var(--la-bg-0);
+            color: var(--la-text-main);
             font-family: Consolas, 'Liberation Mono', Menlo, monospace;
             line-height: 1.5;
             min-height: 100vh;
@@ -26,8 +28,8 @@
         }
 
         .header {
-            background-color: #131313;
-            border: 1px solid #2a2a2a;
+            background-color: var(--la-bg-4);
+            border: 1px solid var(--la-border-muted);
             padding: 10px 14px;
             margin-bottom: 2px;
         }
@@ -45,7 +47,7 @@
 
         .header h1 {
             font-size: 20px;
-            color: #9fcf82;
+            color: var(--la-text-primary);
             margin-bottom: 0;
             font-weight: 600;
         }
@@ -53,8 +55,8 @@
         .page-context {
             flex-shrink: 0;
             padding: 4px 0 2px 14px;
-            border-left: 1px solid #2a2a2a;
-            color: #b4b4b4;
+            border-left: 1px solid var(--la-border-muted);
+            color: var(--la-text-neutral);
             font-size: 12px;
             line-height: 1.2;
             letter-spacing: 0.04em;
@@ -68,16 +70,16 @@
             gap: 8px;
             margin-top: 8px;
             padding-top: 8px;
-            border-top: 1px solid #2a2a2a;
+            border-top: 1px solid var(--la-border-muted);
         }
 
         .nav a {
-            color: #9fcf82;
+            color: var(--la-text-primary);
             text-decoration: none;
             font-size: 12px;
             padding: 6px 10px;
-            border: 1px solid #2f2f2f;
-            background-color: #111111;
+            border: 1px solid var(--la-border);
+            background-color: var(--la-bg-2);
         }
 
         .nav a:hover {
@@ -85,44 +87,44 @@
         }
 
         .content {
-            background-color: #131313;
-            border: 1px solid #2a2a2a;
+            background-color: var(--la-bg-4);
+            border: 1px solid var(--la-border-muted);
             padding: 14px;
         }
 
         .info-box {
             padding: 10px;
             margin-bottom: 12px;
-            background-color: #111111;
-            border: 1px solid #2f2f2f;
+            background-color: var(--la-bg-2);
+            border: 1px solid var(--la-border);
             font-size: 12px;
-            color: #b9b9b9;
+            color: var(--la-info-box-text);
         }
 
         .warning-box {
             padding: 10px;
             margin-bottom: 12px;
-            background-color: #1a1510;
-            border: 1px solid #5a4428;
-            color: #d4b17f;
+            background-color: var(--la-warning-bg);
+            border: 1px solid var(--la-warning-border);
+            color: var(--la-warning-text);
             font-size: 12px;
         }
 
         .error-box {
             padding: 10px;
             margin-bottom: 12px;
-            background-color: #1a1010;
-            border: 1px solid #5a2a2a;
-            color: #d28e8e;
+            background-color: var(--la-error-bg);
+            border: 1px solid var(--la-error-border);
+            color: var(--la-error-text);
             font-size: 12px;
         }
 
         .success-box {
             padding: 10px;
             margin-bottom: 12px;
-            background-color: #101810;
-            border: 1px solid #2b5a2b;
-            color: #8fbf8f;
+            background-color: var(--la-success-bg);
+            border: 1px solid var(--la-success-border);
+            color: var(--la-success-text);
             font-size: 12px;
         }
 
@@ -134,7 +136,7 @@
             display: block;
             margin-bottom: 4px;
             font-size: 12px;
-            color: #b0b0b0;
+            color: var(--la-text-neutral);
         }
 
         input[type="text"],
@@ -143,9 +145,9 @@
         textarea {
             width: 100%;
             padding: 8px;
-            background-color: #101010;
-            color: #d8d8d8;
-            border: 1px solid #2f2f2f;
+            background-color: var(--la-bg-1);
+            color: var(--la-text-main);
+            border: 1px solid var(--la-border);
             font-family: inherit;
             font-size: 12px;
         }
@@ -155,7 +157,7 @@
         input[type="email"]:focus,
         textarea:focus {
             outline: none;
-            border-color: #9fcf82;
+            border-color: var(--la-focus);
         }
 
         textarea {
@@ -169,9 +171,9 @@
 
         button {
             padding: 8px 12px;
-            background-color: #101010;
-            color: #9fcf82;
-            border: 1px solid #2f2f2f;
+            background-color: var(--la-bg-1);
+            color: var(--la-text-primary);
+            border: 1px solid var(--la-border);
             font-size: 12px;
             cursor: pointer;
             font-family: inherit;
@@ -195,25 +197,25 @@
         .fixlist-item {
             padding: 10px;
             margin-bottom: 8px;
-            background-color: #101010;
-            border: 1px solid #2f2f2f;
+            background-color: var(--la-bg-1);
+            border: 1px solid var(--la-border);
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
         .fixlist-item:hover {
-            border-color: #3b3b3b;
+            border-color: var(--la-border-strong);
         }
 
         .fixlist-title {
             font-size: 13px;
-            color: #d8d8d8;
+            color: var(--la-text-main);
         }
 
         .fixlist-meta {
             font-size: 12px;
-            color: #8c8c8c;
+            color: var(--la-text-muted);
             margin-top: 4px;
         }
 
@@ -233,9 +235,9 @@
             display: none;
             margin-top: 8px;
             padding: 8px;
-            background-color: #101810;
-            border: 1px solid #2b5a2b;
-            color: #8fbf8f;
+            background-color: var(--la-success-bg);
+            border: 1px solid var(--la-success-border);
+            color: var(--la-success-text);
             font-size: 12px;
         }
 
@@ -244,38 +246,38 @@
         }
 
         .divider {
-            border-top: 1px solid #2a2a2a;
+            border-top: 1px solid var(--la-border-muted);
             margin: 12px 0;
         }
 
         .code-block {
-            background-color: #101010;
-            border: 1px solid #2f2f2f;
+            background-color: var(--la-bg-1);
+            border: 1px solid var(--la-border);
             padding: 10px;
             margin: 8px 0;
             overflow-x: auto;
             font-size: 12px;
             white-space: pre-wrap;
             word-wrap: break-word;
-            color: #c4dcb7;
+            color: var(--la-text-primary);
         }
 
         h2 {
             font-size: 16px;
-            color: #d8d8d8;
+            color: var(--la-text-main);
             margin-bottom: 10px;
             font-weight: 600;
         }
 
         h3 {
             font-size: 13px;
-            color: #c9c9c9;
+            color: var(--la-text-main);
             margin-bottom: 8px;
             font-weight: 600;
         }
 
         a {
-            color: #9fcf82;
+            color: var(--la-text-primary);
             text-decoration: none;
         }
 
@@ -284,7 +286,7 @@
         }
 
         .muted {
-            color: #8c8c8c;
+            color: var(--la-text-muted);
             font-size: 12px;
         }
 
@@ -316,7 +318,7 @@
                 width: 100%;
                 padding: 10px 0 0;
                 border-left: none;
-                border-top: 1px solid #2a2a2a;
+                border-top: 1px solid var(--la-border-muted);
                 text-align: left;
                 white-space: normal;
             }
@@ -358,5 +360,6 @@
             {% block content %}{% endblock %}
         </div>
     </div>
+    {% block extra_js %}{% endblock %}
 </body>
 </html>

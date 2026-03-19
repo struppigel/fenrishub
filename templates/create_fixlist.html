@@ -10,10 +10,6 @@
 <div>
     <form method="post" id="createFixlistForm">
         {% csrf_token %}
-        <input type="hidden" id="persistRulesInput" name="persist_rules" value="0">
-        <input type="hidden" id="pendingRuleChangesInput" name="pending_rule_changes_json" value="[]">
-        <input type="hidden" id="selectedRuleIdsInput" name="selected_rule_change_ids_json" value="[]">
-        <input type="hidden" id="conflictResolutionsInput" name="conflict_resolutions_json" value="[]">
 
         <div class="form-group">
             <label for="title">title</label>
@@ -32,75 +28,31 @@
 
         <div class="button-group">
             <button type="submit">create</button>
-            <a href="{% url 'dashboard' %}"><button type="button">back to list</button></a>
         </div>
     </form>
 </div>
 
 <style>
+#createFixlistForm #content {
+    min-height: 560px;
+}
 </style>
 
 <script>
 const PREFILL_CONTENT_KEY = 'fenrishub_prefill_content';
-const PENDING_STATUS_STORAGE_KEY = 'fenrishub_pending_status_changes';
-
-function getCookie(name) {
-    const value = `; ${document.cookie}`;
-    const parts = value.split(`; ${name}=`);
-    if (parts.length === 2) {
-        return parts.pop().split(';').shift();
-    }
-    return '';
-}
-
-function safeParseJson(input, fallback) {
-    try {
-        return JSON.parse(input);
-    } catch (error) {
-        return fallback;
-    }
-}
 
 document.addEventListener('DOMContentLoaded', function() {
     const prefillContent = sessionStorage.getItem(PREFILL_CONTENT_KEY);
-    const persistRules = sessionStorage.getItem('fenrishub_persist_rules');
-    const pendingRuleChanges = sessionStorage.getItem('fenrishub_pending_rule_changes');
-    const selectedRuleIds = sessionStorage.getItem('fenrishub_selected_rule_ids');
-    const conflictResolutions = sessionStorage.getItem('fenrishub_conflict_resolutions');
     
     const contentField = document.getElementById('content');
-    const form = document.getElementById('createFixlistForm');
-    const persistInput = document.getElementById('persistRulesInput');
-    const pendingInput = document.getElementById('pendingRuleChangesInput');
-    const selectedInput = document.getElementById('selectedRuleIdsInput');
-    const conflictResolutionsInput = document.getElementById('conflictResolutionsInput');
 
     if (prefillContent && contentField && !contentField.value.trim()) {
         contentField.value = prefillContent;
     }
 
-    if (persistRules && persistInput) {
-        persistInput.value = persistRules;
-    }
-    
-    if (pendingRuleChanges && pendingInput) {
-        pendingInput.value = pendingRuleChanges;
-    }
-    
-    if (selectedRuleIds && selectedInput) {
-        selectedInput.value = selectedRuleIds;
-    }
-
-    if (conflictResolutions && conflictResolutionsInput) {
-        conflictResolutionsInput.value = conflictResolutions;
-    }
-
     // Clear prefill from sessionStorage
     sessionStorage.removeItem(PREFILL_CONTENT_KEY);
-    sessionStorage.removeItem('fenrishub_persist_rules');
-    sessionStorage.removeItem('fenrishub_pending_rule_changes');
-    sessionStorage.removeItem('fenrishub_selected_rule_ids');
-    sessionStorage.removeItem('fenrishub_conflict_resolutions');
+    sessionStorage.removeItem('fenrishub_pending_status_changes');
 });
 </script>
 {% endblock %}

@@ -1,0 +1,69 @@
+/* Shared FenrisHub palette */
+:root {
+    --la-bg-0: #0f0f0f;
+    --la-bg-1: #101010;
+    --la-bg-2: #111111;
+    --la-bg-3: #121212;
+    --la-bg-4: #131313;
+    --la-bg-5: #151515;
+    --la-bg-hover: #1a1a1a;
+    --la-bg-copied: #171717;
+    --la-bg-copied-hover: #1c1c1c;
+
+    --la-border-muted: #2a2a2a;
+    --la-border: #2f2f2f;
+    --la-border-strong: #3a3a3a;
+    --la-border-hover: #4a4a4a;
+    --la-border-accent: #2f4a34;
+
+    --la-overlay: rgba(0, 0, 0, 0.65);
+    --la-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+
+    --la-text-primary: #9fcf82;
+    --la-text-secondary: #8fbe74;
+    --la-text-muted: #7da466;
+    --la-text-neutral: #b4b4b4;
+    --la-text-disabled: #7a7a7a;
+    --la-text-main: #d8d8d8;
+
+    --la-focus: #9fcf82;
+    --la-focus-alt: #56779d;
+
+    --la-warning-border: #6b5523;
+    --la-warning-bg: #1a1610;
+    --la-warning-text: #f0d28f;
+    --la-warning-hover: #fff2cc;
+
+    --la-info-box-text: #b9b9b9;
+    --la-error-bg: #1a1010;
+    --la-error-border: #5a2a2a;
+    --la-error-text: #d28e8e;
+    --la-success-bg: #101810;
+    --la-success-border: #2b5a2b;
+    --la-success-text: #8fbf8f;
+
+    --la-success: #79d279;
+    --la-info: #8eb6d8;
+    --la-caution: #d8b26e;
+    --la-danger: #d87878;
+
+    --la-parsed-entry-type: #7fc9f0;
+    --la-parsed-clsid: #f0a070;
+    --la-parsed-name: #a0f070;
+    --la-parsed-filepath: #f070f0;
+    --la-parsed-filename: #f0f070;
+    --la-parsed-company: #70f0f0;
+    --la-parsed-arguments: #f0a0a0;
+
+    --la-picker-active-bg: #1f2919;
+
+    --la-status-b: #ff0000;
+    --la-status-p: #ff5f00;
+    --la-status-c: #00ff00;
+    --la-status-w: #ff8700;
+    --la-status-g: #af00ff;
+    --la-status-s: #00ffff;
+    --la-status-i: #ffffd7;
+    --la-status-j: #8a8a8a;
+    --la-status-unknown: #ffffff;
+}

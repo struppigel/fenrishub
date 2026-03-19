@@ -361,6 +361,63 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str) -> d
     }
 
 
+def _persist_selected_pending_rules(
+    *,
+    raw_pending_changes,
+    raw_selected_ids,
+    raw_conflict_resolutions,
+    username: str,
+    source_prefix: str,
+) -> dict:
+    selected_ids = {
+        str(value)
+        for value in (raw_selected_ids if isinstance(raw_selected_ids, list) else [])
+    }
+    normalized_changes, invalid_changes = _normalize_pending_changes(raw_pending_changes)
+    conflict_resolutions = _normalize_conflict_resolutions(raw_conflict_resolutions)
+
+    created_rules = 0
+    updated_rules = 0
+    skipped_changes = 0
+
+    with transaction.atomic():
+        effective_selected_ids = _apply_conflict_resolutions(
+            normalized_changes,
+            selected_ids,
+            conflict_resolutions,
+        )
+
+        source_name = f'{source_prefix}:{username}'
+        for change in normalized_changes:
+            if change['id'] not in effective_selected_ids:
+                continue
+
+            parsed = parse_rule_line(change['line'], status=change['new_status'], source_name=source_name)
+            if not parsed:
+                skipped_changes += 1
+                continue
+
+            if change.get('description') is not None:
+                parsed['description'] = change['description']
+
+            _, is_created = _upsert_classification_rule(parsed)
+            if is_created:
+                created_rules += 1
+            else:
+                updated_rules += 1
+
+    return {
+        'created_rules': created_rules,
+        'updated_rules': updated_rules,
+        'skipped_changes': skipped_changes,
+        'invalid_changes_count': len(invalid_changes),
+        'selected_candidates': len(selected_ids),
+        'effective_selected_candidates': len(
+            [change for change in normalized_changes if change['id'] in effective_selected_ids]
+        ),
+    }
+
+
 @require_http_methods(["GET", "POST"])
 def login_view(request):
     """User login view."""
@@ -404,52 +461,6 @@ def create_fixlist_view(request):
             content=content,
             internal_note=internal_note,
         )
-
-        persist_rules_flag = str(request.POST.get('persist_rules', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
-        if persist_rules_flag:
-            raw_pending_json = request.POST.get('pending_rule_changes_json', '[]')
-            raw_selected_ids_json = request.POST.get('selected_rule_change_ids_json', '[]')
-            raw_conflict_resolutions_json = request.POST.get('conflict_resolutions_json', '[]')
-
-            try:
-                raw_pending_changes = json.loads(raw_pending_json or '[]')
-            except json.JSONDecodeError:
-                raw_pending_changes = []
-
-            try:
-                selected_ids_payload = json.loads(raw_selected_ids_json or '[]')
-            except json.JSONDecodeError:
-                selected_ids_payload = []
-
-            try:
-                raw_conflict_resolutions = json.loads(raw_conflict_resolutions_json or '[]')
-            except json.JSONDecodeError:
-                raw_conflict_resolutions = []
-
-            selected_ids = {
-                str(value)
-                for value in (selected_ids_payload if isinstance(selected_ids_payload, list) else [])
-            }
-            normalized_changes, _ = _normalize_pending_changes(raw_pending_changes)
-            conflict_resolutions = _normalize_conflict_resolutions(raw_conflict_resolutions)
-
-            with transaction.atomic():
-                effective_selected_ids = _apply_conflict_resolutions(
-                    normalized_changes,
-                    selected_ids,
-                    conflict_resolutions,
-                )
-
-                source_name = f'fixlist-save:{request.user.username}'
-                for change in normalized_changes:
-                    if change['id'] not in effective_selected_ids:
-                        continue
-                    parsed = parse_rule_line(change['line'], status=change['new_status'], source_name=source_name)
-                    if not parsed:
-                        continue
-                    if change.get('description') is not None:
-                        parsed['description'] = change['description']
-                    _upsert_classification_rule(parsed)
 
         return redirect('view_fixlist', pk=fixlist.pk)
 
@@ -598,6 +609,37 @@ def preview_pending_rule_changes_api(request):
     preview = _build_pending_rule_preview(normalized_changes, request.user.username)
     preview['invalid_changes'] = invalid_changes
     return JsonResponse(preview)
+
+
+@login_required
+@require_http_methods(["POST"])
+def persist_pending_rule_changes_api(request):
+    """Persist selected pending analyzer changes as classification rules immediately."""
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+
+    pending_changes = payload.get('pending_changes', [])
+    selected_ids = payload.get('selected_rule_change_ids', [])
+    conflict_resolutions = payload.get('conflict_resolutions', [])
+
+    if pending_changes is not None and not isinstance(pending_changes, list):
+        return JsonResponse({'error': 'Field "pending_changes" must be a list.'}, status=400)
+    if selected_ids is not None and not isinstance(selected_ids, list):
+        return JsonResponse({'error': 'Field "selected_rule_change_ids" must be a list.'}, status=400)
+    if conflict_resolutions is not None and not isinstance(conflict_resolutions, list):
+        return JsonResponse({'error': 'Field "conflict_resolutions" must be a list.'}, status=400)
+
+    result = _persist_selected_pending_rules(
+        raw_pending_changes=pending_changes,
+        raw_selected_ids=selected_ids,
+        raw_conflict_resolutions=conflict_resolutions,
+        username=request.user.username,
+        source_prefix='analyzer-persist',
+    )
+
+    return JsonResponse({'ok': True, **result})
 
 
 @login_required

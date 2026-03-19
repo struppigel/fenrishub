@@ -94,7 +94,7 @@ class FixlistCrudViewTests(TestCase):
         self.assertEqual(created.owner, self.user)
         self.assertEqual(created.internal_note, "internal context")
 
-    def test_create_fixlist_without_rule_persistence_creates_no_rules(self):
+    def test_create_fixlist_ignores_rule_persistence_payload(self):
         pending_changes = [
             {
                 "id": "1",
@@ -108,298 +108,19 @@ class FixlistCrudViewTests(TestCase):
         response = self.client.post(
             reverse("create_fixlist"),
             {
-                "title": "Fixlist No Rule Persist",
+                "title": "Fixlist Ignores Rule Persist Payload",
                 "content": "line-a",
                 "internal_note": "",
-                "persist_rules": "0",
+                "persist_rules": "1",
                 "pending_rule_changes_json": json.dumps(pending_changes),
                 "selected_rule_change_ids_json": json.dumps(["1"]),
             },
         )
 
-        created = Fixlist.objects.get(title="Fixlist No Rule Persist")
+        created = Fixlist.objects.get(title="Fixlist Ignores Rule Persist Payload")
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
         self.assertEqual(ClassificationRule.objects.count(), 0)
-
-    def test_create_fixlist_persists_only_selected_pending_rules(self):
-        pending_changes = [
-            {
-                "id": "1",
-                "line": "MALICIOUS-LINE",
-                "original_status": "?",
-                "new_status": ClassificationRule.STATUS_MALWARE,
-                "order": 1,
-            },
-            {
-                "id": "2",
-                "line": "PUP-LINE",
-                "original_status": "?",
-                "new_status": ClassificationRule.STATUS_PUP,
-                "order": 2,
-            },
-        ]
-
-        response = self.client.post(
-            reverse("create_fixlist"),
-            {
-                "title": "Fixlist Selected Rule Persist",
-                "content": "line-a\nline-b",
-                "internal_note": "",
-                "persist_rules": "1",
-                "pending_rule_changes_json": json.dumps(pending_changes),
-                "selected_rule_change_ids_json": json.dumps(["1"]),
-            },
-        )
-
-        created = Fixlist.objects.get(title="Fixlist Selected Rule Persist")
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
-        self.assertTrue(
-            ClassificationRule.objects.filter(
-                status=ClassificationRule.STATUS_MALWARE,
-                source_text="MALICIOUS-LINE",
-            ).exists()
-        )
-        self.assertFalse(
-            ClassificationRule.objects.filter(
-                status=ClassificationRule.STATUS_PUP,
-                source_text="PUP-LINE",
-            ).exists()
-        )
-
-    def test_create_fixlist_persists_description_override_from_pending_change(self):
-        pending_changes = [
-            {
-                "id": "1",
-                "line": "MALICIOUS-LINE",
-                "original_status": "?",
-                "new_status": ClassificationRule.STATUS_MALWARE,
-                "order": 1,
-                "description": "custom description from modal",
-            }
-        ]
-
-        response = self.client.post(
-            reverse("create_fixlist"),
-            {
-                "title": "Fixlist Description Override",
-                "content": "line-a",
-                "internal_note": "",
-                "persist_rules": "1",
-                "pending_rule_changes_json": json.dumps(pending_changes),
-                "selected_rule_change_ids_json": json.dumps(["1"]),
-            },
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(
-            ClassificationRule.objects.filter(
-                status=ClassificationRule.STATUS_MALWARE,
-                source_text="MALICIOUS-LINE",
-                description="custom description from modal",
-            ).exists()
-        )
-
-    def test_create_fixlist_conflict_resolution_discard_new_rule(self):
-        existing_rule = ClassificationRule.objects.create(
-            status=ClassificationRule.STATUS_CLEAN,
-            match_type=ClassificationRule.MATCH_EXACT,
-            source_text="CONFLICT-LINE",
-            description="existing clean rule",
-        )
-        pending_changes = [
-            {
-                "id": "1",
-                "line": "CONFLICT-LINE",
-                "original_status": "?",
-                "new_status": ClassificationRule.STATUS_MALWARE,
-                "order": 1,
-            }
-        ]
-        conflict_resolutions = [
-            {
-                "conflict_key": "override:1:%s" % existing_rule.id,
-                "contradiction_type": "override_vs_existing_dominant",
-                "change_id": "1",
-                "existing_rule_id": existing_rule.id,
-                "action": "discard_new",
-            }
-        ]
-
-        response = self.client.post(
-            reverse("create_fixlist"),
-            {
-                "title": "Fixlist Discard New Rule",
-                "content": "line-a",
-                "internal_note": "",
-                "persist_rules": "1",
-                "pending_rule_changes_json": json.dumps(pending_changes),
-                "selected_rule_change_ids_json": json.dumps(["1"]),
-                "conflict_resolutions_json": json.dumps(conflict_resolutions),
-            },
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertFalse(
-            ClassificationRule.objects.filter(
-                status=ClassificationRule.STATUS_MALWARE,
-                source_text="CONFLICT-LINE",
-            ).exists()
-        )
-        self.assertTrue(ClassificationRule.objects.filter(pk=existing_rule.pk, is_enabled=True).exists())
-
-    def test_create_fixlist_conflict_resolution_disable_existing_rule(self):
-        existing_rule = ClassificationRule.objects.create(
-            status=ClassificationRule.STATUS_CLEAN,
-            match_type=ClassificationRule.MATCH_EXACT,
-            source_text="DISABLE-EXISTING",
-            description="existing clean rule",
-        )
-        pending_changes = [
-            {
-                "id": "1",
-                "line": "DISABLE-EXISTING",
-                "original_status": "?",
-                "new_status": ClassificationRule.STATUS_MALWARE,
-                "order": 1,
-            }
-        ]
-        conflict_resolutions = [
-            {
-                "conflict_key": "override:1:%s" % existing_rule.id,
-                "contradiction_type": "override_vs_existing_dominant",
-                "change_id": "1",
-                "existing_rule_id": existing_rule.id,
-                "action": "keep_new_disable_other",
-            }
-        ]
-
-        response = self.client.post(
-            reverse("create_fixlist"),
-            {
-                "title": "Fixlist Disable Existing Rule",
-                "content": "line-a",
-                "internal_note": "",
-                "persist_rules": "1",
-                "pending_rule_changes_json": json.dumps(pending_changes),
-                "selected_rule_change_ids_json": json.dumps(["1"]),
-                "conflict_resolutions_json": json.dumps(conflict_resolutions),
-            },
-        )
-
-        existing_rule.refresh_from_db()
-        self.assertEqual(response.status_code, 302)
-        self.assertFalse(existing_rule.is_enabled)
-        self.assertTrue(
-            ClassificationRule.objects.filter(
-                status=ClassificationRule.STATUS_MALWARE,
-                source_text="DISABLE-EXISTING",
-                is_enabled=True,
-            ).exists()
-        )
-
-    def test_create_fixlist_conflict_resolution_update_existing_status(self):
-        existing_rule = ClassificationRule.objects.create(
-            status=ClassificationRule.STATUS_CLEAN,
-            match_type=ClassificationRule.MATCH_EXACT,
-            source_text="STATUS-SWAP",
-            description="existing clean rule",
-        )
-        pending_changes = [
-            {
-                "id": "1",
-                "line": "STATUS-SWAP",
-                "original_status": "?",
-                "new_status": ClassificationRule.STATUS_MALWARE,
-                "order": 1,
-            }
-        ]
-        conflict_resolutions = [
-            {
-                "conflict_key": "override:1:%s" % existing_rule.id,
-                "contradiction_type": "override_vs_existing_dominant",
-                "change_id": "1",
-                "existing_rule_id": existing_rule.id,
-                "action": "update_existing_status",
-            }
-        ]
-
-        response = self.client.post(
-            reverse("create_fixlist"),
-            {
-                "title": "Fixlist Update Existing Status",
-                "content": "line-a",
-                "internal_note": "",
-                "persist_rules": "1",
-                "pending_rule_changes_json": json.dumps(pending_changes),
-                "selected_rule_change_ids_json": json.dumps(["1"]),
-                "conflict_resolutions_json": json.dumps(conflict_resolutions),
-            },
-        )
-
-        existing_rule.refresh_from_db()
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(existing_rule.status, ClassificationRule.STATUS_MALWARE)
-        self.assertTrue(existing_rule.is_enabled)
-        self.assertEqual(
-            ClassificationRule.objects.filter(
-                status=ClassificationRule.STATUS_MALWARE,
-                match_type=ClassificationRule.MATCH_EXACT,
-                source_text="STATUS-SWAP",
-            ).count(),
-            1,
-        )
-
-    def test_create_fixlist_conflict_resolution_keep_both(self):
-        existing_rule = ClassificationRule.objects.create(
-            status=ClassificationRule.STATUS_CLEAN,
-            match_type=ClassificationRule.MATCH_SUBSTRING,
-            source_text="KEEP-BOTH",
-            description="existing clean substring",
-        )
-        pending_changes = [
-            {
-                "id": "1",
-                "line": "KEEP-BOTH-LINE",
-                "original_status": "?",
-                "new_status": ClassificationRule.STATUS_MALWARE,
-                "order": 1,
-            }
-        ]
-        conflict_resolutions = [
-            {
-                "conflict_key": "overlap:1:%s" % existing_rule.id,
-                "contradiction_type": "overlaps_other_status_rules",
-                "change_id": "1",
-                "existing_rule_id": existing_rule.id,
-                "action": "keep_both",
-            }
-        ]
-
-        response = self.client.post(
-            reverse("create_fixlist"),
-            {
-                "title": "Fixlist Keep Both Rules",
-                "content": "line-a",
-                "internal_note": "",
-                "persist_rules": "1",
-                "pending_rule_changes_json": json.dumps(pending_changes),
-                "selected_rule_change_ids_json": json.dumps(["1"]),
-                "conflict_resolutions_json": json.dumps(conflict_resolutions),
-            },
-        )
-
-        existing_rule.refresh_from_db()
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(existing_rule.is_enabled)
-        self.assertTrue(
-            ClassificationRule.objects.filter(
-                status=ClassificationRule.STATUS_MALWARE,
-                source_text="KEEP-BOTH-LINE",
-                is_enabled=True,
-            ).exists()
-        )
 
     def test_update_fixlist_changes_content(self):
         fixlist = Fixlist.objects.create(
@@ -540,6 +261,14 @@ class TemplateMarkupTests(TestCase):
         template_path = project_root / "templates" / template_name
         return template_path.read_text(encoding="utf-8")
 
+    @staticmethod
+    def _read_static_asset(*relative_parts):
+        project_root = Path(__file__).resolve().parent.parent
+        asset_path = project_root / "static"
+        for part in relative_parts:
+            asset_path = asset_path / part
+        return asset_path.read_text(encoding="utf-8")
+
     def test_view_fixlist_template_has_preview_guest_button(self):
         content = self._read_template("view_fixlist.html")
 
@@ -564,30 +293,60 @@ class TemplateMarkupTests(TestCase):
 
     def test_log_analyzer_template_contains_status_picker_hooks(self):
         content = self._read_template("log_analyzer.html")
+        script_content = "\n".join(
+            [
+                self._read_static_asset("js", "log_analyzer", "shared.js"),
+                self._read_static_asset("js", "log_analyzer", "analysis.js"),
+                self._read_static_asset("js", "log_analyzer", "conflict_wizard.js"),
+                self._read_static_asset("js", "log_analyzer", "rule_preview.js"),
+                self._read_static_asset("js", "log_analyzer", "bootstrap.js"),
+            ]
+        )
 
         self.assertIn('id="statusPicker"', content)
-        self.assertIn("fenrishub_pending_status_changes", content)
-        self.assertIn("manual override:", content)
-        self.assertIn("renderContradictionListsForRule", content)
-        self.assertIn("Select a rule to inspect contradictions.", content)
         self.assertIn('id="conflictWizardModal"', content)
-        self.assertIn("advanceConflictWizard", content)
-        self.assertIn("pending_change_id", content)
+        self.assertIn('id="ruleReviewDialog"', content)
+        self.assertIn('id="conflictWizardDialog"', content)
         self.assertIn('id="plannedExistingRuleChangesList"', content)
-        self.assertIn("existing status changes", content)
-        self.assertNotIn("update_analyzed_line_status_api", content)
+        self.assertIn('id="saveFixlistButton"', content)
+        self.assertIn('id="conflictWizardBackButton"', content)
+        self.assertIn('role="radiogroup"', content)
+        self.assertNotIn("onclick=", content)
+        self.assertIn("window.logAnalyzerConfig", content)
+        self.assertIn("{% static 'css/log_analyzer.css' %}", content)
+        self.assertIn("{% static 'js/log_analyzer/shared.js' %}", content)
+        self.assertIn("{% static 'js/log_analyzer/analysis.js' %}", content)
+        self.assertIn("{% static 'js/log_analyzer/conflict_wizard.js' %}", content)
+        self.assertIn("{% static 'js/log_analyzer/rule_preview.js' %}", content)
+        self.assertIn("{% static 'js/log_analyzer/bootstrap.js' %}", content)
+        self.assertIn("persistRuleChangesUrl", content)
 
-    def test_create_fixlist_template_contains_rule_persist_handoff_fields(self):
+        self.assertIn("fenrishub_pending_status_changes", script_content)
+        self.assertIn("manual override:", script_content)
+        self.assertIn("renderContradictionListsForRule", script_content)
+        self.assertIn("No dominant-status contradictions were detected.", script_content)
+        self.assertIn("advanceConflictWizard", script_content)
+        self.assertIn("pending_change_id", script_content)
+        self.assertIn("existing status changes", script_content)
+        self.assertIn("PERSIST_RULE_CHANGES_URL", script_content)
+        self.assertIn("persistPendingRuleChanges", script_content)
+        self.assertIn("Object.assign(window", script_content)
+        self.assertIn("handleAnalyzerModalOpen", script_content)
+        self.assertIn("focusStatusPickerButton", script_content)
+        self.assertNotIn("{% url 'analyze_log_api' %}", script_content)
+
+    def test_create_fixlist_template_only_uses_prefill_handoff(self):
         content = self._read_template("create_fixlist.html")
 
-        self.assertIn('id="persistRulesInput"', content)
-        self.assertIn('id="pendingRuleChangesInput"', content)
-        self.assertIn('id="selectedRuleIdsInput"', content)
-        self.assertIn('id="conflictResolutionsInput"', content)
-        self.assertIn("fenrishub_persist_rules", content)
-        self.assertIn("fenrishub_pending_rule_changes", content)
-        self.assertIn("fenrishub_selected_rule_ids", content)
-        self.assertIn("fenrishub_conflict_resolutions", content)
+        self.assertIn("fenrishub_prefill_content", content)
+        self.assertNotIn('id="persistRulesInput"', content)
+        self.assertNotIn('id="pendingRuleChangesInput"', content)
+        self.assertNotIn('id="selectedRuleIdsInput"', content)
+        self.assertNotIn('id="conflictResolutionsInput"', content)
+        self.assertNotIn("fenrishub_persist_rules", content)
+        self.assertNotIn("fenrishub_pending_rule_changes", content)
+        self.assertNotIn("fenrishub_selected_rule_ids", content)
+        self.assertNotIn("fenrishub_conflict_resolutions", content)
 
 
 class LogAnalyzerApiTests(TestCase):
@@ -625,6 +384,152 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
         self.assertEqual(payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_UNKNOWN)
         self.assertEqual(payload["summary"]["unknown_lines"], 1)
+
+    def test_persist_pending_rule_changes_api_requires_login(self):
+        payload = {
+            "pending_changes": [
+                {
+                    "id": "1",
+                    "line": "IMMEDIATE-PERSIST-LINE",
+                    "original_status": "?",
+                    "new_status": ClassificationRule.STATUS_MALWARE,
+                    "order": 1,
+                }
+            ],
+            "selected_rule_change_ids": ["1"],
+            "conflict_resolutions": [],
+        }
+
+        response = self.client.post(
+            reverse("persist_pending_rule_changes_api"),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+
+    def test_persist_pending_rule_changes_api_affects_next_analysis(self):
+        self.client.login(username="analyzer", password="password123")
+
+        payload = {
+            "pending_changes": [
+                {
+                    "id": "1",
+                    "line": "IMMEDIATE-PERSIST-LINE",
+                    "original_status": "?",
+                    "new_status": ClassificationRule.STATUS_MALWARE,
+                    "order": 1,
+                }
+            ],
+            "selected_rule_change_ids": ["1"],
+            "conflict_resolutions": [],
+        }
+
+        persist_response = self.client.post(
+            reverse("persist_pending_rule_changes_api"),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+        persist_payload = persist_response.json()
+        self.assertEqual(persist_response.status_code, 200)
+        self.assertTrue(persist_payload["ok"])
+        self.assertTrue(
+            ClassificationRule.objects.filter(
+                status=ClassificationRule.STATUS_MALWARE,
+                source_text="IMMEDIATE-PERSIST-LINE",
+                is_enabled=True,
+            ).exists()
+        )
+
+        analyze_response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": "IMMEDIATE-PERSIST-LINE"}),
+            content_type="application/json",
+        )
+
+        analyze_payload = analyze_response.json()
+        self.assertEqual(analyze_response.status_code, 200)
+        self.assertEqual(
+            analyze_payload["lines"][0]["dominant_status"],
+            ClassificationRule.STATUS_MALWARE,
+        )
+
+    def test_persist_pending_rule_changes_api_rejects_invalid_selected_ids_payload(self):
+        self.client.login(username="analyzer", password="password123")
+
+        payload = {
+            "pending_changes": [],
+            "selected_rule_change_ids": {"id": "1"},
+            "conflict_resolutions": [],
+        }
+
+        response = self.client.post(
+            reverse("persist_pending_rule_changes_api"),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json().get("error"),
+            'Field "selected_rule_change_ids" must be a list.',
+        )
+
+    def test_persist_pending_rule_changes_api_applies_update_existing_status_resolution(self):
+        self.client.login(username="analyzer", password="password123")
+
+        existing_rule = ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="IMMEDIATE-STATUS-SWAP",
+            description="existing clean rule",
+        )
+        payload = {
+            "pending_changes": [
+                {
+                    "id": "1",
+                    "line": "IMMEDIATE-STATUS-SWAP",
+                    "original_status": "?",
+                    "new_status": ClassificationRule.STATUS_MALWARE,
+                    "order": 1,
+                }
+            ],
+            "selected_rule_change_ids": ["1"],
+            "conflict_resolutions": [
+                {
+                    "conflict_key": f"override:1:{existing_rule.id}",
+                    "contradiction_type": "override_vs_existing_dominant",
+                    "change_id": "1",
+                    "existing_rule_id": existing_rule.id,
+                    "action": "update_existing_status",
+                }
+            ],
+        }
+
+        response = self.client.post(
+            reverse("persist_pending_rule_changes_api"),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+        existing_rule.refresh_from_db()
+        payload_json = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload_json.get("ok"))
+        self.assertEqual(payload_json.get("created_rules"), 0)
+        self.assertEqual(payload_json.get("updated_rules"), 0)
+        self.assertEqual(existing_rule.status, ClassificationRule.STATUS_MALWARE)
+        self.assertTrue(existing_rule.is_enabled)
+        self.assertEqual(
+            ClassificationRule.objects.filter(
+                status=ClassificationRule.STATUS_MALWARE,
+                match_type=ClassificationRule.MATCH_EXACT,
+                source_text="IMMEDIATE-STATUS-SWAP",
+            ).count(),
+            1,
+        )
 
     def test_analyze_api_applies_status_precedence(self):
         self.client.login(username="analyzer", password="password123")
