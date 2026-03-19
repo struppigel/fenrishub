@@ -13,6 +13,7 @@
         <input type="hidden" id="persistRulesInput" name="persist_rules" value="0">
         <input type="hidden" id="pendingRuleChangesInput" name="pending_rule_changes_json" value="[]">
         <input type="hidden" id="selectedRuleIdsInput" name="selected_rule_change_ids_json" value="[]">
+        <input type="hidden" id="conflictResolutionsInput" name="conflict_resolutions_json" value="[]">
 
         <div class="form-group">
             <label for="title">title</label>
@@ -65,12 +66,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const persistRules = sessionStorage.getItem('fenrishub_persist_rules');
     const pendingRuleChanges = sessionStorage.getItem('fenrishub_pending_rule_changes');
     const selectedRuleIds = sessionStorage.getItem('fenrishub_selected_rule_ids');
+    const conflictResolutions = sessionStorage.getItem('fenrishub_conflict_resolutions');
     
     const contentField = document.getElementById('content');
     const form = document.getElementById('createFixlistForm');
     const persistInput = document.getElementById('persistRulesInput');
     const pendingInput = document.getElementById('pendingRuleChangesInput');
     const selectedInput = document.getElementById('selectedRuleIdsInput');
+    const conflictResolutionsInput = document.getElementById('conflictResolutionsInput');
 
     if (prefillContent && contentField && !contentField.value.trim()) {
         contentField.value = prefillContent;
@@ -88,11 +91,16 @@ document.addEventListener('DOMContentLoaded', function() {
         selectedInput.value = selectedRuleIds;
     }
 
+    if (conflictResolutions && conflictResolutionsInput) {
+        conflictResolutionsInput.value = conflictResolutions;
+    }
+
     // Clear prefill from sessionStorage
     sessionStorage.removeItem(PREFILL_CONTENT_KEY);
     sessionStorage.removeItem('fenrishub_persist_rules');
     sessionStorage.removeItem('fenrishub_pending_rule_changes');
     sessionStorage.removeItem('fenrishub_selected_rule_ids');
+    sessionStorage.removeItem('fenrishub_conflict_resolutions');
 });
 </script>
 {% endblock %}

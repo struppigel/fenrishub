@@ -49,13 +49,10 @@ End::</textarea>
         <p id="ruleReviewSummary" class="review-summary"></p>
 
         <div class="review-section">
-            <h4>manual status changes</h4>
-            <ul id="manualChangesList" class="review-list"></ul>
-        </div>
-
-        <div class="review-section">
             <h4>rules that would be persisted</h4>
+            <div id="ruleLegend" class="rule-legend"></div>
             <div id="ruleCandidatesList" class="rule-candidates-list"></div>
+            <div id="ruleDetailsPanel" class="rule-details-panel">click a rule line to inspect parsed fields.</div>
         </div>
 
         <div class="review-section">
@@ -69,6 +66,11 @@ End::</textarea>
         </div>
 
         <div class="review-section">
+            <h4>existing rules affected by selected resolutions</h4>
+            <ul id="plannedExistingRuleChangesList" class="review-list"></ul>
+        </div>
+
+        <div class="review-section">
             <h4>invalid pending changes</h4>
             <ul id="invalidChangesList" class="review-list"></ul>
         </div>
@@ -76,7 +78,41 @@ End::</textarea>
         <div class="button-group review-actions">
             <button type="button" id="ruleReviewBackButton" onclick="closeRuleReviewModal(); return false;">back to edit</button>
             <button type="button" id="ruleReviewContinueButton" onclick="submitWithRulePersist(false); return false;">discard rules and continue</button>
-            <button type="button" id="ruleReviewSavePersistButton">save + persist selected rules</button>
+            <button type="button" id="ruleReviewSavePersistButton" onclick="submitWithRulePersist(true); return false;">save + persist selected rules</button>
+        </div>
+    </div>
+</div>
+
+<div id="conflictWizardModal" class="rule-review-modal" hidden>
+    <div class="rule-review-backdrop" id="conflictWizardBackdrop"></div>
+    <div class="rule-review-content conflict-wizard-content" role="dialog" aria-modal="true" aria-labelledby="conflictWizardTitle">
+        <h3 id="conflictWizardTitle">resolve contradictions before final confirmation</h3>
+        <p id="conflictWizardProgress" class="review-summary"></p>
+
+        <div class="conflict-wizard-grid">
+            <div class="conflict-rule-card">
+                <h4>new rule candidate</h4>
+                <div id="wizardNewRulePanel" class="wizard-rule-panel"></div>
+            </div>
+            <div class="conflict-rule-card">
+                <h4>existing conflicting rule</h4>
+                <div id="wizardExistingRulePanel" class="wizard-rule-panel"></div>
+            </div>
+        </div>
+
+        <div class="review-section">
+            <h4>precedence if both stay enabled</h4>
+            <div id="wizardPrecedenceSummary" class="wizard-precedence-summary"></div>
+        </div>
+
+        <div class="review-section">
+            <h4>choose how to resolve this conflict</h4>
+            <div id="wizardActionPanel" class="wizard-action-panel"></div>
+        </div>
+
+        <div class="button-group review-actions">
+            <button type="button" onclick="closeConflictWizardModal(); return false;">back to edit</button>
+            <button type="button" id="wizardNextButton" onclick="advanceConflictWizard(); return false;">next conflict</button>
         </div>
     </div>
 </div>
@@ -193,7 +229,7 @@ body {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 10px;
     width: 100%;
-    height: calc(100vh - 180px);
+    height: calc(100vh - 210px);
     min-height: 0;
     background-color: #131313;
     border: 1px solid #2a2a2a;
@@ -419,8 +455,242 @@ body {
     color: #949494;
 }
 
+.rule-candidate-trigger {
+    display: block;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    padding: 2px 4px;
+    cursor: pointer;
+}
+
+.rule-candidate-trigger:hover {
+    border-color: #2f2f2f;
+    background: #181818;
+}
+
+.rule-candidate-trigger.active {
+    border-color: #3e5266;
+    background: #161e28;
+}
+
+.rule-candidate-source-line {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.rule-details-panel {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+    border: 1px solid #2a2a2a;
+    background: #101010;
+    padding: 10px;
+    font-size: 12px;
+}
+
+.rule-details-empty {
+    color: #949494;
+}
+
+.rule-details-header {
+    color: #c7c7c7;
+}
+
+.rule-description-editor {
+    display: grid;
+    gap: 4px;
+}
+
+.rule-description-editor label {
+    color: #888;
+    text-transform: lowercase;
+}
+
+.rule-description-input {
+    width: 100%;
+    min-height: 70px;
+    resize: vertical;
+    border: 1px solid #2f2f2f;
+    background: #0f0f0f;
+    color: #d4d4d4;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    padding: 6px 8px;
+}
+
+.rule-description-input:focus {
+    outline: none;
+    border-color: #56779d;
+}
+
+.rule-details-line {
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.rule-details-grid {
+    display: grid;
+    grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+    gap: 6px 10px;
+}
+
+.rule-detail-key {
+    color: #888;
+    text-transform: lowercase;
+}
+
+.rule-detail-value {
+    color: #d4d4d4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.rule-legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 6px;
+    margin-bottom: 8px;
+    font-size: 11px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.legend-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+}
+
+#ruleReviewModal .parsed-entry-type {
+    color: #7fc9f0;
+}
+
+#ruleReviewModal .parsed-clsid {
+    color: #f0a070;
+}
+
+#ruleReviewModal .parsed-name {
+    color: #a0f070;
+}
+
+#ruleReviewModal .parsed-filepath {
+    color: #f070f0;
+}
+
+#ruleReviewModal .parsed-filename {
+    color: #f0f070;
+}
+
+#ruleReviewModal .parsed-company {
+    color: #70f0f0;
+}
+
+#ruleReviewModal .parsed-arguments {
+    color: #f0a0a0;
+}
+
 .review-actions {
     margin-top: 14px;
+}
+
+.conflict-wizard-content {
+    width: min(1120px, 97vw);
+}
+
+.conflict-wizard-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+}
+
+.conflict-rule-card {
+    border: 1px solid #2a2a2a;
+    background: #111;
+    padding: 10px;
+}
+
+.conflict-rule-card h4 {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #d8d8d8;
+    text-transform: lowercase;
+}
+
+.wizard-rule-panel {
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+}
+
+.wizard-rule-grid {
+    display: grid;
+    grid-template-columns: minmax(110px, 180px) minmax(0, 1fr);
+    gap: 6px 10px;
+}
+
+.wizard-rule-key {
+    color: #878787;
+    text-transform: lowercase;
+}
+
+.wizard-rule-value {
+    color: #d4d4d4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.wizard-precedence-summary {
+    font-size: 12px;
+    color: #c2c2c2;
+    border: 1px solid #2f2f2f;
+    background: #101010;
+    padding: 8px 10px;
+}
+
+.wizard-action-panel {
+    display: grid;
+    gap: 8px;
+}
+
+.wizard-action-option {
+    display: grid;
+    gap: 4px;
+    border: 1px solid #2f2f2f;
+    background: #101010;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.wizard-action-option:hover {
+    border-color: #4a4a4a;
+}
+
+.wizard-action-option input {
+    margin-right: 6px;
+}
+
+.wizard-action-title {
+    color: #e0e0e0;
+}
+
+.wizard-action-description {
+    color: #9e9e9e;
+    font-size: 11px;
+}
+
+.rule-resolution-note {
+    color: #8eb6d8;
+    font-size: 11px;
+    margin-top: 3px;
 }
 
 .status-picker-option {
@@ -504,6 +774,10 @@ body {
         grid-template-columns: 1fr;
         height: auto;
     }
+
+    .conflict-wizard-grid {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 
@@ -533,10 +807,23 @@ const STATUS_LABEL_MAP = {
     J: 'junk',
     '?': 'unknown',
 };
+const STATUS_PRECEDENCE_ORDER = ['B', 'P', 'C', '!', 'G', 'S', 'I', 'J', '?'];
 const PENDING_STATUS_STORAGE_KEY = 'fenrishub_pending_status_changes';
+const CONFLICT_RESOLUTION_STORAGE_KEY = 'fenrishub_conflict_resolutions';
+const CONFLICT_ACTION_UPDATE_EXISTING = 'update_existing_status';
+const CONFLICT_ACTION_KEEP_BOTH = 'keep_both';
+const CONFLICT_ACTION_KEEP_NEW_DISABLE_OTHER = 'keep_new_disable_other';
+const CONFLICT_ACTION_DISCARD_NEW = 'discard_new';
 let statusPickerBusy = false;
 let pendingStatusChanges = new Map();
 let pendingChangeSequence = 0;
+let ruleDescriptionOverrides = new Map();
+let conflictWizardState = {
+    queue: [],
+    index: 0,
+    resolutions: {},
+    discardedRuleIds: new Set(),
+};
 
 function getCookie(name) {
     const value = `; ${document.cookie}`;
@@ -545,6 +832,14 @@ function getCookie(name) {
         return parts.pop().split(';').shift();
     }
     return '';
+}
+
+function safeParseJson(input, fallback) {
+    try {
+        return JSON.parse(input);
+    } catch (error) {
+        return fallback;
+    }
 }
 
 // Set cursor position after CloseProcesses: on page load
@@ -583,29 +878,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Setup rule review modal event listeners
-    const ruleReviewBackButton = document.getElementById('ruleReviewBackButton');
-    const ruleReviewContinueButton = document.getElementById('ruleReviewContinueButton');
-    const ruleReviewSavePersistButton = document.getElementById('ruleReviewSavePersistButton');
     const ruleReviewBackdrop = document.getElementById('ruleReviewBackdrop');
-    
-    if (ruleReviewBackButton) {
-        ruleReviewBackButton.addEventListener('click', closeRuleReviewModal);
-    }
-    
-    if (ruleReviewContinueButton) {
-        ruleReviewContinueButton.addEventListener('click', function() {
-            submitWithRulePersist(false);
-        });
-    }
-    
-    if (ruleReviewSavePersistButton) {
-        ruleReviewSavePersistButton.addEventListener('click', function() {
-            submitWithRulePersist(true);
-        });
-    }
+    const conflictWizardBackdrop = document.getElementById('conflictWizardBackdrop');
     
     if (ruleReviewBackdrop) {
         ruleReviewBackdrop.addEventListener('click', closeRuleReviewModal);
+    }
+    if (conflictWizardBackdrop) {
+        conflictWizardBackdrop.addEventListener('click', closeConflictWizardModal);
     }
 });
 
@@ -694,13 +974,22 @@ function applyPendingOverrides() {
 function getPendingStatusChangesPayload() {
     return [...pendingStatusChanges.values()]
         .sort((left, right) => left.order - right.order)
-        .map((change) => ({
-            id: change.id,
-            line: change.line,
-            original_status: change.original_status,
-            new_status: change.new_status,
-            order: change.order,
-        }));
+        .map((change) => {
+            const payload = {
+                id: change.id,
+                line: change.line,
+                original_status: change.original_status,
+                new_status: change.new_status,
+                order: change.order,
+            };
+
+            const changeId = String(change.id);
+            if (ruleDescriptionOverrides.has(changeId)) {
+                payload.description = ruleDescriptionOverrides.get(changeId);
+            }
+
+            return payload;
+        });
 }
 
 function applyAnalysisPayload(payload, options = {}) {
@@ -712,10 +1001,12 @@ function applyAnalysisPayload(payload, options = {}) {
         copiedLineIndexes = new Set();
         pendingStatusChanges.clear();
         pendingChangeSequence = 0;
+        ruleDescriptionOverrides.clear();
     } else if (nextLines.length !== analyzedLines.length) {
         copiedLineIndexes = new Set();
         pendingStatusChanges.clear();
         pendingChangeSequence = 0;
+        ruleDescriptionOverrides.clear();
     } else {
         copiedLineIndexes = new Set(
             [...copiedLineIndexes].filter((index) => index >= 0 && index < nextLines.length)
@@ -1144,6 +1435,7 @@ function goToCreateFixlist() {
     } else {
         // No pending changes, go directly to fixlist
         sessionStorage.setItem('fenrishub_prefill_content', selected);
+        sessionStorage.removeItem(CONFLICT_RESOLUTION_STORAGE_KEY);
         window.location.href = "{% url 'create_fixlist' %}";
     }
 }
@@ -1160,6 +1452,559 @@ function closeRuleReviewModal() {
     if (modal) {
         modal.hidden = true;
     }
+}
+
+function openConflictWizardModal() {
+    const modal = document.getElementById('conflictWizardModal');
+    if (!modal) {
+        return;
+    }
+    modal.hidden = false;
+    renderConflictWizardStep();
+}
+
+function closeConflictWizardModal() {
+    const modal = document.getElementById('conflictWizardModal');
+    if (modal) {
+        modal.hidden = true;
+    }
+}
+
+function resetConflictWizardState() {
+    conflictWizardState = {
+        queue: [],
+        index: 0,
+        resolutions: {},
+        discardedRuleIds: new Set(),
+    };
+}
+
+function statusDominance(statuses) {
+    const available = new Set((statuses || []).filter(Boolean));
+    for (const code of STATUS_PRECEDENCE_ORDER) {
+        if (available.has(code)) {
+            return code;
+        }
+    }
+    return '?';
+}
+
+function precedenceSummary(newStatus, existingStatus) {
+    const winner = statusDominance([newStatus, existingStatus]);
+    const winnerLabel = STATUS_LABEL_MAP[winner] || 'unknown';
+    const newLabel = STATUS_LABEL_MAP[newStatus] || 'unknown';
+    const existingLabel = STATUS_LABEL_MAP[existingStatus] || 'unknown';
+    if (!newStatus || !existingStatus) {
+        return 'Insufficient data to compute precedence.';
+    }
+    if (newStatus === existingStatus) {
+        return `Both rules resolve to ${winner} (${winnerLabel}), so either rule set produces the same status.`;
+    }
+    const winnerSource = winner === newStatus ? 'new rule' : 'existing rule';
+    return (
+        `new: ${newStatus} (${newLabel}), existing: ${existingStatus} (${existingLabel}). ` +
+        `If both stay enabled, ${winner} (${winnerLabel}) wins by status precedence (${winnerSource}).`
+    );
+}
+
+function rebuildDiscardedRuleIds() {
+    const next = new Set();
+    Object.values(conflictWizardState.resolutions).forEach((resolution) => {
+        if (resolution.action === CONFLICT_ACTION_DISCARD_NEW) {
+            next.add(String(resolution.change_id));
+        }
+    });
+    conflictWizardState.discardedRuleIds = next;
+}
+
+function buildConflictWizardQueue(preview) {
+    const queue = [];
+    const ruleMap = new Map((preview.rule_changes || []).map((change) => [String(change.id), change]));
+
+    const overrideConflicts = ((preview.contradictions || {}).override_vs_existing_dominant || []);
+    overrideConflicts.forEach((conflict) => {
+        const changeId = String(conflict.id);
+        const newRule = ruleMap.get(changeId);
+        if (!newRule) {
+            return;
+        }
+        const matchingRules = Array.isArray(conflict.matching_rules) ? conflict.matching_rules : [];
+        matchingRules.forEach((existingRule) => {
+            if (!existingRule || existingRule.id === null || existingRule.id === undefined) {
+                return;
+            }
+            queue.push(
+                {
+                    key: `override:${changeId}:${existingRule.id}`,
+                    contradiction_type: 'override_vs_existing_dominant',
+                    change_id: changeId,
+                    line: conflict.line,
+                    selected_status: conflict.selected_status,
+                    existing_status_codes: conflict.existing_status_codes,
+                    existing_dominant_status: conflict.existing_dominant_status,
+                    existing_rule: existingRule,
+                    new_rule: newRule,
+                }
+            );
+        });
+    });
+
+    const overlapConflicts = ((preview.contradictions || {}).overlaps_other_status_rules || []);
+    overlapConflicts.forEach((conflict) => {
+        const changeId = String(conflict.id);
+        const newRule = ruleMap.get(changeId);
+        if (!newRule) {
+            return;
+        }
+        const matchingRules = Array.isArray(conflict.matching_rules) ? conflict.matching_rules : [];
+        matchingRules.forEach((existingRule) => {
+            if (!existingRule || existingRule.id === null || existingRule.id === undefined) {
+                return;
+            }
+            queue.push(
+                {
+                    key: `overlap:${changeId}:${existingRule.id}`,
+                    contradiction_type: 'overlaps_other_status_rules',
+                    change_id: changeId,
+                    line: conflict.line,
+                    selected_status: conflict.selected_status,
+                    overlap_statuses: conflict.overlap_statuses || [],
+                    existing_rule: existingRule,
+                    new_rule: newRule,
+                }
+            );
+        });
+    });
+
+    return queue;
+}
+
+function initializeConflictWizard(preview) {
+    resetConflictWizardState();
+    conflictWizardState.queue = buildConflictWizardQueue(preview || {});
+}
+
+function findNextWizardIndex(startIndex) {
+    for (let i = startIndex; i < conflictWizardState.queue.length; i++) {
+        const item = conflictWizardState.queue[i];
+        if (!conflictWizardState.resolutions[item.key]) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+function currentWizardItem() {
+    if (!Array.isArray(conflictWizardState.queue) || conflictWizardState.queue.length === 0) {
+        return null;
+    }
+    const idx = Math.max(0, Math.min(conflictWizardState.index, conflictWizardState.queue.length - 1));
+    conflictWizardState.index = idx;
+    return conflictWizardState.queue[idx];
+}
+
+function resolutionActionLabel(action) {
+    if (action === CONFLICT_ACTION_UPDATE_EXISTING) {
+        return 'change existing status';
+    }
+    if (action === CONFLICT_ACTION_KEEP_BOTH) {
+        return 'keep both rules';
+    }
+    if (action === CONFLICT_ACTION_KEEP_NEW_DISABLE_OTHER) {
+        return 'keep new and disable existing';
+    }
+    if (action === CONFLICT_ACTION_DISCARD_NEW) {
+        return 'discard new rule';
+    }
+    return '';
+}
+
+function resolutionSummaryForRule(changeId) {
+    const normalizedId = String(changeId);
+    const entries = Object.values(conflictWizardState.resolutions).filter(
+        (resolution) => String(resolution.change_id) === normalizedId
+    );
+    if (entries.length === 0) {
+        return [];
+    }
+
+    const labels = [];
+    entries.forEach((resolution) => {
+        const label = resolutionActionLabel(resolution.action);
+        if (label && !labels.includes(label)) {
+            labels.push(label);
+        }
+    });
+    return labels;
+}
+
+function getResolutionsForChange(changeId) {
+    const normalizedId = String(changeId);
+    return Object.values(conflictWizardState.resolutions).filter(
+        (resolution) => String(resolution.change_id) === normalizedId
+    );
+}
+
+function buildRuleResolutionPlan(change) {
+    const entries = getResolutionsForChange(change.id);
+    const hasDiscard = entries.some((entry) => entry.action === CONFLICT_ACTION_DISCARD_NEW);
+    const hasUpdateExisting = entries.some((entry) => entry.action === CONFLICT_ACTION_UPDATE_EXISTING);
+    const disableRuleIds = [
+        ...new Set(
+            entries
+                .filter((entry) => entry.action === CONFLICT_ACTION_KEEP_NEW_DISABLE_OTHER)
+                .map((entry) => entry.existing_rule_id)
+                .filter((value) => value !== null && value !== undefined)
+        ),
+    ];
+    const updateRuleIds = [
+        ...new Set(
+            entries
+                .filter((entry) => entry.action === CONFLICT_ACTION_UPDATE_EXISTING)
+                .map((entry) => entry.existing_rule_id)
+                .filter((value) => value !== null && value !== undefined)
+        ),
+    ];
+
+    let effectiveAction = (change.action || 'create').toLowerCase();
+    let suppressNewRule = false;
+    let forceUnchecked = false;
+    if (hasDiscard) {
+        effectiveAction = 'discard-new';
+        suppressNewRule = true;
+        forceUnchecked = true;
+    } else if (hasUpdateExisting) {
+        effectiveAction = 'update-existing-status';
+        suppressNewRule = true;
+    }
+
+    return {
+        entries,
+        hasDiscard,
+        hasUpdateExisting,
+        disableRuleIds,
+        updateRuleIds,
+        effectiveAction,
+        suppressNewRule,
+        forceUnchecked,
+    };
+}
+
+function renderPlannedExistingRuleChanges(ruleChanges) {
+    const changeById = new Map((ruleChanges || []).map((change) => [String(change.id), change]));
+    const selectedIds = new Set(selectedRuleIdsFromModal());
+    const lines = [];
+    const dedupe = new Set();
+
+    selectedIds.forEach((changeId) => {
+        const change = changeById.get(String(changeId));
+        if (!change) {
+            return;
+        }
+        const plan = buildRuleResolutionPlan(change);
+
+        if (plan.hasUpdateExisting) {
+            const nextStatus = `${change.to_status} (${STATUS_LABEL_MAP[change.to_status] || 'unknown'})`;
+            plan.updateRuleIds.forEach((ruleId) => {
+                const key = `update:${ruleId}:${change.to_status}`;
+                if (!dedupe.has(key)) {
+                    dedupe.add(key);
+                    lines.push(`rule #${ruleId}: status will be changed to ${nextStatus}`);
+                }
+            });
+        }
+
+        if (!plan.suppressNewRule && plan.disableRuleIds.length > 0) {
+            plan.disableRuleIds.forEach((ruleId) => {
+                const key = `disable:${ruleId}`;
+                if (!dedupe.has(key)) {
+                    dedupe.add(key);
+                    lines.push(`rule #${ruleId}: will be disabled`);
+                }
+            });
+        }
+    });
+
+    buildReviewList(
+        'plannedExistingRuleChangesList',
+        lines,
+        'No existing rules will be modified by current selections.'
+    );
+}
+
+function refreshFinalReviewSummary(ruleChanges) {
+    const summaryEl = document.getElementById('ruleReviewSummary');
+    if (!summaryEl) {
+        return;
+    }
+
+    const selectedIds = new Set(selectedRuleIdsFromModal());
+    const totalCandidates = Array.isArray(ruleChanges) ? ruleChanges.length : 0;
+    let createCount = 0;
+    let updateCount = 0;
+    const statusUpdateRuleIds = new Set();
+    const disableRuleIds = new Set();
+
+    (ruleChanges || []).forEach((change) => {
+        const changeId = String(change.id);
+        if (!selectedIds.has(changeId)) {
+            return;
+        }
+
+        const plan = buildRuleResolutionPlan(change);
+        if (plan.hasUpdateExisting) {
+            plan.updateRuleIds.forEach((ruleId) => statusUpdateRuleIds.add(String(ruleId)));
+            return;
+        }
+
+        if (plan.suppressNewRule) {
+            return;
+        }
+
+        if ((change.action || 'create').toLowerCase() === 'update') {
+            updateCount += 1;
+        } else {
+            createCount += 1;
+        }
+
+        plan.disableRuleIds.forEach((ruleId) => disableRuleIds.add(String(ruleId)));
+    });
+
+    const skippedCount = Math.max(0, totalCandidates - selectedIds.size);
+    summaryEl.textContent =
+        `selected candidates: ${selectedIds.size}/${totalCandidates}, ` +
+        `new creates: ${createCount}, ` +
+        `new updates: ${updateCount}, ` +
+        `existing status changes: ${statusUpdateRuleIds.size}, ` +
+        `existing disables: ${disableRuleIds.size}, ` +
+        `skipped: ${skippedCount}`;
+}
+
+function serializeConflictResolutions() {
+    return Object.values(conflictWizardState.resolutions).map((resolution) => ({
+        conflict_key: resolution.conflict_key,
+        contradiction_type: resolution.contradiction_type,
+        change_id: resolution.change_id,
+        existing_rule_id: resolution.existing_rule_id,
+        action: resolution.action,
+    }));
+}
+
+function renderWizardRulePanel(containerId, rows) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+        return;
+    }
+
+    container.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'wizard-rule-grid';
+
+    rows.forEach((row) => {
+        const key = document.createElement('div');
+        key.className = 'wizard-rule-key';
+        key.textContent = row.key;
+
+        const val = document.createElement('div');
+        val.className = 'wizard-rule-value';
+        val.textContent = formatRuleDetailValue(row.value);
+
+        grid.appendChild(key);
+        grid.appendChild(val);
+    });
+
+    container.appendChild(grid);
+}
+
+function renderConflictWizardActions(item) {
+    const panel = document.getElementById('wizardActionPanel');
+    if (!panel) {
+        return;
+    }
+
+    panel.innerHTML = '';
+    const currentResolution = conflictWizardState.resolutions[item.key];
+    const selectedAction = currentResolution ? currentResolution.action : '';
+    const statusText = `${item.selected_status} (${STATUS_LABEL_MAP[item.selected_status] || 'unknown'})`;
+
+    const options = [
+        {
+            value: CONFLICT_ACTION_UPDATE_EXISTING,
+            title: `only change status of existing rule to ${statusText}`,
+            description: 'Does not create a new rule for this conflict pair.',
+        },
+        {
+            value: CONFLICT_ACTION_KEEP_BOTH,
+            title: 'keep both rules',
+            description: 'Both rules remain enabled; precedence decides runtime status.',
+        },
+        {
+            value: CONFLICT_ACTION_KEEP_NEW_DISABLE_OTHER,
+            title: 'keep new rule and disable existing conflicting rule',
+            description: 'Existing conflicting rule is soft-disabled (is_enabled=false).',
+        },
+        {
+            value: CONFLICT_ACTION_DISCARD_NEW,
+            title: 'discard own new rule',
+            description: 'This new rule is removed from persistence for all of its contradictions.',
+        },
+    ];
+
+    options.forEach((option) => {
+        const label = document.createElement('label');
+        label.className = 'wizard-action-option';
+
+        const title = document.createElement('div');
+        title.className = 'wizard-action-title';
+
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'wizardActionChoice';
+        radio.value = option.value;
+        radio.checked = selectedAction === option.value;
+        radio.addEventListener('change', () => {
+            setWizardResolution(item, option.value);
+        });
+
+        title.appendChild(radio);
+        title.appendChild(document.createTextNode(option.title));
+
+        const description = document.createElement('div');
+        description.className = 'wizard-action-description';
+        description.textContent = option.description;
+
+        label.appendChild(title);
+        label.appendChild(description);
+        panel.appendChild(label);
+    });
+}
+
+function setWizardResolution(item, action) {
+    if (!item) {
+        return;
+    }
+
+    const baseResolution = {
+        conflict_key: item.key,
+        contradiction_type: item.contradiction_type,
+        change_id: item.change_id,
+        existing_rule_id: item.existing_rule ? item.existing_rule.id : null,
+        action,
+    };
+
+    conflictWizardState.resolutions[item.key] = baseResolution;
+
+    if (action === CONFLICT_ACTION_DISCARD_NEW) {
+        conflictWizardState.queue.forEach((queueItem) => {
+            if (String(queueItem.change_id) === String(item.change_id)) {
+                conflictWizardState.resolutions[queueItem.key] = {
+                    ...baseResolution,
+                    conflict_key: queueItem.key,
+                    contradiction_type: queueItem.contradiction_type,
+                    existing_rule_id: queueItem.existing_rule ? queueItem.existing_rule.id : null,
+                };
+            }
+        });
+    }
+
+    rebuildDiscardedRuleIds();
+}
+
+function renderConflictWizardStep() {
+    const item = currentWizardItem();
+    const progressEl = document.getElementById('conflictWizardProgress');
+    const precedenceEl = document.getElementById('wizardPrecedenceSummary');
+    const nextButton = document.getElementById('wizardNextButton');
+
+    if (!item) {
+        if (progressEl) {
+            progressEl.textContent = 'No contradictions detected.';
+        }
+        if (precedenceEl) {
+            precedenceEl.textContent = 'No contradiction wizard steps are required.';
+        }
+        if (nextButton) {
+            nextButton.textContent = 'continue';
+        }
+        return;
+    }
+
+    const total = conflictWizardState.queue.length;
+    if (progressEl) {
+        progressEl.textContent = (
+            `conflict ${conflictWizardState.index + 1} of ${total} | ` +
+            `pending change id: ${item.change_id} | existing db rule id: ${item.existing_rule ? item.existing_rule.id : '?'} | type: ${item.contradiction_type}`
+        );
+    }
+
+    const newRule = item.new_rule || {};
+    const existingRule = item.existing_rule || {};
+
+    renderWizardRulePanel('wizardNewRulePanel', [
+        { key: 'pending_change_id', value: newRule.id },
+        { key: 'status', value: `${newRule.to_status} (${STATUS_LABEL_MAP[newRule.to_status] || 'unknown'})` },
+        { key: 'match_type', value: newRule.match_type },
+        { key: 'source_text', value: newRule.source_text },
+        { key: 'description', value: newRule.description },
+        { key: 'entry_type', value: newRule.entry_type },
+        { key: 'filepath', value: newRule.filepath },
+        { key: 'name', value: newRule.name },
+        { key: 'company', value: newRule.company },
+        { key: 'arguments', value: newRule.arguments },
+    ]);
+
+    renderWizardRulePanel('wizardExistingRulePanel', [
+        { key: 'existing_rule_db_id', value: existingRule.id },
+        { key: 'status', value: `${existingRule.status} (${STATUS_LABEL_MAP[existingRule.status] || 'unknown'})` },
+        { key: 'match_type', value: existingRule.match_type },
+        { key: 'source_text', value: existingRule.source_text },
+        { key: 'description', value: existingRule.description },
+        { key: 'entry_type', value: existingRule.entry_type },
+        { key: 'filepath', value: existingRule.filepath },
+        { key: 'name', value: existingRule.name },
+        { key: 'company', value: existingRule.company },
+        { key: 'arguments', value: existingRule.arguments },
+        { key: 'reason', value: existingRule.reason },
+    ]);
+
+    if (precedenceEl) {
+        precedenceEl.textContent = precedenceSummary(newRule.to_status, existingRule.status);
+    }
+
+    renderConflictWizardActions(item);
+
+    if (nextButton) {
+        nextButton.textContent = conflictWizardState.index >= total - 1
+            ? 'finish contradictions'
+            : 'next conflict';
+    }
+}
+
+function advanceConflictWizard() {
+    const item = currentWizardItem();
+    if (!item) {
+        closeConflictWizardModal();
+        renderRulePreview(currentRulePreview || {});
+        openRuleReviewModal();
+        return;
+    }
+
+    const resolution = conflictWizardState.resolutions[item.key];
+    if (!resolution) {
+        alert('Choose a resolution action before continuing.');
+        return;
+    }
+
+    const nextIndex = findNextWizardIndex(conflictWizardState.index + 1);
+    if (nextIndex === -1) {
+        closeConflictWizardModal();
+        renderRulePreview(currentRulePreview || {});
+        openRuleReviewModal();
+        return;
+    }
+
+    conflictWizardState.index = nextIndex;
+    renderConflictWizardStep();
 }
 
 function buildReviewList(containerId, values, emptyText) {
@@ -1183,39 +2028,402 @@ function buildReviewList(containerId, values, emptyText) {
     });
 }
 
+function collectInlineHighlightMatches(sourceText, change) {
+    if (typeof sourceText !== 'string' || !sourceText.length || !change) {
+        return [];
+    }
+
+    const fields = [
+        { key: 'entry_type', className: 'parsed-entry-type' },
+        { key: 'clsid', className: 'parsed-clsid' },
+        { key: 'filepath', className: 'parsed-filepath' },
+        { key: 'arguments', className: 'parsed-arguments' },
+        { key: 'company', className: 'parsed-company' },
+        { key: 'name', className: 'parsed-name' },
+        { key: 'filename', className: 'parsed-filename' },
+    ];
+
+    const lowerSource = sourceText.toLowerCase();
+    const candidates = [];
+
+    fields.forEach((field, priority) => {
+        const rawValue = change[field.key];
+        if (rawValue === null || rawValue === undefined) {
+            return;
+        }
+
+        const needle = String(rawValue).trim();
+        if (!needle) {
+            return;
+        }
+
+        const lowerNeedle = needle.toLowerCase();
+        let fromIndex = 0;
+
+        while (fromIndex < lowerSource.length) {
+            const start = lowerSource.indexOf(lowerNeedle, fromIndex);
+            if (start === -1) {
+                break;
+            }
+
+            candidates.push({
+                start,
+                end: start + lowerNeedle.length,
+                className: field.className,
+                priority,
+            });
+
+            fromIndex = start + lowerNeedle.length;
+        }
+    });
+
+    candidates.sort((a, b) => {
+        if (a.start !== b.start) {
+            return a.start - b.start;
+        }
+        const aLen = a.end - a.start;
+        const bLen = b.end - b.start;
+        if (aLen !== bLen) {
+            return bLen - aLen;
+        }
+        return a.priority - b.priority;
+    });
+
+    const accepted = [];
+    candidates.forEach((candidate) => {
+        const overlaps = accepted.some(
+            (existing) => !(candidate.end <= existing.start || candidate.start >= existing.end)
+        );
+        if (!overlaps) {
+            accepted.push(candidate);
+        }
+    });
+
+    accepted.sort((a, b) => a.start - b.start);
+    return accepted;
+}
+
+function appendHighlightedRuleLine(container, sourceText, change) {
+    const text = typeof sourceText === 'string' ? sourceText : '';
+    if (!text.length) {
+        return;
+    }
+
+    const matches = collectInlineHighlightMatches(text, change);
+    if (!matches.length) {
+        container.textContent = text;
+        return;
+    }
+
+    let cursor = 0;
+    matches.forEach((match) => {
+        if (cursor < match.start) {
+            container.appendChild(document.createTextNode(text.slice(cursor, match.start)));
+        }
+
+        const span = document.createElement('span');
+        span.className = match.className;
+        span.textContent = text.slice(match.start, match.end);
+        container.appendChild(span);
+
+        cursor = match.end;
+    });
+
+    if (cursor < text.length) {
+        container.appendChild(document.createTextNode(text.slice(cursor)));
+    }
+}
+
+let activeRuleDetailsId = null;
+let currentRulePreview = null;
+
+function formatRuleDetailValue(value) {
+    if (value === null || value === undefined) {
+        return '(none)';
+    }
+    if (typeof value === 'string' && !value.length) {
+        return '(empty)';
+    }
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false';
+    }
+    return String(value);
+}
+
+function createRuleDetailRow(fieldName, value, valueClassName = '') {
+    const key = document.createElement('div');
+    key.className = 'rule-detail-key';
+    key.textContent = fieldName;
+
+    const val = document.createElement('div');
+    val.className = 'rule-detail-value';
+    if (valueClassName) {
+        val.classList.add(valueClassName);
+    }
+    val.textContent = formatRuleDetailValue(value);
+
+    return [key, val];
+}
+
+function renderContradictionListsForRule(ruleId) {
+    const contradictions = (currentRulePreview || {}).contradictions || {};
+    const selectedRuleId = ruleId === null || ruleId === undefined ? null : String(ruleId);
+    const emptyMessage = selectedRuleId
+        ? 'No contradictions detected for the selected rule.'
+        : 'Select a rule to inspect contradictions.';
+
+    const overrideConflicts = (contradictions.override_vs_existing_dominant || [])
+        .filter((item) => String(item.id) === selectedRuleId)
+        .map((item) => (
+            `selected ${item.selected_status}, existing dominant ${item.existing_dominant_status} [${item.existing_status_codes}] | ${item.line}`
+        ));
+    buildReviewList('overrideConflictsList', overrideConflicts, emptyMessage);
+
+    const overlapConflicts = (contradictions.overlaps_other_status_rules || [])
+        .filter((item) => String(item.id) === selectedRuleId)
+        .map((item) => {
+            const overlapStatuses = Array.isArray(item.overlap_statuses) ? item.overlap_statuses.join(', ') : '';
+            return `selected ${item.selected_status}, overlapping statuses: [${overlapStatuses}] | ${item.line}`;
+        });
+    buildReviewList('overlapConflictsList', overlapConflicts, emptyMessage);
+}
+
+function renderRuleDetailsPanel(change, triggerButton) {
+    const panel = document.getElementById('ruleDetailsPanel');
+    if (!panel) {
+        return;
+    }
+
+    const activeTriggers = document.querySelectorAll('.rule-candidate-trigger.active');
+    activeTriggers.forEach((button) => button.classList.remove('active'));
+    if (triggerButton) {
+        triggerButton.classList.add('active');
+    }
+
+    panel.innerHTML = '';
+    if (!change) {
+        const empty = document.createElement('div');
+        empty.className = 'rule-details-empty';
+        empty.textContent = 'Click a rule line to inspect parsed fields.';
+        panel.appendChild(empty);
+        activeRuleDetailsId = null;
+        renderContradictionListsForRule(null);
+        return;
+    }
+
+    activeRuleDetailsId = String(change.id);
+    renderContradictionListsForRule(activeRuleDetailsId);
+
+    const header = document.createElement('div');
+    header.className = 'rule-details-header';
+    header.textContent = 'parsed rule details';
+    panel.appendChild(header);
+
+    const sourceLine = document.createElement('div');
+    sourceLine.className = 'rule-details-line';
+    appendHighlightedRuleLine(sourceLine, change.source_text || '', change);
+    panel.appendChild(sourceLine);
+
+    const descriptionEditor = document.createElement('div');
+    descriptionEditor.className = 'rule-description-editor';
+
+    const descriptionLabel = document.createElement('label');
+    descriptionLabel.textContent = 'description';
+    descriptionLabel.setAttribute('for', `ruleDescriptionInput-${change.id}`);
+
+    const descriptionInput = document.createElement('textarea');
+    descriptionInput.id = `ruleDescriptionInput-${change.id}`;
+    descriptionInput.className = 'rule-description-input';
+    descriptionInput.placeholder = 'Add description for this rule...';
+    descriptionInput.value = typeof change.description === 'string' ? change.description : '';
+    descriptionInput.addEventListener('input', (event) => {
+        const value = event.target.value;
+        change.description = value;
+        ruleDescriptionOverrides.set(String(change.id), value);
+    });
+
+    descriptionEditor.appendChild(descriptionLabel);
+    descriptionEditor.appendChild(descriptionInput);
+    panel.appendChild(descriptionEditor);
+
+    const grid = document.createElement('div');
+    grid.className = 'rule-details-grid';
+
+    const colorByField = {
+        entry_type: 'parsed-entry-type',
+        clsid: 'parsed-clsid',
+        name: 'parsed-name',
+        filepath: 'parsed-filepath',
+        filename: 'parsed-filename',
+        company: 'parsed-company',
+        arguments: 'parsed-arguments',
+    };
+
+    const orderedFields = [
+        'match_type',
+        'source_text',
+        'existing_rule_id',
+        'entry_type',
+        'clsid',
+        'name',
+        'filepath',
+        'normalized_filepath',
+        'filename',
+        'company',
+        'arguments',
+        'file_not_signed',
+    ];
+
+    orderedFields.forEach((fieldName) => {
+        const [keyEl, valEl] = createRuleDetailRow(fieldName, change[fieldName], colorByField[fieldName] || '');
+        grid.appendChild(keyEl);
+        grid.appendChild(valEl);
+    });
+
+    panel.appendChild(grid);
+}
+
 function renderRuleCandidates(ruleChanges) {
     const container = document.getElementById('ruleCandidatesList');
+    const legendContainer = document.getElementById('ruleLegend');
+    const detailsPanel = document.getElementById('ruleDetailsPanel');
     if (!container) {
         return;
     }
     container.innerHTML = '';
+    if (legendContainer) {
+        legendContainer.innerHTML = '';
+    }
 
     if (!Array.isArray(ruleChanges) || ruleChanges.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'rule-candidate-meta';
         empty.textContent = 'No valid rule candidates were generated from pending changes.';
         container.appendChild(empty);
+        if (detailsPanel) {
+            renderRuleDetailsPanel(null, null);
+        }
         return;
     }
 
+    // Render legend if legendContainer exists
+    if (legendContainer) {
+        const legend = [
+            { label: 'CLSID', color: '#f0a070' },
+            { label: 'name', color: '#a0f070' },
+            { label: 'filepath', color: '#f070f0' },
+            { label: 'filename', color: '#f0f070' },
+            { label: 'company', color: '#70f0f0' },
+            { label: 'arguments', color: '#f0a0a0' },
+        ];
+        legend.forEach((item) => {
+            const legendItem = document.createElement('div');
+            legendItem.className = 'legend-item';
+            const swatch = document.createElement('div');
+            swatch.className = 'legend-swatch';
+            swatch.style.backgroundColor = item.color;
+            const label = document.createElement('span');
+            label.style.color = '#b5b5b5';
+            label.textContent = item.label;
+            legendItem.appendChild(swatch);
+            legendItem.appendChild(label);
+            legendContainer.appendChild(legendItem);
+        });
+    }
+
+    const changeById = new Map();
+    const triggerById = new Map();
+    const validChangeIds = new Set(ruleChanges.map((change) => String(change.id)));
+    [...ruleDescriptionOverrides.keys()].forEach((changeId) => {
+        if (!validChangeIds.has(changeId)) {
+            ruleDescriptionOverrides.delete(changeId);
+        }
+    });
+
     ruleChanges.forEach((change) => {
-        const row = document.createElement('label');
+        const row = document.createElement('div');
         row.className = 'rule-candidate-item';
+
+        const plan = buildRuleResolutionPlan(change);
 
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.className = 'rule-candidate-checkbox';
         checkbox.value = String(change.id);
-        checkbox.checked = true;
+        checkbox.checked = !plan.forceUnchecked;
+
+        if (plan.forceUnchecked) {
+            checkbox.checked = false;
+            checkbox.disabled = true;
+        }
+        checkbox.addEventListener('change', () => {
+            refreshFinalReviewSummary(ruleChanges);
+            renderPlannedExistingRuleChanges(ruleChanges);
+        });
+
+        changeById.set(String(change.id), change);
+
+        const descriptionOverride = ruleDescriptionOverrides.get(String(change.id));
+        if (descriptionOverride !== undefined) {
+            change.description = descriptionOverride;
+        }
+
+        const trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'rule-candidate-trigger';
+        trigger.setAttribute('aria-label', 'Show parsed details for this rule');
+        triggerById.set(String(change.id), trigger);
 
         const text = document.createElement('div');
-        const action = (change.action || 'create').toLowerCase();
-        text.textContent = `[${action}] ${change.from_status} -> ${change.to_status} | ${change.match_type} | ${change.source_text}`;
+        const action = plan.effectiveAction;
+        text.appendChild(
+            document.createTextNode(
+                `[${action}] ${change.from_status} -> ${change.to_status} | ${change.match_type} | `
+            )
+        );
+
+        const sourceLine = document.createElement('span');
+        sourceLine.className = 'rule-candidate-source-line';
+        appendHighlightedRuleLine(sourceLine, change.source_text || '', change);
+        text.appendChild(sourceLine);
+
+        trigger.appendChild(text);
+
+        const resolutionLabels = resolutionSummaryForRule(change.id);
+        const planNotes = [];
+        if (resolutionLabels.length > 0) {
+            planNotes.push(`resolution: ${resolutionLabels.join(', ')}`);
+        }
+        if (plan.hasUpdateExisting) {
+            planNotes.push('new rule will not be submitted; selected existing rules will receive the new status');
+        } else if (plan.hasDiscard) {
+            planNotes.push('new rule will be discarded and not submitted');
+        }
+        if (!plan.suppressNewRule && plan.disableRuleIds.length > 0) {
+            planNotes.push(`existing rules to disable: ${plan.disableRuleIds.map((id) => `#${id}`).join(', ')}`);
+        }
+        if (planNotes.length > 0) {
+            const note = document.createElement('div');
+            note.className = 'rule-resolution-note';
+            note.textContent = planNotes.join(' | ');
+            trigger.appendChild(note);
+        }
+
+        trigger.addEventListener('click', () => {
+            renderRuleDetailsPanel(change, trigger);
+        });
 
         row.appendChild(checkbox);
-        row.appendChild(text);
+        row.appendChild(trigger);
         container.appendChild(row);
     });
+
+    const preferredId = activeRuleDetailsId && changeById.has(activeRuleDetailsId)
+        ? activeRuleDetailsId
+        : String(ruleChanges[0].id);
+    renderRuleDetailsPanel(changeById.get(preferredId), triggerById.get(preferredId));
+    refreshFinalReviewSummary(ruleChanges);
+    renderPlannedExistingRuleChanges(ruleChanges);
 }
 
 function selectedRuleIdsFromModal() {
@@ -1224,7 +2432,9 @@ function selectedRuleIdsFromModal() {
 }
 
 function renderRulePreview(preview) {
-    const summary = preview.summary || {};
+    const safePreview = preview || {};
+    currentRulePreview = safePreview;
+    const summary = safePreview.summary || {};
     const summaryEl = document.getElementById('ruleReviewSummary');
     if (summaryEl) {
         summaryEl.textContent =
@@ -1236,33 +2446,9 @@ function renderRulePreview(preview) {
             `overlap conflicts: ${summary.overlap_conflicts || 0}`;
     }
 
-    const manualChanges = (preview.manual_changes || []).map((item) => (
-        `${item.original_status} -> ${item.new_status} | ${item.line}`
-    ));
-    buildReviewList('manualChangesList', manualChanges, 'No pending manual status changes were provided.');
+    renderRuleCandidates(safePreview.rule_changes || []);
 
-    renderRuleCandidates(preview.rule_changes || []);
-
-    const overrideConflicts = ((preview.contradictions || {}).override_vs_existing_dominant || []).map((item) => (
-        `selected ${item.selected_status}, existing dominant ${item.existing_dominant_status} [${item.existing_status_codes}] | ${item.line}`
-    ));
-    buildReviewList(
-        'overrideConflictsList',
-        overrideConflicts,
-        'No dominant status contradictions detected.'
-    );
-
-    const overlapConflicts = ((preview.contradictions || {}).overlaps_other_status_rules || []).map((item) => {
-        const overlapStatuses = Array.isArray(item.overlap_statuses) ? item.overlap_statuses.join(', ') : '';
-        return `selected ${item.selected_status}, overlapping statuses: [${overlapStatuses}] | ${item.line}`;
-    });
-    buildReviewList(
-        'overlapConflictsList',
-        overlapConflicts,
-        'No overlap contradictions detected.'
-    );
-
-    const invalidChanges = (preview.invalid_changes || []).map((item) => {
+    const invalidChanges = (safePreview.invalid_changes || []).map((item) => {
         const idx = item.index === null || item.index === undefined ? '?' : item.index;
         return `index ${idx}: ${item.error || 'Invalid change.'}`;
     });
@@ -1294,7 +2480,15 @@ async function fetchRulePreview(pendingChanges) {
 
         const preview = await response.json();
         renderRulePreview(preview);
-        openRuleReviewModal();
+        initializeConflictWizard(preview);
+        const firstUnresolvedIndex = findNextWizardIndex(0);
+        if (firstUnresolvedIndex !== -1) {
+            conflictWizardState.index = firstUnresolvedIndex;
+            closeRuleReviewModal();
+            openConflictWizardModal();
+        } else {
+            openRuleReviewModal();
+        }
     } catch (error) {
         alert(error.message || 'Failed to preview pending rule changes.');
     } finally {
@@ -1310,11 +2504,19 @@ async function submitWithRulePersist(persistSelectedRules) {
     
     if (persistSelectedRules && pendingPayload.length > 0) {
         const selectedRuleIds = selectedRuleIdsFromModal();
+        const conflictResolutions = serializeConflictResolutions();
         sessionStorage.setItem('fenrishub_persist_rules', '1');
         sessionStorage.setItem('fenrishub_pending_rule_changes', JSON.stringify(pendingPayload));
         sessionStorage.setItem('fenrishub_selected_rule_ids', JSON.stringify(selectedRuleIds));
+        sessionStorage.setItem(CONFLICT_RESOLUTION_STORAGE_KEY, JSON.stringify(conflictResolutions));
+    } else {
+        sessionStorage.removeItem('fenrishub_persist_rules');
+        sessionStorage.removeItem('fenrishub_pending_rule_changes');
+        sessionStorage.removeItem('fenrishub_selected_rule_ids');
+        sessionStorage.removeItem(CONFLICT_RESOLUTION_STORAGE_KEY);
     }
     
+    closeConflictWizardModal();
     closeRuleReviewModal();
     window.location.href = "{% url 'create_fixlist' %}";
 }
