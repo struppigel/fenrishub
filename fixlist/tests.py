@@ -8,7 +8,7 @@ from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
 from .models import AccessLog, ClassificationRule, Fixlist
-from .views import dashboard_view, shared_fixlist_view, view_fixlist
+from .views import change_password_view, dashboard_view, shared_fixlist_view, view_fixlist
 
 
 class FixlistModelTests(TestCase):
@@ -49,6 +49,49 @@ class AuthenticationAndAccessTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response.url)
+
+    def test_change_password_requires_login(self):
+        response = self.client.get(reverse("change_password"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+
+    def test_change_password_updates_credentials_without_email(self):
+        self.user.email = ""
+        self.user.save(update_fields=["email"])
+
+        self.assertTrue(self.client.login(username="alice", password="password123"))
+        response = self.client.post(
+            reverse("change_password"),
+            {
+                "old_password": "password123",
+                "new_password1": "new-password456",
+                "new_password2": "new-password456",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("change_password"))
+
+        self.client.logout()
+        self.assertFalse(self.client.login(username="alice", password="password123"))
+        self.assertTrue(self.client.login(username="alice", password="new-password456"))
+
+    def test_change_password_form_exposes_password_fields_only(self):
+        request = self.factory.get(reverse("change_password"))
+        request.user = self.user
+
+        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
+            response = change_password_view(request)
+
+        rendered_context = mock_render.call_args.args[2]
+        form = rendered_context["form"]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("old_password", form.fields)
+        self.assertIn("new_password1", form.fields)
+        self.assertIn("new_password2", form.fields)
+        self.assertNotIn("email", form.fields)
 
     def test_dashboard_only_shows_user_fixlists(self):
         Fixlist.objects.create(owner=self.other_user, title="Other", content="secret")

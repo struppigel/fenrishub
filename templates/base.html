@@ -344,6 +344,7 @@
                 <a href="{% url 'dashboard' %}">fixlists</a>
                 <a href="{% url 'create_fixlist' %}">create</a>
                 <a href="{% url 'log_analyzer' %}">analyze</a>
+                <a href="{% url 'change_password' %}">password</a>
                 <form method="post" action="{% url 'logout' %}" style="display: inline;">
                     {% csrf_token %}
                     <button type="submit">Logout {{ user.username }}</button>

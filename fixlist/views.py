@@ -1,6 +1,8 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth import authenticate, login, logout
+from django.contrib import messages
+from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.models import User
 from django.http import JsonResponse, HttpResponse, FileResponse
 from django.views.decorators.http import require_http_methods
@@ -436,6 +438,24 @@ def login_view(request):
             return render(request, 'login.html', {'error': 'Invalid credentials'})
     
     return render(request, 'login.html')
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def change_password_view(request):
+    """Allow authenticated users to change their password without email input."""
+    if request.method == 'POST':
+        form = PasswordChangeForm(request.user, request.POST)
+        if form.is_valid():
+            updated_user = form.save()
+            # Keep the current session active after password update.
+            update_session_auth_hash(request, updated_user)
+            messages.success(request, 'Password updated successfully.')
+            return redirect('change_password')
+    else:
+        form = PasswordChangeForm(request.user)
+
+    return render(request, 'change_password.html', {'form': form})
 
 
 @login_required

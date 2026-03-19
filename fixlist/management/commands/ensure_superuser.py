@@ -22,10 +22,10 @@ class Command(BaseCommand):
         email = os.getenv('DJANGO_SUPERUSER_EMAIL', '').strip()
         password = os.getenv('DJANGO_SUPERUSER_PASSWORD', '').strip()
 
-        if not username or not email or not password:
+        if not username or not password:
             self.stdout.write(
-                'Missing DJANGO_SUPERUSER_USERNAME, DJANGO_SUPERUSER_EMAIL, or '
-                'DJANGO_SUPERUSER_PASSWORD; skipping superuser bootstrap.'
+                'Missing DJANGO_SUPERUSER_USERNAME or DJANGO_SUPERUSER_PASSWORD; '
+                'skipping superuser bootstrap.'
             )
             return
 
@@ -46,7 +46,7 @@ class Command(BaseCommand):
             return
 
         changed = False
-        if user.email != email:
+        if email and user.email != email:
             user.email = email
             changed = True
         if not user.is_staff:
@@ -55,8 +55,11 @@ class Command(BaseCommand):
         if not user.is_superuser:
             user.is_superuser = True
             changed = True
+        if not user.check_password(password):
+            user.set_password(password)
+            changed = True
 
         if changed:
-            user.save(update_fields=['email', 'is_staff', 'is_superuser'])
+            user.save()
 
         self.stdout.write(f'Superuser already exists: {username}')
