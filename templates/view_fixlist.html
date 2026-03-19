@@ -2,10 +2,12 @@
 
 {% block title %}{{ fixlist.title }} - FenrisHub{% endblock %}
 
+{% block header_context %}
+<div class="page-context">edit / {{ fixlist.title }}</div>
+{% endblock %}
+
 {% block content %}
 <div>
-    <h2>edit / {{ fixlist.title }}</h2>
-
     <div class="info-box">
         token {{ fixlist.share_token }}<br>
         created {{ fixlist.created_at|date:"Y-m-d H:i" }}<br>
