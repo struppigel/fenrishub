@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser, User
@@ -92,6 +93,80 @@ class FixlistCrudViewTests(TestCase):
         self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
         self.assertEqual(created.owner, self.user)
         self.assertEqual(created.internal_note, "internal context")
+
+    def test_create_fixlist_without_rule_persistence_creates_no_rules(self):
+        pending_changes = [
+            {
+                "id": "1",
+                "line": "MALICIOUS-LINE",
+                "original_status": "?",
+                "new_status": ClassificationRule.STATUS_MALWARE,
+                "order": 1,
+            }
+        ]
+
+        response = self.client.post(
+            reverse("create_fixlist"),
+            {
+                "title": "Fixlist No Rule Persist",
+                "content": "line-a",
+                "internal_note": "",
+                "persist_rules": "0",
+                "pending_rule_changes_json": json.dumps(pending_changes),
+                "selected_rule_change_ids_json": json.dumps(["1"]),
+            },
+        )
+
+        created = Fixlist.objects.get(title="Fixlist No Rule Persist")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
+        self.assertEqual(ClassificationRule.objects.count(), 0)
+
+    def test_create_fixlist_persists_only_selected_pending_rules(self):
+        pending_changes = [
+            {
+                "id": "1",
+                "line": "MALICIOUS-LINE",
+                "original_status": "?",
+                "new_status": ClassificationRule.STATUS_MALWARE,
+                "order": 1,
+            },
+            {
+                "id": "2",
+                "line": "PUP-LINE",
+                "original_status": "?",
+                "new_status": ClassificationRule.STATUS_PUP,
+                "order": 2,
+            },
+        ]
+
+        response = self.client.post(
+            reverse("create_fixlist"),
+            {
+                "title": "Fixlist Selected Rule Persist",
+                "content": "line-a\nline-b",
+                "internal_note": "",
+                "persist_rules": "1",
+                "pending_rule_changes_json": json.dumps(pending_changes),
+                "selected_rule_change_ids_json": json.dumps(["1"]),
+            },
+        )
+
+        created = Fixlist.objects.get(title="Fixlist Selected Rule Persist")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
+        self.assertTrue(
+            ClassificationRule.objects.filter(
+                status=ClassificationRule.STATUS_MALWARE,
+                source_text="MALICIOUS-LINE",
+            ).exists()
+        )
+        self.assertFalse(
+            ClassificationRule.objects.filter(
+                status=ClassificationRule.STATUS_PUP,
+                source_text="PUP-LINE",
+            ).exists()
+        )
 
     def test_update_fixlist_changes_content(self):
         fixlist = Fixlist.objects.create(
@@ -254,6 +329,21 @@ class TemplateMarkupTests(TestCase):
         self.assertIn('class="action-btn" onclick="copyShareLink', content)
         self.assertIn('class="action-btn">edit</a>', content)
 
+    def test_log_analyzer_template_contains_status_picker_hooks(self):
+        content = self._read_template("log_analyzer.html")
+
+        self.assertIn('id="statusPicker"', content)
+        self.assertIn("fenrishub_pending_status_changes", content)
+        self.assertIn("manual override:", content)
+        self.assertNotIn("update_analyzed_line_status_api", content)
+
+    def test_create_fixlist_template_contains_persist_review_modal(self):
+        content = self._read_template("create_fixlist.html")
+
+        self.assertIn('id="ruleReviewModal"', content)
+        self.assertIn("preview_pending_rule_changes_api", content)
+        self.assertIn("save + persist selected rules", content)
+
 
 class LogAnalyzerApiTests(TestCase):
     def setUp(self):
@@ -314,3 +404,296 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["lines"][0]["status_codes"], "BP")
         self.assertEqual(payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+
+    def test_analyze_api_returns_incomplete_log_warning(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Scan result of Farbar Recovery Scan Tool\n"
+                    "Some FRST content without end markers"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warning_codes = {warning["code"] for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("incomplete_logs", warning_codes)
+        self.assertEqual(payload["summary"]["warning_count"], len(payload["warnings"]))
+
+    def test_analyze_api_returns_low_memory_warning(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Percentage of memory in use: 91%\n"
+                    "Total physical RAM: 2048 MB\n"
+                    "Drive C: (Windows) (Free:50 GB)\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("low_memory", warnings_by_code)
+        self.assertIn("RAM usage above 80%", warnings_by_code["low_memory"]["message"])
+
+    def test_analyze_api_accepts_windows_ssd_drive_line_for_memory_check(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "BIOS: LENOVO KZCN40WW 10/18/2023\n"
+                    "Motherboard: LENOVO LNVNB161216\n"
+                    "Processor: 13th Gen Intel(R) Core(TM) i5-13500H\n"
+                    "Percentage of memory in use: 67%\n"
+                    "Total physical RAM: 16123.87 MB\n"
+                    "Available physical RAM: 5196.51 MB\n"
+                    "Total Virtual: 30459.87 MB\n"
+                    "Available Virtual: 13730.64 MB\n"
+                    "Drive c: (Windows-SSD) (Fixed) (Total:951.65 GB) (Free:260.94 GB) (Model: SAMSUNG MZAL41T0HBLB-00BL2) (Protected) NTFS\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("low_memory", warnings_by_code)
+
+    def test_analyze_api_accepts_drive_c_without_windows_label_for_memory_check(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Percentage of memory in use: 48%\n"
+                    "Total physical RAM: 16107.87 MB\n"
+                    "Available physical RAM: 8322.04 MB\n"
+                    "Drive c: () (Fixed) (Total:952.91 GB) (Free:901.65 GB) (Model: SAMSUNG MZVL21T0HCLR-00BL2) NTFS\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("low_memory", warnings_by_code)
+
+    def test_update_status_api_requires_login(self):
+        response = self.client.post(
+            reverse("update_analyzed_line_status_api"),
+            data=json.dumps({"line": "example", "status": "B", "current_status": "?"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+
+    def test_update_status_api_rejects_invalid_status(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("update_analyzed_line_status_api"),
+            data=json.dumps({"line": "example", "status": "X", "current_status": "?"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid status", response.json()["error"])
+
+    def test_update_status_api_rejects_informational_line_edits(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("update_analyzed_line_status_api"),
+            data=json.dumps({"line": "example", "status": "B", "current_status": "I"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Informational lines cannot be edited.")
+
+    def test_update_status_api_validates_payload_without_persisting(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("update_analyzed_line_status_api"),
+            data=json.dumps(
+                {
+                    "line": "MALICIOUS-LINE",
+                    "status": ClassificationRule.STATUS_MALWARE,
+                    "current_status": ClassificationRule.STATUS_UNKNOWN,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(payload["persisted"])
+        self.assertEqual(payload["match_type"], ClassificationRule.MATCH_EXACT)
+        self.assertFalse(ClassificationRule.objects.filter(source_text="MALICIOUS-LINE").exists())
+
+    def test_update_status_api_validates_parsed_entry_without_persisting(self):
+        self.client.login(username="analyzer", password="password123")
+        runkey_line = (
+            r"HKU\S-1-5-21-111-222-333-1001\...\Run: [SomeValue] => C:\Users\Alice\AppData\Roaming\Some.exe "
+            r"[2024-01-01] (Contoso)"
+        )
+
+        response = self.client.post(
+            reverse("update_analyzed_line_status_api"),
+            data=json.dumps(
+                {
+                    "line": runkey_line,
+                    "status": ClassificationRule.STATUS_PUP,
+                    "current_status": ClassificationRule.STATUS_UNKNOWN,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(payload["persisted"])
+        self.assertEqual(payload["match_type"], ClassificationRule.MATCH_PARSED_ENTRY)
+        self.assertEqual(ClassificationRule.objects.count(), 0)
+
+    def test_preview_pending_rule_changes_api_requires_login(self):
+        response = self.client.post(
+            reverse("preview_pending_rule_changes_api"),
+            data=json.dumps({"pending_changes": []}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+
+    def test_preview_pending_rule_changes_api_rejects_non_list_payload(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("preview_pending_rule_changes_api"),
+            data=json.dumps({"pending_changes": {"id": "1"}}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("must be a list", response.json()["error"])
+
+    def test_preview_pending_rule_changes_reports_conflicts_and_candidates(self):
+        self.client.login(username="analyzer", password="password123")
+
+        ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="CONFLICT-LINE",
+            description="existing malware exact",
+        )
+        ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+            source_text="CONFLICT",
+            description="existing clean substring",
+        )
+
+        response = self.client.post(
+            reverse("preview_pending_rule_changes_api"),
+            data=json.dumps(
+                {
+                    "pending_changes": [
+                        {
+                            "id": "1",
+                            "line": "CONFLICT-LINE",
+                            "original_status": "?",
+                            "new_status": ClassificationRule.STATUS_PUP,
+                            "order": 1,
+                        }
+                    ]
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        summary = payload["summary"]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(summary["pending_changes"], 1)
+        self.assertEqual(summary["rule_candidates"], 1)
+        self.assertEqual(summary["create_candidates"], 1)
+        self.assertGreaterEqual(summary["override_conflicts"], 1)
+        self.assertGreaterEqual(summary["overlap_conflicts"], 1)
+        self.assertEqual(payload["rule_changes"][0]["match_type"], ClassificationRule.MATCH_EXACT)
+
+    def test_preview_pending_rule_changes_marks_existing_rule_as_update(self):
+        self.client.login(username="analyzer", password="password123")
+
+        ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_PUP,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="EXISTING-PUP",
+            description="already tracked",
+        )
+
+        response = self.client.post(
+            reverse("preview_pending_rule_changes_api"),
+            data=json.dumps(
+                {
+                    "pending_changes": [
+                        {
+                            "id": "2",
+                            "line": "EXISTING-PUP",
+                            "original_status": "?",
+                            "new_status": ClassificationRule.STATUS_PUP,
+                            "order": 1,
+                        }
+                    ]
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["rule_changes"][0]["action"], "update")
+
+    def test_analyze_api_flags_memory_incomplete_when_drive_info_missing(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Percentage of memory in use: 67%\n"
+                    "Total physical RAM: 16123.87 MB\n"
+                    "Available physical RAM: 5196.51 MB\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("low_memory", warnings_by_code)
+        self.assertIn("Memory information incomplete", warnings_by_code["low_memory"]["message"])

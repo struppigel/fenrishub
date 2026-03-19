@@ -2,6 +2,10 @@
 
 {% block title %}Dashboard - FenrisHub{% endblock %}
 
+{% block header_context %}
+<div class="page-context">fixlists / {{ user.username }}</div>
+{% endblock %}
+
 {% block extra_css %}
 <style>
     .fixlist-actions .action-btn {
@@ -29,8 +33,6 @@
 
 {% block content %}
 <div>
-    <h2>fixlists / {{ user.username }}</h2>
-
     <div class="button-group">
         <a href="{% url 'create_fixlist' %}"><button type="button">create new</button></a>
     </div>

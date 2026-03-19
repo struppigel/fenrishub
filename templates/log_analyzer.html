@@ -2,37 +2,81 @@
 
 {% block title %}Log Analyzer - FenrisHub{% endblock %}
 
+{% block header_context %}
+<div class="page-context">log analyzer / {{ user.username }}</div>
+{% endblock %}
+
 {% block content %}
-<div class="analyzer-header">
-    <h2>log analyzer / {{ user.username }}</h2>
+<div id="analysisWarnings" class="analysis-warnings" hidden></div>
+
+<div class="analyzer-toolbar-grid">
+    <div class="analyzer-toolbar analyzer-toolbar-left">
+        <button type="button" id="parseButton" onclick="parseLogs()">parse lines</button>
+        <button type="button" id="resetButton" onclick="resetToInput()" style="display: none;">edit log</button>
+    </div>
+    <div class="analyzer-toolbar analyzer-toolbar-right">
+        <button type="button" onclick="insertAllStatus('J')">add all junk</button>
+        <button type="button" onclick="insertAllStatus('B')">add all bad</button>
+        <button type="button" onclick="insertAllStatus('P')">add all PUP</button>
+        <button type="button" class="save-fixlist-button" onclick="goToCreateFixlist()">save as fixlist</button>
+    </div>
 </div>
 
-<div class="analyzer-grid">
-    <!-- Left side: Log input and parsed lines -->
-    <div class="analyzer-section">
-        <h3>paste log</h3>
-        <div id="inputMode">
-            <textarea id="logInput" placeholder="Paste your log content here..."></textarea>
-            <div class="panel-actions">
-                <button type="button" onclick="parseLogs()">parse lines</button>
-            </div>
-        </div>
-        <div id="linesMode">
-            <div id="analysisSummary" class="analysis-summary"></div>
-            <div id="logLines" class="log-lines-container"></div>
-            <div class="panel-actions">
-                <button type="button" onclick="resetToInput()">edit log</button>
-            </div>
-        </div>
+<div class="textareas-box">
+    <div class="left-panel">
+        <textarea id="logInput" placeholder="Paste your log content here..."></textarea>
+        <div id="logLines" class="log-lines-container" style="display: none;"></div>
     </div>
+    <textarea id="selectedLines">Start::
+CreateRestorePoint:
+CloseProcesses:
 
-    <!-- Right side: Selected lines (editable) -->
-    <div class="analyzer-section">
-        <h3>selected for fixlist</h3>
-        <textarea id="selectedLines" placeholder="Click lines on the left to add them here, or type directly..."></textarea>
-        <div class="panel-actions button-group">
-            <button type="button" onclick="goToCreateFixlist()">save as fixlist</button>
-            <a href="{% url 'dashboard' %}"><button type="button">back to list</button></a>
+EmptyTemp:
+End::</textarea>
+</div>
+
+<div class="analyzer-summary-grid">
+    <div id="analysisSummary" class="analysis-summary"></div>
+    <div></div>
+</div>
+
+<div id="statusPicker" class="status-picker" hidden></div>
+
+<div id="ruleReviewModal" class="rule-review-modal" hidden>
+    <div class="rule-review-backdrop" id="ruleReviewBackdrop"></div>
+    <div class="rule-review-content" role="dialog" aria-modal="true" aria-labelledby="ruleReviewTitle">
+        <h3 id="ruleReviewTitle">Persist pending status changes to the rule database?</h3>
+        <p id="ruleReviewSummary" class="review-summary"></p>
+
+        <div class="review-section">
+            <h4>manual status changes</h4>
+            <ul id="manualChangesList" class="review-list"></ul>
+        </div>
+
+        <div class="review-section">
+            <h4>rules that would be persisted</h4>
+            <div id="ruleCandidatesList" class="rule-candidates-list"></div>
+        </div>
+
+        <div class="review-section">
+            <h4>contradictions: selected status vs existing dominant status</h4>
+            <ul id="overrideConflictsList" class="review-list"></ul>
+        </div>
+
+        <div class="review-section">
+            <h4>contradictions: overlapping rules with other statuses</h4>
+            <ul id="overlapConflictsList" class="review-list"></ul>
+        </div>
+
+        <div class="review-section">
+            <h4>invalid pending changes</h4>
+            <ul id="invalidChangesList" class="review-list"></ul>
+        </div>
+
+        <div class="button-group review-actions">
+            <button type="button" id="ruleReviewBackButton" onclick="closeRuleReviewModal(); return false;">back to edit</button>
+            <button type="button" id="ruleReviewContinueButton" onclick="submitWithRulePersist(false); return false;">discard rules and continue</button>
+            <button type="button" id="ruleReviewSavePersistButton">save + persist selected rules</button>
         </div>
     </div>
 </div>
@@ -52,66 +96,121 @@ body {
     padding: 0;
 }
 
-.analyzer-header {
-    margin: 0 0 12px;
+.analyzer-toolbar-grid,
+.analyzer-summary-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px;
+    width: 100%;
+    margin-bottom: 10px;
 }
 
-.analyzer-grid {
+.analyzer-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 0;
+}
+
+.analyzer-toolbar-right {
+    justify-content: flex-start;
+}
+
+.save-fixlist-button {
+    margin-left: auto;
+}
+
+.analyzer-toolbar-bottom {
+    margin-top: 0;
+}
+
+.analyzer-toolbar-grid-bottom {
+    margin-top: 10px;
+    margin-bottom: 0;
+}
+
+.analyzer-summary-grid {
+    min-height: 18px;
+}
+
+.analyzer-summary-grid > div {
+    min-width: 0;
+}
+
+.analysis-warnings {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.analysis-warning {
+    border: 1px solid #6b5523;
+    background-color: #1a1610;
+    color: #f0d28f;
+    padding: 10px 12px;
+}
+
+.analysis-warning-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.analysis-warning-title {
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.analysis-warning-close {
+    border: 0;
+    background: transparent;
+    color: #f0d28f;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0;
+}
+
+.analysis-warning-close:hover {
+    color: #fff2cc;
+}
+
+.analysis-warning-message {
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.analysis-warning-details {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    font-size: 12px;
+}
+
+.textareas-box {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 10px;
     width: 100%;
     height: calc(100vh - 180px);
     min-height: 0;
-    overflow: hidden;
     background-color: #131313;
     border: 1px solid #2a2a2a;
     padding: 12px;
 }
 
-.analyzer-section {
+.left-panel {
+    min-width: 0;
+    min-height: 0;
     display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
 }
 
-.analyzer-section h3 {
-    margin-bottom: 10px;
-}
-
-#inputMode,
-#linesMode {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-}
-
-#linesMode {
-    display: none;
-}
-
-#logInput {
-    width: 100%;
-    flex: 1;
-    min-height: 0;
-    font-family: monospace;
-    font-size: 12px;
-    line-height: 1.35;
-    padding: 10px;
-    border: 1px solid #9fcf82;
-    background-color: #131313;
-    color: #9fcf82;
-    overflow: auto;
-    resize: none;
-}
-
+#logInput,
 #selectedLines {
+    min-width: 0;
     width: 100%;
-    flex: 1;
-    min-height: 0;
+    height: 100%;
     font-family: monospace;
     font-size: 12px;
     line-height: 1.35;
@@ -121,16 +220,56 @@ body {
     color: #9fcf82;
     overflow: auto;
     resize: none;
+}
+
+#logInput::-webkit-scrollbar,
+#selectedLines::-webkit-scrollbar {
+    width: 8px;
+}
+
+#logInput::-webkit-scrollbar-track,
+#selectedLines::-webkit-scrollbar-track {
+    background: #1a1a1a;
+}
+
+#logInput::-webkit-scrollbar-thumb,
+#selectedLines::-webkit-scrollbar-thumb {
+    background: #3a3a3a;
+    border-radius: 4px;
+}
+
+#logInput::-webkit-scrollbar-thumb:hover,
+#selectedLines::-webkit-scrollbar-thumb:hover {
+    background: #4a4a4a;
 }
 
 .log-lines-container {
     border: 1px solid #9fcf82;
     background-color: #131313;
     overflow-y: auto;
-    overflow-x: auto;
+    overflow-x: hidden;
     padding: 0;
-    flex: 1;
+    min-width: 0;
+    width: 100%;
+    height: 100%;
     min-height: 0;
+}
+
+.log-lines-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+.log-lines-container::-webkit-scrollbar-track {
+    background: #1a1a1a;
+}
+
+.log-lines-container::-webkit-scrollbar-thumb {
+    background: #3a3a3a;
+    border-radius: 4px;
+}
+
+.log-lines-container::-webkit-scrollbar-thumb:hover {
+    background: #4a4a4a;
 }
 
 .log-line {
@@ -141,13 +280,12 @@ body {
     font-size: 12px;
     line-height: 1.35;
     color: #9fcf82;
-    white-space: pre;
-    word-break: normal;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    word-break: break-word;
+    overflow: visible;
     user-select: none;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
 }
 
@@ -169,16 +307,7 @@ body {
     border-bottom: none;
 }
 
-.panel-actions {
-    margin-top: 10px;
-    min-height: 32px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
 .analysis-summary {
-    margin: 0 0 8px;
     font-size: 12px;
     color: #b4b4b4;
 }
@@ -191,6 +320,133 @@ body {
     background-color: #0f0f0f;
     padding: 0 4px;
     line-height: 1.2;
+    cursor: pointer;
+}
+
+.status-badge:hover {
+    border-color: #4a4a4a;
+}
+
+.status-picker {
+    position: fixed;
+    z-index: 2000;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    padding: 6px;
+    min-width: 170px;
+    border: 1px solid #3a3a3a;
+    background: #111111;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.status-picker[hidden] {
+    display: none !important;
+}
+
+.rule-review-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2500;
+}
+
+.rule-review-modal[hidden] {
+    display: none !important;
+}
+
+.rule-review-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    pointer-events: none;
+}
+
+.rule-review-content {
+    position: relative;
+    margin: 5vh auto;
+    width: min(960px, 96vw);
+    max-height: 90vh;
+    overflow: auto;
+    background: #151515;
+    border: 1px solid #2d2d2d;
+    padding: 16px;
+}
+
+.review-summary {
+    color: #b5b5b5;
+    margin: 8px 0 14px;
+    font-size: 12px;
+}
+
+.review-section {
+    margin-bottom: 12px;
+}
+
+.review-section h4 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    color: #d8d8d8;
+    text-transform: lowercase;
+}
+
+.review-list {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.rule-candidates-list {
+    display: grid;
+    gap: 6px;
+    max-height: 220px;
+    overflow: auto;
+    border: 1px solid #2a2a2a;
+    padding: 8px;
+    background: #121212;
+}
+
+.rule-candidate-item {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px;
+    align-items: flex-start;
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.rule-candidate-meta {
+    color: #949494;
+}
+
+.review-actions {
+    margin-top: 14px;
+}
+
+.status-picker-option {
+    border: 1px solid #303030;
+    background: #181818;
+    color: #d3d3d3;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.2;
+    padding: 4px 0;
+    cursor: pointer;
+}
+
+.status-picker-option:hover:not(:disabled) {
+    border-color: #5a5a5a;
+    background: #212121;
+}
+
+.status-picker-option.active {
+    border-color: #9fcf82;
+    background: #1f2919;
+}
+
+.status-picker-option:disabled {
+    opacity: 0.6;
+    cursor: wait;
 }
 
 .status-b {
@@ -234,14 +490,19 @@ body {
     color: #7a7a7a;
 }
 
-@media (max-width: 980px) {
-    .analyzer-grid {
-        grid-template-columns: 1fr;
-        min-height: auto;
-    }
+.line-text {
+    flex: 1;
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
 
-    .analyzer-section {
-        min-height: 40vh;
+@media (max-width: 980px) {
+    .analyzer-toolbar-grid,
+    .analyzer-summary-grid,
+    .textareas-box {
+        grid-template-columns: 1fr;
+        height: auto;
     }
 }
 </style>
@@ -249,6 +510,33 @@ body {
 <script>
 let analyzedLines = [];
 let copiedLineIndexes = new Set();
+const EDITABLE_STATUSES = ['B', 'P', 'C', '!', 'G', 'S', 'J', '?'];
+const STATUS_CLASS_MAP = {
+    B: 'status-b',
+    P: 'status-p',
+    C: 'status-c',
+    '!': 'status-w',
+    G: 'status-g',
+    S: 'status-s',
+    I: 'status-i',
+    J: 'status-j',
+    '?': 'status-unknown',
+};
+const STATUS_LABEL_MAP = {
+    B: 'malware',
+    P: 'potentially unwanted',
+    C: 'clean',
+    '!': 'warning',
+    G: 'grayware',
+    S: 'security',
+    I: 'informational',
+    J: 'junk',
+    '?': 'unknown',
+};
+const PENDING_STATUS_STORAGE_KEY = 'fenrishub_pending_status_changes';
+let statusPickerBusy = false;
+let pendingStatusChanges = new Map();
+let pendingChangeSequence = 0;
 
 function getCookie(name) {
     const value = `; ${document.cookie}`;
@@ -259,6 +547,272 @@ function getCookie(name) {
     return '';
 }
 
+// Set cursor position after CloseProcesses: on page load
+function initializeCursorPosition() {
+    const textarea = document.getElementById('selectedLines');
+    const text = textarea.value;
+    const marker = "CloseProcesses:";
+    const markerIndex = text.indexOf(marker);
+    
+    if (markerIndex !== -1) {
+        const lineEndIndex = text.indexOf('\n', markerIndex);
+        const cursorPos = lineEndIndex !== -1 ? lineEndIndex + 1 : markerIndex + marker.length;
+        textarea.selectionStart = textarea.selectionEnd = cursorPos;
+    }
+}
+
+// Initialize page behaviors when page loads
+document.addEventListener('DOMContentLoaded', () => {
+    initializeCursorPosition();
+    setupStatusPicker();
+    
+    // Load pending status changes from sessionStorage
+    const pendingRaw = sessionStorage.getItem(PENDING_STATUS_STORAGE_KEY);
+    const parsedPending = safeParseJson(pendingRaw || '[]', []);
+    
+    // Convert array back to Map
+    if (Array.isArray(parsedPending) && parsedPending.length > 0) {
+        const tempMap = new Map();
+        parsedPending.forEach((change) => {
+            const key = `${change.line}::${change.order}`;
+            tempMap.set(key, change);
+        });
+        pendingStatusChanges = tempMap;
+    } else {
+        pendingStatusChanges = new Map();
+    }
+    
+    // Setup rule review modal event listeners
+    const ruleReviewBackButton = document.getElementById('ruleReviewBackButton');
+    const ruleReviewContinueButton = document.getElementById('ruleReviewContinueButton');
+    const ruleReviewSavePersistButton = document.getElementById('ruleReviewSavePersistButton');
+    const ruleReviewBackdrop = document.getElementById('ruleReviewBackdrop');
+    
+    if (ruleReviewBackButton) {
+        ruleReviewBackButton.addEventListener('click', closeRuleReviewModal);
+    }
+    
+    if (ruleReviewContinueButton) {
+        ruleReviewContinueButton.addEventListener('click', function() {
+            submitWithRulePersist(false);
+        });
+    }
+    
+    if (ruleReviewSavePersistButton) {
+        ruleReviewSavePersistButton.addEventListener('click', function() {
+            submitWithRulePersist(true);
+        });
+    }
+    
+    if (ruleReviewBackdrop) {
+        ruleReviewBackdrop.addEventListener('click', closeRuleReviewModal);
+    }
+});
+
+function updateSummary(summary, fallbackTotal = 0) {
+    const totalLines = Number(summary.total_lines || fallbackTotal);
+    const matchedLines = Number(summary.matched_lines || 0);
+    const unknownLines = Number(summary.unknown_lines || 0);
+    const pendingChanges = pendingStatusChanges.size;
+    const summaryEl = document.getElementById('analysisSummary');
+    summaryEl.textContent = `lines: ${totalLines}, matched: ${matchedLines}, unknown: ${unknownLines}, pending status changes: ${pendingChanges}`;
+}
+
+function summarizeEffectiveStatuses(lines) {
+    let matchedLines = 0;
+    let unknownLines = 0;
+
+    lines.forEach((line) => {
+        const status = line.dominant_status || '?';
+        if (status === '?') {
+            unknownLines += 1;
+        } else {
+            matchedLines += 1;
+        }
+    });
+
+    return {
+        total_lines: lines.length,
+        matched_lines: matchedLines,
+        unknown_lines: unknownLines,
+    };
+}
+
+function attachLineKeys(lines) {
+    const seenByLine = new Map();
+    return lines.map((entry) => {
+        const lineText = entry.line || '';
+        const nextCount = (seenByLine.get(lineText) || 0) + 1;
+        seenByLine.set(lineText, nextCount);
+
+        const baseStatus = entry.dominant_status || '?';
+        const baseReasons = Array.isArray(entry.reasons) ? [...entry.reasons] : [];
+
+        return {
+            ...entry,
+            _lineKey: `${lineText}::${nextCount}`,
+            _baseDominantStatus: baseStatus,
+            _baseStatusCodes: entry.status_codes || baseStatus,
+            _baseCssClass: entry.css_class || STATUS_CLASS_MAP[baseStatus] || 'status-unknown',
+            _baseStatusLabel: entry.status_label || STATUS_LABEL_MAP[baseStatus] || 'unknown',
+            _baseReasons: baseReasons,
+        };
+    });
+}
+
+function applyPendingOverrides() {
+    analyzedLines = analyzedLines.map((entry) => {
+        const baseStatus = entry._baseDominantStatus || entry.dominant_status || '?';
+        const baseReasons = Array.isArray(entry._baseReasons) ? [...entry._baseReasons] : [];
+        const pending = pendingStatusChanges.get(entry._lineKey);
+
+        if (!pending) {
+            return {
+                ...entry,
+                dominant_status: baseStatus,
+                status_codes: entry._baseStatusCodes || baseStatus,
+                css_class: entry._baseCssClass || STATUS_CLASS_MAP[baseStatus] || 'status-unknown',
+                status_label: entry._baseStatusLabel || STATUS_LABEL_MAP[baseStatus] || 'unknown',
+                reasons: baseReasons,
+                matched: baseStatus !== '?',
+            };
+        }
+
+        const overrideStatus = pending.new_status;
+        return {
+            ...entry,
+            dominant_status: overrideStatus,
+            status_codes: overrideStatus,
+            css_class: STATUS_CLASS_MAP[overrideStatus] || 'status-unknown',
+            status_label: STATUS_LABEL_MAP[overrideStatus] || 'unknown',
+            reasons: [...baseReasons, `manual override: ${pending.original_status} -> ${pending.new_status}`],
+            matched: overrideStatus !== '?',
+        };
+    });
+}
+
+function getPendingStatusChangesPayload() {
+    return [...pendingStatusChanges.values()]
+        .sort((left, right) => left.order - right.order)
+        .map((change) => ({
+            id: change.id,
+            line: change.line,
+            original_status: change.original_status,
+            new_status: change.new_status,
+            order: change.order,
+        }));
+}
+
+function applyAnalysisPayload(payload, options = {}) {
+    const nextLines = Array.isArray(payload.lines) ? payload.lines : [];
+    const shouldResetCopied = Boolean(options.resetCopied);
+    const keyedLines = attachLineKeys(nextLines);
+
+    if (shouldResetCopied) {
+        copiedLineIndexes = new Set();
+        pendingStatusChanges.clear();
+        pendingChangeSequence = 0;
+    } else if (nextLines.length !== analyzedLines.length) {
+        copiedLineIndexes = new Set();
+        pendingStatusChanges.clear();
+        pendingChangeSequence = 0;
+    } else {
+        copiedLineIndexes = new Set(
+            [...copiedLineIndexes].filter((index) => index >= 0 && index < nextLines.length)
+        );
+    }
+
+    analyzedLines = keyedLines;
+    applyPendingOverrides();
+    renderWarnings(payload.warnings || []);
+    updateSummary(summarizeEffectiveStatuses(analyzedLines), analyzedLines.length);
+    closeStatusPicker();
+    renderLogLines();
+}
+
+async function requestLogAnalysis(logText) {
+    const response = await fetch("{% url 'analyze_log_api' %}", {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCookie('csrftoken'),
+        },
+        body: JSON.stringify({ log: logText }),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to analyze log.');
+    }
+
+    return response.json();
+}
+
+function renderWarnings(warnings) {
+    const container = document.getElementById('analysisWarnings');
+    const warningList = Array.isArray(warnings) ? warnings : [];
+    container.innerHTML = '';
+
+    if (warningList.length === 0) {
+        container.hidden = true;
+        return;
+    }
+
+    warningList.forEach((warning) => {
+        const warningElement = document.createElement('div');
+        warningElement.className = 'analysis-warning';
+
+        const titleText = String(warning.title || 'Warning').trim();
+        const messageText = String(warning.message || '').trim();
+        const showMessage = messageText && messageText.toLowerCase() !== titleText.toLowerCase();
+
+        const headerElement = document.createElement('div');
+        headerElement.className = 'analysis-warning-header';
+
+        const titleElement = document.createElement('div');
+        titleElement.className = 'analysis-warning-title';
+        titleElement.textContent = titleText;
+
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.className = 'analysis-warning-close';
+        closeButton.setAttribute('aria-label', 'Close warning');
+        closeButton.textContent = 'x';
+        closeButton.onclick = () => {
+            warningElement.remove();
+            if (container.children.length === 0) {
+                container.hidden = true;
+            }
+        };
+
+        headerElement.appendChild(titleElement);
+        headerElement.appendChild(closeButton);
+        warningElement.appendChild(headerElement);
+
+        if (showMessage) {
+            const messageElement = document.createElement('div');
+            messageElement.className = 'analysis-warning-message';
+            messageElement.textContent = messageText;
+            warningElement.appendChild(messageElement);
+        }
+
+        if (Array.isArray(warning.details) && warning.details.length > 0) {
+            const detailsList = document.createElement('ul');
+            detailsList.className = 'analysis-warning-details';
+            warning.details.forEach((detail) => {
+                const detailItem = document.createElement('li');
+                detailItem.textContent = detail;
+                detailsList.appendChild(detailItem);
+            });
+            warningElement.appendChild(detailsList);
+        }
+
+        container.appendChild(warningElement);
+    });
+
+    container.hidden = false;
+}
+
 async function parseLogs() {
     const logInput = document.getElementById('logInput').value;
     if (!logInput.trim()) {
@@ -266,61 +820,187 @@ async function parseLogs() {
         return;
     }
 
-    const parseButton = document.querySelector('#inputMode button');
-    parseButton.disabled = true;
-    parseButton.textContent = 'analyzing...';
+    const parseButton = document.getElementById('parseButton');
+    if (parseButton) {
+        parseButton.disabled = true;
+        parseButton.textContent = 'analyzing...';
+    }
 
     try {
-        const response = await fetch("{% url 'analyze_log_api' %}", {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': getCookie('csrftoken'),
-            },
-            body: JSON.stringify({ log: logInput }),
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || 'Failed to analyze log.');
-        }
-
-        const payload = await response.json();
-        analyzedLines = payload.lines || [];
-        copiedLineIndexes = new Set();
+        const payload = await requestLogAnalysis(logInput);
+        applyAnalysisPayload(payload, { resetCopied: true });
 
         if (analyzedLines.length === 0) {
             alert('No non-empty lines were found.');
             return;
         }
 
-        const summary = payload.summary || {};
-        const summaryEl = document.getElementById('analysisSummary');
-        summaryEl.textContent = `lines: ${summary.total_lines || analyzedLines.length}, matched: ${summary.matched_lines || 0}, unknown: ${summary.unknown_lines || 0}`;
-
     } catch (error) {
         alert(error.message);
         return;
     } finally {
-        parseButton.disabled = false;
-        parseButton.textContent = 'parse lines';
+        if (parseButton) {
+            parseButton.disabled = false;
+            parseButton.textContent = 'parse lines';
+        }
     }
 
     renderLogLines();
 
-    // Switch from input mode to lines mode
-    document.getElementById('inputMode').style.display = 'none';
-    const linesMode = document.getElementById('linesMode');
-    linesMode.style.display = 'flex';
+    document.getElementById('logInput').style.display = 'none';
+    document.getElementById('logLines').style.display = 'block';
+    document.getElementById('parseButton').style.display = 'none';
+    document.getElementById('resetButton').style.display = 'inline-flex';
 }
 
 function resetToInput() {
-    document.getElementById('linesMode').style.display = 'none';
-    document.getElementById('inputMode').style.display = 'flex';
+    closeStatusPicker();
+    document.getElementById('logLines').style.display = 'none';
+    document.getElementById('logInput').style.display = 'block';
+    document.getElementById('resetButton').style.display = 'none';
+    document.getElementById('parseButton').style.display = 'inline-flex';
+}
+
+function setupStatusPicker() {
+    document.addEventListener('click', (event) => {
+        const picker = document.getElementById('statusPicker');
+        if (!picker || picker.hidden) {
+            return;
+        }
+        if (picker.contains(event.target)) {
+            return;
+        }
+        closeStatusPicker();
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            closeStatusPicker();
+        }
+    });
+}
+
+function closeStatusPicker() {
+    const picker = document.getElementById('statusPicker');
+    if (!picker) {
+        return;
+    }
+    picker.hidden = true;
+    picker.innerHTML = '';
+}
+
+function setStatusPickerDisabled(disabled) {
+    const buttons = document.querySelectorAll('#statusPicker button');
+    buttons.forEach((button) => {
+        button.disabled = disabled;
+    });
+}
+
+function openStatusPicker(anchor, index) {
+    if (statusPickerBusy) {
+        return;
+    }
+
+    const entry = analyzedLines[index];
+    if (!entry) {
+        return;
+    }
+    if ((entry._baseDominantStatus || entry.dominant_status) === 'I') {
+        alert('Informational lines cannot be edited.');
+        return;
+    }
+
+    const picker = document.getElementById('statusPicker');
+    if (!picker) {
+        return;
+    }
+
+    picker.innerHTML = '';
+    EDITABLE_STATUSES.forEach((status) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `status-picker-option ${STATUS_CLASS_MAP[status] || 'status-unknown'}`;
+        button.textContent = status;
+        if (entry.dominant_status === status) {
+            button.classList.add('active');
+        }
+        button.onclick = async (event) => {
+            event.stopPropagation();
+            await saveStatusSelection(index, status);
+        };
+        picker.appendChild(button);
+    });
+
+    const rect = anchor.getBoundingClientRect();
+    const top = rect.bottom + 4;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - 190));
+    picker.style.top = `${top}px`;
+    picker.style.left = `${left}px`;
+    picker.hidden = false;
+}
+
+async function saveStatusSelection(index, newStatus) {
+    const entry = analyzedLines[index];
+    if (!entry) {
+        closeStatusPicker();
+        return;
+    }
+    const currentStatus = entry.dominant_status || '?';
+    const baseStatus = entry._baseDominantStatus || currentStatus;
+
+    if (currentStatus === newStatus) {
+        closeStatusPicker();
+        return;
+    }
+    if (baseStatus === 'I') {
+        alert('Informational lines cannot be edited.');
+        closeStatusPicker();
+        return;
+    }
+
+    statusPickerBusy = true;
+    setStatusPickerDisabled(true);
+
+    try {
+        const lineKey = entry._lineKey || `${entry.line}::${index}`;
+        const existing = pendingStatusChanges.get(lineKey);
+
+        if (newStatus === baseStatus) {
+            pendingStatusChanges.delete(lineKey);
+        } else {
+            let id = existing ? existing.id : null;
+            let order = existing ? existing.order : null;
+
+            if (!id) {
+                pendingChangeSequence += 1;
+                id = String(pendingChangeSequence);
+                order = pendingChangeSequence;
+            }
+
+            pendingStatusChanges.set(lineKey, {
+                id,
+                order,
+                line: entry.line,
+                original_status: baseStatus,
+                new_status: newStatus,
+            });
+        }
+
+        applyPendingOverrides();
+        updateSummary(summarizeEffectiveStatuses(analyzedLines), analyzedLines.length);
+        renderLogLines();
+        closeStatusPicker();
+    } catch (error) {
+        alert(error.message || 'Failed to update line status.');
+    } finally {
+        statusPickerBusy = false;
+        setStatusPickerDisabled(false);
+    }
 }
 
 function renderLogLines() {
     const container = document.getElementById('logLines');
+    const savedScrollTop = container.scrollTop;
     container.innerHTML = '';
 
     analyzedLines.forEach((entry, index) => {
@@ -334,8 +1014,12 @@ function renderLogLines() {
             : `log-line ${cssClass}`;
 
         const badge = document.createElement('span');
-        badge.className = 'status-badge';
+        badge.className = `status-badge ${cssClass}`;
         badge.textContent = status;
+        badge.onclick = (event) => {
+            event.stopPropagation();
+            openStatusPicker(badge, index);
+        };
 
         const text = document.createElement('span');
         text.className = 'line-text';
@@ -346,13 +1030,50 @@ function renderLogLines() {
 
         const reasons = Array.isArray(entry.reasons) ? entry.reasons : [];
         lineDiv.title = reasons.length > 0 ? `${line}\n\n${reasons.join('\n')}` : line;
-        lineDiv.onclick = () => insertLine(line, index);
+        lineDiv.onclick = () => {
+            if (copiedLineIndexes.has(index)) {
+                removeLine(line, index);
+            } else {
+                insertLine(line, index);
+            }
+        };
         container.appendChild(lineDiv);
     });
+    container.scrollTop = savedScrollTop;
+}
+
+function removeLine(line, index) {
+    const textarea = document.getElementById('selectedLines');
+    const cursorPos = textarea.selectionStart;
+    const escaped = line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp('(?:^|\\n)' + escaped + '(?:\\n|$)');
+    const match = textarea.value.match(pattern);
+    if (match) {
+        const matchStart = textarea.value.indexOf(match[0]);
+        let removal = match[0];
+        let replaceWith = '';
+        // keep a single newline if the match consumed two (mid-text)
+        if (match[0].startsWith('\n') && match[0].endsWith('\n')) {
+            replaceWith = '\n';
+        }
+        textarea.value = textarea.value.substring(0, matchStart) + replaceWith + textarea.value.substring(matchStart + removal.length);
+        
+        // Restore cursor position, adjusting if the removed text was before the cursor
+        const removedLength = removal.length - replaceWith.length;
+        let restoredPos = cursorPos;
+        if (cursorPos > matchStart) {
+            restoredPos = Math.max(matchStart, cursorPos - removedLength);
+        }
+        textarea.selectionStart = textarea.selectionEnd = restoredPos;
+        textarea.focus();
+    }
+    copiedLineIndexes.delete(index);
+    renderLogLines();
 }
 
 function insertLine(line, index) {
-    if (copiedLineIndexes.has(index)) {
+    // Prevent insertion of lines with status 'I' (informational)
+    if (analyzedLines[index] && analyzedLines[index].dominant_status === 'I') {
         return;
     }
 
@@ -373,6 +1094,40 @@ function insertLine(line, index) {
     renderLogLines();
 }
 
+function insertAllStatus(status) {
+    const textarea = document.getElementById('selectedLines');
+    let insertPosition = textarea.selectionStart;
+    let linesAdded = 0;
+
+    for (let index = 0; index < analyzedLines.length; index++) {
+        if (copiedLineIndexes.has(index)) {
+            continue;
+        }
+
+        const entry = analyzedLines[index];
+        if (entry.dominant_status === status) {
+            const line = entry.line;
+            const text = textarea.value;
+            
+            // Insert line at the tracked position
+            const newText = text.substring(0, insertPosition) + line + '\n' + text.substring(insertPosition);
+            textarea.value = newText;
+            
+            // Update insert position for next line
+            insertPosition += line.length + 1;
+            
+            copiedLineIndexes.add(index);
+            linesAdded++;
+        }
+    }
+
+    if (linesAdded > 0) {
+        textarea.selectionStart = textarea.selectionEnd = insertPosition;
+        textarea.focus();
+        renderLogLines();
+    }
+}
+
 function goToCreateFixlist() {
     const selected = document.getElementById('selectedLines').value;
     if (!selected.trim()) {
@@ -380,7 +1135,187 @@ function goToCreateFixlist() {
         return;
     }
 
-    sessionStorage.setItem('fenrishub_prefill_content', selected);
+    const pendingPayload = getPendingStatusChangesPayload();
+    if (pendingPayload.length > 0) {
+        // Show rule review modal
+        sessionStorage.setItem('fenrishub_prefill_content', selected);
+        sessionStorage.setItem(PENDING_STATUS_STORAGE_KEY, JSON.stringify(pendingPayload));
+        fetchRulePreview(pendingPayload);
+    } else {
+        // No pending changes, go directly to fixlist
+        sessionStorage.setItem('fenrishub_prefill_content', selected);
+        window.location.href = "{% url 'create_fixlist' %}";
+    }
+}
+
+function openRuleReviewModal() {
+    const modal = document.getElementById('ruleReviewModal');
+    if (modal) {
+        modal.hidden = false;
+    }
+}
+
+function closeRuleReviewModal() {
+    const modal = document.getElementById('ruleReviewModal');
+    if (modal) {
+        modal.hidden = true;
+    }
+}
+
+function buildReviewList(containerId, values, emptyText) {
+    const list = document.getElementById(containerId);
+    if (!list) {
+        return;
+    }
+    list.innerHTML = '';
+
+    if (!Array.isArray(values) || values.length === 0) {
+        const li = document.createElement('li');
+        li.textContent = emptyText;
+        list.appendChild(li);
+        return;
+    }
+
+    values.forEach((value) => {
+        const li = document.createElement('li');
+        li.textContent = value;
+        list.appendChild(li);
+    });
+}
+
+function renderRuleCandidates(ruleChanges) {
+    const container = document.getElementById('ruleCandidatesList');
+    if (!container) {
+        return;
+    }
+    container.innerHTML = '';
+
+    if (!Array.isArray(ruleChanges) || ruleChanges.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'rule-candidate-meta';
+        empty.textContent = 'No valid rule candidates were generated from pending changes.';
+        container.appendChild(empty);
+        return;
+    }
+
+    ruleChanges.forEach((change) => {
+        const row = document.createElement('label');
+        row.className = 'rule-candidate-item';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'rule-candidate-checkbox';
+        checkbox.value = String(change.id);
+        checkbox.checked = true;
+
+        const text = document.createElement('div');
+        const action = (change.action || 'create').toLowerCase();
+        text.textContent = `[${action}] ${change.from_status} -> ${change.to_status} | ${change.match_type} | ${change.source_text}`;
+
+        row.appendChild(checkbox);
+        row.appendChild(text);
+        container.appendChild(row);
+    });
+}
+
+function selectedRuleIdsFromModal() {
+    const checkboxes = document.querySelectorAll('.rule-candidate-checkbox:checked');
+    return [...checkboxes].map((checkbox) => checkbox.value);
+}
+
+function renderRulePreview(preview) {
+    const summary = preview.summary || {};
+    const summaryEl = document.getElementById('ruleReviewSummary');
+    if (summaryEl) {
+        summaryEl.textContent =
+            `pending edits: ${summary.pending_changes || 0}, ` +
+            `rule candidates: ${summary.rule_candidates || 0}, ` +
+            `creates: ${summary.create_candidates || 0}, ` +
+            `updates: ${summary.update_candidates || 0}, ` +
+            `dominant conflicts: ${summary.override_conflicts || 0}, ` +
+            `overlap conflicts: ${summary.overlap_conflicts || 0}`;
+    }
+
+    const manualChanges = (preview.manual_changes || []).map((item) => (
+        `${item.original_status} -> ${item.new_status} | ${item.line}`
+    ));
+    buildReviewList('manualChangesList', manualChanges, 'No pending manual status changes were provided.');
+
+    renderRuleCandidates(preview.rule_changes || []);
+
+    const overrideConflicts = ((preview.contradictions || {}).override_vs_existing_dominant || []).map((item) => (
+        `selected ${item.selected_status}, existing dominant ${item.existing_dominant_status} [${item.existing_status_codes}] | ${item.line}`
+    ));
+    buildReviewList(
+        'overrideConflictsList',
+        overrideConflicts,
+        'No dominant status contradictions detected.'
+    );
+
+    const overlapConflicts = ((preview.contradictions || {}).overlaps_other_status_rules || []).map((item) => {
+        const overlapStatuses = Array.isArray(item.overlap_statuses) ? item.overlap_statuses.join(', ') : '';
+        return `selected ${item.selected_status}, overlapping statuses: [${overlapStatuses}] | ${item.line}`;
+    });
+    buildReviewList(
+        'overlapConflictsList',
+        overlapConflicts,
+        'No overlap contradictions detected.'
+    );
+
+    const invalidChanges = (preview.invalid_changes || []).map((item) => {
+        const idx = item.index === null || item.index === undefined ? '?' : item.index;
+        return `index ${idx}: ${item.error || 'Invalid change.'}`;
+    });
+    buildReviewList('invalidChangesList', invalidChanges, 'No invalid pending changes detected.');
+}
+
+let rulePreviewInFlight = false;
+
+async function fetchRulePreview(pendingChanges) {
+    if (rulePreviewInFlight) {
+        return;
+    }
+
+    rulePreviewInFlight = true;
+    try {
+        const response = await fetch("{% url 'preview_pending_rule_changes_api' %}", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify({ pending_changes: pendingChanges }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || 'Failed to preview pending rule changes.');
+        }
+
+        const preview = await response.json();
+        renderRulePreview(preview);
+        openRuleReviewModal();
+    } catch (error) {
+        alert(error.message || 'Failed to preview pending rule changes.');
+    } finally {
+        rulePreviewInFlight = false;
+    }
+}
+
+async function submitWithRulePersist(persistSelectedRules) {
+    const selectedContent = document.getElementById('selectedLines').value;
+    const pendingPayload = getPendingStatusChangesPayload();
+    
+    sessionStorage.setItem('fenrishub_prefill_content', selectedContent);
+    
+    if (persistSelectedRules && pendingPayload.length > 0) {
+        const selectedRuleIds = selectedRuleIdsFromModal();
+        sessionStorage.setItem('fenrishub_persist_rules', '1');
+        sessionStorage.setItem('fenrishub_pending_rule_changes', JSON.stringify(pendingPayload));
+        sessionStorage.setItem('fenrishub_selected_rule_ids', JSON.stringify(selectedRuleIds));
+    }
+    
+    closeRuleReviewModal();
     window.location.href = "{% url 'create_fixlist' %}";
 }
 

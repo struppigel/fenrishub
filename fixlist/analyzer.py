@@ -31,6 +31,15 @@ STATUS_CSS_CLASS = {
     "?": "status-unknown",
 }
 
+FRST_END_OF_ADDITION = "==================== End of Addition.txt ======================="
+FRST_END_OF_LOG = "==================== End of FRST.txt ========================"
+FRST_CONTEXT_MARKERS = (
+    "Farbar Recovery Scan Tool",
+    "Addition.txt",
+    "FRST.txt",
+    "Loaded Profiles:",
+)
+
 PARSER_ORDER = [
     ex.extract_frst_runkey,
     ex.extract_print_monitors,
@@ -81,6 +90,124 @@ def _line_core_and_description(raw_line: str) -> tuple[str, str]:
     core = ex.strip_description(raw_line)
     description = ex.get_description(raw_line)
     return core, description
+
+
+def _build_warning(code: str, title: str, message: str, details: Iterable[str] | None = None) -> dict:
+    detail_list = [detail for detail in (details or []) if detail]
+    return {
+        "code": code,
+        "severity": "warning",
+        "title": title,
+        "message": message,
+        "details": detail_list,
+    }
+
+
+def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
+    has_frst_context = any(marker in raw_log_text for marker in FRST_CONTEXT_MARKERS)
+    if not has_frst_context:
+        return None
+
+    end_of_addition_found = FRST_END_OF_ADDITION in raw_log_text
+    end_of_frst_found = FRST_END_OF_LOG in raw_log_text
+    if end_of_addition_found and end_of_frst_found:
+        return None
+
+    details = [
+        f"Addition end found: {'yes' if end_of_addition_found else 'no'}",
+        f"FRST end found: {'yes' if end_of_frst_found else 'no'}",
+    ]
+    return _build_warning(
+        "incomplete_logs",
+        "Incomplete logs detected",
+        "One or more FRST logs appear incomplete. Check that the pasted content includes the full FRST.txt and Addition.txt output.",
+        details,
+    )
+
+
+def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
+    usage_percent = None
+    total_mb = None
+    free_gb = None
+    drive_free_space_by_letter = {}
+    windows_drive_letter = None
+    saw_memory_context = False
+
+    for raw_line in raw_log_text.splitlines():
+        line = raw_line.strip()
+        if "Percentage of memory in use:" in line:
+            saw_memory_context = True
+            match = re.search(r"(\d+)", line)
+            if match:
+                usage_percent = int(match.group(1))
+        elif "Total physical RAM:" in line:
+            saw_memory_context = True
+            match = re.search(r"([\d.]+)", line)
+            if match:
+                total_mb = float(match.group(1))
+        elif line.startswith("Drive"):
+            saw_memory_context = True
+            drive_match = re.search(r"Drive\s+([a-zA-Z]):", line, re.IGNORECASE)
+            free_match = re.search(r"\(Free:\s*(\d+(?:\.\d+)?)\s*GB\)", line, re.IGNORECASE)
+            if drive_match and free_match:
+                drive_letter = drive_match.group(1).upper()
+                drive_free_space_by_letter[drive_letter] = float(free_match.group(1))
+                if re.search(r"\bWindows\b", line, re.IGNORECASE):
+                    windows_drive_letter = drive_letter
+
+    if windows_drive_letter and windows_drive_letter in drive_free_space_by_letter:
+        free_gb = drive_free_space_by_letter[windows_drive_letter]
+    elif "C" in drive_free_space_by_letter:
+        free_gb = drive_free_space_by_letter["C"]
+
+    if not saw_memory_context:
+        return None
+
+    threshold_usage_percent = 80
+    threshold_total_ram_gb = 4
+    threshold_free_space_gb = 100
+    total_gb = total_mb / 1024 if total_mb is not None else None
+    reasons = []
+    details = []
+    low_memory = False
+
+    if total_gb is not None:
+        details.append(f"Total RAM: {total_gb:.2f} GB")
+        if total_gb < threshold_total_ram_gb:
+            low_memory = True
+            reasons.append(f"Total physical RAM below {threshold_total_ram_gb} GB")
+
+    if usage_percent is not None:
+        details.append(f"RAM usage: {usage_percent}%")
+        if usage_percent > threshold_usage_percent:
+            low_memory = True
+            reasons.append(f"RAM usage above {threshold_usage_percent}%")
+
+    if free_gb is not None:
+        details.append(f"System drive free space: {free_gb:.2f} GB")
+        if free_gb < threshold_free_space_gb:
+            low_memory = True
+            reasons.append(f"Free space on Windows partition below {threshold_free_space_gb} GB")
+
+    if total_mb is None or usage_percent is None or free_gb is None:
+        reasons.append("Memory information incomplete")
+
+    if not reasons:
+        return None
+
+    title = "Low memory conditions detected" if low_memory else "Memory information incomplete"
+    return _build_warning("low_memory", title, "; ".join(reasons), details)
+
+
+def _build_log_warnings(raw_log_text: str) -> list[dict]:
+    warnings = []
+    for warning in (
+        _detect_incomplete_log_warning(raw_log_text),
+        _detect_low_memory_warning(raw_log_text),
+    ):
+        if warning:
+            warnings.append(warning)
+    return warnings
 
 
 def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict | None:
@@ -342,9 +469,108 @@ def _analyze_single_line(line: str, buckets):
     return _build_line_result(line, "?", unknown_entry_type, [], "unknown")
 
 
+def _collect_all_matches_for_line(line: str, buckets):
+    matches = []
+
+    for rule in buckets[ClassificationRule.MATCH_EXACT]:
+        if rule.source_text.strip() == line.strip():
+            matches.append((rule, "found exact match", "exact"))
+
+    parsed_entries = []
+    for extractor in PARSER_ORDER:
+        entry = extractor(line)
+        if entry:
+            parsed_entries.append(entry)
+
+    if parsed_entries:
+        for entry in parsed_entries:
+            for rule, parsed_rule_entry in buckets[ClassificationRule.MATCH_PARSED_ENTRY]:
+                if entry == parsed_rule_entry:
+                    matches.append((rule, f"matched {entry.entry_type or 'parsed'} entry", "parsed_entry"))
+
+    filepath = ex.extract_any_frst_path(line)
+    if filepath:
+        normalized = ex.normalize_path(filepath).lower().strip()
+        for rule in buckets[ClassificationRule.MATCH_FILEPATH]:
+            rule_path = rule.normalized_filepath or ex.normalize_path(rule.source_text).lower().strip()
+            if not rule_path:
+                continue
+            if r":\windows\system32\cmd.exe" in rule_path:
+                continue
+            if normalized == rule_path:
+                matches.append((rule, "found matching normalized path", "filepath"))
+
+    for rule in buckets[ClassificationRule.MATCH_SUBSTRING]:
+        if rule.source_text and rule.source_text in line:
+            matches.append((rule, f'found substring "{rule.source_text}"', "substring"))
+
+    for rule, compiled_regex in buckets[ClassificationRule.MATCH_REGEX]:
+        if compiled_regex.search(line):
+            matches.append((rule, f'found regex match for "{rule.source_text}"', "regex"))
+
+    deduped = []
+    seen = set()
+    for rule, reason, matcher in matches:
+        dedupe_key = (rule.id, matcher)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped.append((rule, reason, matcher))
+    return deduped
+
+
+def inspect_line_matches(line: str, buckets=None) -> dict:
+    line_value = (line or "").strip()
+    if not line_value:
+        return {
+            "line": "",
+            "status_codes": "?",
+            "dominant_status": "?",
+            "reasons": [],
+            "matches": [],
+        }
+
+    active_buckets = buckets or _load_rule_buckets()
+    matches = _collect_all_matches_for_line(line_value, active_buckets)
+
+    statuses = [rule.status for rule, _, _ in matches]
+    status_codes = _ordered_status_codes(statuses)
+    dominant_status = _dominant_status(status_codes)
+
+    reasons = []
+    serialized_matches = []
+    for rule, reason, matcher in matches:
+        reason_value = reason or ""
+        if reason_value:
+            reasons.append(f"{rule.status}: {reason_value}")
+        if rule.description:
+            reasons.append(f"{rule.status}: {rule.description}")
+
+        serialized_matches.append(
+            {
+                "id": rule.id,
+                "status": rule.status,
+                "match_type": rule.match_type,
+                "source_text": rule.source_text,
+                "description": rule.description,
+                "matcher": matcher,
+                "reason": reason_value,
+            }
+        )
+
+    return {
+        "line": line_value,
+        "status_codes": status_codes,
+        "dominant_status": dominant_status,
+        "reasons": _dedupe(reasons),
+        "matches": serialized_matches,
+    }
+
+
 def analyze_log_text(raw_log_text: str) -> dict:
     buckets = _load_rule_buckets()
     analyzed_lines = []
+    warnings = _build_log_warnings(raw_log_text or "")
 
     for raw_line in (raw_log_text or "").splitlines():
         line = raw_line.strip()
@@ -361,9 +587,11 @@ def analyze_log_text(raw_log_text: str) -> dict:
         "matched_lines": len([line for line in analyzed_lines if line["matched"]]),
         "unknown_lines": status_counts["?"],
         "status_counts": status_counts,
+        "warning_count": len(warnings),
     }
 
     return {
         "lines": analyzed_lines,
         "summary": summary,
+        "warnings": warnings,
     }
