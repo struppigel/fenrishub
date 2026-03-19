@@ -34,6 +34,11 @@ body {
     justify-content: flex-start;
 }
 
+#parseButton,
+.save-fixlist-button {
+    border-color: var(--la-success-border);
+}
+
 .save-fixlist-button {
     margin-left: auto;
 }

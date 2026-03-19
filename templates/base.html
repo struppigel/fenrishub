@@ -31,7 +31,7 @@
             background-color: var(--la-bg-4);
             border: 1px solid var(--la-border-muted);
             padding: 10px 14px;
-            margin-bottom: 2px;
+            margin-bottom: 6px;
         }
 
         .header-top {
@@ -67,6 +67,7 @@
 
         .nav {
             display: flex;
+            align-items: center;
             gap: 8px;
             margin-top: 8px;
             padding-top: 8px;
@@ -83,6 +84,79 @@
         }
 
         .nav a:hover {
+            text-decoration: underline;
+        }
+
+        .nav-left {
+            display: flex;
+            gap: 8px;
+        }
+
+        .nav-right {
+            margin-left: auto;
+        }
+
+        .profile-dropdown {
+            position: relative;
+        }
+
+        .profile-btn {
+            padding: 6px 10px;
+            background-color: var(--la-bg-2);
+            color: var(--la-text-primary);
+            border: 1px solid var(--la-border);
+            font-size: 12px;
+            cursor: pointer;
+            font-family: inherit;
+            white-space: nowrap;
+        }
+
+        .profile-btn:hover {
+            text-decoration: underline;
+        }
+
+        .profile-menu {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            margin-top: 2px;
+            background-color: var(--la-bg-4);
+            border: 1px solid var(--la-border-strong);
+            min-width: 140px;
+            z-index: 100;
+        }
+
+        .profile-dropdown:focus-within .profile-menu,
+        .profile-dropdown:hover .profile-menu {
+            display: block;
+        }
+
+        .profile-menu a,
+        .profile-menu button {
+            display: block;
+            width: 100%;
+            padding: 7px 12px;
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--la-border-muted);
+            color: var(--la-text-primary);
+            font-size: 12px;
+            font-family: inherit;
+            text-align: left;
+            cursor: pointer;
+            text-decoration: none;
+            box-sizing: border-box;
+        }
+
+        .profile-menu a:last-child,
+        .profile-menu button:last-child {
+            border-bottom: none;
+        }
+
+        .profile-menu a:hover,
+        .profile-menu button:hover {
+            background-color: var(--la-bg-2);
             text-decoration: underline;
         }
 
@@ -210,7 +284,7 @@
 
         .fixlist-title {
             font-size: 13px;
-            color: var(--la-text-main);
+            color: var(--la-text-neutral);
         }
 
         .fixlist-meta {
@@ -271,7 +345,7 @@
 
         h3 {
             font-size: 13px;
-            color: var(--la-text-main);
+            color: var(--la-text-neutral);
             margin-bottom: 8px;
             font-weight: 600;
         }
@@ -341,14 +415,22 @@
             </div>
             {% if user.is_authenticated %}
             <div class="nav">
-                <a href="{% url 'dashboard' %}">fixlists</a>
-                <a href="{% url 'create_fixlist' %}">create</a>
-                <a href="{% url 'log_analyzer' %}">analyze</a>
-                <a href="{% url 'change_password' %}">password</a>
-                <form method="post" action="{% url 'logout' %}" style="display: inline;">
-                    {% csrf_token %}
-                    <button type="submit">Logout {{ user.username }}</button>
-                </form>
+                <div class="nav-left">
+                    <a href="{% url 'dashboard' %}">fixlists</a>
+                    <a href="{% url 'log_analyzer' %}">analyze</a>
+                </div>
+                <div class="nav-right">
+                    <div class="profile-dropdown" tabindex="0">
+                        <button class="profile-btn" type="button">{{ user.username }} &#9660;</button>
+                        <div class="profile-menu">
+                            <a href="{% url 'change_password' %}">change password</a>
+                            <form method="post" action="{% url 'logout' %}">
+                                {% csrf_token %}
+                                <button type="submit">logout</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
             </div>
             {% else %}
             <div class="nav">

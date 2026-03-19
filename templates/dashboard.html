@@ -28,6 +28,16 @@
     .fixlist-actions .action-btn:hover {
         text-decoration: underline;
     }
+
+    .fixlist-actions form {
+        display: inline;
+    }
+
+    .fixlist-actions .delete-btn {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+        border-color: var(--la-error-border);
+    }
 </style>
 {% endblock %}
 
@@ -53,6 +63,11 @@
             <div class="fixlist-actions">
                 <button type="button" class="action-btn" onclick="copyShareLink('{% url 'shared_fixlist' fixlist.share_token %}', this)">copy link</button>
                 <a href="{% url 'view_fixlist' fixlist.pk %}" class="action-btn">edit</a>
+                <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete">
+                    <button type="submit" class="action-btn delete-btn" onclick="return confirm('Delete this fixlist?');">delete</button>
+                </form>
             </div>
         </div>
         {% endfor %}

@@ -195,6 +195,8 @@ The application features a minimalist terminal aesthetic:
 - Glow effects on interactions
 - Command-line style UI
 
+**CSS convention**: All colors must use the global CSS variables defined in `static/css/theme.css`. Never use hardcoded hex values in stylesheets — always reference a `--la-*` variable instead. Add new variables to `theme.css` if an existing one does not fit.
+
 ## Future Enhancements
 
 - Export multiple fixlists as archive
