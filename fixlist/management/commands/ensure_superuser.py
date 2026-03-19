@@ -34,6 +34,7 @@ class Command(BaseCommand):
             username=username,
             defaults={
                 'email': email,
+                'is_active': True,
                 'is_staff': True,
                 'is_superuser': True,
             },
@@ -42,10 +43,14 @@ class Command(BaseCommand):
         if created:
             user.set_password(password)
             user.save(update_fields=['password'])
-            self.stdout.write(f'Created superuser: {username}')
+            self.stdout.write(
+                f'Created superuser: {username} '
+                f'(active={user.is_active}, staff={user.is_staff}, superuser={user.is_superuser})'
+            )
             return
 
         changed = False
+        password_changed = False
         if email and user.email != email:
             user.email = email
             changed = True
@@ -55,11 +60,25 @@ class Command(BaseCommand):
         if not user.is_superuser:
             user.is_superuser = True
             changed = True
+        if not user.is_active:
+            user.is_active = True
+            changed = True
         if not user.check_password(password):
             user.set_password(password)
             changed = True
+            password_changed = True
 
         if changed:
             user.save()
+            self.stdout.write(
+                f'Updated superuser: {username} '
+                f'(active={user.is_active}, staff={user.is_staff}, superuser={user.is_superuser}, '
+                f'password_changed={password_changed})'
+            )
+            return
 
-        self.stdout.write(f'Superuser already exists: {username}')
+        self.stdout.write(
+            f'Superuser already exists: {username} '
+            f'(active={user.is_active}, staff={user.is_staff}, superuser={user.is_superuser}, '
+            f'password_changed={password_changed})'
+        )
