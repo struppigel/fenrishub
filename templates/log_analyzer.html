@@ -18,6 +18,7 @@
     <div class="analyzer-toolbar analyzer-toolbar-left">
         <button type="button" id="parseButton">parse lines</button>
         <button type="button" id="resetButton" style="display: none;">edit log</button>
+        <button type="button" id="saveRulesRescanButton">save changes</button>
     </div>
     <div class="analyzer-toolbar analyzer-toolbar-right">
         <button type="button" data-insert-status="J">add all junk</button>
@@ -45,6 +46,19 @@ End::</textarea>
     <div></div>
 </div>
 
+<div id="statusLegend" class="status-legend" hidden>
+    <div class="legend-items">
+        <span class="legend-item" style="color: var(--la-status-b);"><strong>B</strong> malware</span>
+        <span class="legend-item" style="color: var(--la-status-p);"><strong>P</strong> PUP</span>
+        <span class="legend-item" style="color: var(--la-status-c);"><strong>C</strong> clean</span>
+        <span class="legend-item" style="color: var(--la-status-w);"><strong>!</strong> warning</span>
+        <span class="legend-item" style="color: var(--la-status-g);"><strong>G</strong> grayware</span>
+        <span class="legend-item" style="color: var(--la-status-s);"><strong>S</strong> security</span>
+        <span class="legend-item" style="color: var(--la-status-i);"><strong>I</strong> info</span>
+        <span class="legend-item" style="color: var(--la-status-j);"><strong>J</strong> junk</span>
+    </div>
+</div>
+
 <div id="statusPicker" class="status-picker" role="radiogroup" aria-label="Select line status" hidden></div>
 
 <div id="ruleReviewModal" class="rule-review-modal" hidden>
@@ -70,7 +84,7 @@ End::</textarea>
         </div>
 
         <div class="button-group review-actions">
-            <button type="button" id="ruleReviewBackButton">back to edit</button>
+            <button type="button" id="ruleReviewBackButton">cancel</button>
             <button type="button" id="ruleReviewContinueButton">discard rules and continue</button>
             <button type="button" id="ruleReviewSavePersistButton">save + persist selected rules</button>
         </div>
@@ -105,7 +119,7 @@ End::</textarea>
         </div>
 
         <div class="button-group review-actions">
-            <button type="button" id="conflictWizardBackButton">back to edit</button>
+            <button type="button" id="conflictWizardBackButton">cancel</button>
             <button type="button" id="wizardNextButton">next conflict</button>
         </div>
     </div>

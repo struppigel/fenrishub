@@ -351,6 +351,8 @@ class TemplateMarkupTests(TestCase):
         self.assertIn('id="ruleReviewDialog"', content)
         self.assertIn('id="conflictWizardDialog"', content)
         self.assertIn('id="plannedExistingRuleChangesList"', content)
+        self.assertIn('id="saveRulesRescanButton"', content)
+        self.assertIn('>save changes<', content)
         self.assertIn('id="saveFixlistButton"', content)
         self.assertIn('id="conflictWizardBackButton"', content)
         self.assertIn('role="radiogroup"', content)
@@ -373,6 +375,12 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("existing status changes", script_content)
         self.assertIn("PERSIST_RULE_CHANGES_URL", script_content)
         self.assertIn("persistPendingRuleChanges", script_content)
+        self.assertIn("RULE_SUBMIT_TARGET_RESCAN", script_content)
+        self.assertIn("saveRulesAndRescan", script_content)
+        self.assertIn("bindAnalyzerButton('saveRulesRescanButton'", script_content)
+        self.assertIn("cancelRuleWorkflow", script_content)
+        self.assertIn("ruleReviewBackdrop.addEventListener('click', () => cancelRuleWorkflow())", script_content)
+        self.assertIn("has-pending-changes", script_content)
         self.assertIn("Object.assign(window", script_content)
         self.assertIn("handleAnalyzerModalOpen", script_content)
         self.assertIn("focusStatusPickerButton", script_content)
@@ -877,6 +885,220 @@ class LogAnalyzerApiTests(TestCase):
         self.assertTrue(rule["name"])
         self.assertTrue(rule["filepath"])
         self.assertTrue(rule["normalized_filepath"])
+
+    def test_parse_rule_line_keeps_parsed_entry_match_type_for_service_lines(self):
+        from .analyzer import parse_rule_line
+
+        service_line = (
+            r"R3 ProtoVPN Service; C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe "
+            r"[477424 2026-03-06] (Proto AG -> ProtoVPN)"
+        )
+
+        parsed = parse_rule_line(
+            service_line,
+            status=ClassificationRule.STATUS_MALWARE,
+            source_name="test-suite",
+        )
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["match_type"], ClassificationRule.MATCH_PARSED_ENTRY)
+        self.assertTrue(parsed["normalized_filepath"])
+
+    def test_persisted_parsed_rule_matches_other_line_with_same_filepath(self):
+        self.client.login(username="analyzer", password="password123")
+        service_line = (
+            r"R3 ProtoVPN Service; C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe "
+            r"[477424 2026-03-06] (Proto AG -> ProtoVPN)"
+        )
+        same_path_line = (
+            r"2026-03-18 13:45 - 2026-03-18 13:45 - 000000000 ____D "
+            r"C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe"
+        )
+
+        persist_payload = {
+            "pending_changes": [
+                {
+                    "id": "1",
+                    "line": service_line,
+                    "original_status": "?",
+                    "new_status": ClassificationRule.STATUS_MALWARE,
+                    "order": 1,
+                }
+            ],
+            "selected_rule_change_ids": ["1"],
+            "conflict_resolutions": [],
+        }
+
+        persist_response = self.client.post(
+            reverse("persist_pending_rule_changes_api"),
+            data=json.dumps(persist_payload),
+            content_type="application/json",
+        )
+
+        self.assertEqual(persist_response.status_code, 200)
+        self.assertTrue(
+            ClassificationRule.objects.filter(
+                status=ClassificationRule.STATUS_MALWARE,
+                match_type=ClassificationRule.MATCH_PARSED_ENTRY,
+                source_text=service_line,
+                is_enabled=True,
+            ).exists()
+        )
+
+        analyze_response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": f"{service_line}\n{same_path_line}"}),
+            content_type="application/json",
+        )
+
+        analyze_payload = analyze_response.json()
+        self.assertEqual(analyze_response.status_code, 200)
+        self.assertEqual(analyze_payload["lines"][0]["matcher"], "parsed_entry")
+        self.assertEqual(analyze_payload["lines"][1]["matcher"], "filepath")
+        self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+        self.assertEqual(analyze_payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+
+    def test_inspect_line_matches_prefers_parsed_entry_matcher_over_filepath_for_same_rule(self):
+        from .analyzer import inspect_line_matches
+
+        self.client.login(username="analyzer", password="password123")
+        service_line = (
+            r"R3 ProtoVPN Service; C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe "
+            r"[477424 2026-03-06] (Proto AG -> ProtoVPN)"
+        )
+
+        persist_payload = {
+            "pending_changes": [
+                {
+                    "id": "1",
+                    "line": service_line,
+                    "original_status": "?",
+                    "new_status": ClassificationRule.STATUS_CLEAN,
+                    "order": 1,
+                }
+            ],
+            "selected_rule_change_ids": ["1"],
+            "conflict_resolutions": [],
+        }
+
+        persist_response = self.client.post(
+            reverse("persist_pending_rule_changes_api"),
+            data=json.dumps(persist_payload),
+            content_type="application/json",
+        )
+        self.assertEqual(persist_response.status_code, 200)
+
+        persisted_rule = ClassificationRule.objects.get(
+            status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_PARSED_ENTRY,
+            source_text=service_line,
+        )
+
+        inspection = inspect_line_matches(service_line)
+        rule_matches = [item for item in inspection["matches"] if item["id"] == persisted_rule.id]
+
+        self.assertEqual(len(rule_matches), 1)
+        self.assertEqual(rule_matches[0]["matcher"], "parsed_entry")
+
+    def test_inspect_line_matches_uses_runtime_precedence_and_tracks_shadowed_matches(self):
+        from .analyzer import inspect_line_matches, parse_rule_line
+
+        self.client.login(username="analyzer", password="password123")
+        service_line = (
+            r"R3 ProtoVPN Service; C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe "
+            r"[477424 2026-03-06] (Proto AG -> ProtoVPN)"
+        )
+        service_path = r"C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe"
+
+        parsed_rule = parse_rule_line(
+            service_line,
+            status=ClassificationRule.STATUS_CLEAN,
+            source_name="test-suite",
+        )
+        self.assertIsNotNone(parsed_rule)
+
+        ClassificationRule.objects.create(**parsed_rule)
+        ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_FILEPATH,
+            source_text=service_path,
+            source_name="test-suite",
+            filepath=service_path,
+            normalized_filepath=service_path.lower(),
+        )
+
+        inspection = inspect_line_matches(service_line)
+
+        self.assertEqual(inspection["effective_matcher"], "parsed_entry")
+        self.assertEqual(inspection["dominant_status"], ClassificationRule.STATUS_CLEAN)
+        self.assertTrue(inspection["matches"])
+        self.assertEqual({match["status"] for match in inspection["matches"]}, {ClassificationRule.STATUS_CLEAN})
+
+        shadowed_statuses = {match["status"] for match in inspection["shadowed_matches"]}
+        shadowed_matchers = {match["matcher"] for match in inspection["shadowed_matches"]}
+        self.assertIn(ClassificationRule.STATUS_MALWARE, shadowed_statuses)
+        self.assertIn("filepath", shadowed_matchers)
+
+    def test_preview_pending_rule_changes_uses_effective_matches_for_contradictions(self):
+        from .analyzer import parse_rule_line
+
+        self.client.login(username="analyzer", password="password123")
+        service_line = (
+            r"R3 ProtoVPN Service; C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe "
+            r"[477424 2026-03-06] (Proto AG -> ProtoVPN)"
+        )
+        service_path = r"C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe"
+
+        parsed_rule = parse_rule_line(
+            service_line,
+            status=ClassificationRule.STATUS_CLEAN,
+            source_name="test-suite",
+        )
+        self.assertIsNotNone(parsed_rule)
+
+        ClassificationRule.objects.create(**parsed_rule)
+        ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_FILEPATH,
+            source_text=service_path,
+            source_name="test-suite",
+            filepath=service_path,
+            normalized_filepath=service_path.lower(),
+        )
+
+        response = self.client.post(
+            reverse("preview_pending_rule_changes_api"),
+            data=json.dumps(
+                {
+                    "pending_changes": [
+                        {
+                            "id": "precedence-1",
+                            "line": service_line,
+                            "original_status": "?",
+                            "new_status": ClassificationRule.STATUS_PUP,
+                            "order": 1,
+                        }
+                    ]
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+
+        override_conflicts = payload["contradictions"]["override_vs_existing_dominant"]
+        self.assertEqual(len(override_conflicts), 1)
+        self.assertEqual(override_conflicts[0]["existing_dominant_status"], ClassificationRule.STATUS_CLEAN)
+        self.assertEqual(
+            {item["status"] for item in override_conflicts[0]["matching_rules"]},
+            {ClassificationRule.STATUS_CLEAN},
+        )
+
+        overlap_conflicts = payload["contradictions"]["overlaps_other_status_rules"]
+        self.assertEqual(len(overlap_conflicts), 1)
+        self.assertEqual(overlap_conflicts[0]["overlap_statuses"], [ClassificationRule.STATUS_CLEAN])
+        self.assertNotIn(ClassificationRule.STATUS_MALWARE, overlap_conflicts[0]["overlap_statuses"])
 
     def test_preview_pending_rule_changes_marks_existing_rule_as_update(self):
         self.client.login(username="analyzer", password="password123")

@@ -35,12 +35,15 @@ const ANALYZE_LOG_URL = analyzerConfig.analyzeLogUrl || '';
 const PREVIEW_RULE_CHANGES_URL = analyzerConfig.previewRuleChangesUrl || '';
 const PERSIST_RULE_CHANGES_URL = analyzerConfig.persistRuleChangesUrl || '';
 const CREATE_FIXLIST_URL = analyzerConfig.createFixlistUrl || '';
+const RULE_SUBMIT_TARGET_CREATE_FIXLIST = 'create_fixlist';
+const RULE_SUBMIT_TARGET_RESCAN = 'rescan';
 let statusPickerBusy = false;
 let pendingStatusChanges = new Map();
 let pendingChangeSequence = 0;
 let ruleDescriptionOverrides = new Map();
 let removedRuleCandidateIds = new Set();
 let expandedRuleCandidateId = null;
+let ruleSubmitTarget = RULE_SUBMIT_TARGET_CREATE_FIXLIST;
 let conflictWizardState = {
     queue: [],
     index: 0,
@@ -78,13 +81,28 @@ function initializeCursorPosition() {
     }
 }
 
+function updateSaveChangesButtonState() {
+    const saveChangesButton = document.getElementById('saveRulesRescanButton');
+    if (!saveChangesButton) {
+        return;
+    }
+
+    const hasPendingChanges = pendingStatusChanges.size > 0;
+    saveChangesButton.classList.toggle('has-pending-changes', hasPendingChanges);
+}
+
 function updateSummary(summary, fallbackTotal = 0) {
     const totalLines = Number(summary.total_lines || fallbackTotal);
     const matchedLines = Number(summary.matched_lines || 0);
     const unknownLines = Number(summary.unknown_lines || 0);
     const pendingChanges = pendingStatusChanges.size;
     const summaryEl = document.getElementById('analysisSummary');
+    const legendEl = document.getElementById('statusLegend');
     summaryEl.textContent = `lines: ${totalLines}, matched: ${matchedLines}, unknown: ${unknownLines}, pending status changes: ${pendingChanges}`;
+    if (legendEl) {
+        legendEl.hidden = false;
+    }
+    updateSaveChangesButtonState();
 }
 
 function summarizeEffectiveStatuses(lines) {
@@ -120,6 +138,7 @@ function attachLineKeys(lines) {
         return {
             ...entry,
             _lineKey: `${lineText}::${nextCount}`,
+            _lineTextKey: lineText,
             _baseDominantStatus: baseStatus,
             _baseStatusCodes: entry.status_codes || baseStatus,
             _baseCssClass: entry.css_class || STATUS_CLASS_MAP[baseStatus] || 'status-unknown',
@@ -129,11 +148,21 @@ function attachLineKeys(lines) {
     });
 }
 
+function pendingOverrideKeyForEntry(entry, fallbackIndex = 0) {
+    if (entry && typeof entry._lineTextKey === 'string') {
+        return entry._lineTextKey;
+    }
+    if (entry && typeof entry.line === 'string') {
+        return entry.line;
+    }
+    return entry && entry._lineKey ? entry._lineKey : `line::${fallbackIndex}`;
+}
+
 function applyPendingOverrides() {
     analyzedLines = analyzedLines.map((entry) => {
         const baseStatus = entry._baseDominantStatus || entry.dominant_status || '?';
         const baseReasons = Array.isArray(entry._baseReasons) ? [...entry._baseReasons] : [];
-        const pending = pendingStatusChanges.get(entry._lineKey);
+        const pending = pendingStatusChanges.get(pendingOverrideKeyForEntry(entry));
 
         if (!pending) {
             return {
@@ -212,4 +241,12 @@ function applyAnalysisPayload(payload, options = {}) {
     updateSummary(summarizeEffectiveStatuses(analyzedLines), analyzedLines.length);
     closeStatusPicker();
     renderLogLines();
+}
+
+function setRuleSubmitTarget(nextTarget) {
+    if (nextTarget !== RULE_SUBMIT_TARGET_RESCAN) {
+        ruleSubmitTarget = RULE_SUBMIT_TARGET_CREATE_FIXLIST;
+        return;
+    }
+    ruleSubmitTarget = RULE_SUBMIT_TARGET_RESCAN;
 }

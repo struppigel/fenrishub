@@ -39,6 +39,17 @@ body {
     border-color: var(--la-success-border);
 }
 
+#saveRulesRescanButton.has-pending-changes {
+    border-color: var(--la-warning-border);
+    background-color: var(--la-caution-bg);
+    color: var(--la-warning-text);
+}
+
+#saveRulesRescanButton.has-pending-changes:hover:not(:disabled) {
+    border-color: var(--la-caution);
+    background-color: #1f2212;
+}
+
 .save-fixlist-button {
     margin-left: auto;
 }
@@ -58,6 +69,25 @@ body {
 
 .analyzer-summary-grid > div {
     min-width: 0;
+}
+
+.status-legend {
+    background-color: var(--la-bg-4);
+    border: 1px solid var(--la-border-muted);
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    font-size: 12px;
+}
+
+.legend-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.legend-item {
+    white-space: nowrap;
+    font-size: 12px;
 }
 
 .analysis-warnings {
@@ -368,21 +398,11 @@ body {
     color: inherit;
     text-align: left;
     padding: 4px 6px;
-    cursor: pointer;
+    cursor: default;
 }
 
 .rule-candidate-content:hover {
     border-color: var(--la-border-hover);
-}
-
-.rule-candidate-content:focus-visible {
-    outline: 1px solid var(--la-focus);
-    outline-offset: 1px;
-}
-
-.rule-candidate-content.is-expanded {
-    border-color: var(--la-border-accent);
-    background: var(--la-bg-2);
 }
 
 .rule-candidate-header {
@@ -421,8 +441,38 @@ body {
     outline: none;
 }
 
-.rule-description-note {
+.rule-description-inline {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 6px;
     margin-top: 4px;
+}
+
+.rule-description-inline-label {
+    color: var(--la-text-muted);
+    text-transform: lowercase;
+    white-space: nowrap;
+    padding-top: 3px;
+}
+
+.rule-description-inline-input {
+    width: 100%;
+    min-height: 24px;
+    max-height: 96px;
+    resize: vertical;
+    border: 1px solid var(--la-border);
+    background: var(--la-bg-0);
+    color: var(--la-text-primary);
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.35;
+    padding: 3px 6px;
+}
+
+.rule-description-inline-input:focus {
+    outline: none;
+    border-color: var(--la-focus-alt);
 }
 
 .rule-candidate-text {

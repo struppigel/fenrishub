@@ -382,7 +382,6 @@ function renderRuleCandidates(ruleChanges) {
 
         const action = plan.effectiveAction;
         const actionMeta = changeTypeMeta(action);
-        const isExpanded = expandedRuleCandidateId === changeId;
 
         const symbol = document.createElement('span');
         symbol.className = `rule-change-symbol rule-change-${actionMeta.className}`;
@@ -392,21 +391,6 @@ function renderRuleCandidates(ruleChanges) {
 
         const content = document.createElement('div');
         content.className = 'rule-candidate-content';
-        if (isExpanded) {
-            content.classList.add('is-expanded');
-        }
-        content.setAttribute('role', 'button');
-        content.setAttribute('tabindex', '0');
-        content.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-        content.setAttribute('title', 'Click to edit this rule description');
-        content.addEventListener('click', () => toggleRuleCandidateExpanded(changeId));
-        content.addEventListener('keydown', (event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') {
-                return;
-            }
-            event.preventDefault();
-            toggleRuleCandidateExpanded(changeId);
-        });
 
         const header = document.createElement('div');
         header.className = 'rule-candidate-header';
@@ -449,10 +433,26 @@ function renderRuleCandidates(ruleChanges) {
             body.appendChild(note);
         }
 
-        const descriptionNote = document.createElement('div');
-        descriptionNote.className = 'rule-resolution-note rule-description-note';
-        renderRuleDescriptionNote(descriptionNote, change.description || '');
-        body.appendChild(descriptionNote);
+        const descriptionEditor = document.createElement('div');
+        descriptionEditor.className = 'rule-description-inline';
+
+        const descriptionLabel = document.createElement('span');
+        descriptionLabel.className = 'rule-description-inline-label';
+        descriptionLabel.textContent = 'description:';
+        descriptionEditor.appendChild(descriptionLabel);
+
+        const descriptionInput = document.createElement('textarea');
+        descriptionInput.className = 'rule-description-inline-input';
+        descriptionInput.rows = 1;
+        descriptionInput.placeholder = 'Optional description saved with this rule';
+        descriptionInput.value = typeof change.description === 'string' ? change.description : '';
+        descriptionInput.addEventListener('click', (event) => event.stopPropagation());
+        descriptionInput.addEventListener('keydown', (event) => event.stopPropagation());
+        descriptionInput.addEventListener('input', () => {
+            setRuleDescriptionOverride(change, descriptionInput.value);
+        });
+        descriptionEditor.appendChild(descriptionInput);
+        body.appendChild(descriptionEditor);
 
         const controls = document.createElement('div');
         controls.className = 'rule-candidate-controls';
@@ -473,60 +473,6 @@ function renderRuleCandidates(ruleChanges) {
         header.appendChild(controls);
         content.appendChild(header);
 
-        if (isExpanded) {
-            const details = document.createElement('div');
-            details.className = 'rule-details-panel';
-            details.addEventListener('click', (event) => event.stopPropagation());
-            details.addEventListener('keydown', (event) => event.stopPropagation());
-
-            const detailsHeader = document.createElement('div');
-            detailsHeader.className = 'rule-details-header';
-            detailsHeader.textContent = 'Edit description and review parsed fields';
-            details.appendChild(detailsHeader);
-
-            const descriptionEditor = document.createElement('div');
-            descriptionEditor.className = 'rule-description-editor';
-
-            const descriptionLabel = document.createElement('label');
-            descriptionLabel.textContent = 'description';
-            descriptionEditor.appendChild(descriptionLabel);
-
-            const descriptionInput = document.createElement('textarea');
-            descriptionInput.className = 'rule-description-input';
-            descriptionInput.rows = 4;
-            descriptionInput.placeholder = 'Optional description saved with this rule';
-            descriptionInput.value = typeof change.description === 'string' ? change.description : '';
-            descriptionInput.addEventListener('input', () => {
-                setRuleDescriptionOverride(change, descriptionInput.value);
-                renderRuleDescriptionNote(descriptionNote, descriptionInput.value);
-            });
-            descriptionEditor.appendChild(descriptionInput);
-            details.appendChild(descriptionEditor);
-
-            const sourceLineDetail = document.createElement('div');
-            sourceLineDetail.className = 'rule-details-line';
-            appendHighlightedRuleLine(sourceLineDetail, change.source_text || '', change);
-            details.appendChild(sourceLineDetail);
-
-            const detailsGrid = document.createElement('div');
-            detailsGrid.className = 'rule-details-grid';
-            buildRuleDetailRows(change).forEach((detailRow) => {
-                const key = document.createElement('div');
-                key.className = 'rule-detail-key';
-                key.textContent = detailRow.key;
-
-                const value = document.createElement('div');
-                value.className = 'rule-detail-value';
-                value.textContent = formatRuleDetailValue(detailRow.value);
-
-                detailsGrid.appendChild(key);
-                detailsGrid.appendChild(value);
-            });
-            details.appendChild(detailsGrid);
-
-            content.appendChild(details);
-        }
-
         row.appendChild(symbol);
         row.appendChild(content);
         container.appendChild(row);
@@ -546,6 +492,27 @@ function renderRuleCandidates(ruleChanges) {
 
 function selectedRuleIdsFromModal() {
     return [...selectedRuleCandidateIds];
+}
+
+function resetRuleReviewDraftState() {
+    currentRulePreview = null;
+    selectedRuleCandidateIds = [];
+    ruleDescriptionOverrides.clear();
+    removedRuleCandidateIds.clear();
+    expandedRuleCandidateId = null;
+
+    if (typeof resetConflictWizardState === 'function') {
+        resetConflictWizardState();
+    }
+}
+
+function cancelRuleWorkflow(options = {}) {
+    const { restoreFocus = true } = options;
+    sessionStorage.removeItem(CONFLICT_RESOLUTION_STORAGE_KEY);
+    resetRuleReviewDraftState();
+    setRuleSubmitTarget(RULE_SUBMIT_TARGET_CREATE_FIXLIST);
+    closeConflictWizardModal({ restoreFocus: false });
+    closeRuleReviewModal({ restoreFocus });
 }
 
 function renderRulePreview(preview) {
@@ -637,10 +604,8 @@ async function persistPendingRuleChanges(pendingChanges, selectedRuleIds, confli
 }
 
 async function submitWithRulePersist(persistSelectedRules) {
-    const selectedContent = document.getElementById('selectedLines').value;
     const pendingPayload = getPendingStatusChangesPayload();
-
-    sessionStorage.setItem('fenrishub_prefill_content', selectedContent);
+    const submitTarget = ruleSubmitTarget;
 
     if (persistSelectedRules && pendingPayload.length > 0) {
         const selectedRuleIds = selectedRuleIdsFromModal();
@@ -658,9 +623,23 @@ async function submitWithRulePersist(persistSelectedRules) {
         sessionStorage.removeItem(PENDING_STATUS_STORAGE_KEY);
     } else {
         sessionStorage.removeItem(CONFLICT_RESOLUTION_STORAGE_KEY);
+        if (submitTarget === RULE_SUBMIT_TARGET_RESCAN) {
+            sessionStorage.removeItem(PENDING_STATUS_STORAGE_KEY);
+        }
     }
 
     closeConflictWizardModal({ restoreFocus: false });
     closeRuleReviewModal({ restoreFocus: false });
+
+    if (submitTarget === RULE_SUBMIT_TARGET_RESCAN) {
+        resetRuleReviewDraftState();
+        setRuleSubmitTarget(RULE_SUBMIT_TARGET_CREATE_FIXLIST);
+        if (typeof parseLogs === 'function') {
+            await parseLogs();
+        }
+        return;
+    }
+
+    resetRuleReviewDraftState();
     window.location.href = CREATE_FIXLIST_URL;
 }

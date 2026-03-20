@@ -17,13 +17,15 @@ function initializePendingStatusChanges() {
     if (Array.isArray(parsedPending) && parsedPending.length > 0) {
         const tempMap = new Map();
         parsedPending.forEach((change) => {
-            const key = `${change.line}::${change.order}`;
+            const key = change.line;
             tempMap.set(key, change);
         });
         pendingStatusChanges = tempMap;
     } else {
         pendingStatusChanges = new Map();
     }
+
+    updateSaveChangesButtonState();
 }
 
 const modalTriggerElements = {
@@ -132,11 +134,12 @@ function trapFocusInModal(event, modalId) {
 function bindAnalyzerControls() {
     bindAnalyzerButton('parseButton', () => parseLogs());
     bindAnalyzerButton('resetButton', () => resetToInput());
+    bindAnalyzerButton('saveRulesRescanButton', () => saveRulesAndRescan());
     bindAnalyzerButton('saveFixlistButton', () => goToCreateFixlist());
-    bindAnalyzerButton('ruleReviewBackButton', () => closeRuleReviewModal());
+    bindAnalyzerButton('ruleReviewBackButton', () => cancelRuleWorkflow());
     bindAnalyzerButton('ruleReviewContinueButton', () => submitWithRulePersist(false));
     bindAnalyzerButton('ruleReviewSavePersistButton', () => submitWithRulePersist(true));
-    bindAnalyzerButton('conflictWizardBackButton', () => closeConflictWizardModal());
+    bindAnalyzerButton('conflictWizardBackButton', () => cancelRuleWorkflow());
     bindAnalyzerButton('wizardNextButton', () => advanceConflictWizard());
 
     document.querySelectorAll('[data-insert-status]').forEach((button) => {
@@ -152,10 +155,10 @@ function bindAnalyzerModalDismissals() {
     const conflictWizardBackdrop = document.getElementById('conflictWizardBackdrop');
 
     if (ruleReviewBackdrop) {
-        ruleReviewBackdrop.addEventListener('click', closeRuleReviewModal);
+        ruleReviewBackdrop.addEventListener('click', () => cancelRuleWorkflow());
     }
     if (conflictWizardBackdrop) {
-        conflictWizardBackdrop.addEventListener('click', closeConflictWizardModal);
+        conflictWizardBackdrop.addEventListener('click', () => cancelRuleWorkflow());
     }
 
     document.addEventListener('keydown', (event) => {
@@ -170,11 +173,11 @@ function bindAnalyzerModalDismissals() {
         }
 
         if (activeModalId === 'conflictWizardModal') {
-            closeConflictWizardModal();
+            cancelRuleWorkflow();
             return;
         }
         if (activeModalId === 'ruleReviewModal') {
-            closeRuleReviewModal();
+            cancelRuleWorkflow();
         }
     });
 }
@@ -187,6 +190,7 @@ function exposeLegacyAnalyzerGlobals() {
         advanceConflictWizard,
         closeConflictWizardModal,
         closeRuleReviewModal,
+        cancelRuleWorkflow,
         closeStatusPicker,
         fetchRulePreview,
         goToCreateFixlist,
@@ -200,6 +204,7 @@ function exposeLegacyAnalyzerGlobals() {
         renderContradictionListsForRule,
         renderRulePreview,
         resetToInput,
+        saveRulesAndRescan,
         saveStatusSelection,
         submitWithRulePersist,
     });

@@ -126,6 +126,10 @@ function resetToInput() {
     document.getElementById('logInput').style.display = 'block';
     document.getElementById('resetButton').style.display = 'none';
     document.getElementById('parseButton').style.display = 'inline-flex';
+    const legendEl = document.getElementById('statusLegend');
+    if (legendEl) {
+        legendEl.hidden = true;
+    }
 }
 
 let statusPickerTrigger = null;
@@ -312,7 +316,7 @@ async function saveStatusSelection(index, newStatus) {
     setStatusPickerDisabled(true);
 
     try {
-        const lineKey = entry._lineKey || `${entry.line}::${index}`;
+        const lineKey = pendingOverrideKeyForEntry(entry, index);
         const existing = pendingStatusChanges.get(lineKey);
 
         if (newStatus === baseStatus) {
@@ -481,6 +485,27 @@ function insertAllStatus(status) {
     }
 }
 
+function beginRuleWorkflow(target) {
+    setRuleSubmitTarget(target);
+
+    const pendingPayload = getPendingStatusChangesPayload();
+    if (pendingPayload.length > 0) {
+        sessionStorage.setItem(PENDING_STATUS_STORAGE_KEY, JSON.stringify(pendingPayload));
+        fetchRulePreview(pendingPayload);
+        return;
+    }
+
+    sessionStorage.removeItem(PENDING_STATUS_STORAGE_KEY);
+
+    if (target === RULE_SUBMIT_TARGET_RESCAN) {
+        parseLogs();
+        return;
+    }
+
+    sessionStorage.removeItem(CONFLICT_RESOLUTION_STORAGE_KEY);
+    window.location.href = CREATE_FIXLIST_URL;
+}
+
 function goToCreateFixlist() {
     const selected = document.getElementById('selectedLines').value;
     if (!selected.trim()) {
@@ -488,16 +513,18 @@ function goToCreateFixlist() {
         return;
     }
 
-    const pendingPayload = getPendingStatusChangesPayload();
-    if (pendingPayload.length > 0) {
-        sessionStorage.setItem('fenrishub_prefill_content', selected);
-        sessionStorage.setItem(PENDING_STATUS_STORAGE_KEY, JSON.stringify(pendingPayload));
-        fetchRulePreview(pendingPayload);
-    } else {
-        sessionStorage.setItem('fenrishub_prefill_content', selected);
-        sessionStorage.removeItem(CONFLICT_RESOLUTION_STORAGE_KEY);
-        window.location.href = CREATE_FIXLIST_URL;
+    sessionStorage.setItem('fenrishub_prefill_content', selected);
+    beginRuleWorkflow(RULE_SUBMIT_TARGET_CREATE_FIXLIST);
+}
+
+function saveRulesAndRescan() {
+    const logInput = document.getElementById('logInput').value;
+    if (!logInput.trim()) {
+        alert('No lines to parse');
+        return;
     }
+
+    beginRuleWorkflow(RULE_SUBMIT_TARGET_RESCAN);
 }
 
 function openRuleReviewModal(options = {}) {

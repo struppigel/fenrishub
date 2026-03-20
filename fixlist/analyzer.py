@@ -282,6 +282,14 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         rule_data["file_not_signed"] = parsed_entry.file_not_signed
         if not rule_data["description"]:
             rule_data["description"] = parsed_entry.description
+        return rule_data
+
+    fallback_path = ex.extract_any_frst_path(core)
+    if fallback_path:
+        rule_data["match_type"] = ClassificationRule.MATCH_FILEPATH
+        rule_data["source_text"] = fallback_path
+        rule_data["filepath"] = fallback_path
+        rule_data["normalized_filepath"] = ex.normalize_path(fallback_path).lower().strip()
 
     return rule_data
 
@@ -346,11 +354,22 @@ def _load_rule_buckets():
         ClassificationRule.MATCH_REGEX: [],
         ClassificationRule.MATCH_FILEPATH: [],
         ClassificationRule.MATCH_PARSED_ENTRY: [],
+        "__filepath_any": [],
     }
 
     for rule in rules:
         if rule.status not in VALID_STATUSES:
             continue
+
+        rule_path = (rule.normalized_filepath or "").strip().lower()
+        if not rule_path and rule.filepath:
+            rule_path = ex.normalize_path(rule.filepath).lower().strip()
+        if not rule_path and rule.source_text:
+            source_path = ex.extract_any_frst_path(rule.source_text)
+            if source_path:
+                rule_path = ex.normalize_path(source_path).lower().strip()
+        if rule_path:
+            buckets["__filepath_any"].append((rule, rule_path))
 
         if rule.match_type == ClassificationRule.MATCH_REGEX:
             try:
@@ -433,10 +452,7 @@ def _analyze_single_line(line: str, buckets):
     if filepath:
         normalized = ex.normalize_path(filepath).lower().strip()
         path_matches = []
-        for rule in buckets[ClassificationRule.MATCH_FILEPATH]:
-            rule_path = rule.normalized_filepath or ex.normalize_path(rule.source_text).lower().strip()
-            if not rule_path:
-                continue
+        for rule, rule_path in buckets["__filepath_any"]:
             if r":\windows\system32\cmd.exe" in rule_path:
                 continue
             if normalized == rule_path:
@@ -469,12 +485,18 @@ def _analyze_single_line(line: str, buckets):
     return _build_line_result(line, "?", unknown_entry_type, [], "unknown")
 
 
-def _collect_all_matches_for_line(line: str, buckets):
-    matches = []
+def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]:
+    groups = {
+        "exact": [],
+        "parsed_entry": [],
+        "filepath": [],
+        "substring": [],
+        "regex": [],
+    }
 
     for rule in buckets[ClassificationRule.MATCH_EXACT]:
         if rule.source_text.strip() == line.strip():
-            matches.append((rule, "found exact match", "exact"))
+            groups["exact"].append((rule, "found exact match", "exact"))
 
     parsed_entries = []
     for extractor in PARSER_ORDER:
@@ -483,62 +505,59 @@ def _collect_all_matches_for_line(line: str, buckets):
             parsed_entries.append(entry)
 
     if parsed_entries:
+        seen_rule_ids = set()
         for entry in parsed_entries:
             for rule, parsed_rule_entry in buckets[ClassificationRule.MATCH_PARSED_ENTRY]:
-                if entry == parsed_rule_entry:
-                    matches.append((rule, f"matched {entry.entry_type or 'parsed'} entry", "parsed_entry"))
+                if entry == parsed_rule_entry and rule.id not in seen_rule_ids:
+                    seen_rule_ids.add(rule.id)
+                    groups["parsed_entry"].append(
+                        (rule, f"matched {entry.entry_type or 'parsed'} entry", "parsed_entry")
+                    )
 
     filepath = ex.extract_any_frst_path(line)
     if filepath:
         normalized = ex.normalize_path(filepath).lower().strip()
-        for rule in buckets[ClassificationRule.MATCH_FILEPATH]:
-            rule_path = rule.normalized_filepath or ex.normalize_path(rule.source_text).lower().strip()
-            if not rule_path:
-                continue
+        for rule, rule_path in buckets["__filepath_any"]:
             if r":\windows\system32\cmd.exe" in rule_path:
                 continue
             if normalized == rule_path:
-                matches.append((rule, "found matching normalized path", "filepath"))
+                groups["filepath"].append((rule, "found matching normalized path", "filepath"))
 
     for rule in buckets[ClassificationRule.MATCH_SUBSTRING]:
         if rule.source_text and rule.source_text in line:
-            matches.append((rule, f'found substring "{rule.source_text}"', "substring"))
+            groups["substring"].append((rule, f'found substring "{rule.source_text}"', "substring"))
 
     for rule, compiled_regex in buckets[ClassificationRule.MATCH_REGEX]:
         if compiled_regex.search(line):
-            matches.append((rule, f'found regex match for "{rule.source_text}"', "regex"))
+            groups["regex"].append((rule, f'found regex match for "{rule.source_text}"', "regex"))
 
-    deduped = []
-    seen = set()
-    for rule, reason, matcher in matches:
-        dedupe_key = (rule.id, matcher)
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-        deduped.append((rule, reason, matcher))
-    return deduped
+    return groups
 
 
-def inspect_line_matches(line: str, buckets=None) -> dict:
-    line_value = (line or "").strip()
-    if not line_value:
-        return {
-            "line": "",
-            "status_codes": "?",
-            "dominant_status": "?",
-            "reasons": [],
-            "matches": [],
-        }
+def _collect_effective_and_shadowed_matches_for_line(line: str, buckets):
+    groups = _collect_match_groups_for_line(line, buckets)
+    matcher_order = ["exact", "parsed_entry", "filepath", "substring", "regex"]
 
-    active_buckets = buckets or _load_rule_buckets()
-    matches = _collect_all_matches_for_line(line_value, active_buckets)
+    effective_matcher = "unknown"
+    effective_matches = []
+    shadowed_matches = []
 
-    statuses = [rule.status for rule, _, _ in matches]
-    status_codes = _ordered_status_codes(statuses)
-    dominant_status = _dominant_status(status_codes)
+    for index, matcher in enumerate(matcher_order):
+        matches = groups.get(matcher, [])
+        if matches:
+            effective_matcher = matcher
+            effective_matches = matches
+            for later_matcher in matcher_order[index + 1 :]:
+                shadowed_matches.extend(groups.get(later_matcher, []))
+            break
 
+    return effective_matches, shadowed_matches, effective_matcher
+
+
+def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]]:
     reasons = []
     serialized_matches = []
+
     for rule, reason, matcher in matches:
         reason_value = reason or ""
         if reason_value:
@@ -569,12 +588,40 @@ def inspect_line_matches(line: str, buckets=None) -> dict:
             }
         )
 
+    return serialized_matches, reasons
+
+
+def inspect_line_matches(line: str, buckets=None) -> dict:
+    line_value = (line or "").strip()
+    if not line_value:
+        return {
+            "line": "",
+            "status_codes": "?",
+            "dominant_status": "?",
+            "reasons": [],
+            "matches": [],
+        }
+
+    active_buckets = buckets or _load_rule_buckets()
+    effective_matches, shadowed_matches, effective_matcher = _collect_effective_and_shadowed_matches_for_line(
+        line_value,
+        active_buckets,
+    )
+
+    statuses = [rule.status for rule, _, _ in effective_matches]
+    status_codes = _ordered_status_codes(statuses)
+    dominant_status = _dominant_status(status_codes)
+    serialized_matches, reasons = _serialize_rule_matches(effective_matches)
+    serialized_shadowed_matches, _ = _serialize_rule_matches(shadowed_matches)
+
     return {
         "line": line_value,
         "status_codes": status_codes,
         "dominant_status": dominant_status,
+        "effective_matcher": effective_matcher,
         "reasons": _dedupe(reasons),
         "matches": serialized_matches,
+        "shadowed_matches": serialized_shadowed_matches,
     }
 
 
