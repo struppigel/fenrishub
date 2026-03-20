@@ -655,6 +655,7 @@ async function submitWithRulePersist(persistSelectedRules) {
     closeRuleReviewModal({ restoreFocus: false });
 
     if (submitTarget === RULE_SUBMIT_TARGET_RESCAN) {
+        clearPendingAnalyzerChanges();
         resetRuleReviewDraftState();
         setRuleSubmitTarget(RULE_SUBMIT_TARGET_CREATE_FIXLIST);
         if (typeof parseLogs === 'function') {

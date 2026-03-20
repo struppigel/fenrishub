@@ -320,3 +320,12 @@ function setRuleSubmitTarget(nextTarget) {
     }
     ruleSubmitTarget = RULE_SUBMIT_TARGET_RESCAN;
 }
+
+function clearPendingAnalyzerChanges() {
+    pendingStatusChanges.clear();
+    pendingChangeSequence = 0;
+    ruleDescriptionOverrides.clear();
+    removedRuleCandidateIds.clear();
+    expandedRuleCandidateId = null;
+    updateSaveChangesButtonState();
+}

@@ -381,6 +381,8 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("persistPendingRuleChanges", script_content)
         self.assertIn("RULE_SUBMIT_TARGET_RESCAN", script_content)
         self.assertIn("saveRulesAndRescan", script_content)
+        self.assertIn("function clearPendingAnalyzerChanges()", script_content)
+        self.assertIn("clearPendingAnalyzerChanges();", script_content)
         self.assertIn("toggleQuestionCursorMode", script_content)
         self.assertIn("openLineInspectorModal", script_content)
         self.assertIn("bindAnalyzerButton('saveRulesRescanButton'", script_content)
