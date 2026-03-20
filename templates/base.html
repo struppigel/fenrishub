@@ -53,6 +53,9 @@
         }
 
         .page-context {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
             flex-shrink: 0;
             padding: 4px 0 2px 14px;
             border-left: 1px solid var(--la-border-muted);
@@ -63,6 +66,14 @@
             text-align: right;
             text-transform: lowercase;
             white-space: nowrap;
+        }
+
+        .page-context-label {
+            white-space: nowrap;
+        }
+
+        .page-context-separator {
+            color: var(--la-text-neutral);
         }
 
         .nav {
@@ -115,6 +126,15 @@
             text-decoration: underline;
         }
 
+        .page-context-profile {
+            padding: 0;
+            border: none;
+            background: none;
+            color: var(--la-text-neutral);
+            letter-spacing: 0.04em;
+            text-transform: lowercase;
+        }
+
         .profile-menu {
             display: none;
             position: absolute;
@@ -125,6 +145,10 @@
             border: 1px solid var(--la-border-strong);
             min-width: 140px;
             z-index: 100;
+        }
+
+        .page-context .profile-menu {
+            margin-top: 6px;
         }
 
         .profile-dropdown:focus-within .profile-menu,
@@ -389,6 +413,10 @@
             }
 
             .page-context {
+                display: inline-flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 6px;
                 width: 100%;
                 padding: 10px 0 0;
                 border-left: none;
@@ -411,17 +439,12 @@
                 <div class="header-branding">
                     <h1>FenrisHub</h1>
                 </div>
-                {% block header_context %}{% endblock %}
-            </div>
-            {% if user.is_authenticated %}
-            <div class="nav">
-                <div class="nav-left">
-                    <a href="{% url 'dashboard' %}">fixlists</a>
-                    <a href="{% url 'log_analyzer' %}">analyze</a>
-                </div>
-                <div class="nav-right">
+                {% if user.is_authenticated %}
+                <div class="page-context">
+                    <span class="page-context-label">{% block page_context_label %}{% endblock %}</span>
+                    <span class="page-context-separator">/</span>
                     <div class="profile-dropdown" tabindex="0">
-                        <button class="profile-btn" type="button">{{ user.username }} &#9660;</button>
+                        <button class="profile-btn page-context-profile" type="button" aria-haspopup="true">{{ user.username }} &#9660;</button>
                         <div class="profile-menu">
                             <a href="{% url 'change_password' %}">change password</a>
                             <form method="post" action="{% url 'logout' %}">
@@ -430,6 +453,16 @@
                             </form>
                         </div>
                     </div>
+                </div>
+                {% else %}
+                {% block header_context %}{% endblock %}
+                {% endif %}
+            </div>
+            {% if user.is_authenticated %}
+            <div class="nav">
+                <div class="nav-left">
+                    <a href="{% url 'dashboard' %}">fixlists</a>
+                    <a href="{% url 'log_analyzer' %}">analyze</a>
                 </div>
             </div>
             {% else %}
