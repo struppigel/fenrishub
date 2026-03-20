@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 
-{% block title %}{{ fixlist.title }} - FenrisHub{% endblock %}
+{% block title %}{{ fixlist.title }} - Fenris{% endblock %}
 
 {% block page_context_label %}shared / {{ fixlist.title }}{% endblock %}
 
@@ -88,11 +88,8 @@
     {% endif %}
 
     <div id="shared-content" {% if not is_owner %}class="shared-content-locked"{% endif %}>
-        <div class="info-box">
-            owner {{ fixlist.owner.username }}<br>
-            created {{ fixlist.created_at|date:"Y-m-d H:i" }}<br>
-            views {{ fixlist.accesses.count }}
-        </div>
+
+          <div id="copy-feedback" class="copy-feedback">content copied</div>
 
         <div class="button-group">
             <button onclick="copyContent()">copy all</button>
@@ -105,18 +102,18 @@
 
         <div class="code-block">{{ fixlist.content }}</div>
 
-        <div id="copy-feedback" class="copy-feedback">content copied</div>
+      
     </div>
 
     {% if not is_owner %}
     <div id="agreement-modal" class="warning-modal-backdrop show" role="dialog" aria-modal="true" aria-label="shared fixlist access warning">
         <div class="warning-modal">
-            <div class="alert-strip">access warning: recipient-specific content</div>
+            <div class="alert-strip">Warning</div>
             <div class="warning-modal-body">
-                <p class="alert-body">this fixlist is intended for a specific recipient. continue only if the owner sent this link to you directly.</p>
-                <p class="muted consent-note">to view the content, acknowledge this warning.</p>
+                <p class="alert-body">Executing a Fixlist on the wrong system may permanently damage it. Continue only if this link was meant for you. </p>
+                <p class="muted consent-note">To view the content, acknowledge this warning.</p>
                 <div class="button-group">
-                    <button type="button" onclick="agreeToWarning()">i understand, show content</button>
+                    <button type="button" onclick="agreeToWarning()">I understand, show content</button>
                 </div>
             </div>
         </div>

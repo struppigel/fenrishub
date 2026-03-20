@@ -1,413 +1,10 @@
-from pathlib import Path
-import json
-from unittest.mock import patch
+﻿import json
 
-from django.contrib.auth.models import AnonymousUser, User
-from django.http import Http404, HttpResponse
-from django.test import RequestFactory, TestCase
+from django.contrib.auth.models import User
+from django.test import TestCase
 from django.urls import reverse
 
-from .models import AccessLog, ClassificationRule, Fixlist, ParsedFilepathExclusion
-from .views import change_password_view, dashboard_view, shared_fixlist_view, view_fixlist
-
-
-class FixlistModelTests(TestCase):
-    def test_share_token_generated_on_create(self):
-        user = User.objects.create_user(username="alice", password="password123")
-
-        fixlist = Fixlist.objects.create(
-            owner=user,
-            title="Initial",
-            content="line1",
-        )
-
-        self.assertEqual(len(fixlist.share_token), 32)
-        self.assertTrue(fixlist.share_token.isalnum())
-
-
-class AuthenticationAndAccessTests(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username="alice", password="password123")
-        self.other_user = User.objects.create_user(username="bob", password="password123")
-        self.factory = RequestFactory()
-
-        self.fixlist = Fixlist.objects.create(
-            owner=self.user,
-            title="Owner Fixlist",
-            content="ioc-a\nioc-b",
-            internal_note="Sensitive internal note",
-        )
-
-    def test_dashboard_requires_login(self):
-        response = self.client.get(reverse("dashboard"))
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("login"), response.url)
-
-    def test_log_analyzer_requires_login(self):
-        response = self.client.get(reverse("log_analyzer"))
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("login"), response.url)
-
-    def test_change_password_requires_login(self):
-        response = self.client.get(reverse("change_password"))
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("login"), response.url)
-
-    def test_change_password_updates_credentials_without_email(self):
-        self.user.email = ""
-        self.user.save(update_fields=["email"])
-
-        self.assertTrue(self.client.login(username="alice", password="password123"))
-        response = self.client.post(
-            reverse("change_password"),
-            {
-                "old_password": "password123",
-                "new_password1": "new-password456",
-                "new_password2": "new-password456",
-            },
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, reverse("change_password"))
-
-        self.client.logout()
-        self.assertFalse(self.client.login(username="alice", password="password123"))
-        self.assertTrue(self.client.login(username="alice", password="new-password456"))
-
-    def test_change_password_form_exposes_password_fields_only(self):
-        request = self.factory.get(reverse("change_password"))
-        request.user = self.user
-
-        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
-            response = change_password_view(request)
-
-        rendered_context = mock_render.call_args.args[2]
-        form = rendered_context["form"]
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("old_password", form.fields)
-        self.assertIn("new_password1", form.fields)
-        self.assertIn("new_password2", form.fields)
-        self.assertNotIn("email", form.fields)
-
-    def test_dashboard_only_shows_user_fixlists(self):
-        Fixlist.objects.create(owner=self.other_user, title="Other", content="secret")
-        request = self.factory.get(reverse("dashboard"))
-        request.user = self.user
-
-        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
-            response = dashboard_view(request)
-
-        rendered_context = mock_render.call_args.args[2]
-        titles = {item.title for item in rendered_context["fixlists"]}
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("Owner Fixlist", titles)
-        self.assertNotIn("Other", titles)
-
-    def test_user_cannot_access_other_users_fixlist_edit_page(self):
-        request = self.factory.get(reverse("view_fixlist", args=[self.fixlist.pk]))
-        request.user = self.other_user
-
-        with self.assertRaises(Http404):
-            view_fixlist(request, pk=self.fixlist.pk)
-
-
-class FixlistCrudViewTests(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username="alice", password="password123")
-        self.client.login(username="alice", password="password123")
-
-    def test_create_fixlist_creates_record_and_redirects(self):
-        response = self.client.post(
-            reverse("create_fixlist"),
-            {
-                "title": "Created Via Test",
-                "content": "ioc-1\nioc-2",
-                "internal_note": "internal context",
-            },
-        )
-
-        created = Fixlist.objects.get(title="Created Via Test")
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
-        self.assertEqual(created.owner, self.user)
-        self.assertEqual(created.internal_note, "internal context")
-
-    def test_create_fixlist_ignores_rule_persistence_payload(self):
-        pending_changes = [
-            {
-                "id": "1",
-                "line": "MALICIOUS-LINE",
-                "original_status": "?",
-                "new_status": ClassificationRule.STATUS_MALWARE,
-                "order": 1,
-            }
-        ]
-
-        response = self.client.post(
-            reverse("create_fixlist"),
-            {
-                "title": "Fixlist Ignores Rule Persist Payload",
-                "content": "line-a",
-                "internal_note": "",
-                "persist_rules": "1",
-                "pending_rule_changes_json": json.dumps(pending_changes),
-                "selected_rule_change_ids_json": json.dumps(["1"]),
-            },
-        )
-
-        created = Fixlist.objects.get(title="Fixlist Ignores Rule Persist Payload")
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
-        self.assertEqual(ClassificationRule.objects.count(), 0)
-
-    def test_update_fixlist_changes_content(self):
-        fixlist = Fixlist.objects.create(
-            owner=self.user,
-            title="Before",
-            content="old-content",
-            internal_note="old-note",
-        )
-
-        response = self.client.post(
-            reverse("view_fixlist", args=[fixlist.pk]),
-            {
-                "action": "update",
-                "title": "After",
-                "content": "new-content",
-                "internal_note": "new-note",
-            },
-        )
-
-        fixlist.refresh_from_db()
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, reverse("view_fixlist", args=[fixlist.pk]))
-        self.assertEqual(fixlist.title, "After")
-        self.assertEqual(fixlist.content, "new-content")
-        self.assertEqual(fixlist.internal_note, "new-note")
-
-    def test_delete_fixlist_removes_record(self):
-        fixlist = Fixlist.objects.create(owner=self.user, title="Delete Me", content="x")
-
-        response = self.client.post(
-            reverse("view_fixlist", args=[fixlist.pk]),
-            {"action": "delete"},
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, reverse("dashboard"))
-        self.assertFalse(Fixlist.objects.filter(pk=fixlist.pk).exists())
-
-    def test_view_fixlist_context_includes_guest_preview_url(self):
-        fixlist = Fixlist.objects.create(
-            owner=self.user,
-            title="Previewable",
-            content="payload",
-        )
-        request = RequestFactory().get(reverse("view_fixlist", args=[fixlist.pk]))
-        request.user = self.user
-
-        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
-            response = view_fixlist(request, pk=fixlist.pk)
-
-        rendered_context = mock_render.call_args.args[2]
-        share_url = rendered_context["share_url"]
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(f"/share/{fixlist.share_token}/", share_url)
-        self.assertEqual(
-            rendered_context["guest_preview_url"],
-            f"{share_url}?preview=guest",
-        )
-
-class SharingAndDownloadTests(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username="alice", password="password123")
-        self.factory = RequestFactory()
-        self.fixlist = Fixlist.objects.create(
-            owner=self.user,
-            title="Shareable",
-            content="ioc-a\nioc-b",
-            internal_note="Internal only",
-        )
-
-    def test_shared_view_creates_access_log_for_anonymous_access(self):
-        request = self.factory.get(reverse("shared_fixlist", args=[self.fixlist.share_token]))
-        request.user = AnonymousUser()
-
-        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
-            response = shared_fixlist_view(request, token=self.fixlist.share_token)
-
-        rendered_context = mock_render.call_args.args[2]
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(rendered_context["fixlist"].pk, self.fixlist.pk)
-        self.assertFalse(rendered_context["is_owner"])
-        self.assertEqual(AccessLog.objects.filter(fixlist=self.fixlist).count(), 1)
-
-    def test_download_increments_counter_and_returns_attachment(self):
-        response = self.client.get(reverse("download_fixlist", args=[self.fixlist.share_token]))
-
-        self.fixlist.refresh_from_db()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response["Content-Type"], "text/plain")
-        self.assertIn('attachment; filename="Fixlist.txt"', response["Content-Disposition"])
-        self.assertEqual(response.content.decode("utf-8"), self.fixlist.content)
-        self.assertEqual(self.fixlist.download_count, 1)
-        self.assertEqual(AccessLog.objects.filter(fixlist=self.fixlist).count(), 1)
-
-    def test_copy_api_returns_content_and_logs_access(self):
-        response = self.client.post(reverse("copy_api", args=[self.fixlist.share_token]))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"content": self.fixlist.content})
-        self.assertEqual(AccessLog.objects.filter(fixlist=self.fixlist).count(), 1)
-
-    def test_shared_view_marks_owner_in_context_when_logged_in(self):
-        request = self.factory.get(reverse("shared_fixlist", args=[self.fixlist.share_token]))
-        request.user = self.user
-
-        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
-            response = shared_fixlist_view(request, token=self.fixlist.share_token)
-
-        rendered_context = mock_render.call_args.args[2]
-
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(rendered_context["is_owner"])
-        self.assertFalse(rendered_context["preview_as_guest"])
-
-    def test_shared_view_owner_guest_preview_sets_non_owner_context(self):
-        request = self.factory.get(
-            reverse("shared_fixlist", args=[self.fixlist.share_token]),
-            {"preview": "guest"},
-        )
-        request.user = self.user
-
-        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
-            response = shared_fixlist_view(request, token=self.fixlist.share_token)
-
-        rendered_context = mock_render.call_args.args[2]
-
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(rendered_context["preview_as_guest"])
-        self.assertFalse(rendered_context["is_owner"])
-
-
-class TemplateMarkupTests(TestCase):
-    @staticmethod
-    def _read_template(template_name):
-        project_root = Path(__file__).resolve().parent.parent
-        template_path = project_root / "templates" / template_name
-        return template_path.read_text(encoding="utf-8")
-
-    @staticmethod
-    def _read_static_asset(*relative_parts):
-        project_root = Path(__file__).resolve().parent.parent
-        asset_path = project_root / "static"
-        for part in relative_parts:
-            asset_path = asset_path / part
-        return asset_path.read_text(encoding="utf-8")
-
-    def test_view_fixlist_template_has_preview_guest_button(self):
-        content = self._read_template("view_fixlist.html")
-
-        self.assertIn("preview guest view", content)
-        self.assertIn('href="{{ guest_preview_url }}"', content)
-
-    def test_shared_fixlist_template_contains_modal_warning_flow(self):
-        content = self._read_template("shared_fixlist.html")
-
-        self.assertIn("id=\"agreement-modal\"", content)
-        self.assertIn("access warning: recipient-specific content", content)
-        self.assertIn("class=\"muted consent-note\"", content)
-        self.assertIn("shared-content-locked", content)
-        self.assertNotIn("before you continue", content)
-        self.assertNotIn("leave page", content)
-
-    def test_dashboard_template_actions_share_action_button_class(self):
-        content = self._read_template("dashboard.html")
-
-        self.assertIn('class="action-btn" onclick="copyShareLink', content)
-        self.assertIn('class="action-btn">edit</a>', content)
-
-    def test_log_analyzer_template_contains_status_picker_hooks(self):
-        content = self._read_template("log_analyzer.html")
-        script_content = "\n".join(
-            [
-                self._read_static_asset("js", "log_analyzer", "shared.js"),
-                self._read_static_asset("js", "log_analyzer", "analysis.js"),
-                self._read_static_asset("js", "log_analyzer", "conflict_wizard.js"),
-                self._read_static_asset("js", "log_analyzer", "rule_preview.js"),
-                self._read_static_asset("js", "log_analyzer", "bootstrap.js"),
-            ]
-        )
-
-        self.assertIn('id="statusPicker"', content)
-        self.assertIn('id="conflictWizardModal"', content)
-        self.assertIn('id="ruleReviewDialog"', content)
-        self.assertIn('id="conflictWizardDialog"', content)
-        self.assertIn('id="plannedExistingRuleChangesList"', content)
-        self.assertIn('id="saveRulesRescanButton"', content)
-        self.assertIn('>save changes<', content)
-        self.assertIn('id="questionCursorModeButton"', content)
-        self.assertIn('id="lineInspectorModal"', content)
-        self.assertIn('id="lineInspectorDialog"', content)
-        self.assertIn('data-insert-status="!"', content)
-        self.assertIn('id="saveFixlistButton"', content)
-        self.assertIn('id="conflictWizardBackButton"', content)
-        self.assertIn('role="radiogroup"', content)
-        self.assertNotIn("onclick=", content)
-        self.assertIn("window.logAnalyzerConfig", content)
-        self.assertIn("{% static 'css/log_analyzer.css' %}", content)
-        self.assertIn("{% static 'js/log_analyzer/shared.js' %}", content)
-        self.assertIn("{% static 'js/log_analyzer/analysis.js' %}", content)
-        self.assertIn("{% static 'js/log_analyzer/conflict_wizard.js' %}", content)
-        self.assertIn("{% static 'js/log_analyzer/rule_preview.js' %}", content)
-        self.assertIn("{% static 'js/log_analyzer/bootstrap.js' %}", content)
-        self.assertIn("persistRuleChangesUrl", content)
-
-        self.assertIn("fenrishub_pending_status_changes", script_content)
-        self.assertIn("manual override:", script_content)
-        self.assertIn("renderContradictionListsForRule", script_content)
-        self.assertIn("No dominant-status contradictions were detected.", script_content)
-        self.assertIn("advanceConflictWizard", script_content)
-        self.assertIn("pending_change_id", script_content)
-        self.assertIn("existing status changes", script_content)
-        self.assertIn("PERSIST_RULE_CHANGES_URL", script_content)
-        self.assertIn("persistPendingRuleChanges", script_content)
-        self.assertIn("RULE_SUBMIT_TARGET_RESCAN", script_content)
-        self.assertIn("saveRulesAndRescan", script_content)
-        self.assertIn("function clearPendingAnalyzerChanges()", script_content)
-        self.assertIn("clearPendingAnalyzerChanges();", script_content)
-        self.assertIn("toggleQuestionCursorMode", script_content)
-        self.assertIn("openLineInspectorModal", script_content)
-        self.assertIn("bindAnalyzerButton('saveRulesRescanButton'", script_content)
-        self.assertIn("cancelRuleWorkflow", script_content)
-        self.assertIn("ruleReviewBackdrop.addEventListener('click', () => cancelRuleWorkflow())", script_content)
-        self.assertIn("has-pending-changes", script_content)
-        self.assertIn("Object.assign(window", script_content)
-        self.assertIn("handleAnalyzerModalOpen", script_content)
-        self.assertIn("focusStatusPickerButton", script_content)
-        self.assertIn("lineDetailsUrl", content)
-        self.assertNotIn("{% url 'analyze_log_api' %}", script_content)
-
-    def test_create_fixlist_template_only_uses_prefill_handoff(self):
-        content = self._read_template("create_fixlist.html")
-
-        self.assertIn("fenrishub_prefill_content", content)
-        self.assertNotIn('id="persistRulesInput"', content)
-        self.assertNotIn('id="pendingRuleChangesInput"', content)
-        self.assertNotIn('id="selectedRuleIdsInput"', content)
-        self.assertNotIn('id="conflictResolutionsInput"', content)
-        self.assertNotIn("fenrishub_persist_rules", content)
-        self.assertNotIn("fenrishub_pending_rule_changes", content)
-        self.assertNotIn("fenrishub_selected_rule_ids", content)
-        self.assertNotIn("fenrishub_conflict_resolutions", content)
-
+from ..models import ClassificationRule, ParsedFilepathExclusion
 
 class LogAnalyzerApiTests(TestCase):
     def setUp(self):
@@ -938,7 +535,7 @@ class LogAnalyzerApiTests(TestCase):
         self.assertTrue(rule["normalized_filepath"])
 
     def test_parse_rule_line_keeps_parsed_entry_match_type_for_service_lines(self):
-        from .analyzer import parse_rule_line
+        from ..analyzer import parse_rule_line
 
         service_line = (
             r"R3 ProtoVPN Service; C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe "
@@ -1010,7 +607,7 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(analyze_payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_MALWARE)
 
     def test_parsed_fallback_filepath_respects_exclusion_list(self):
-        from .analyzer import parse_rule_line, inspect_line_matches
+        from ..analyzer import parse_rule_line, inspect_line_matches
 
         self.client.login(username="analyzer", password="password123")
         service_line = (
@@ -1050,7 +647,7 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(inspection["matches"], [])
 
     def test_explicit_filepath_rule_ignores_parsed_fallback_exclusion_list(self):
-        from .analyzer import inspect_line_matches
+        from ..analyzer import inspect_line_matches
 
         self.client.login(username="analyzer", password="password123")
         same_path_line = (
@@ -1090,7 +687,7 @@ class LogAnalyzerApiTests(TestCase):
         )
 
     def test_inspect_line_matches_prefers_parsed_entry_matcher_over_filepath_for_same_rule(self):
-        from .analyzer import inspect_line_matches
+        from ..analyzer import inspect_line_matches
 
         self.client.login(username="analyzer", password="password123")
         service_line = (
@@ -1132,7 +729,7 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(rule_matches[0]["matcher"], "parsed_entry")
 
     def test_inspect_line_matches_uses_runtime_precedence_and_tracks_shadowed_matches(self):
-        from .analyzer import inspect_line_matches, parse_rule_line
+        from ..analyzer import inspect_line_matches, parse_rule_line
 
         self.client.login(username="analyzer", password="password123")
         service_line = (
@@ -1172,7 +769,7 @@ class LogAnalyzerApiTests(TestCase):
         self.assertIn("filepath", shadowed_matchers)
 
     def test_preview_pending_rule_changes_uses_effective_matches_for_contradictions(self):
-        from .analyzer import parse_rule_line
+        from ..analyzer import parse_rule_line
 
         self.client.login(username="analyzer", password="password123")
         service_line = (
@@ -1287,3 +884,5 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("low_memory", warnings_by_code)
         self.assertIn("Memory information incomplete", warnings_by_code["low_memory"]["message"])
+
+
