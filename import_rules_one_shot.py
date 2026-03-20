@@ -1,9 +1,10 @@
 from pathlib import Path
 
+from django.contrib.auth import get_user_model
 from django.db.models import Count
 
 from fixlist.analyzer import import_rules_from_lines
-from fixlist.models import ClassificationRule
+from fixlist.models import ClassificationRule, get_default_rule_owner_id
 
 base = Path("Fenris")
 
@@ -31,9 +32,12 @@ mapped_systemlookup_sources = [
 ]
 
 sources = personal_sources + mapped_systemlookup_sources
+User = get_user_model()
+default_owner = User.objects.get(pk=get_default_rule_owner_id())
 
 print("INITIAL_RULES", ClassificationRule.objects.count())
 print("MAPPED_DB_SOURCES", mapped_systemlookup_sources)
+print("DEFAULT_OWNER", default_owner.username)
 
 for status, filename in sources:
     file_path = base / filename
@@ -42,7 +46,7 @@ for status, filename in sources:
         continue
 
     lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    result = import_rules_from_lines(lines, status=status, source_name=filename)
+    result = import_rules_from_lines(lines, status=status, source_name=filename, owner=default_owner)
     print(
         f"{status} {filename}: "
         f"created={result['created']} "

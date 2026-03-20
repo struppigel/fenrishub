@@ -353,6 +353,7 @@ class TemplateMarkupTests(TestCase):
         self.assertIn('id="plannedExistingRuleChangesList"', content)
         self.assertIn('id="saveRulesRescanButton"', content)
         self.assertIn('>save changes<', content)
+        self.assertIn('data-insert-status="!"', content)
         self.assertIn('id="saveFixlistButton"', content)
         self.assertIn('id="conflictWizardBackButton"', content)
         self.assertIn('role="radiogroup"', content)
@@ -417,6 +418,7 @@ class LogAnalyzerApiTests(TestCase):
     def test_analyze_api_returns_known_and_unknown_statuses(self):
         self.client.login(username="analyzer", password="password123")
         ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_MALWARE,
             match_type=ClassificationRule.MATCH_EXACT,
             source_text="MALICIOUS-LINE",
@@ -532,6 +534,7 @@ class LogAnalyzerApiTests(TestCase):
         self.client.login(username="analyzer", password="password123")
 
         existing_rule = ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_CLEAN,
             match_type=ClassificationRule.MATCH_EXACT,
             source_text="IMMEDIATE-STATUS-SWAP",
@@ -585,11 +588,13 @@ class LogAnalyzerApiTests(TestCase):
     def test_analyze_api_applies_status_precedence(self):
         self.client.login(username="analyzer", password="password123")
         ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_PUP,
             match_type=ClassificationRule.MATCH_EXACT,
             source_text="MULTI-MATCH",
         )
         ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_MALWARE,
             match_type=ClassificationRule.MATCH_EXACT,
             source_text="MULTI-MATCH",
@@ -804,12 +809,14 @@ class LogAnalyzerApiTests(TestCase):
         self.client.login(username="analyzer", password="password123")
 
         ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_MALWARE,
             match_type=ClassificationRule.MATCH_EXACT,
             source_text="CONFLICT-LINE",
             description="existing malware exact",
         )
         ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_CLEAN,
             match_type=ClassificationRule.MATCH_SUBSTRING,
             source_text="CONFLICT",
@@ -978,7 +985,7 @@ class LogAnalyzerApiTests(TestCase):
             source_name="test-suite",
         )
         self.assertIsNotNone(parsed_rule)
-        ClassificationRule.objects.create(**parsed_rule)
+        ClassificationRule.objects.create(owner=self.user, **parsed_rule)
 
         ParsedFilepathExclusion.objects.create(normalized_filepath=service_path)
 
@@ -1009,6 +1016,7 @@ class LogAnalyzerApiTests(TestCase):
         service_path = r"C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe"
 
         ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_MALWARE,
             match_type=ClassificationRule.MATCH_FILEPATH,
             source_text=service_path,
@@ -1096,8 +1104,9 @@ class LogAnalyzerApiTests(TestCase):
         )
         self.assertIsNotNone(parsed_rule)
 
-        ClassificationRule.objects.create(**parsed_rule)
+        ClassificationRule.objects.create(owner=self.user, **parsed_rule)
         ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_MALWARE,
             match_type=ClassificationRule.MATCH_FILEPATH,
             source_text=service_path,
@@ -1135,8 +1144,9 @@ class LogAnalyzerApiTests(TestCase):
         )
         self.assertIsNotNone(parsed_rule)
 
-        ClassificationRule.objects.create(**parsed_rule)
+        ClassificationRule.objects.create(owner=self.user, **parsed_rule)
         ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_MALWARE,
             match_type=ClassificationRule.MATCH_FILEPATH,
             source_text=service_path,
@@ -1183,6 +1193,7 @@ class LogAnalyzerApiTests(TestCase):
         self.client.login(username="analyzer", password="password123")
 
         ClassificationRule.objects.create(
+            owner=self.user,
             status=ClassificationRule.STATUS_PUP,
             match_type=ClassificationRule.MATCH_EXACT,
             source_text="EXISTING-PUP",

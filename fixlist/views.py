@@ -56,8 +56,9 @@ def _rule_defaults_from_parsed(parsed: dict) -> dict:
     }
 
 
-def _upsert_classification_rule(parsed: dict) -> tuple[ClassificationRule, bool]:
+def _upsert_classification_rule(parsed: dict, owner: User) -> tuple[ClassificationRule, bool]:
     lookup = {
+        'owner': owner,
         'status': parsed['status'],
         'match_type': parsed['match_type'],
         'source_text': parsed['source_text'],
@@ -168,6 +169,7 @@ def _apply_conflict_resolutions(
     normalized_changes: list[dict],
     selected_ids: set[str],
     conflict_resolutions: list[dict],
+    owner: User,
 ) -> set[str]:
     selected_change_map = {
         change['id']: change
@@ -195,7 +197,7 @@ def _apply_conflict_resolutions(
         if existing_rule_id is None:
             continue
 
-        existing_rule = ClassificationRule.objects.filter(pk=existing_rule_id).first()
+        existing_rule = ClassificationRule.objects.filter(pk=existing_rule_id, owner=owner).first()
         if not existing_rule:
             continue
 
@@ -208,6 +210,7 @@ def _apply_conflict_resolutions(
             target_status = target_change['new_status']
             duplicate_rule = (
                 ClassificationRule.objects.filter(
+                    owner=owner,
                     status=target_status,
                     match_type=existing_rule.match_type,
                     source_text=existing_rule.source_text,
@@ -249,7 +252,7 @@ def _apply_conflict_resolutions(
     return effective_selected_ids
 
 
-def _build_pending_rule_preview(pending_changes: list[dict], username: str) -> dict:
+def _build_pending_rule_preview(pending_changes: list[dict], username: str, owner: User) -> dict:
     manual_changes = []
     rule_changes = []
     override_conflicts = []
@@ -278,6 +281,7 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str) -> d
             continue
 
         lookup = {
+            'owner': owner,
             'status': parsed['status'],
             'match_type': parsed['match_type'],
             'source_text': parsed['source_text'],
@@ -370,6 +374,7 @@ def _persist_selected_pending_rules(
     raw_conflict_resolutions,
     username: str,
     source_prefix: str,
+    owner: User,
 ) -> dict:
     selected_ids = {
         str(value)
@@ -387,6 +392,7 @@ def _persist_selected_pending_rules(
             normalized_changes,
             selected_ids,
             conflict_resolutions,
+            owner,
         )
 
         source_name = f'{source_prefix}:{username}'
@@ -402,7 +408,7 @@ def _persist_selected_pending_rules(
             if change.get('description') is not None:
                 parsed['description'] = change['description']
 
-            _, is_created = _upsert_classification_rule(parsed)
+            _, is_created = _upsert_classification_rule(parsed, owner=owner)
             if is_created:
                 created_rules += 1
             else:
@@ -626,7 +632,7 @@ def preview_pending_rule_changes_api(request):
     if pending_changes is not None and not isinstance(pending_changes, list):
         return JsonResponse({'error': 'Field "pending_changes" must be a list.'}, status=400)
 
-    preview = _build_pending_rule_preview(normalized_changes, request.user.username)
+    preview = _build_pending_rule_preview(normalized_changes, request.user.username, request.user)
     preview['invalid_changes'] = invalid_changes
     return JsonResponse(preview)
 
@@ -657,6 +663,7 @@ def persist_pending_rule_changes_api(request):
         raw_conflict_resolutions=conflict_resolutions,
         username=request.user.username,
         source_prefix='analyzer-persist',
+        owner=request.user,
     )
 
     return JsonResponse({'ok': True, **result})

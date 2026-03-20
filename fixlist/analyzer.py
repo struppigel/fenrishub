@@ -2,7 +2,7 @@ import re
 from typing import Iterable
 
 from . import frst_extractors as ex
-from .models import ClassificationRule, ParsedFilepathExclusion
+from .models import ClassificationRule, ParsedFilepathExclusion, get_default_rule_owner_id
 
 STATUS_PRECEDENCE = "BPC!GSIJ?"
 VALID_STATUSES = set(STATUS_PRECEDENCE)
@@ -294,12 +294,13 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
     return rule_data
 
 
-def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str = "") -> dict:
+def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str = "", owner=None) -> dict:
     created = 0
     updated = 0
     skipped = 0
     invalid = 0
     errors = []
+    owner_id = owner.id if owner is not None else get_default_rule_owner_id()
 
     for raw_line in lines:
         try:
@@ -309,6 +310,7 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
                 continue
 
             lookup = {
+                "owner_id": owner_id,
                 "status": parsed["status"],
                 "match_type": parsed["match_type"],
                 "source_text": parsed["source_text"],

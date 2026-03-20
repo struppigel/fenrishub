@@ -60,9 +60,9 @@ class AccessLogAdmin(admin.ModelAdmin):
 @admin.register(ClassificationRule)
 class ClassificationRuleAdmin(admin.ModelAdmin):
     change_list_template = 'admin/fixlist/classificationrule/change_list.html'
-    list_display = ('status', 'match_type', 'short_source', 'source_name', 'is_enabled', 'updated_at')
-    list_filter = ('status', 'match_type', 'is_enabled', 'source_name')
-    search_fields = ('source_text', 'description', 'name', 'filepath', 'clsid')
+    list_display = ('status', 'owner', 'match_type', 'short_source', 'source_name', 'is_enabled', 'updated_at')
+    list_filter = ('status', 'owner', 'match_type', 'is_enabled', 'source_name')
+    search_fields = ('source_text', 'description', 'name', 'filepath', 'clsid', 'owner__username')
     readonly_fields = ('created_at', 'updated_at')
 
     fieldsets = (
@@ -71,6 +71,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             {
                 'fields': (
                     'status',
+                    'owner',
                     'match_type',
                     'source_text',
                     'description',
@@ -136,7 +137,12 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                     if not source_name:
                         source_name = rules_file.name
 
-                result = import_rules_from_lines(lines, status=status, source_name=source_name)
+                result = import_rules_from_lines(
+                    lines,
+                    status=status,
+                    source_name=source_name,
+                    owner=request.user,
+                )
                 self.message_user(
                     request,
                     (

@@ -6,6 +6,30 @@ import secrets
 import string
 
 
+def get_default_rule_owner_id():
+    """Resolve a stable owner id for rules that are created without an explicit owner."""
+    superuser = User.objects.filter(is_superuser=True).order_by('id').first()
+    if superuser:
+        return superuser.id
+
+    fallback_user, _ = User.objects.get_or_create(
+        username='rule_owner_fallback',
+        defaults={
+            'is_staff': True,
+            'is_superuser': True,
+        },
+    )
+    if not fallback_user.is_staff or not fallback_user.is_superuser:
+        fallback_user.is_staff = True
+        fallback_user.is_superuser = True
+        fallback_user.save(update_fields=['is_staff', 'is_superuser'])
+    if fallback_user.has_usable_password():
+        fallback_user.set_unusable_password()
+        fallback_user.save(update_fields=['password'])
+
+    return fallback_user.id
+
+
 class Fixlist(models.Model):
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fixlists')
     title = models.CharField(max_length=255)
@@ -86,6 +110,12 @@ class ClassificationRule(models.Model):
     ]
 
     status = models.CharField(max_length=1, choices=STATUS_CHOICES)
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='classification_rules',
+        default=get_default_rule_owner_id,
+    )
     match_type = models.CharField(max_length=16, choices=MATCH_TYPE_CHOICES)
     source_text = models.TextField(help_text='Rule input without description metadata.')
     description = models.TextField(blank=True)
@@ -108,10 +138,11 @@ class ClassificationRule(models.Model):
 
     class Meta:
         ordering = ['status', 'match_type', 'source_text']
-        unique_together = ('status', 'match_type', 'source_text')
+        unique_together = ('owner', 'status', 'match_type', 'source_text')
 
     def __str__(self):
-        return f"{self.status} [{self.match_type}] {self.source_text[:80]}"
+        owner_name = self.owner.username if self.owner_id else 'unknown'
+        return f"{self.status} [{self.match_type}] {self.source_text[:80]} ({owner_name})"
 
 
 class ParsedFilepathExclusion(models.Model):
