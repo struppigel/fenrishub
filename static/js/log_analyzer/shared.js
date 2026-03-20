@@ -129,12 +129,18 @@ function initializeCursorPosition() {
 
 function updateSaveChangesButtonState() {
     const saveChangesButton = document.getElementById('saveRulesRescanButton');
-    if (!saveChangesButton) {
-        return;
+    const hasPendingChanges = pendingStatusChanges.size > 0;
+    if (saveChangesButton) {
+        saveChangesButton.classList.toggle('has-pending-changes', hasPendingChanges);
     }
 
-    const hasPendingChanges = pendingStatusChanges.size > 0;
-    saveChangesButton.classList.toggle('has-pending-changes', hasPendingChanges);
+    const bannerStatisticsEl = document.getElementById('bannerStatistics');
+    if (bannerStatisticsEl && bannerStatisticsEl.textContent) {
+        bannerStatisticsEl.textContent = bannerStatisticsEl.textContent.replace(
+            /pending status changes: \d+/,
+            `pending status changes: ${pendingStatusChanges.size}`
+        );
+    }
 }
 
 function updateSummary(summary, fallbackTotal = 0) {
@@ -143,8 +149,17 @@ function updateSummary(summary, fallbackTotal = 0) {
     const unknownLines = Number(summary.unknown_lines || 0);
     const pendingChanges = pendingStatusChanges.size;
     const summaryEl = document.getElementById('analysisSummary');
+    const bannerStatisticsEl = document.getElementById('bannerStatistics');
     const legendEl = document.getElementById('statusLegend');
-    summaryEl.textContent = `lines: ${totalLines}, matched: ${matchedLines}, unknown: ${unknownLines}, pending status changes: ${pendingChanges}`;
+    const summaryText = `lines: ${totalLines}, matched: ${matchedLines}, unknown: ${unknownLines}, pending status changes: ${pendingChanges}`;
+    
+    if (summaryEl) {
+        summaryEl.textContent = summaryText;
+    }
+    if (bannerStatisticsEl) {
+        bannerStatisticsEl.textContent = summaryText;
+        bannerStatisticsEl.style.display = totalLines > 0 ? 'block' : 'none';
+    }
     if (legendEl) {
         legendEl.hidden = false;
     }

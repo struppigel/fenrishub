@@ -256,7 +256,8 @@ function renderPlannedExistingRuleChanges(ruleChanges) {
     buildReviewList(
         'plannedExistingRuleChangesList',
         lines,
-        'No existing rules will be modified by current selections.'
+        'No existing rules will be modified by current selections.',
+        { hideWhenEmpty: true }
     );
 }
 

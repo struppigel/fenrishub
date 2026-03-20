@@ -11,20 +11,9 @@ function bindAnalyzerButton(elementId, handler) {
 }
 
 function initializePendingStatusChanges() {
-    const pendingRaw = sessionStorage.getItem(PENDING_STATUS_STORAGE_KEY);
-    const parsedPending = safeParseJson(pendingRaw || '[]', []);
-
-    if (Array.isArray(parsedPending) && parsedPending.length > 0) {
-        const tempMap = new Map();
-        parsedPending.forEach((change) => {
-            const key = change.line;
-            tempMap.set(key, change);
-        });
-        pendingStatusChanges = tempMap;
-    } else {
-        pendingStatusChanges = new Map();
-    }
-
+    sessionStorage.removeItem(PENDING_STATUS_STORAGE_KEY);
+    pendingStatusChanges = new Map();
+    pendingChangeSequence = 0;
     recomputePendingChangeSequence();
     updateSaveChangesButtonState();
 }

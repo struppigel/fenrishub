@@ -1,15 +1,33 @@
-function buildReviewList(containerId, values, emptyText) {
+function buildReviewList(containerId, values, emptyText, options = {}) {
     const list = document.getElementById(containerId);
     if (!list) {
         return;
     }
     list.innerHTML = '';
 
+    const hideWhenEmpty = Boolean(options.hideWhenEmpty);
+    const section = list.closest('.review-section');
+
     if (!Array.isArray(values) || values.length === 0) {
+        if (hideWhenEmpty) {
+            if (section) {
+                section.hidden = true;
+            }
+            return;
+        }
+
+        if (section) {
+            section.hidden = false;
+        }
+
         const li = document.createElement('li');
         li.textContent = emptyText;
         list.appendChild(li);
         return;
+    }
+
+    if (section) {
+        section.hidden = false;
     }
 
     values.forEach((value) => {
@@ -537,7 +555,12 @@ function renderRulePreview(preview) {
         const idx = item.index === null || item.index === undefined ? '?' : item.index;
         return `index ${idx}: ${item.error || 'Invalid change.'}`;
     });
-    buildReviewList('invalidChangesList', invalidChanges, 'No invalid pending changes detected.');
+    buildReviewList(
+        'invalidChangesList',
+        invalidChanges,
+        'No invalid pending changes detected.',
+        { hideWhenEmpty: true }
+    );
 }
 
 let rulePreviewInFlight = false;

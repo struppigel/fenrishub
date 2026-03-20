@@ -146,7 +146,7 @@ body {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 10px;
     width: 100%;
-    height: calc(100vh - 210px);
+    height: calc(100vh - 290px);
     min-height: 0;
     background-color: var(--la-bg-4);
     border: 1px solid var(--la-border-muted);
@@ -170,7 +170,7 @@ body {
     padding: 10px;
     border: 1px solid var(--la-text-primary);
     background-color: var(--la-bg-4);
-    color: var(--la-text-primary);
+    color: var(--la-text-neutral);
     overflow: auto;
     resize: none;
 }
@@ -232,7 +232,7 @@ body {
     font-family: monospace;
     font-size: 12px;
     line-height: 1.35;
-    color: var(--la-text-primary);
+    color: var(--la-text-neutral);
     white-space: normal;
     word-break: break-word;
     overflow: visible;

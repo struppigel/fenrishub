@@ -53,8 +53,9 @@
         }
 
         .page-context {
-            display: inline-flex;
-            align-items: center;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
             gap: 6px;
             flex-shrink: 0;
             padding: 4px 0 2px 14px;
@@ -65,6 +66,12 @@
             letter-spacing: 0.04em;
             text-align: right;
             text-transform: lowercase;
+        }
+
+        .page-context > div:first-child {
+            display: flex;
+            align-items: center;
+            gap: 6px;
             white-space: nowrap;
         }
 
@@ -74,6 +81,14 @@
 
         .page-context-separator {
             color: var(--la-text-neutral);
+        }
+
+        .banner-statistics {
+            font-size: 11px;
+            color: var(--la-text-neutral);
+            white-space: nowrap;
+            margin-top: 0;
+            text-align: right;
         }
 
         .nav {
@@ -403,6 +418,11 @@
                 flex-direction: column;
             }
 
+            .nav-right {
+                margin-left: 0;
+                width: 100%;
+            }
+
             .header {
                 padding: 10px;
             }
@@ -413,16 +433,19 @@
             }
 
             .page-context {
-                display: inline-flex;
-                align-items: center;
-                flex-wrap: wrap;
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
                 gap: 6px;
                 width: 100%;
                 padding: 10px 0 0;
                 border-left: none;
                 border-top: 1px solid var(--la-border-muted);
                 text-align: left;
-                white-space: normal;
+            }
+
+            .banner-statistics {
+                text-align: left;
             }
 
             .content {
@@ -441,16 +464,18 @@
                 </div>
                 {% if user.is_authenticated %}
                 <div class="page-context">
-                    <span class="page-context-label">{% block page_context_label %}{% endblock %}</span>
-                    <span class="page-context-separator">/</span>
-                    <div class="profile-dropdown" tabindex="0">
-                        <button class="profile-btn page-context-profile" type="button" aria-haspopup="true">{{ user.username }} &#9660;</button>
-                        <div class="profile-menu">
-                            <a href="{% url 'change_password' %}">change password</a>
-                            <form method="post" action="{% url 'logout' %}">
-                                {% csrf_token %}
-                                <button type="submit">logout</button>
-                            </form>
+                    <div>
+                        <span class="page-context-label">{% block page_context_label %}{% endblock %}</span>
+                        <span class="page-context-separator">/</span>
+                        <div class="profile-dropdown" tabindex="0">
+                            <button class="profile-btn page-context-profile" type="button" aria-haspopup="true">{{ user.username }} &#9660;</button>
+                            <div class="profile-menu">
+                                <a href="{% url 'change_password' %}">change password</a>
+                                <form method="post" action="{% url 'logout' %}">
+                                    {% csrf_token %}
+                                    <button type="submit">logout</button>
+                                </form>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -464,6 +489,7 @@
                     <a href="{% url 'dashboard' %}">fixlists</a>
                     <a href="{% url 'log_analyzer' %}">analyze</a>
                 </div>
+                <div id="bannerStatistics" class="nav-right banner-statistics" style="display: none;"></div>
             </div>
             {% else %}
             <div class="nav">

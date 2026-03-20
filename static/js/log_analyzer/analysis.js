@@ -126,10 +126,6 @@ function resetToInput() {
     document.getElementById('logInput').style.display = 'block';
     document.getElementById('resetButton').style.display = 'none';
     document.getElementById('parseButton').style.display = 'inline-flex';
-    const legendEl = document.getElementById('statusLegend');
-    if (legendEl) {
-        legendEl.hidden = true;
-    }
 }
 
 let statusPickerTrigger = null;
