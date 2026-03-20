@@ -68,6 +68,52 @@ function safeParseJson(input, fallback) {
     }
 }
 
+function recomputePendingChangeSequence() {
+    let maxSequence = 0;
+    pendingStatusChanges.forEach((change) => {
+        const orderValue = Number(change && change.order);
+        const idValue = Number(change && change.id);
+        if (Number.isFinite(orderValue)) {
+            maxSequence = Math.max(maxSequence, orderValue);
+        }
+        if (Number.isFinite(idValue)) {
+            maxSequence = Math.max(maxSequence, idValue);
+        }
+    });
+    pendingChangeSequence = maxSequence;
+}
+
+function normalizePendingChangesForCurrentLines() {
+    if (!pendingStatusChanges.size || !analyzedLines.length) {
+        return;
+    }
+
+    const availableLineKeys = new Set(analyzedLines.map((entry) => pendingOverrideKeyForEntry(entry)));
+    const normalizedPending = new Map();
+    pendingStatusChanges.forEach((change, key) => {
+        const changeLine = change && typeof change.line === 'string' ? change.line : key;
+        if (!availableLineKeys.has(changeLine)) {
+            return;
+        }
+        normalizedPending.set(changeLine, {
+            ...change,
+            line: changeLine,
+        });
+    });
+
+    pendingStatusChanges = normalizedPending;
+    recomputePendingChangeSequence();
+
+    const validChangeIds = new Set(
+        [...pendingStatusChanges.values()].map((change) => String(change && change.id))
+    );
+    [...ruleDescriptionOverrides.keys()].forEach((changeId) => {
+        if (!validChangeIds.has(String(changeId))) {
+            ruleDescriptionOverrides.delete(changeId);
+        }
+    });
+}
+
 function initializeCursorPosition() {
     const textarea = document.getElementById('selectedLines');
     const text = textarea.value;
@@ -213,22 +259,27 @@ function getPendingStatusChangesPayload() {
 function applyAnalysisPayload(payload, options = {}) {
     const nextLines = Array.isArray(payload.lines) ? payload.lines : [];
     const shouldResetCopied = Boolean(options.resetCopied);
+    const preservePendingChanges = Boolean(options.preservePendingChanges);
     const keyedLines = attachLineKeys(nextLines);
 
     if (shouldResetCopied) {
         copiedLineIndexes = new Set();
-        pendingStatusChanges.clear();
-        pendingChangeSequence = 0;
-        ruleDescriptionOverrides.clear();
-        removedRuleCandidateIds.clear();
-        expandedRuleCandidateId = null;
+        if (!preservePendingChanges) {
+            pendingStatusChanges.clear();
+            pendingChangeSequence = 0;
+            ruleDescriptionOverrides.clear();
+            removedRuleCandidateIds.clear();
+            expandedRuleCandidateId = null;
+        }
     } else if (nextLines.length !== analyzedLines.length) {
         copiedLineIndexes = new Set();
-        pendingStatusChanges.clear();
-        pendingChangeSequence = 0;
-        ruleDescriptionOverrides.clear();
-        removedRuleCandidateIds.clear();
-        expandedRuleCandidateId = null;
+        if (!preservePendingChanges) {
+            pendingStatusChanges.clear();
+            pendingChangeSequence = 0;
+            ruleDescriptionOverrides.clear();
+            removedRuleCandidateIds.clear();
+            expandedRuleCandidateId = null;
+        }
     } else {
         copiedLineIndexes = new Set(
             [...copiedLineIndexes].filter((index) => index >= 0 && index < nextLines.length)
@@ -236,6 +287,9 @@ function applyAnalysisPayload(payload, options = {}) {
     }
 
     analyzedLines = keyedLines;
+    if (preservePendingChanges) {
+        normalizePendingChangesForCurrentLines();
+    }
     applyPendingOverrides();
     renderWarnings(payload.warnings || []);
     updateSummary(summarizeEffectiveStatuses(analyzedLines), analyzedLines.length);

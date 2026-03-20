@@ -25,6 +25,7 @@ function initializePendingStatusChanges() {
         pendingStatusChanges = new Map();
     }
 
+    recomputePendingChangeSequence();
     updateSaveChangesButtonState();
 }
 

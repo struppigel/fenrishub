@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.utils.text import slugify
 import secrets
 import string
@@ -111,3 +112,30 @@ class ClassificationRule(models.Model):
 
     def __str__(self):
         return f"{self.status} [{self.match_type}] {self.source_text[:80]}"
+
+
+class ParsedFilepathExclusion(models.Model):
+    normalized_filepath = models.TextField(unique=True)
+    note = models.TextField(blank=True)
+    is_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['normalized_filepath']
+
+    def clean(self):
+        path = (self.normalized_filepath or '').strip()
+        if not path:
+            raise ValidationError({'normalized_filepath': 'Path cannot be empty.'})
+
+        from . import frst_extractors as ex
+
+        self.normalized_filepath = ex.normalize_path(path).lower().strip()
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.normalized_filepath

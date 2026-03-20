@@ -7,7 +7,7 @@ from django.http import Http404, HttpResponse
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
-from .models import AccessLog, ClassificationRule, Fixlist
+from .models import AccessLog, ClassificationRule, Fixlist, ParsedFilepathExclusion
 from .views import change_password_view, dashboard_view, shared_fixlist_view, view_fixlist
 
 
@@ -957,6 +957,85 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(analyze_payload["lines"][1]["matcher"], "filepath")
         self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
         self.assertEqual(analyze_payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+
+    def test_parsed_fallback_filepath_respects_exclusion_list(self):
+        from .analyzer import parse_rule_line, inspect_line_matches
+
+        self.client.login(username="analyzer", password="password123")
+        service_line = (
+            r"R3 ProtoVPN Service; C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe "
+            r"[477424 2026-03-06] (Proto AG -> ProtoVPN)"
+        )
+        same_path_line = (
+            r"2026-03-18 13:45 - 2026-03-18 13:45 - 000000000 ____D "
+            r"C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe"
+        )
+        service_path = r"C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe"
+
+        parsed_rule = parse_rule_line(
+            service_line,
+            status=ClassificationRule.STATUS_MALWARE,
+            source_name="test-suite",
+        )
+        self.assertIsNotNone(parsed_rule)
+        ClassificationRule.objects.create(**parsed_rule)
+
+        ParsedFilepathExclusion.objects.create(normalized_filepath=service_path)
+
+        analyze_response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": same_path_line}),
+            content_type="application/json",
+        )
+        analyze_payload = analyze_response.json()
+
+        self.assertEqual(analyze_response.status_code, 200)
+        self.assertEqual(analyze_payload["lines"][0]["matcher"], "unknown")
+        self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_UNKNOWN)
+
+        inspection = inspect_line_matches(same_path_line)
+        self.assertEqual(inspection["effective_matcher"], "unknown")
+        self.assertEqual(inspection["dominant_status"], ClassificationRule.STATUS_UNKNOWN)
+        self.assertEqual(inspection["matches"], [])
+
+    def test_explicit_filepath_rule_ignores_parsed_fallback_exclusion_list(self):
+        from .analyzer import inspect_line_matches
+
+        self.client.login(username="analyzer", password="password123")
+        same_path_line = (
+            r"2026-03-18 13:45 - 2026-03-18 13:45 - 000000000 ____D "
+            r"C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe"
+        )
+        service_path = r"C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe"
+
+        ClassificationRule.objects.create(
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_FILEPATH,
+            source_text=service_path,
+            source_name="test-suite",
+            filepath=service_path,
+            normalized_filepath=service_path.lower(),
+        )
+        ParsedFilepathExclusion.objects.create(normalized_filepath=service_path)
+
+        analyze_response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": same_path_line}),
+            content_type="application/json",
+        )
+        analyze_payload = analyze_response.json()
+
+        self.assertEqual(analyze_response.status_code, 200)
+        self.assertEqual(analyze_payload["lines"][0]["matcher"], "filepath")
+        self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+
+        inspection = inspect_line_matches(same_path_line)
+        self.assertEqual(inspection["effective_matcher"], "filepath")
+        self.assertTrue(inspection["matches"])
+        self.assertEqual(
+            {match["status"] for match in inspection["matches"]},
+            {ClassificationRule.STATUS_MALWARE},
+        )
 
     def test_inspect_line_matches_prefers_parsed_entry_matcher_over_filepath_for_same_rule(self):
         from .analyzer import inspect_line_matches

@@ -2,7 +2,7 @@ import re
 from typing import Iterable
 
 from . import frst_extractors as ex
-from .models import ClassificationRule
+from .models import ClassificationRule, ParsedFilepathExclusion
 
 STATUS_PRECEDENCE = "BPC!GSIJ?"
 VALID_STATUSES = set(STATUS_PRECEDENCE)
@@ -348,6 +348,14 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
 
 def _load_rule_buckets():
     rules = ClassificationRule.objects.filter(is_enabled=True)
+    parsed_filepath_exclusions = {
+        (path or "").strip().lower()
+        for path in ParsedFilepathExclusion.objects.filter(is_enabled=True).values_list(
+            "normalized_filepath",
+            flat=True,
+        )
+        if path
+    }
     buckets = {
         ClassificationRule.MATCH_EXACT: [],
         ClassificationRule.MATCH_SUBSTRING: [],
@@ -355,6 +363,7 @@ def _load_rule_buckets():
         ClassificationRule.MATCH_FILEPATH: [],
         ClassificationRule.MATCH_PARSED_ENTRY: [],
         "__filepath_any": [],
+        "__parsed_filepath_exclusions": parsed_filepath_exclusions,
     }
 
     for rule in rules:
@@ -369,7 +378,9 @@ def _load_rule_buckets():
             if source_path:
                 rule_path = ex.normalize_path(source_path).lower().strip()
         if rule_path:
-            buckets["__filepath_any"].append((rule, rule_path))
+            buckets["__filepath_any"].append(
+                (rule, rule_path, rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY)
+            )
 
         if rule.match_type == ClassificationRule.MATCH_REGEX:
             try:
@@ -452,8 +463,8 @@ def _analyze_single_line(line: str, buckets):
     if filepath:
         normalized = ex.normalize_path(filepath).lower().strip()
         path_matches = []
-        for rule, rule_path in buckets["__filepath_any"]:
-            if r":\windows\system32\cmd.exe" in rule_path:
+        for rule, rule_path, parsed_fallback in buckets["__filepath_any"]:
+            if parsed_fallback and rule_path in buckets["__parsed_filepath_exclusions"]:
                 continue
             if normalized == rule_path:
                 path_matches.append((rule, "found matching normalized path"))
@@ -517,8 +528,8 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
     filepath = ex.extract_any_frst_path(line)
     if filepath:
         normalized = ex.normalize_path(filepath).lower().strip()
-        for rule, rule_path in buckets["__filepath_any"]:
-            if r":\windows\system32\cmd.exe" in rule_path:
+        for rule, rule_path, parsed_fallback in buckets["__filepath_any"]:
+            if parsed_fallback and rule_path in buckets["__parsed_filepath_exclusions"]:
                 continue
             if normalized == rule_path:
                 groups["filepath"].append((rule, "found matching normalized path", "filepath"))

@@ -96,7 +96,7 @@ async function parseLogs() {
 
     try {
         const payload = await requestLogAnalysis(logInput);
-        applyAnalysisPayload(payload, { resetCopied: true });
+        applyAnalysisPayload(payload, { resetCopied: true, preservePendingChanges: true });
 
         if (analyzedLines.length === 0) {
             alert('No non-empty lines were found.');
