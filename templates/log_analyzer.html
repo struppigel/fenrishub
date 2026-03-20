@@ -16,13 +16,17 @@
     <div class="analyzer-toolbar analyzer-toolbar-left">
         <button type="button" id="parseButton">parse lines</button>
         <button type="button" id="resetButton" style="display: none;">edit log</button>
+        <button type="button" id="questionCursorModeButton" aria-pressed="false" title="question cursor mode">?</button>
         <button type="button" id="saveRulesRescanButton">save changes</button>
     </div>
     <div class="analyzer-toolbar analyzer-toolbar-right">
-        <button type="button" data-insert-status="J">add all junk</button>
-        <button type="button" data-insert-status="B">add all bad</button>
-        <button type="button" data-insert-status="P">add all PUP</button>
-        <button type="button" data-insert-status="!">add all warn</button>
+        <div class="bulk-insert-controls" aria-label="bulk insert by status">
+            <span class="bulk-insert-label">add all</span>
+            <button type="button" class="bulk-status-button status-b" data-insert-status="B" aria-label="add all bad" title="add all bad">B</button>
+            <button type="button" class="bulk-status-button status-p" data-insert-status="P" aria-label="add all PUP" title="add all PUP">P</button>
+            <button type="button" class="bulk-status-button status-j" data-insert-status="J" aria-label="add all junk" title="add all junk">J</button>
+            <button type="button" class="bulk-status-button status-w" data-insert-status="!" aria-label="add all warn" title="add all warn">!</button>
+        </div>
         <button type="button" id="saveFixlistButton" class="save-fixlist-button">save as fixlist</button>
     </div>
 </div>
@@ -54,6 +58,33 @@ End::</textarea>
 </div>
 
 <div id="statusPicker" class="status-picker" role="radiogroup" aria-label="Select line status" hidden></div>
+
+<div id="lineInspectorModal" class="rule-review-modal" hidden>
+    <div class="rule-review-backdrop" id="lineInspectorBackdrop"></div>
+    <div id="lineInspectorDialog" class="rule-review-content line-inspector-content" role="dialog" aria-modal="true" aria-labelledby="lineInspectorTitle" aria-describedby="lineInspectorSummary" tabindex="-1">
+        <h3 id="lineInspectorTitle">parsed line details</h3>
+        <p id="lineInspectorSummary" class="review-summary"></p>
+
+        <div class="review-section">
+            <h4>source line</h4>
+            <div id="lineInspectorSource" class="line-inspector-source"></div>
+        </div>
+
+        <div class="review-section">
+            <h4>parsed components</h4>
+            <div id="lineInspectorDetails" class="line-inspector-details"></div>
+        </div>
+
+        <div class="review-section">
+            <h4>matching rules</h4>
+            <ul id="lineInspectorMatchesList" class="review-list"></ul>
+        </div>
+
+        <div class="button-group review-actions">
+            <button type="button" id="lineInspectorCloseButton">close</button>
+        </div>
+    </div>
+</div>
 
 <div id="ruleReviewModal" class="rule-review-modal" hidden>
     <div class="rule-review-backdrop" id="ruleReviewBackdrop"></div>
@@ -124,6 +155,7 @@ End::</textarea>
 <script>
 window.logAnalyzerConfig = {
     analyzeLogUrl: "{% url 'analyze_log_api' %}",
+    lineDetailsUrl: "{% url 'analyze_line_details_api' %}",
     previewRuleChangesUrl: "{% url 'preview_pending_rule_changes_api' %}",
     persistRuleChangesUrl: "{% url 'persist_pending_rule_changes_api' %}",
     createFixlistUrl: "{% url 'create_fixlist' %}",

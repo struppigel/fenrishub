@@ -353,6 +353,9 @@ class TemplateMarkupTests(TestCase):
         self.assertIn('id="plannedExistingRuleChangesList"', content)
         self.assertIn('id="saveRulesRescanButton"', content)
         self.assertIn('>save changes<', content)
+        self.assertIn('id="questionCursorModeButton"', content)
+        self.assertIn('id="lineInspectorModal"', content)
+        self.assertIn('id="lineInspectorDialog"', content)
         self.assertIn('data-insert-status="!"', content)
         self.assertIn('id="saveFixlistButton"', content)
         self.assertIn('id="conflictWizardBackButton"', content)
@@ -378,6 +381,8 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("persistPendingRuleChanges", script_content)
         self.assertIn("RULE_SUBMIT_TARGET_RESCAN", script_content)
         self.assertIn("saveRulesAndRescan", script_content)
+        self.assertIn("toggleQuestionCursorMode", script_content)
+        self.assertIn("openLineInspectorModal", script_content)
         self.assertIn("bindAnalyzerButton('saveRulesRescanButton'", script_content)
         self.assertIn("cancelRuleWorkflow", script_content)
         self.assertIn("ruleReviewBackdrop.addEventListener('click', () => cancelRuleWorkflow())", script_content)
@@ -385,6 +390,7 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("Object.assign(window", script_content)
         self.assertIn("handleAnalyzerModalOpen", script_content)
         self.assertIn("focusStatusPickerButton", script_content)
+        self.assertIn("lineDetailsUrl", content)
         self.assertNotIn("{% url 'analyze_log_api' %}", script_content)
 
     def test_create_fixlist_template_only_uses_prefill_handoff(self):
@@ -414,6 +420,42 @@ class LogAnalyzerApiTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response.url)
+
+    def test_analyze_line_details_api_requires_login(self):
+        response = self.client.post(
+            reverse("analyze_line_details_api"),
+            data=json.dumps({"line": "example", "status": "?"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+
+    def test_analyze_line_details_api_returns_parsed_components(self):
+        self.client.login(username="analyzer", password="password123")
+        runkey_line = (
+            r"HKU\S-1-5-21-111-222-333-1001\...\Run: [SomeValue] => C:\Users\Alice\AppData\Roaming\Some.exe "
+            r"[2024-01-01] (Contoso)"
+        )
+
+        response = self.client.post(
+            reverse("analyze_line_details_api"),
+            data=json.dumps({"line": runkey_line, "status": ClassificationRule.STATUS_PUP}),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        parsed_rule = payload.get("parsed_rule") or {}
+        inspection = payload.get("inspection") or {}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload.get("line"), runkey_line)
+        self.assertEqual(parsed_rule.get("match_type"), ClassificationRule.MATCH_PARSED_ENTRY)
+        self.assertTrue(parsed_rule.get("entry_type"))
+        self.assertTrue(parsed_rule.get("name"))
+        self.assertTrue(parsed_rule.get("filepath"))
+        self.assertIn("dominant_status", inspection)
+        self.assertIn("matches", inspection)
 
     def test_analyze_api_returns_known_and_unknown_statuses(self):
         self.client.login(username="analyzer", password="password123")

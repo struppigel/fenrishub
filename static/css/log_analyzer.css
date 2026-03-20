@@ -34,9 +34,76 @@ body {
     justify-content: flex-start;
 }
 
+.bulk-insert-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.bulk-insert-label {
+    font-size: 12px;
+    color: var(--la-text-muted);
+    text-transform: lowercase;
+    white-space: nowrap;
+}
+
+.bulk-status-button {
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: monospace;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.bulk-status-button.status-b {
+    border-color: var(--la-status-b);
+    color: var(--la-status-b);
+}
+
+.bulk-status-button.status-p {
+    border-color: var(--la-status-p);
+    color: var(--la-status-p);
+}
+
+.bulk-status-button.status-j {
+    border-color: var(--la-status-j);
+    color: var(--la-status-j);
+}
+
+.bulk-status-button.status-w {
+    border-color: var(--la-status-w);
+    color: var(--la-status-w);
+}
+
 #parseButton,
 .save-fixlist-button {
     border-color: var(--la-success-border);
+}
+
+#questionCursorModeButton {
+    min-width: 32px;
+    padding-left: 10px;
+    padding-right: 10px;
+    font-family: monospace;
+    font-weight: 700;
+}
+
+#questionCursorModeButton.is-active {
+    border-color: var(--la-focus);
+    color: var(--la-status-i);
+}
+
+body.question-cursor-mode .log-lines-container,
+body.question-cursor-mode .log-lines-container *,
+body.question-cursor-mode .status-badge,
+body.question-cursor-mode .line-text {
+    cursor: help !important;
 }
 
 #saveRulesRescanButton.has-pending-changes {
@@ -637,31 +704,38 @@ body {
     justify-self: center;
 }
 
-#ruleReviewModal .parsed-entry-type {
+#ruleReviewModal .parsed-entry-type,
+#lineInspectorModal .parsed-entry-type {
     color: var(--la-parsed-entry-type);
 }
 
-#ruleReviewModal .parsed-clsid {
+#ruleReviewModal .parsed-clsid,
+#lineInspectorModal .parsed-clsid {
     color: var(--la-parsed-clsid);
 }
 
-#ruleReviewModal .parsed-name {
+#ruleReviewModal .parsed-name,
+#lineInspectorModal .parsed-name {
     color: var(--la-parsed-name);
 }
 
-#ruleReviewModal .parsed-filepath {
+#ruleReviewModal .parsed-filepath,
+#lineInspectorModal .parsed-filepath {
     color: var(--la-parsed-filepath);
 }
 
-#ruleReviewModal .parsed-filename {
+#ruleReviewModal .parsed-filename,
+#lineInspectorModal .parsed-filename {
     color: var(--la-parsed-filename);
 }
 
-#ruleReviewModal .parsed-company {
+#ruleReviewModal .parsed-company,
+#lineInspectorModal .parsed-company {
     color: var(--la-parsed-company);
 }
 
-#ruleReviewModal .parsed-arguments {
+#ruleReviewModal .parsed-arguments,
+#lineInspectorModal .parsed-arguments {
     color: var(--la-parsed-arguments);
 }
 
@@ -671,6 +745,19 @@ body {
 
 .conflict-wizard-content {
     width: min(1120px, 97vw);
+}
+
+.line-inspector-content {
+    width: min(980px, 96vw);
+}
+
+.line-inspector-source,
+.line-inspector-details {
+    border: 1px solid var(--la-border-muted);
+    background: var(--la-bg-2);
+    padding: 8px;
+    font-size: 12px;
+    line-height: 1.35;
 }
 
 .conflict-wizard-grid {
@@ -844,6 +931,10 @@ body {
 
     .conflict-wizard-grid {
         grid-template-columns: 1fr;
+    }
+
+    .bulk-insert-controls {
+        width: 100%;
     }
 }
 

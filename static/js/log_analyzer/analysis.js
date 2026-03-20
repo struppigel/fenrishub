@@ -16,6 +16,229 @@ async function requestLogAnalysis(logText) {
     return response.json();
 }
 
+async function requestLineDetails(line, status) {
+    const response = await fetch(LINE_DETAILS_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCookie('csrftoken'),
+        },
+        body: JSON.stringify({ line, status }),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to inspect line details.');
+    }
+
+    return response.json();
+}
+
+let questionCursorModeActive = false;
+let lineInspectorInFlight = false;
+
+function closeLineInspectorModal(options = {}) {
+    const modal = document.getElementById('lineInspectorModal');
+    if (modal) {
+        modal.hidden = true;
+    }
+    if (typeof window.handleAnalyzerModalClose === 'function') {
+        window.handleAnalyzerModalClose('lineInspectorModal', options);
+    }
+}
+
+function openLineInspectorModal(options = {}) {
+    const modal = document.getElementById('lineInspectorModal');
+    if (modal) {
+        modal.hidden = false;
+    }
+    if (typeof window.handleAnalyzerModalOpen === 'function') {
+        window.handleAnalyzerModalOpen('lineInspectorModal', options);
+    }
+}
+
+function applyQuestionCursorModeState() {
+    document.body.classList.toggle('question-cursor-mode', questionCursorModeActive);
+
+    const button = document.getElementById('questionCursorModeButton');
+    if (!button) {
+        return;
+    }
+
+    button.setAttribute('aria-pressed', questionCursorModeActive ? 'true' : 'false');
+    button.classList.toggle('is-active', questionCursorModeActive);
+}
+
+function toggleQuestionCursorMode() {
+    questionCursorModeActive = !questionCursorModeActive;
+    applyQuestionCursorModeState();
+}
+
+function buildLineInspectorRows(parsedRule) {
+    if (!parsedRule || typeof parsedRule !== 'object') {
+        return [];
+    }
+
+    const rows = [
+        { key: 'status', value: `${parsedRule.status || '?'} (${STATUS_LABEL_MAP[parsedRule.status] || 'unknown'})` },
+        { key: 'match type', value: parsedRule.match_type },
+        { key: 'entry type', value: parsedRule.entry_type },
+        { key: 'description', value: parsedRule.description },
+        { key: 'clsid', value: parsedRule.clsid },
+        { key: 'name', value: parsedRule.name },
+        { key: 'filepath', value: parsedRule.filepath },
+        { key: 'normalized filepath', value: parsedRule.normalized_filepath },
+        { key: 'filename', value: parsedRule.filename },
+        { key: 'company', value: parsedRule.company },
+        { key: 'arguments', value: parsedRule.arguments },
+        { key: 'file not signed', value: parsedRule.file_not_signed },
+    ];
+
+    return rows.filter((row) => {
+        if (typeof row.value === 'boolean') {
+            return true;
+        }
+        if (row.value === null || row.value === undefined) {
+            return false;
+        }
+        return String(row.value).length > 0;
+    });
+}
+
+function lineInspectorComponentClassForKey(key) {
+    const lookup = {
+        'entry type': 'parsed-entry-type',
+        clsid: 'parsed-clsid',
+        name: 'parsed-name',
+        filepath: 'parsed-filepath',
+        filename: 'parsed-filename',
+        company: 'parsed-company',
+        arguments: 'parsed-arguments',
+    };
+    return lookup[key] || '';
+}
+
+function renderLineInspector(detailsPayload, entry) {
+    const parsedRule = detailsPayload && typeof detailsPayload.parsed_rule === 'object'
+        ? detailsPayload.parsed_rule
+        : null;
+    const inspection = detailsPayload && typeof detailsPayload.inspection === 'object'
+        ? detailsPayload.inspection
+        : {};
+    const effectiveMatches = Array.isArray(inspection.matches) ? inspection.matches : [];
+    const shadowedMatches = Array.isArray(inspection.shadowed_matches) ? inspection.shadowed_matches : [];
+
+    const summaryEl = document.getElementById('lineInspectorSummary');
+    const sourceEl = document.getElementById('lineInspectorSource');
+    const detailsEl = document.getElementById('lineInspectorDetails');
+    const matchesListEl = document.getElementById('lineInspectorMatchesList');
+
+    if (summaryEl) {
+        const effectiveMatcher = inspection.effective_matcher || entry.matcher || 'unknown';
+        const dominantStatus = inspection.dominant_status || entry.dominant_status || '?';
+        summaryEl.textContent =
+            `status: ${dominantStatus} (${STATUS_LABEL_MAP[dominantStatus] || 'unknown'}), ` +
+            `matcher: ${effectiveMatcher}, ` +
+            `matches: ${effectiveMatches.length + shadowedMatches.length}`;
+    }
+
+    if (sourceEl) {
+        sourceEl.innerHTML = '';
+        const text = document.createElement('div');
+        text.className = 'rule-details-line';
+
+        if (typeof appendHighlightedRuleLine === 'function') {
+            appendHighlightedRuleLine(text, entry.line || '', parsedRule || {});
+        } else {
+            text.textContent = entry.line || '';
+        }
+        sourceEl.appendChild(text);
+    }
+
+    if (detailsEl) {
+        detailsEl.innerHTML = '';
+        const rows = buildLineInspectorRows(parsedRule);
+
+        if (!rows.length) {
+            const empty = document.createElement('div');
+            empty.className = 'rule-details-empty';
+            empty.textContent = 'No parsed components were detected for this line.';
+            detailsEl.appendChild(empty);
+        } else {
+            const grid = document.createElement('div');
+            grid.className = 'rule-details-grid';
+
+            rows.forEach((row) => {
+                const key = document.createElement('div');
+                key.className = 'rule-detail-key';
+                key.textContent = row.key;
+
+                const value = document.createElement('div');
+                value.className = 'rule-detail-value';
+                const componentClass = lineInspectorComponentClassForKey(row.key);
+                if (componentClass) {
+                    value.classList.add(componentClass);
+                }
+                if (row.key === 'status' && parsedRule && parsedRule.status) {
+                    const statusClass = STATUS_CLASS_MAP[parsedRule.status] || '';
+                    if (statusClass) {
+                        value.classList.add(statusClass);
+                    }
+                }
+                value.textContent = formatRuleDetailValue(row.value);
+
+                grid.appendChild(key);
+                grid.appendChild(value);
+            });
+
+            detailsEl.appendChild(grid);
+        }
+    }
+
+    if (matchesListEl) {
+        matchesListEl.innerHTML = '';
+        const allMatches = [
+            ...effectiveMatches.map((match) => ({ ...match, _scope: 'effective' })),
+            ...shadowedMatches.map((match) => ({ ...match, _scope: 'shadowed' })),
+        ];
+
+        if (!allMatches.length) {
+            const empty = document.createElement('li');
+            empty.textContent = 'No enabled rules currently match this line.';
+            matchesListEl.appendChild(empty);
+        } else {
+            allMatches.forEach((match) => {
+                const item = document.createElement('li');
+                const scopeLabel = match._scope === 'shadowed' ? 'shadowed' : 'effective';
+                const matcherText = match.matcher ? ` | matcher: ${match.matcher}` : '';
+                const reasonText = match.reason ? ` | reason: ${match.reason}` : '';
+                item.textContent =
+                    `${scopeLabel} | #${match.id} | ${match.status} (${STATUS_LABEL_MAP[match.status] || 'unknown'}) | ` +
+                    `${match.match_type}${matcherText} | ${match.source_text}${reasonText}`;
+                matchesListEl.appendChild(item);
+            });
+        }
+    }
+}
+
+async function openLineInspectorForIndex(index, options = {}) {
+    const entry = analyzedLines[index];
+    if (!entry || lineInspectorInFlight) {
+        return;
+    }
+
+    lineInspectorInFlight = true;
+    try {
+        const detailsPayload = await requestLineDetails(entry.line || '', entry.dominant_status || '?');
+        renderLineInspector(detailsPayload, entry);
+        openLineInspectorModal(options);
+    } catch (error) {
+        alert(error.message || 'Failed to inspect line details.');
+    } finally {
+        lineInspectorInFlight = false;
+    }
+}
+
 function renderWarnings(warnings) {
     const container = document.getElementById('analysisWarnings');
     const warningList = Array.isArray(warnings) ? warnings : [];
@@ -25,7 +248,6 @@ function renderWarnings(warnings) {
         container.hidden = true;
         return;
     }
-
     warningList.forEach((warning) => {
         const warningElement = document.createElement('div');
         warningElement.className = 'analysis-warning';
@@ -378,6 +600,10 @@ function renderLogLines() {
         }
         badge.addEventListener('click', (event) => {
             event.stopPropagation();
+            if (questionCursorModeActive) {
+                openLineInspectorForIndex(index, { triggerElement: badge });
+                return;
+            }
             openStatusPicker(badge, index);
         });
 
@@ -391,6 +617,10 @@ function renderLogLines() {
         const reasons = Array.isArray(entry.reasons) ? entry.reasons : [];
         lineDiv.title = reasons.length > 0 ? `${line}\n\n${reasons.join('\n')}` : line;
         lineDiv.addEventListener('click', () => {
+            if (questionCursorModeActive) {
+                openLineInspectorForIndex(index, { triggerElement: lineDiv });
+                return;
+            }
             if (copiedLineIndexes.has(index)) {
                 removeLine(line, index);
             } else {

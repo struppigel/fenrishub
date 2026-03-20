@@ -19,6 +19,7 @@ function initializePendingStatusChanges() {
 }
 
 const modalTriggerElements = {
+    lineInspectorModal: null,
     ruleReviewModal: null,
     conflictWizardModal: null,
 };
@@ -46,6 +47,11 @@ function getFocusableElements(container) {
 }
 
 function getActiveModalId() {
+    const lineInspectorModal = document.getElementById('lineInspectorModal');
+    if (lineInspectorModal && !lineInspectorModal.hidden) {
+        return 'lineInspectorModal';
+    }
+
     const conflictWizardModal = document.getElementById('conflictWizardModal');
     if (conflictWizardModal && !conflictWizardModal.hidden) {
         return 'conflictWizardModal';
@@ -124,8 +130,10 @@ function trapFocusInModal(event, modalId) {
 function bindAnalyzerControls() {
     bindAnalyzerButton('parseButton', () => parseLogs());
     bindAnalyzerButton('resetButton', () => resetToInput());
+    bindAnalyzerButton('questionCursorModeButton', () => toggleQuestionCursorMode());
     bindAnalyzerButton('saveRulesRescanButton', () => saveRulesAndRescan());
     bindAnalyzerButton('saveFixlistButton', () => goToCreateFixlist());
+    bindAnalyzerButton('lineInspectorCloseButton', () => closeLineInspectorModal());
     bindAnalyzerButton('ruleReviewBackButton', () => cancelRuleWorkflow());
     bindAnalyzerButton('ruleReviewContinueButton', () => submitWithRulePersist(false));
     bindAnalyzerButton('ruleReviewSavePersistButton', () => submitWithRulePersist(true));
@@ -141,9 +149,13 @@ function bindAnalyzerControls() {
 }
 
 function bindAnalyzerModalDismissals() {
+    const lineInspectorBackdrop = document.getElementById('lineInspectorBackdrop');
     const ruleReviewBackdrop = document.getElementById('ruleReviewBackdrop');
     const conflictWizardBackdrop = document.getElementById('conflictWizardBackdrop');
 
+    if (lineInspectorBackdrop) {
+        lineInspectorBackdrop.addEventListener('click', () => closeLineInspectorModal());
+    }
     if (ruleReviewBackdrop) {
         ruleReviewBackdrop.addEventListener('click', () => cancelRuleWorkflow());
     }
@@ -159,6 +171,11 @@ function bindAnalyzerModalDismissals() {
         }
 
         if (event.key !== 'Escape') {
+            return;
+        }
+
+        if (activeModalId === 'lineInspectorModal') {
+            closeLineInspectorModal();
             return;
         }
 
@@ -182,11 +199,13 @@ function exposeLegacyAnalyzerGlobals() {
         closeRuleReviewModal,
         cancelRuleWorkflow,
         closeStatusPicker,
+        closeLineInspectorModal,
         fetchRulePreview,
         goToCreateFixlist,
         insertAllStatus,
         insertLine,
         openConflictWizardModal,
+        openLineInspectorModal,
         openRuleReviewModal,
         openStatusPicker,
         parseLogs,
@@ -197,6 +216,7 @@ function exposeLegacyAnalyzerGlobals() {
         saveRulesAndRescan,
         saveStatusSelection,
         submitWithRulePersist,
+        toggleQuestionCursorMode,
     });
 }
 
@@ -206,6 +226,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeCursorPosition();
     setupStatusPicker();
     initializePendingStatusChanges();
+    if (typeof applyQuestionCursorModeState === 'function') {
+        applyQuestionCursorModeState();
+    }
     bindAnalyzerControls();
     bindAnalyzerModalDismissals();
 });

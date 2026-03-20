@@ -620,6 +620,47 @@ def analyze_log_api(request):
 
 @login_required
 @require_http_methods(["POST"])
+def analyze_line_details_api(request):
+    """Inspect a single line and return parsed metadata plus matching rule details."""
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+
+    line = payload.get('line', '')
+    requested_status = payload.get('status', ClassificationRule.STATUS_UNKNOWN)
+
+    if not isinstance(line, str):
+        return JsonResponse({'error': 'Field "line" must be a string.'}, status=400)
+    if not isinstance(requested_status, str):
+        return JsonResponse({'error': 'Field "status" must be a string.'}, status=400)
+
+    line = line.strip()
+    requested_status = requested_status.strip() or ClassificationRule.STATUS_UNKNOWN
+
+    if not line:
+        return JsonResponse({'error': 'Field "line" cannot be empty.'}, status=400)
+    if requested_status not in VALID_STATUSES:
+        requested_status = ClassificationRule.STATUS_UNKNOWN
+
+    parsed_rule = parse_rule_line(
+        line,
+        status=requested_status,
+        source_name=f'analyzer-inspect:{request.user.username}',
+    )
+    inspection = inspect_line_matches(line)
+
+    return JsonResponse(
+        {
+            'line': line,
+            'parsed_rule': parsed_rule,
+            'inspection': inspection,
+        }
+    )
+
+
+@login_required
+@require_http_methods(["POST"])
 def preview_pending_rule_changes_api(request):
     """Preview optional rule persistence before creating a fixlist."""
     try:

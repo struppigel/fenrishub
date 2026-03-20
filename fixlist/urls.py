@@ -8,6 +8,7 @@ urlpatterns = [
     path('fixlists/create/', views.create_fixlist_view, name='create_fixlist'),
     path('fixlists/analyze/', views.log_analyzer_view, name='log_analyzer'),
     path('api/analyze-log/', views.analyze_log_api, name='analyze_log_api'),
+    path('api/analyze-log/line-details/', views.analyze_line_details_api, name='analyze_line_details_api'),
     path('api/analyze-log/status/', views.update_analyzed_line_status_api, name='update_analyzed_line_status_api'),
     path('api/fixlist/rules-preview/', views.preview_pending_rule_changes_api, name='preview_pending_rule_changes_api'),
     path('api/fixlist/rules-persist/', views.persist_pending_rule_changes_api, name='persist_pending_rule_changes_api'),

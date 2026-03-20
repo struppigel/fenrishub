@@ -335,7 +335,7 @@ function renderRuleCandidates(ruleChanges) {
 
         const colorLegend = [
             { label: 'CLSID', color: '#f0a070' },
-            { label: 'name', color: '#a0f070' },
+            { label: 'name', color: '#8ca8ff' },
             { label: 'filepath', color: '#f070f0' },
             { label: 'filename', color: '#f0f070' },
             { label: 'company', color: '#70f0f0' },
