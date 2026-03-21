@@ -220,6 +220,8 @@ class UploadedLogViewTests(TestCase):
         self.assertEqual(second_get.status_code, 200)
         self.assertNotContains(second_get, 'id="uploadedLogId"')
         self.assertEqual(UploadedLog.objects.count(), 1)
+        self.assertEqual(uploaded.total_line_count, 2)
+        self.assertEqual(uploaded.count_unknown, 2)
 
     def test_upload_log_view_rejects_non_txt_extension(self):
         response = self.client.post(
@@ -299,6 +301,8 @@ class UploadedLogViewTests(TestCase):
         self.assertIsNotNone(merged)
         self.assertEqual(merged.content, 'aaa\nbbb')
         self.assertTrue(merged.upload_id)
+        self.assertEqual(merged.total_line_count, 2)
+        self.assertEqual(merged.count_unknown, 2)
 
     def test_merge_requires_at_least_two_uploads(self):
         only = UploadedLog.objects.create(
@@ -320,6 +324,44 @@ class UploadedLogViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse('uploaded_logs'))
         self.assertEqual(UploadedLog.objects.count(), 1)
+
+    def test_bulk_rescan_recalculates_stats_for_all_uploads(self):
+        first = UploadedLog.objects.create(
+            upload_id='silent-river',
+            reddit_username='reddit_name',
+            original_filename='first.txt',
+            content='MAL-LINE\nOTHER-LINE',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='rapid-harbor',
+            reddit_username='reddit_name',
+            original_filename='second.txt',
+            content='MAL-LINE',
+        )
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text='MAL-LINE',
+        )
+
+        self.client.login(username='alice', password='password123')
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'rescan_stats_all'},
+        )
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('uploaded_logs'))
+        self.assertEqual(first.total_line_count, 2)
+        self.assertEqual(first.count_malware, 1)
+        self.assertEqual(first.count_unknown, 1)
+        self.assertEqual(second.total_line_count, 1)
+        self.assertEqual(second.count_malware, 1)
+        self.assertEqual(second.count_unknown, 0)
 
     def test_log_analyzer_view_passes_initial_upload_id_from_query(self):
         uploaded = UploadedLog.objects.create(

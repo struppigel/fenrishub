@@ -110,6 +110,43 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_UNKNOWN)
         self.assertEqual(payload["summary"]["unknown_lines"], 1)
 
+    def test_analyze_api_updates_stats_for_selected_upload_only(self):
+        self.client.login(username="analyzer", password="password123")
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="MALICIOUS-LINE",
+        )
+        selected_upload = UploadedLog.objects.create(
+            upload_id='swift-river',
+            reddit_username='stats_user',
+            original_filename='one.txt',
+            content='placeholder',
+        )
+        other_upload = UploadedLog.objects.create(
+            upload_id='quiet-harbor',
+            reddit_username='stats_user',
+            original_filename='two.txt',
+            content='placeholder',
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": "MALICIOUS-LINE\nUNKNOWN-LINE", "upload_id": selected_upload.upload_id}),
+            content_type="application/json",
+        )
+
+        selected_upload.refresh_from_db()
+        other_upload.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(selected_upload.total_line_count, 2)
+        self.assertEqual(selected_upload.count_malware, 1)
+        self.assertEqual(selected_upload.count_unknown, 1)
+        self.assertEqual(other_upload.total_line_count, 0)
+        self.assertEqual(other_upload.count_malware, 0)
+        self.assertEqual(other_upload.count_unknown, 0)
+
     def test_persist_pending_rule_changes_api_requires_login(self):
         payload = {
             "pending_changes": [

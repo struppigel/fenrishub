@@ -41,8 +41,14 @@
     <input type="hidden" name="action" value="merge">
 </form>
 
+<form id="rescanUploadsStatsForm" method="post" action="{% url 'uploaded_logs' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="rescan_stats_all">
+</form>
+
 <div class="merge-controls button-group">
     <button type="submit" form="mergeUploadsForm">merge selected</button>
+    <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan logs</button>
     <a href="{% url 'upload_log' %}"><button type="button">upload new log</button></a>
 </div>
 
@@ -57,6 +63,9 @@
                 </div>
                 <div class="fixlist-meta">
                     {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}
+                </div>
+                <div class="fixlist-meta">
+                    lines {{ uploaded_log.total_line_count }} | B {{ uploaded_log.count_malware }} P {{ uploaded_log.count_pup }} C {{ uploaded_log.count_clean }} ! {{ uploaded_log.count_warning }} G {{ uploaded_log.count_grayware }} S {{ uploaded_log.count_security }} I {{ uploaded_log.count_info }} J {{ uploaded_log.count_junk }} ? {{ uploaded_log.count_unknown }}
                 </div>
             </div>
         </div>

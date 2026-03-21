@@ -53,9 +53,12 @@ class TemplateMarkupTests(TestCase):
         self.assertIn('copyUploadId', upload_page)
         self.assertIn('>upload new log<', uploads_page)
         self.assertIn('>merge selected<', uploads_page)
+        self.assertIn('>rescan logs<', uploads_page)
         self.assertIn('>analyze</a>', uploads_page)
         self.assertIn('?upload_id={{ uploaded_log.upload_id|urlencode }}', uploads_page)
         self.assertIn('class="merge-controls button-group"', uploads_page)
+        self.assertIn('lines {{ uploaded_log.total_line_count }}', uploads_page)
+        self.assertIn('? {{ uploaded_log.count_unknown }}', uploads_page)
 
     def test_log_analyzer_template_contains_status_picker_hooks(self):
         content = self._read_template("log_analyzer.html")
@@ -111,7 +114,8 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("openLineInspectorModal", script_content)
         self.assertIn("bindAnalyzerButton('saveRulesRescanButton'", script_content)
         self.assertIn("bulkIgnoreFirewallRules", script_content)
-        self.assertIn("line.startsWith('FirewallRules:')", script_content)
+        self.assertIn("shouldSkipFirewallRulesLine", script_content)
+        self.assertIn("firewallrules:", script_content.lower())
         self.assertIn("cancelRuleWorkflow", script_content)
         self.assertIn("ruleReviewBackdrop.addEventListener('click', () => cancelRuleWorkflow())", script_content)
         self.assertIn("has-pending-changes", script_content)

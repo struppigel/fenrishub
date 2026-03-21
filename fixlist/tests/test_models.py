@@ -48,3 +48,41 @@ class UploadedLogModelTests(TestCase):
 
         self.assertRegex(uploaded.upload_id, r'^amber-otter-[a-z0-9]{2}$')
 
+    def test_apply_analysis_summary_sets_all_stat_fields(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='mellow-valley',
+            reddit_username='stats_user',
+            original_filename='stats.txt',
+            content='placeholder',
+        )
+
+        uploaded.apply_analysis_summary(
+            {
+                'total_lines': 6,
+                'status_counts': {
+                    'B': 1,
+                    'P': 2,
+                    'C': 0,
+                    '!': 1,
+                    'G': 0,
+                    'S': 0,
+                    'I': 1,
+                    'J': 0,
+                    '?': 1,
+                },
+            }
+        )
+        uploaded.save(update_fields=UploadedLog.analysis_stat_update_fields())
+        uploaded.refresh_from_db()
+
+        self.assertEqual(uploaded.total_line_count, 6)
+        self.assertEqual(uploaded.count_malware, 1)
+        self.assertEqual(uploaded.count_pup, 2)
+        self.assertEqual(uploaded.count_clean, 0)
+        self.assertEqual(uploaded.count_warning, 1)
+        self.assertEqual(uploaded.count_grayware, 0)
+        self.assertEqual(uploaded.count_security, 0)
+        self.assertEqual(uploaded.count_info, 1)
+        self.assertEqual(uploaded.count_junk, 0)
+        self.assertEqual(uploaded.count_unknown, 1)
+

@@ -184,6 +184,27 @@ class UploadedLog(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    total_line_count = models.PositiveIntegerField(default=0)
+    count_malware = models.PositiveIntegerField(default=0)
+    count_pup = models.PositiveIntegerField(default=0)
+    count_clean = models.PositiveIntegerField(default=0)
+    count_warning = models.PositiveIntegerField(default=0)
+    count_grayware = models.PositiveIntegerField(default=0)
+    count_security = models.PositiveIntegerField(default=0)
+    count_info = models.PositiveIntegerField(default=0)
+    count_junk = models.PositiveIntegerField(default=0)
+    count_unknown = models.PositiveIntegerField(default=0)
+    ANALYSIS_STATUS_FIELD_MAP = {
+        'B': 'count_malware',
+        'P': 'count_pup',
+        'C': 'count_clean',
+        '!': 'count_warning',
+        'G': 'count_grayware',
+        'S': 'count_security',
+        'I': 'count_info',
+        'J': 'count_junk',
+        '?': 'count_unknown',
+    }
 
     class Meta:
         ordering = ['-created_at']
@@ -204,6 +225,31 @@ class UploadedLog(models.Model):
         if not self.upload_id:
             self.upload_id = self._generate_unique_upload_id()
         super().save(*args, **kwargs)
+
+    @classmethod
+    def analysis_stat_fields(cls):
+        return ['total_line_count', *cls.ANALYSIS_STATUS_FIELD_MAP.values()]
+
+    @classmethod
+    def analysis_stat_update_fields(cls):
+        return [*cls.analysis_stat_fields(), 'updated_at']
+
+    def apply_analysis_summary(self, summary: dict):
+        summary_payload = summary if isinstance(summary, dict) else {}
+        status_counts = summary_payload.get('status_counts', {})
+        if not isinstance(status_counts, dict):
+            status_counts = {}
+
+        self.total_line_count = max(0, int(summary_payload.get('total_lines', 0) or 0))
+        for status_code, field_name in self.ANALYSIS_STATUS_FIELD_MAP.items():
+            setattr(self, field_name, max(0, int(status_counts.get(status_code, 0) or 0)))
+
+    def recalculate_analysis_stats(self):
+        from .analyzer import analyze_log_text
+
+        analysis = analyze_log_text(self.content or '')
+        self.apply_analysis_summary(analysis.get('summary', {}))
+        self.save(update_fields=self.analysis_stat_update_fields())
 
     @classmethod
     def _generate_unique_upload_id(cls):

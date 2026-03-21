@@ -1,11 +1,16 @@
-async function requestLogAnalysis(logText) {
+async function requestLogAnalysis(logText, uploadId = '') {
+    const payload = { log: logText };
+    if (uploadId) {
+        payload.upload_id = uploadId;
+    }
+
     const response = await fetch(ANALYZE_LOG_URL, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'X-CSRFToken': getCookie('csrftoken'),
         },
-        body: JSON.stringify({ log: logText }),
+        body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
@@ -317,7 +322,12 @@ async function parseLogs() {
     }
 
     try {
-        const payload = await requestLogAnalysis(logInput);
+        const uploadSelect = document.getElementById('uploadSourceSelect');
+        const selectedUploadId = uploadSelect ? (uploadSelect.value || '').trim() : '';
+        if (selectedUploadId) {
+            console.log('Parsing with upload_id:', selectedUploadId);
+        }
+        const payload = await requestLogAnalysis(logInput, selectedUploadId);
         applyAnalysisPayload(payload, { resetCopied: true, preservePendingChanges: true });
 
         if (analyzedLines.length === 0) {
@@ -659,8 +669,22 @@ function removeLine(line, index) {
     renderLogLines();
 }
 
+function shouldSkipFirewallRulesLine(line) {
+    const ignoreFirewallRulesToggle = document.getElementById('bulkIgnoreFirewallRules');
+    if (!ignoreFirewallRulesToggle || !ignoreFirewallRulesToggle.checked) {
+        return false;
+    }
+
+    const normalizedLine = String(line || '').trimStart();
+    return /^(?:[A-Z!?]\s+)?firewallrules:/i.test(normalizedLine);
+}
+
 function insertLine(line, index) {
     if (analyzedLines[index] && analyzedLines[index].dominant_status === 'I') {
+        return;
+    }
+
+    if (shouldSkipFirewallRulesLine(line)) {
         return;
     }
 
@@ -681,8 +705,6 @@ function insertLine(line, index) {
 
 function insertAllStatus(status) {
     const textarea = document.getElementById('selectedLines');
-    const ignoreFirewallRulesToggle = document.getElementById('bulkIgnoreFirewallRules');
-    const shouldIgnoreFirewallRules = !ignoreFirewallRulesToggle || ignoreFirewallRulesToggle.checked;
     let insertPosition = textarea.selectionStart;
     let linesAdded = 0;
 
@@ -694,7 +716,7 @@ function insertAllStatus(status) {
         const entry = analyzedLines[index];
         if (entry.dominant_status === status) {
             const line = entry.line;
-            if (shouldIgnoreFirewallRules && line.startsWith('FirewallRules:')) {
+            if (shouldSkipFirewallRulesLine(line)) {
                 continue;
             }
             const text = textarea.value;

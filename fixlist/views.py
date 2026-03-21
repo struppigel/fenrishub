@@ -495,6 +495,12 @@ def upload_log_view(request):
                 original_filename=log_file.name,
                 content=getattr(log_file, 'decoded_content', ''),
             )
+            try:
+                created_log.recalculate_analysis_stats()
+            except Exception as e:
+                import traceback
+                print(f"ERROR calculating stats for {created_log.upload_id}: {e}")
+                traceback.print_exc()
             request.session['upload_success_id'] = created_log.upload_id
             request.session['upload_success_filename'] = created_log.original_filename
             return redirect('upload_log')
@@ -565,8 +571,41 @@ def uploaded_logs_view(request):
                 content=merged_content,
                 created_by=request.user,
             )
+            try:
+                merged_upload.recalculate_analysis_stats()
+            except Exception as e:
+                import traceback
+                print(f"ERROR calculating stats for merged {merged_upload.upload_id}: {e}")
+                traceback.print_exc()
             messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
             return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
+
+        if action == 'rescan_stats_all':
+            rescanned_count = 0
+            failed_upload_ids = []
+
+            for uploaded_log in UploadedLog.objects.all().iterator():
+                try:
+                    uploaded_log.recalculate_analysis_stats()
+                    rescanned_count += 1
+                except Exception:
+                    failed_upload_ids.append(uploaded_log.upload_id)
+
+            if failed_upload_ids:
+                failed_preview = ', '.join(failed_upload_ids[:5])
+                if len(failed_upload_ids) > 5:
+                    failed_preview = f'{failed_preview}, ...'
+                messages.warning(
+                    request,
+                    (
+                        f'Rescanned stats for {rescanned_count} upload(s), '
+                        f'failed for {len(failed_upload_ids)}: {failed_preview}'
+                    ),
+                )
+            else:
+                messages.success(request, f'Rescanned stats for {rescanned_count} upload(s).')
+
+            return redirect('uploaded_logs')
 
         messages.error(request, 'Invalid action.')
         return redirect('uploaded_logs')
@@ -755,8 +794,24 @@ def analyze_log_api(request):
     log_text = payload.get('log', '')
     if not isinstance(log_text, str):
         return JsonResponse({'error': 'Field "log" must be a string.'}, status=400)
+    upload_id = payload.get('upload_id', '')
+    if upload_id is None:
+        upload_id = ''
+    if not isinstance(upload_id, str):
+        return JsonResponse({'error': 'Field "upload_id" must be a string when provided.'}, status=400)
+    upload_id = upload_id.strip()
 
     analysis = analyze_log_text(log_text)
+    if upload_id:
+        uploaded_log = UploadedLog.objects.filter(upload_id=upload_id).first()
+        if uploaded_log:
+            try:
+                uploaded_log.apply_analysis_summary(analysis.get('summary', {}))
+                uploaded_log.save(update_fields=UploadedLog.analysis_stat_update_fields())
+            except Exception as e:
+                import traceback
+                print(f"ERROR updating stats for {upload_id} during parse: {e}")
+                traceback.print_exc()
     return JsonResponse(analysis)
 
 
