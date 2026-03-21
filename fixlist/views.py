@@ -4,6 +4,8 @@ from django.contrib.auth import authenticate, login, logout, update_session_auth
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.models import User
+from django.conf import settings
+from django.core.cache import cache
 from django.http import JsonResponse, HttpResponse, FileResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
@@ -29,6 +31,33 @@ VALID_CONFLICT_ACTIONS = {
     CONFLICT_ACTION_KEEP_NEW_DISABLE_OTHER,
     CONFLICT_ACTION_DISCARD_NEW,
 }
+
+
+def _anonymous_upload_limit() -> tuple[int, int]:
+    limit = int(getattr(settings, 'ANON_UPLOAD_RATE_LIMIT_COUNT', 15) or 15)
+    window_seconds = int(getattr(settings, 'ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS', 3600) or 3600)
+    return max(1, limit), max(1, window_seconds)
+
+
+def _consume_anonymous_upload_slot(client_ip: str) -> bool:
+    if not client_ip:
+        return True
+
+    limit, window_seconds = _anonymous_upload_limit()
+    cache_key = f'anon-upload-rate:{client_ip}'
+    current_count = int(cache.get(cache_key, 0) or 0)
+    if current_count >= limit:
+        return False
+
+    if current_count == 0:
+        cache.add(cache_key, 1, timeout=window_seconds)
+        return True
+
+    try:
+        cache.incr(cache_key)
+    except ValueError:
+        cache.set(cache_key, current_count + 1, timeout=window_seconds)
+    return True
 
 
 def _merged_upload_username_for_user(user: User) -> str:
@@ -485,9 +514,31 @@ def upload_log_view(request):
     """Public upload endpoint for text logs."""
     uploaded_log_id = None
     uploaded_original_filename = None
+    upload_limit, upload_window_seconds = _anonymous_upload_limit()
 
     if request.method == 'POST':
         form = UploadedLogForm(request.POST, request.FILES)
+        if not request.user.is_authenticated:
+            client_ip = get_client_ip(request)
+            if not _consume_anonymous_upload_slot(client_ip):
+                minutes = max(1, (upload_window_seconds + 59) // 60)
+                form.add_error(
+                    None,
+                    (
+                        f'Anonymous upload rate limit reached: {upload_limit} upload(s) '
+                        f'per {minutes} minute(s). Please wait and try again.'
+                    ),
+                )
+                return render(
+                    request,
+                    'upload_log.html',
+                    {
+                        'form': form,
+                        'uploaded_log_id': uploaded_log_id,
+                        'uploaded_original_filename': uploaded_original_filename,
+                    },
+                )
+
         if form.is_valid():
             log_file = form.cleaned_data['log_file']
             created_log = UploadedLog.objects.create(

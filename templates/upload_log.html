@@ -26,6 +26,9 @@ function copyUploadId(button) {
 
 <form method="post" enctype="multipart/form-data">
     {% csrf_token %}
+    {% if form.non_field_errors %}
+        <div class="error-box">{{ form.non_field_errors|join:', ' }}</div>
+    {% endif %}
     <div class="form-group">
         <label for="id_reddit_username">reddit username</label>
         <input type="text" id="id_reddit_username" name="reddit_username" maxlength="20" value="{{ form.reddit_username.value|default:'' }}" required>

@@ -2,9 +2,11 @@
 from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser, User
+from django.core.cache import cache
 from django.http import HttpResponse
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import RequestFactory, TestCase
+from django.test import override_settings
 from django.urls import reverse
 
 from ..models import AccessLog, ClassificationRule, Fixlist, UploadedLog
@@ -196,6 +198,7 @@ class SharingAndDownloadTests(TestCase):
 class UploadedLogViewTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='alice', password='password123')
+        cache.clear()
 
     def test_upload_log_view_allows_anonymous_upload_and_returns_id(self):
         response = self.client.post(
@@ -235,6 +238,55 @@ class UploadedLogViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Only .txt files are allowed.')
         self.assertEqual(UploadedLog.objects.count(), 0)
+
+    @override_settings(ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600)
+    def test_anonymous_upload_rate_limit_blocks_second_attempt(self):
+        first = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('first.txt', b'line-a', content_type='text/plain'),
+            },
+            REMOTE_ADDR='203.0.113.10',
+        )
+        second = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('second.txt', b'line-b', content_type='text/plain'),
+            },
+            REMOTE_ADDR='203.0.113.10',
+        )
+
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(second.status_code, 200)
+        self.assertContains(second, 'Anonymous upload rate limit reached')
+        self.assertEqual(UploadedLog.objects.count(), 1)
+
+    @override_settings(ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600)
+    def test_authenticated_upload_not_rate_limited(self):
+        self.client.login(username='alice', password='password123')
+
+        first = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('first.txt', b'line-a', content_type='text/plain'),
+            },
+            REMOTE_ADDR='203.0.113.10',
+        )
+        second = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('second.txt', b'line-b', content_type='text/plain'),
+            },
+            REMOTE_ADDR='203.0.113.10',
+        )
+
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(second.status_code, 302)
+        self.assertEqual(UploadedLog.objects.count(), 2)
 
     def test_uploaded_logs_page_requires_login(self):
         response = self.client.get(reverse('uploaded_logs'))
