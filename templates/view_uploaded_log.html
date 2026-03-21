@@ -6,6 +6,12 @@
 
 {% block extra_css %}
 <style>
+    .uploaded-log-page h3,
+    .uploaded-log-page label,
+    .uploaded-log-page .meta-grid {
+        color: var(--la-text-primary);
+    }
+
     .meta-grid {
         display: grid;
         grid-template-columns: 160px 1fr;
@@ -22,11 +28,30 @@
         min-height: 300px;
         font-family: inherit;
         white-space: pre-wrap;
+        color: var(--la-text-main);
+    }
+
+    #uploadedContent::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    #uploadedContent::-webkit-scrollbar-track {
+        background: var(--la-bg-hover);
+    }
+
+    #uploadedContent::-webkit-scrollbar-thumb {
+        background: var(--la-border-strong);
+        border-radius: 4px;
+    }
+
+    #uploadedContent::-webkit-scrollbar-thumb:hover {
+        background: var(--la-border-hover);
     }
 </style>
 {% endblock %}
 
 {% block content %}
+<div class="uploaded-log-page">
 <div class="button-group">
     <a href="{% url 'uploaded_logs' %}"><button type="button">back to uploads</button></a>
 </div>
@@ -57,4 +82,5 @@
         <button type="submit" onclick="return confirm('Delete this upload?');">delete</button>
     </div>
 </form>
+</div>
 {% endblock %}

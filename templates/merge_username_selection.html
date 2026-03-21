@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+
+{% block title %}Select Username for Merged Log - Fenris{% endblock %}
+
+{% block content %}
+<p style="margin-bottom: 12px; font-size: 12px; color: var(--la-text-primary);">The uploads you're merging have different usernames. Please choose which one to use for the merged log:</p>
+
+<div class="info-box">
+    <strong style="color: var(--la-text-primary);">uploads to merge:</strong>
+    <ul style="margin-left: 20px; margin-top: 8px; font-size: 12px; color: var(--la-text-primary);">
+        {% for log in selected_logs %}
+        <li>{{ log.upload_id }} | {{ log.original_filename }} | u/{{ log.reddit_username }}</li>
+        {% endfor %}
+    </ul>
+</div>
+
+<form method="post" action="{% url 'uploaded_logs' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="confirm_merge">
+    {% for upload_id in selected_upload_ids %}
+    <input type="hidden" name="selected_upload_ids" value="{{ upload_id }}">
+    {% endfor %}
+    
+    <div class="form-group">
+        <label>choose a username:</label>
+        {% for username in usernames %}
+        <div style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 0; color: var(--la-text-primary);">
+                <input type="radio" name="selected_username" value="{{ username }}" {% if forloop.first %}checked{% endif %}>
+                <span style="font-size: 12px; color: var(--la-text-primary);">u/{{ username }}</span>
+            </label>
+        </div>
+        {% endfor %}
+    </div>
+    
+    <div class="button-group">
+        <button type="submit">merge with selected username</button>
+        <a href="{% url 'uploaded_logs' %}" style="display: inline-block; margin-left: 10px; padding: 8px 10px; background-color: var(--la-bg-1); color: var(--la-text-primary); border: 1px solid var(--la-border); border-radius: 2px; text-decoration: none; font-size: 12px;">cancel</a>
+    </div>
+</form>
+{% endblock %}

@@ -10,6 +10,27 @@
         margin-right: 8px;
     }
 
+    .fixlist-actions .action-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 32px;
+        padding: 0 10px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-primary);
+        border: 1px solid var(--la-border);
+        font-size: 12px;
+        font-family: inherit;
+        line-height: 1;
+        text-decoration: none;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+
+    .fixlist-actions .action-btn:hover {
+        text-decoration: underline;
+    }
+
     .fixlist-actions form {
         display: inline;
     }
@@ -27,9 +48,20 @@
     }
 
     .upload-id-link {
-        color: var(--la-text-primary);
+        color: var(--la-text-main) !important;
         font-weight: 600;
     }
+
+    .upload-stats .stat-b { color: var(--la-status-b); }
+    .upload-stats .stat-p { color: var(--la-status-p); }
+    .upload-stats .stat-c { color: var(--la-status-c); }
+    .upload-stats .stat-w { color: var(--la-status-w); }
+    .upload-stats .stat-g { color: var(--la-status-g); }
+    .upload-stats .stat-s { color: var(--la-status-s); }
+    .upload-stats .stat-i { color: var(--la-status-i); }
+    .upload-stats .stat-j { color: var(--la-status-j); }
+    .upload-stats .stat-u { color: var(--la-status-u); }
+
 </style>
 {% endblock %}
 
@@ -64,19 +96,35 @@
                 <div class="fixlist-meta">
                     {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}
                 </div>
-                <div class="fixlist-meta">
-                    lines {{ uploaded_log.total_line_count }} | B {{ uploaded_log.count_malware }} P {{ uploaded_log.count_pup }} C {{ uploaded_log.count_clean }} ! {{ uploaded_log.count_warning }} G {{ uploaded_log.count_grayware }} S {{ uploaded_log.count_security }} I {{ uploaded_log.count_info }} J {{ uploaded_log.count_junk }} ? {{ uploaded_log.count_unknown }}
+                <div class="fixlist-meta upload-stats">
+                    lines {{ uploaded_log.total_line_count }} |
+                    <span class="stat-b">B {{ uploaded_log.count_malware }}</span>
+                    <span class="stat-p">P {{ uploaded_log.count_pup }}</span>
+                    <span class="stat-c">C {{ uploaded_log.count_clean }}</span>
+                    <span class="stat-w">! {{ uploaded_log.count_warning }}</span>
+                    <span class="stat-g">G {{ uploaded_log.count_grayware }}</span>
+                    <span class="stat-s">S {{ uploaded_log.count_security }}</span>
+                    <span class="stat-i">I {{ uploaded_log.count_info }}</span>
+                    <span class="stat-j">J {{ uploaded_log.count_junk }}</span>
+                    <span class="stat-u">? {{ uploaded_log.count_unknown }}</span>
+                    {% with matched_count=uploaded_log.count_malware|add:uploaded_log.count_pup|add:uploaded_log.count_clean|add:uploaded_log.count_warning|add:uploaded_log.count_grayware|add:uploaded_log.count_security|add:uploaded_log.count_info|add:uploaded_log.count_junk %}
+                        {% if uploaded_log.total_line_count > 0 %}
+                            <span class="stat-match">-> {% widthratio matched_count uploaded_log.total_line_count 100 %}% known</span>
+                        {% else %}
+                            <span class="stat-match">-> 0% known</span>
+                        {% endif %}
+                    {% endwith %}
                 </div>
             </div>
         </div>
         <div class="fixlist-actions">
-            <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">view</a>
-            <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}">analyze</a>
+            <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn">view</a>
+            <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}" class="action-btn">analyze</a>
             <form method="post" action="{% url 'uploaded_logs' %}">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                <button type="submit" class="delete-btn" onclick="return confirm('Delete this upload?');">delete</button>
+                <button type="submit" class="action-btn delete-btn" onclick="return confirm('Delete this upload?');">delete</button>
             </form>
         </div>
     </div>

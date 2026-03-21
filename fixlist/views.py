@@ -66,6 +66,17 @@ def _merged_upload_username_for_user(user: User) -> str:
     return candidate[:20]
 
 
+def _merge_logs_content(logs):
+    """Merge content from multiple UploadedLog objects."""
+    merged_parts = []
+    for index, uploaded_log in enumerate(logs):
+        piece = uploaded_log.content or ''
+        if index > 0 and merged_parts and not merged_parts[-1].endswith('\n'):
+            merged_parts[-1] = f"{merged_parts[-1]}\n"
+        merged_parts.append(piece)
+    return ''.join(merged_parts)
+
+
 def get_client_ip(request):
     """Get client IP address from request."""
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -608,16 +619,24 @@ def uploaded_logs_view(request):
                 return redirect('uploaded_logs')
 
             ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
-            merged_parts = []
-            for index, uploaded_log in enumerate(ordered_logs):
-                piece = uploaded_log.content or ''
-                if index > 0 and merged_parts and not merged_parts[-1].endswith('\n'):
-                    merged_parts[-1] = f"{merged_parts[-1]}\n"
-                merged_parts.append(piece)
-
-            merged_content = ''.join(merged_parts)
+            
+            # Collect unique usernames from selected logs
+            usernames = list(set(log.reddit_username for log in ordered_logs))
+            
+            # If usernames differ, show selection page
+            if len(usernames) > 1:
+                context = {
+                    'selected_logs': ordered_logs,
+                    'selected_upload_ids': selected_ids,
+                    'usernames': sorted(usernames),
+                }
+                return render(request, 'merge_username_selection.html', context)
+            
+            # All usernames are the same, proceed with merge using that username
+            selected_username = usernames[0]
+            merged_content = _merge_logs_content(ordered_logs)
             merged_upload = UploadedLog.objects.create(
-                reddit_username=_merged_upload_username_for_user(request.user),
+                reddit_username=selected_username,
                 original_filename='merged-logs.txt',
                 content=merged_content,
                 created_by=request.user,
@@ -628,6 +647,59 @@ def uploaded_logs_view(request):
                 import traceback
                 print(f"ERROR calculating stats for merged {merged_upload.upload_id}: {e}")
                 traceback.print_exc()
+            
+            # Delete the original logs after successful merge
+            for log in ordered_logs:
+                log.delete()
+            
+            messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
+            return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
+        
+        if action == 'confirm_merge':
+            selected_ids = request.POST.getlist('selected_upload_ids')
+            selected_username = request.POST.get('selected_username', '').strip()
+            
+            if len(selected_ids) < 2:
+                messages.error(request, 'Select at least two uploads to merge.')
+                return redirect('uploaded_logs')
+            
+            if not selected_username:
+                messages.error(request, 'Please select a username.')
+                return redirect('uploaded_logs')
+            
+            selected_logs = list(UploadedLog.objects.filter(upload_id__in=selected_ids))
+            logs_by_id = {entry.upload_id: entry for entry in selected_logs}
+            missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
+            if missing_ids:
+                messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
+                return redirect('uploaded_logs')
+            
+            ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
+            
+            # Validate selected username exists in the logs
+            available_usernames = set(log.reddit_username for log in ordered_logs)
+            if selected_username not in available_usernames:
+                messages.error(request, 'Invalid username selection.')
+                return redirect('uploaded_logs')
+            
+            merged_content = _merge_logs_content(ordered_logs)
+            merged_upload = UploadedLog.objects.create(
+                reddit_username=selected_username,
+                original_filename='merged-logs.txt',
+                content=merged_content,
+                created_by=request.user,
+            )
+            try:
+                merged_upload.recalculate_analysis_stats()
+            except Exception as e:
+                import traceback
+                print(f"ERROR calculating stats for merged {merged_upload.upload_id}: {e}")
+                traceback.print_exc()
+            
+            # Delete the original logs after successful merge
+            for log in ordered_logs:
+                log.delete()
+            
             messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
             return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
 

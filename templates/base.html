@@ -493,9 +493,11 @@
                 <div id="bannerStatistics" class="nav-right banner-statistics" style="display: none;"></div>
             </div>
             {% else %}
+            {% block nav %}
             <div class="nav">
                 <a href="{% url 'login' %}">Login</a>
             </div>
+            {% endblock %}
             {% endif %}
         </div>
 

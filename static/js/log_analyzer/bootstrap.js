@@ -22,14 +22,13 @@ async function loadSelectedUploadForAnalyzer() {
     const selectElement = document.getElementById('uploadSourceSelect');
     const statusElement = document.getElementById('uploadLoadStatus');
     const logInputElement = document.getElementById('logInput');
-    const loadButton = document.getElementById('loadUploadButton');
-    if (!selectElement || !statusElement || !logInputElement || !loadButton) {
+    if (!selectElement || !statusElement || !logInputElement) {
         return;
     }
 
     const uploadId = (selectElement.value || '').trim();
     if (!uploadId) {
-        statusElement.textContent = 'select an upload id first';
+        statusElement.textContent = '';
         return;
     }
 
@@ -40,7 +39,6 @@ async function loadSelectedUploadForAnalyzer() {
     }
 
     statusElement.textContent = 'loading...';
-    loadButton.disabled = true;
 
     try {
         const response = await fetch(requestUrl, {
@@ -63,8 +61,6 @@ async function loadSelectedUploadForAnalyzer() {
         logInputElement.focus();
     } catch (error) {
         statusElement.textContent = 'failed to load upload';
-    } finally {
-        loadButton.disabled = false;
     }
 }
 
@@ -89,6 +85,12 @@ async function loadInitialUploadForAnalyzer() {
 
     selectElement.value = initialUploadId;
     await loadSelectedUploadForAnalyzer();
+    
+    // Show the upload source row if an initial upload was loaded
+    const uploadSourceRow = document.getElementById('uploadSourceRow');
+    if (uploadSourceRow) {
+        uploadSourceRow.hidden = false;
+    }
 }
 
 function initializePendingStatusChanges() {
@@ -208,6 +210,14 @@ function trapFocusInModal(event, modalId) {
     }
 }
 
+function toggleUploadSourceRow() {
+    const uploadSourceRow = document.getElementById('uploadSourceRow');
+    if (!uploadSourceRow) {
+        return;
+    }
+    uploadSourceRow.hidden = !uploadSourceRow.hidden;
+}
+
 function bindAnalyzerControls() {
     bindAnalyzerButton('parseButton', () => parseLogs());
     bindAnalyzerButton('resetButton', () => resetToInput());
@@ -220,7 +230,12 @@ function bindAnalyzerControls() {
     bindAnalyzerButton('ruleReviewSavePersistButton', () => submitWithRulePersist(true));
     bindAnalyzerButton('conflictWizardBackButton', () => cancelRuleWorkflow());
     bindAnalyzerButton('wizardNextButton', () => advanceConflictWizard());
-    bindAnalyzerButton('loadUploadButton', () => loadSelectedUploadForAnalyzer());
+    bindAnalyzerButton('toggleLoadUploadButton', () => toggleUploadSourceRow());
+    
+    const uploadSourceSelect = document.getElementById('uploadSourceSelect');
+    if (uploadSourceSelect) {
+        uploadSourceSelect.addEventListener('change', () => loadSelectedUploadForAnalyzer());
+    }
 
     document.querySelectorAll('[data-insert-status]').forEach((button) => {
         button.addEventListener('click', (event) => {

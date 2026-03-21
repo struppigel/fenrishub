@@ -14,6 +14,10 @@
         flex-wrap: wrap;
     }
 
+    .upload-source-row[hidden] {
+        display: none !important;
+    }
+
     .upload-source-row select {
         min-width: 280px;
         max-width: 100%;
@@ -65,6 +69,7 @@
         <button type="button" id="resetButton" style="display: none;">edit log</button>
         <button type="button" id="questionCursorModeButton" aria-pressed="false" title="question cursor mode">?</button>
         <button type="button" id="saveRulesRescanButton">save changes</button>
+        <button type="button" id="toggleLoadUploadButton">load uploaded log</button>
     </div>
     <div class="analyzer-toolbar analyzer-toolbar-right">
         <div class="bulk-insert-controls" aria-label="bulk insert by status">
@@ -82,7 +87,7 @@
     </div>
 </div>
 
-<div class="upload-source-row">
+<div class="upload-source-row" id="uploadSourceRow" hidden>
     <label for="uploadSourceSelect">load uploaded log</label>
     <select id="uploadSourceSelect">
         <option value="">select upload id</option>
@@ -90,7 +95,6 @@
         <option value="{{ uploaded_log.upload_id }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }}</option>
         {% endfor %}
     </select>
-    <button type="button" id="loadUploadButton">load into analyzer</button>
     <span id="uploadLoadStatus" class="muted" aria-live="polite"></span>
 </div>
 
