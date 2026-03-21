@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+
+{% block title %}Uploaded Log - Fenris{% endblock %}
+
+{% block page_context_label %}uploaded log{% endblock %}
+
+{% block extra_css %}
+<style>
+    .meta-grid {
+        display: grid;
+        grid-template-columns: 160px 1fr;
+        gap: 6px 12px;
+        margin-bottom: 12px;
+        font-size: 12px;
+    }
+
+    .meta-key {
+        color: var(--la-text-muted);
+    }
+
+    .uploaded-content {
+        min-height: 300px;
+        font-family: inherit;
+        white-space: pre-wrap;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="button-group">
+    <a href="{% url 'uploaded_logs' %}"><button type="button">back to uploads</button></a>
+</div>
+
+<div class="divider"></div>
+
+<h3>upload {{ uploaded_log.upload_id }}</h3>
+<div class="meta-grid">
+    <div class="meta-key">id</div>
+    <div>{{ uploaded_log.upload_id }}</div>
+    <div class="meta-key">filename</div>
+    <div>{{ uploaded_log.original_filename }}</div>
+    <div class="meta-key">reddit</div>
+    <div>u/{{ uploaded_log.reddit_username }}</div>
+    <div class="meta-key">created</div>
+    <div>{{ uploaded_log.created_at|date:"Y-m-d H:i" }}</div>
+</div>
+
+<div class="form-group">
+    <label for="uploadedContent">content</label>
+    <textarea id="uploadedContent" class="uploaded-content" readonly>{{ uploaded_log.content }}</textarea>
+</div>
+
+<form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="delete">
+    <div class="button-group">
+        <button type="submit" onclick="return confirm('Delete this upload?');">delete</button>
+    </div>
+</form>
+{% endblock %}

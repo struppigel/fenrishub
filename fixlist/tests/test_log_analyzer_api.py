@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
-from ..models import ClassificationRule, ParsedFilepathExclusion
+from ..models import ClassificationRule, ParsedFilepathExclusion, UploadedLog
 
 class LogAnalyzerApiTests(TestCase):
     def setUp(self):
@@ -19,6 +19,37 @@ class LogAnalyzerApiTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response.url)
+
+    def test_uploaded_log_content_api_requires_login(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='rapid-trail',
+            reddit_username='reddit_name',
+            original_filename='content.txt',
+            content='line-1',
+        )
+
+        response = self.client.get(reverse('uploaded_log_content_api', args=[uploaded.upload_id]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_uploaded_log_content_api_returns_json_payload(self):
+        self.client.login(username='analyzer', password='password123')
+        uploaded = UploadedLog.objects.create(
+            upload_id='rapid-trail',
+            reddit_username='reddit_name',
+            original_filename='content.txt',
+            content='line-1\nline-2',
+        )
+
+        response = self.client.get(reverse('uploaded_log_content_api', args=[uploaded.upload_id]))
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload['upload_id'], 'rapid-trail')
+        self.assertEqual(payload['original_filename'], 'content.txt')
+        self.assertEqual(payload['reddit_username'], 'reddit_name')
+        self.assertEqual(payload['content'], 'line-1\nline-2')
 
     def test_analyze_line_details_api_requires_login(self):
         response = self.client.post(
@@ -343,6 +374,48 @@ class LogAnalyzerApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("low_memory", warnings_by_code)
+
+    def test_analyze_api_warns_when_multiple_enabled_av_entries_found(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "AV: Malwarebytes (Enabled - Up to date) {A537353A-1D6A-F6B5-9153-CE1CF80FBE66}\n"
+                    "AV: Windows Defender (Enabled - Up to date) {D68DDC3A-831F-4fae-9E44-DA132C1ACF46}\n"
+                    "AV: ESET Security (Enabled - Up to date) {26E0861C-6FB9-CEF9-E4F0-531986211ACE}\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("multiple_enabled_av", warnings_by_code)
+        self.assertIn("Multiple AV products are enabled", warnings_by_code["multiple_enabled_av"]["message"])
+
+    def test_analyze_api_does_not_warn_for_single_enabled_av_entry(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "AV: Windows Defender (Enabled - Up to date) {D68DDC3A-831F-4fae-9E44-DA132C1ACF46}\n"
+                    "AV: ESET Security (Disabled - Out of date) {26E0861C-6FB9-CEF9-E4F0-531986211ACE}\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warning_codes = {warning["code"] for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("multiple_enabled_av", warning_codes)
 
     def test_update_status_api_requires_login(self):
         response = self.client.post(

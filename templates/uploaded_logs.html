@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+
+{% block title %}Uploads - Fenris{% endblock %}
+
+{% block page_context_label %}uploads{% endblock %}
+
+{% block extra_css %}
+<style>
+    .upload-select {
+        margin-right: 8px;
+    }
+
+    .fixlist-actions form {
+        display: inline;
+    }
+
+    .fixlist-actions .delete-btn {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+        border-color: var(--la-error-border);
+    }
+
+    .merge-controls {
+        margin-bottom: 12px;
+        justify-content: space-between;
+        width: 100%;
+    }
+
+    .upload-id-link {
+        color: var(--la-text-primary);
+        font-weight: 600;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h3>uploaded logs</h3>
+
+<form id="mergeUploadsForm" method="post" action="{% url 'uploaded_logs' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="merge">
+</form>
+
+<div class="merge-controls button-group">
+    <button type="submit" form="mergeUploadsForm">merge selected</button>
+    <a href="{% url 'upload_log' %}"><button type="button">upload new log</button></a>
+</div>
+
+{% if uploads %}
+    {% for uploaded_log in uploads %}
+    <div class="fixlist-item">
+        <div style="display: flex; align-items: flex-start; gap: 10px; flex: 1;">
+            <input class="upload-select" form="mergeUploadsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">
+            <div>
+                <div class="fixlist-title">
+                    <a class="upload-id-link" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>
+                </div>
+                <div class="fixlist-meta">
+                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}
+                </div>
+            </div>
+        </div>
+        <div class="fixlist-actions">
+            <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">view</a>
+            <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}">analyze</a>
+            <form method="post" action="{% url 'uploaded_logs' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                <button type="submit" class="delete-btn" onclick="return confirm('Delete this upload?');">delete</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="info-box">no uploaded logs yet.</div>
+{% endif %}
+{% endblock %}

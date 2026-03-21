@@ -5,6 +5,53 @@
 
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/log_analyzer.css' %}">
+<style>
+    .upload-source-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin: 8px 0 12px;
+        flex-wrap: wrap;
+    }
+
+    .upload-source-row select {
+        min-width: 280px;
+        max-width: 100%;
+        padding: 8px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-main);
+        border: 1px solid var(--la-border);
+        font-family: inherit;
+        font-size: 12px;
+    }
+
+    .upload-source-row select:focus {
+        outline: none;
+        border-color: var(--la-focus);
+    }
+
+    .upload-source-row select option {
+        background-color: var(--la-bg-1);
+        color: var(--la-text-main);
+    }
+
+    .upload-source-row .muted {
+        margin-left: 4px;
+    }
+
+    .bulk-filter-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: 10px;
+        color: var(--la-text-neutral);
+        font-size: 12px;
+    }
+
+    .bulk-filter-toggle input[type="checkbox"] {
+        accent-color: var(--la-focus);
+    }
+</style>
 {% endblock %}
 
 {% block page_context_label %}log analyzer{% endblock %}
@@ -26,9 +73,25 @@
             <button type="button" class="bulk-status-button status-p" data-insert-status="P" aria-label="add all PUP" title="add all PUP">P</button>
             <button type="button" class="bulk-status-button status-j" data-insert-status="J" aria-label="add all junk" title="add all junk">J</button>
             <button type="button" class="bulk-status-button status-w" data-insert-status="!" aria-label="add all warn" title="add all warn">!</button>
+            <label class="bulk-filter-toggle" for="bulkIgnoreFirewallRules">
+                <input type="checkbox" id="bulkIgnoreFirewallRules" checked>
+                ignore FirewallRules:
+            </label>
         </div>
         <button type="button" id="saveFixlistButton" class="save-fixlist-button">save as fixlist</button>
     </div>
+</div>
+
+<div class="upload-source-row">
+    <label for="uploadSourceSelect">load uploaded log</label>
+    <select id="uploadSourceSelect">
+        <option value="">select upload id</option>
+        {% for uploaded_log in uploaded_logs %}
+        <option value="{{ uploaded_log.upload_id }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }}</option>
+        {% endfor %}
+    </select>
+    <button type="button" id="loadUploadButton">load into analyzer</button>
+    <span id="uploadLoadStatus" class="muted" aria-live="polite"></span>
 </div>
 
 <div class="textareas-box">
@@ -159,6 +222,8 @@ window.logAnalyzerConfig = {
     previewRuleChangesUrl: "{% url 'preview_pending_rule_changes_api' %}",
     persistRuleChangesUrl: "{% url 'persist_pending_rule_changes_api' %}",
     createFixlistUrl: "{% url 'create_fixlist' %}",
+    uploadedLogContentUrlTemplate: "{% url 'uploaded_log_content_api' '__UPLOAD_ID__' %}",
+    initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
 };
 </script>
 <script src="{% static 'js/log_analyzer/shared.js' %}"></script>

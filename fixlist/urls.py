@@ -3,10 +3,14 @@ from . import views
 
 urlpatterns = [
     path('', views.login_view, name='login'),
+    path('upload/', views.upload_log_view, name='upload_log'),
     path('account/password/', views.change_password_view, name='change_password'),
     path('dashboard/', views.dashboard_view, name='dashboard'),
+    path('uploads/', views.uploaded_logs_view, name='uploaded_logs'),
+    path('uploads/<str:upload_id>/', views.view_uploaded_log, name='view_uploaded_log'),
     path('fixlists/create/', views.create_fixlist_view, name='create_fixlist'),
     path('fixlists/analyze/', views.log_analyzer_view, name='log_analyzer'),
+    path('api/uploaded-logs/<str:upload_id>/content/', views.uploaded_log_content_api, name='uploaded_log_content_api'),
     path('api/analyze-log/', views.analyze_log_api, name='analyze_log_api'),
     path('api/analyze-log/line-details/', views.analyze_line_details_api, name='analyze_line_details_api'),
     path('api/analyze-log/status/', views.update_analyzed_line_status_api, name='update_analyzed_line_status_api'),

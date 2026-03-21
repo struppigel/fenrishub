@@ -10,6 +10,87 @@ function bindAnalyzerButton(elementId, handler) {
     });
 }
 
+function buildUploadedLogContentUrl(uploadId) {
+    const template = (window.logAnalyzerConfig && window.logAnalyzerConfig.uploadedLogContentUrlTemplate) || '';
+    if (!template || !uploadId) {
+        return '';
+    }
+    return template.replace('__UPLOAD_ID__', encodeURIComponent(uploadId));
+}
+
+async function loadSelectedUploadForAnalyzer() {
+    const selectElement = document.getElementById('uploadSourceSelect');
+    const statusElement = document.getElementById('uploadLoadStatus');
+    const logInputElement = document.getElementById('logInput');
+    const loadButton = document.getElementById('loadUploadButton');
+    if (!selectElement || !statusElement || !logInputElement || !loadButton) {
+        return;
+    }
+
+    const uploadId = (selectElement.value || '').trim();
+    if (!uploadId) {
+        statusElement.textContent = 'select an upload id first';
+        return;
+    }
+
+    const requestUrl = buildUploadedLogContentUrl(uploadId);
+    if (!requestUrl) {
+        statusElement.textContent = 'unable to resolve upload endpoint';
+        return;
+    }
+
+    statusElement.textContent = 'loading...';
+    loadButton.disabled = true;
+
+    try {
+        const response = await fetch(requestUrl, {
+            method: 'GET',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+        });
+
+        if (!response.ok) {
+            throw new Error(`Request failed: ${response.status}`);
+        }
+
+        const payload = await response.json();
+        if (typeof resetToInput === 'function') {
+            resetToInput();
+        }
+        logInputElement.value = payload.content || '';
+        statusElement.textContent = `loaded ${payload.upload_id}`;
+        logInputElement.focus();
+    } catch (error) {
+        statusElement.textContent = 'failed to load upload';
+    } finally {
+        loadButton.disabled = false;
+    }
+}
+
+async function loadInitialUploadForAnalyzer() {
+    const config = window.logAnalyzerConfig || {};
+    const initialUploadId = (config.initialUploadId || '').trim();
+    if (!initialUploadId) {
+        return;
+    }
+
+    const selectElement = document.getElementById('uploadSourceSelect');
+    if (!selectElement) {
+        return;
+    }
+
+    if (![...selectElement.options].some((option) => option.value === initialUploadId)) {
+        const option = document.createElement('option');
+        option.value = initialUploadId;
+        option.textContent = `${initialUploadId} | loading...`;
+        selectElement.appendChild(option);
+    }
+
+    selectElement.value = initialUploadId;
+    await loadSelectedUploadForAnalyzer();
+}
+
 function initializePendingStatusChanges() {
     sessionStorage.removeItem(PENDING_STATUS_STORAGE_KEY);
     pendingStatusChanges = new Map();
@@ -139,6 +220,7 @@ function bindAnalyzerControls() {
     bindAnalyzerButton('ruleReviewSavePersistButton', () => submitWithRulePersist(true));
     bindAnalyzerButton('conflictWizardBackButton', () => cancelRuleWorkflow());
     bindAnalyzerButton('wizardNextButton', () => advanceConflictWizard());
+    bindAnalyzerButton('loadUploadButton', () => loadSelectedUploadForAnalyzer());
 
     document.querySelectorAll('[data-insert-status]').forEach((button) => {
         button.addEventListener('click', (event) => {
@@ -231,4 +313,5 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     bindAnalyzerControls();
     bindAnalyzerModalDismissals();
+    loadInitialUploadForAnalyzer();
 });

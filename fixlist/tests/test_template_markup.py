@@ -27,7 +27,7 @@ class TemplateMarkupTests(TestCase):
         content = self._read_template("shared_fixlist.html")
 
         self.assertIn("id=\"agreement-modal\"", content)
-        self.assertIn("access warning: recipient-specific content", content)
+        self.assertIn("Executing a Fixlist on the wrong system may permanently damage it", content)
         self.assertIn("class=\"muted consent-note\"", content)
         self.assertIn("shared-content-locked", content)
         self.assertNotIn("before you continue", content)
@@ -38,6 +38,24 @@ class TemplateMarkupTests(TestCase):
 
         self.assertIn('class="action-btn" onclick="copyShareLink', content)
         self.assertIn('class="action-btn">edit</a>', content)
+
+    def test_base_template_navigation_omits_upload_link(self):
+        content = self._read_template("base.html")
+
+        self.assertIn('{% url \'uploaded_logs\' %}', content)
+        self.assertNotIn('>upload</a>', content)
+
+    def test_upload_templates_include_upload_toolbar_and_copy_id_ui(self):
+        upload_page = self._read_template("upload_log.html")
+        uploads_page = self._read_template("uploaded_logs.html")
+
+        self.assertIn('id="uploadedLogId"', upload_page)
+        self.assertIn('copyUploadId', upload_page)
+        self.assertIn('>upload new log<', uploads_page)
+        self.assertIn('>merge selected<', uploads_page)
+        self.assertIn('>analyze</a>', uploads_page)
+        self.assertIn('?upload_id={{ uploaded_log.upload_id|urlencode }}', uploads_page)
+        self.assertIn('class="merge-controls button-group"', uploads_page)
 
     def test_log_analyzer_template_contains_status_picker_hooks(self):
         content = self._read_template("log_analyzer.html")
@@ -64,6 +82,7 @@ class TemplateMarkupTests(TestCase):
         self.assertIn('data-insert-status="!"', content)
         self.assertIn('id="saveFixlistButton"', content)
         self.assertIn('id="conflictWizardBackButton"', content)
+        self.assertIn('id="bulkIgnoreFirewallRules"', content)
         self.assertIn('role="radiogroup"', content)
         self.assertNotIn("onclick=", content)
         self.assertIn("window.logAnalyzerConfig", content)
@@ -91,6 +110,8 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("toggleQuestionCursorMode", script_content)
         self.assertIn("openLineInspectorModal", script_content)
         self.assertIn("bindAnalyzerButton('saveRulesRescanButton'", script_content)
+        self.assertIn("bulkIgnoreFirewallRules", script_content)
+        self.assertIn("line.startsWith('FirewallRules:')", script_content)
         self.assertIn("cancelRuleWorkflow", script_content)
         self.assertIn("ruleReviewBackdrop.addEventListener('click', () => cancelRuleWorkflow())", script_content)
         self.assertIn("has-pending-changes", script_content)
@@ -98,6 +119,9 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("handleAnalyzerModalOpen", script_content)
         self.assertIn("focusStatusPickerButton", script_content)
         self.assertIn("lineDetailsUrl", content)
+        self.assertIn("initialUploadId", content)
+        self.assertIn("loadInitialUploadForAnalyzer", script_content)
+        self.assertIn("config.initialUploadId", script_content)
         self.assertNotIn("{% url 'analyze_log_api' %}", script_content)
 
     def test_create_fixlist_template_only_uses_prefill_handoff(self):

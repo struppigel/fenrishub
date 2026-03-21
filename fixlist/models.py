@@ -1,9 +1,9 @@
 from django.db import models
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
-from django.utils.text import slugify
 import secrets
 import string
+import re
 
 
 def get_default_rule_owner_id():
@@ -70,6 +70,31 @@ class AccessLog(models.Model):
 
     def __str__(self):
         return f"Access to {self.fixlist.title} at {self.accessed_at}"
+
+
+MEMORABLE_ID_ADJECTIVES = [
+    'amber', 'ancient', 'atomic', 'autumn', 'azure', 'brave', 'bright', 'calm', 'candid',
+    'celestial', 'cobalt', 'cosmic', 'crimson', 'curious', 'daring', 'desert', 'ember',
+    'fierce', 'frozen', 'gentle', 'glassy', 'golden', 'grand', 'hidden', 'hollow', 'icy',
+    'jade', 'keen', 'lively', 'lunar', 'mellow', 'misty', 'noble', 'opal', 'plucky',
+    'quiet', 'rapid', 'rustic', 'scarlet', 'silent', 'solar', 'spry', 'steady', 'stormy',
+    'swift', 'tidy', 'vivid', 'wild', 'witty', 'young',
+]
+
+MEMORABLE_ID_NOUNS = [
+    'anchor', 'badger', 'beacon', 'birch', 'blossom', 'bridge', 'brook', 'canyon', 'cedar',
+    'citadel', 'cloud', 'comet', 'creek', 'dawn', 'delta', 'ember', 'falcon', 'field',
+    'forest', 'garden', 'harbor', 'hawk', 'horizon', 'island', 'jungle', 'lantern', 'lark',
+    'meadow', 'meteor', 'mountain', 'oasis', 'orchard', 'otter', 'peak', 'phoenix', 'pine',
+    'planet', 'prairie', 'quartz', 'raven', 'reef', 'river', 'summit', 'thunder', 'timber',
+    'trail', 'valley', 'voyage', 'willow', 'zephyr',
+]
+
+
+def generate_memorable_upload_id():
+    adjective = secrets.choice(MEMORABLE_ID_ADJECTIVES)
+    noun = secrets.choice(MEMORABLE_ID_NOUNS)
+    return f'{adjective}-{noun}'
 
 
 class ClassificationRule(models.Model):
@@ -143,6 +168,59 @@ class ClassificationRule(models.Model):
     def __str__(self):
         owner_name = self.owner.username if self.owner_id else 'unknown'
         return f"{self.status} [{self.match_type}] {self.source_text[:80]} ({owner_name})"
+
+
+class UploadedLog(models.Model):
+    upload_id = models.CharField(max_length=48, unique=True, db_index=True)
+    reddit_username = models.CharField(max_length=20, db_index=True)
+    original_filename = models.CharField(max_length=255)
+    content = models.TextField()
+    created_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='uploaded_logs',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.upload_id} ({self.reddit_username})'
+
+    def clean(self):
+        username = (self.reddit_username or '').strip()
+        if not re.fullmatch(r'[A-Za-z0-9_]{3,20}', username):
+            raise ValidationError({'reddit_username': 'Use 3-20 letters, numbers, or underscores.'})
+        if not (self.content or '').strip():
+            raise ValidationError({'content': 'Uploaded content cannot be empty.'})
+        self.reddit_username = username
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        if not self.upload_id:
+            self.upload_id = self._generate_unique_upload_id()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def _generate_unique_upload_id(cls):
+        # Prefer exactly two-word IDs. Only append a suffix if a collision occurs.
+        for _ in range(25):
+            candidate = generate_memorable_upload_id()
+            if not cls.objects.filter(upload_id=candidate).exists():
+                return candidate
+
+        for _ in range(200):
+            base = generate_memorable_upload_id()
+            suffix = ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(2))
+            candidate = f'{base}-{suffix}'
+            if not cls.objects.filter(upload_id=candidate).exists():
+                return candidate
+
+        raise ValidationError('Unable to generate a unique upload id.')
 
 
 class ParsedFilepathExclusion(models.Model):

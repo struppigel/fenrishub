@@ -199,11 +199,34 @@ def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
     return _build_warning("low_memory", title, "; ".join(reasons), details)
 
 
+def _detect_multiple_enabled_av_warning(raw_log_text: str) -> dict | None:
+    enabled_av_lines = []
+
+    for raw_line in (raw_log_text or "").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("AV:"):
+            continue
+        if "(Enabled" not in line:
+            continue
+        enabled_av_lines.append(line)
+
+    if len(enabled_av_lines) < 2:
+        return None
+
+    return _build_warning(
+        "multiple_enabled_av",
+        "Multiple enabled antivirus products detected",
+        "Multiple AV products are enabled at the same time. Running multiple real-time AV engines can cause conflicts and performance issues.",
+        [f"Detected enabled AV entries: {len(enabled_av_lines)}", *enabled_av_lines[:5]],
+    )
+
+
 def _build_log_warnings(raw_log_text: str) -> list[dict]:
     warnings = []
     for warning in (
         _detect_incomplete_log_warning(raw_log_text),
         _detect_low_memory_warning(raw_log_text),
+        _detect_multiple_enabled_av_warning(raw_log_text),
     ):
         if warning:
             warnings.append(warning)

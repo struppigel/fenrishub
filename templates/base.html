@@ -487,6 +487,7 @@
             <div class="nav">
                 <div class="nav-left">
                     <a href="{% url 'dashboard' %}">fixlists</a>
+                    <a href="{% url 'uploaded_logs' %}">uploads</a>
                     <a href="{% url 'log_analyzer' %}">analyze</a>
                 </div>
                 <div id="bannerStatistics" class="nav-right banner-statistics" style="display: none;"></div>
@@ -499,6 +500,11 @@
         </div>
 
         <div class="content">
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="{% if message.tags == 'error' %}error-box{% elif message.tags == 'success' %}success-box{% else %}info-box{% endif %}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
             {% block content %}{% endblock %}
         </div>
     </div>

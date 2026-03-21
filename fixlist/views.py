@@ -11,9 +11,11 @@ from django.db.models import F, Q
 from django.db import transaction
 from io import BytesIO
 import json
+import re
 
 from .analyzer import analyze_log_text, parse_rule_line, inspect_line_matches, VALID_STATUSES
-from .models import Fixlist, AccessLog, ClassificationRule
+from .forms import UploadedLogForm
+from .models import Fixlist, AccessLog, ClassificationRule, UploadedLog
 
 
 CONFLICT_ACTION_UPDATE_EXISTING = 'update_existing_status'
@@ -27,6 +29,12 @@ VALID_CONFLICT_ACTIONS = {
     CONFLICT_ACTION_KEEP_NEW_DISABLE_OTHER,
     CONFLICT_ACTION_DISCARD_NEW,
 }
+
+
+def _merged_upload_username_for_user(user: User) -> str:
+    normalized = re.sub(r'[^A-Za-z0-9_]+', '_', user.username or '').strip('_')
+    candidate = f'merged_{normalized}' if normalized else 'merged_logs'
+    return candidate[:20]
 
 
 def get_client_ip(request):
@@ -472,6 +480,130 @@ def dashboard_view(request):
     return render(request, 'dashboard.html', {'fixlists': fixlists})
 
 
+@require_http_methods(["GET", "POST"])
+def upload_log_view(request):
+    """Public upload endpoint for text logs."""
+    uploaded_log_id = None
+    uploaded_original_filename = None
+
+    if request.method == 'POST':
+        form = UploadedLogForm(request.POST, request.FILES)
+        if form.is_valid():
+            log_file = form.cleaned_data['log_file']
+            created_log = UploadedLog.objects.create(
+                reddit_username=form.cleaned_data['reddit_username'],
+                original_filename=log_file.name,
+                content=getattr(log_file, 'decoded_content', ''),
+            )
+            request.session['upload_success_id'] = created_log.upload_id
+            request.session['upload_success_filename'] = created_log.original_filename
+            return redirect('upload_log')
+    else:
+        form = UploadedLogForm()
+
+    uploaded_log_id = request.session.pop('upload_success_id', None)
+    uploaded_original_filename = request.session.pop('upload_success_filename', None)
+
+    return render(
+        request,
+        'upload_log.html',
+        {
+            'form': form,
+            'uploaded_log_id': uploaded_log_id,
+            'uploaded_original_filename': uploaded_original_filename,
+        },
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def uploaded_logs_view(request):
+    """List uploaded logs for authenticated users and support merge/delete actions."""
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+
+        if action == 'delete':
+            upload_id = request.POST.get('upload_id', '').strip()
+            uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
+            uploaded_log.delete()
+            messages.success(request, f'Upload {upload_id} deleted.')
+            return redirect('uploaded_logs')
+
+        if action == 'merge':
+            selected_ids = []
+            seen_ids = set()
+            for upload_id in request.POST.getlist('selected_upload_ids'):
+                normalized_id = str(upload_id).strip()
+                if not normalized_id or normalized_id in seen_ids:
+                    continue
+                seen_ids.add(normalized_id)
+                selected_ids.append(normalized_id)
+
+            if len(selected_ids) < 2:
+                messages.error(request, 'Select at least two uploads to merge.')
+                return redirect('uploaded_logs')
+
+            selected_logs = list(UploadedLog.objects.filter(upload_id__in=selected_ids))
+            logs_by_id = {entry.upload_id: entry for entry in selected_logs}
+            missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
+            if missing_ids:
+                messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
+                return redirect('uploaded_logs')
+
+            ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
+            merged_parts = []
+            for index, uploaded_log in enumerate(ordered_logs):
+                piece = uploaded_log.content or ''
+                if index > 0 and merged_parts and not merged_parts[-1].endswith('\n'):
+                    merged_parts[-1] = f"{merged_parts[-1]}\n"
+                merged_parts.append(piece)
+
+            merged_content = ''.join(merged_parts)
+            merged_upload = UploadedLog.objects.create(
+                reddit_username=_merged_upload_username_for_user(request.user),
+                original_filename='merged-logs.txt',
+                content=merged_content,
+                created_by=request.user,
+            )
+            messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
+            return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
+
+        messages.error(request, 'Invalid action.')
+        return redirect('uploaded_logs')
+
+    uploads = UploadedLog.objects.all()
+    return render(request, 'uploaded_logs.html', {'uploads': uploads})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def view_uploaded_log(request, upload_id):
+    """View a single uploaded log by memorable ID."""
+    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
+
+    if request.method == 'POST' and request.POST.get('action') == 'delete':
+        uploaded_log.delete()
+        messages.success(request, f'Upload {upload_id} deleted.')
+        return redirect('uploaded_logs')
+
+    return render(request, 'view_uploaded_log.html', {'uploaded_log': uploaded_log})
+
+
+@login_required
+@require_http_methods(["GET"])
+def uploaded_log_content_api(request, upload_id):
+    """Return upload content for analyzer prefill."""
+    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
+    return JsonResponse(
+        {
+            'upload_id': uploaded_log.upload_id,
+            'content': uploaded_log.content,
+            'original_filename': uploaded_log.original_filename,
+            'reddit_username': uploaded_log.reddit_username,
+        }
+    )
+
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def create_fixlist_view(request):
@@ -598,7 +730,17 @@ def copy_to_clipboard_api(request, token):
 @require_http_methods(["GET"])
 def log_analyzer_view(request):
     """Render log analyzer tool."""
-    return render(request, 'log_analyzer.html')
+    uploads = UploadedLog.objects.all()[:200]
+    requested_upload_id = (request.GET.get('upload_id') or '').strip()
+    initial_upload_id = requested_upload_id if requested_upload_id else ''
+    return render(
+        request,
+        'log_analyzer.html',
+        {
+            'uploaded_logs': uploads,
+            'initial_upload_id': initial_upload_id,
+        },
+    )
 
 
 @login_required

@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+
+{% block title %}Log Upload - Fenris{% endblock %}
+
+{% block content %}
+<h2>log upload</h2>
+
+{% if uploaded_log_id %}
+<div class="success-box">
+    uploaded {{ uploaded_original_filename }}<br>
+    id: <strong id="uploadedLogId">{{ uploaded_log_id }}</strong>
+    <button type="button" onclick="copyUploadId(this)" style="margin-left: 10px;">copy id</button>
+</div>
+{% endif %}
+
+<script>
+function copyUploadId(button) {
+    const id = document.getElementById('uploadedLogId').textContent;
+    navigator.clipboard.writeText(id).then(function() {
+        const original = button.textContent;
+        button.textContent = 'copied';
+        setTimeout(() => { button.textContent = original; }, 1200);
+    });
+}
+</script>
+
+<form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <div class="form-group">
+        <label for="id_reddit_username">reddit username</label>
+        <input type="text" id="id_reddit_username" name="reddit_username" maxlength="20" value="{{ form.reddit_username.value|default:'' }}" required>
+        {% if form.reddit_username.errors %}
+            <div class="error-box">{{ form.reddit_username.errors|join:', ' }}</div>
+        {% endif %}
+    </div>
+
+    <div class="form-group">
+        <label for="id_log_file">log file (.txt only)</label>
+        <input type="file" id="id_log_file" name="log_file" accept=".txt,text/plain" required>
+        {% if form.log_file.errors %}
+            <div class="error-box">{{ form.log_file.errors|join:', ' }}</div>
+        {% endif %}
+    </div>
+
+    <div class="button-group">
+        <button type="submit">upload</button>
+    </div>
+</form>
+{% endblock %}

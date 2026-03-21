@@ -3,11 +3,12 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser, User
 from django.http import HttpResponse
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
-from ..models import AccessLog, ClassificationRule, Fixlist
-from ..views import shared_fixlist_view, view_fixlist
+from ..models import AccessLog, ClassificationRule, Fixlist, UploadedLog
+from ..views import log_analyzer_view, shared_fixlist_view, view_fixlist
 
 
 class FixlistCrudViewTests(TestCase):
@@ -190,4 +191,153 @@ class SharingAndDownloadTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(rendered_context["preview_as_guest"])
         self.assertFalse(rendered_context["is_owner"])
+
+
+class UploadedLogViewTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='alice', password='password123')
+
+    def test_upload_log_view_allows_anonymous_upload_and_returns_id(self):
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('sample.txt', b'line-a\nline-b', content_type='text/plain'),
+            },
+        )
+
+        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('upload_log'))
+        self.assertEqual(uploaded.original_filename, 'sample.txt')
+
+        first_get = self.client.get(reverse('upload_log'))
+        self.assertEqual(first_get.status_code, 200)
+        self.assertContains(first_get, uploaded.upload_id)
+        self.assertContains(first_get, 'id="uploadedLogId"')
+
+        second_get = self.client.get(reverse('upload_log'))
+        self.assertEqual(second_get.status_code, 200)
+        self.assertNotContains(second_get, 'id="uploadedLogId"')
+        self.assertEqual(UploadedLog.objects.count(), 1)
+
+    def test_upload_log_view_rejects_non_txt_extension(self):
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('sample.log', b'line-a', content_type='text/plain'),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Only .txt files are allowed.')
+        self.assertEqual(UploadedLog.objects.count(), 0)
+
+    def test_uploaded_logs_page_requires_login(self):
+        response = self.client.get(reverse('uploaded_logs'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_authenticated_user_can_view_upload_by_id(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='bright-river',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'payload')
+
+    def test_authenticated_user_can_delete_upload(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='quiet-forest',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'delete', 'upload_id': uploaded.upload_id},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('uploaded_logs'))
+        self.assertFalse(UploadedLog.objects.filter(pk=uploaded.pk).exists())
+
+    def test_merge_selected_uploads_creates_new_record(self):
+        first = UploadedLog.objects.create(
+            upload_id='amber-meadow',
+            reddit_username='reddit_name',
+            original_filename='first.txt',
+            content='aaa',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='azure-harbor',
+            reddit_username='reddit_name',
+            original_filename='second.txt',
+            content='bbb',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'merge',
+                'selected_upload_ids': [first.upload_id, second.upload_id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(UploadedLog.objects.count(), 3)
+        merged = UploadedLog.objects.exclude(pk__in=[first.pk, second.pk]).first()
+        self.assertIsNotNone(merged)
+        self.assertEqual(merged.content, 'aaa\nbbb')
+        self.assertTrue(merged.upload_id)
+
+    def test_merge_requires_at_least_two_uploads(self):
+        only = UploadedLog.objects.create(
+            upload_id='mellow-garden',
+            reddit_username='reddit_name',
+            original_filename='single.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'merge',
+                'selected_upload_ids': [only.upload_id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('uploaded_logs'))
+        self.assertEqual(UploadedLog.objects.count(), 1)
+
+    def test_log_analyzer_view_passes_initial_upload_id_from_query(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='silver-river',
+            reddit_username='reddit_name',
+            original_filename='single.txt',
+            content='payload',
+        )
+        request = RequestFactory().get(
+            reverse('log_analyzer'),
+            {'upload_id': uploaded.upload_id},
+        )
+        request.user = self.user
+
+        with patch('fixlist.views.render', return_value=HttpResponse('ok')) as mock_render:
+            response = log_analyzer_view(request)
+
+        rendered_context = mock_render.call_args.args[2]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(rendered_context.get('initial_upload_id'), uploaded.upload_id)
 

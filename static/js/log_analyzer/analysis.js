@@ -681,6 +681,8 @@ function insertLine(line, index) {
 
 function insertAllStatus(status) {
     const textarea = document.getElementById('selectedLines');
+    const ignoreFirewallRulesToggle = document.getElementById('bulkIgnoreFirewallRules');
+    const shouldIgnoreFirewallRules = !ignoreFirewallRulesToggle || ignoreFirewallRulesToggle.checked;
     let insertPosition = textarea.selectionStart;
     let linesAdded = 0;
 
@@ -692,6 +694,9 @@ function insertAllStatus(status) {
         const entry = analyzedLines[index];
         if (entry.dominant_status === status) {
             const line = entry.line;
+            if (shouldIgnoreFirewallRules && line.startsWith('FirewallRules:')) {
+                continue;
+            }
             const text = textarea.value;
 
             const newText = text.substring(0, insertPosition) + line + '\n' + text.substring(insertPosition);
