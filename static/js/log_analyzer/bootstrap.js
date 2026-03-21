@@ -218,6 +218,50 @@ function toggleUploadSourceRow() {
     uploadSourceRow.hidden = !uploadSourceRow.hidden;
 }
 
+function extractFrstRunPath(logText) {
+    if (!logText) {
+        return '';
+    }
+
+    const match = logText.match(/^\s*Running from\s+(.+?)\s*$/im);
+    if (!match) {
+        return '';
+    }
+
+    const rawPath = match[1].trim();
+    // If FRST reports the executable path, copy only its directory.
+    if (/\\frst(?:64)?\.exe$/i.test(rawPath)) {
+        return rawPath.replace(/\\[^\\]+$/, '');
+    }
+
+    return rawPath;
+}
+
+async function copyFrstPathFromLog() {
+    const logInputElement = document.getElementById('logInput');
+    const copyButton = document.getElementById('copyFrstPathButton');
+    if (!logInputElement || !copyButton) {
+        return;
+    }
+
+    const frstPath = extractFrstRunPath(logInputElement.value || '');
+    if (!frstPath) {
+        alert('No "Running from" path found in the log.');
+        return;
+    }
+
+    try {
+        await navigator.clipboard.writeText(frstPath);
+        const originalText = copyButton.textContent;
+        copyButton.textContent = 'copied';
+        setTimeout(() => {
+            copyButton.textContent = originalText;
+        }, 1200);
+    } catch (error) {
+        alert('Unable to copy FRST path to clipboard.');
+    }
+}
+
 function bindAnalyzerControls() {
     bindAnalyzerButton('parseButton', () => parseLogs());
     bindAnalyzerButton('resetButton', () => resetToInput());
@@ -231,6 +275,7 @@ function bindAnalyzerControls() {
     bindAnalyzerButton('conflictWizardBackButton', () => cancelRuleWorkflow());
     bindAnalyzerButton('wizardNextButton', () => advanceConflictWizard());
     bindAnalyzerButton('toggleLoadUploadButton', () => toggleUploadSourceRow());
+    bindAnalyzerButton('copyFrstPathButton', () => copyFrstPathFromLog());
     
     const uploadSourceSelect = document.getElementById('uploadSourceSelect');
     if (uploadSourceSelect) {

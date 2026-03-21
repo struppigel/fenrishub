@@ -69,7 +69,8 @@
         <button type="button" id="resetButton" style="display: none;">edit log</button>
         <button type="button" id="questionCursorModeButton" aria-pressed="false" title="question cursor mode">?</button>
         <button type="button" id="saveRulesRescanButton">save changes</button>
-        <button type="button" id="toggleLoadUploadButton">load uploaded log</button>
+        <button type="button" id="toggleLoadUploadButton">logs</button>
+        <button type="button" id="copyFrstPathButton">FRST path</button>
     </div>
     <div class="analyzer-toolbar analyzer-toolbar-right">
         <div class="bulk-insert-controls" aria-label="bulk insert by status">
@@ -88,7 +89,7 @@
 </div>
 
 <div class="upload-source-row" id="uploadSourceRow" hidden>
-    <label for="uploadSourceSelect">load uploaded log</label>
+    <label for="uploadSourceSelect">logs</label>
     <select id="uploadSourceSelect">
         <option value="">select upload id</option>
         {% for uploaded_log in uploaded_logs %}
