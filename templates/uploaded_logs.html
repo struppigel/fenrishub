@@ -79,7 +79,7 @@
 </form>
 
 <div class="merge-controls button-group">
-    <button type="submit" form="mergeUploadsForm">merge selected</button>
+    <button type="submit" form="mergeUploadsForm" onclick="return confirmMerge();">merge selected</button>
     <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan logs</button>
     <a href="{% url 'upload_log' %}"><button type="button">upload new log</button></a>
 </div>
@@ -132,4 +132,17 @@
 {% else %}
     <div class="info-box">no uploaded logs yet.</div>
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function confirmMerge() {
+    const selected = document.querySelectorAll('input[name="selected_upload_ids"]:checked');
+    if (selected.length === 0) {
+        alert('Select at least one upload to merge.');
+        return false;
+    }
+    return confirm('Merge ' + selected.length + ' selected upload(s)?');
+}
+</script>
 {% endblock %}

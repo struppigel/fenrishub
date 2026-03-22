@@ -567,7 +567,8 @@ def upload_log_view(request):
             request.session['upload_success_filename'] = created_log.original_filename
             return redirect('upload_log')
     else:
-        form = UploadedLogForm()
+        prefill = request.GET.get('u', '')
+        form = UploadedLogForm(initial={'reddit_username': prefill} if prefill else None)
 
     uploaded_log_id = request.session.pop('upload_success_id', None)
     uploaded_original_filename = request.session.pop('upload_success_filename', None)
@@ -634,8 +635,12 @@ def uploaded_logs_view(request):
             
             # All usernames are the same, proceed with merge using that username
             selected_username = usernames[0]
+            retained_id = ordered_logs[0].upload_id
             merged_content = _merge_logs_content(ordered_logs)
+            for log in ordered_logs:
+                log.delete()
             merged_upload = UploadedLog.objects.create(
+                upload_id=retained_id,
                 reddit_username=selected_username,
                 original_filename='merged-logs.txt',
                 content=merged_content,
@@ -647,11 +652,7 @@ def uploaded_logs_view(request):
                 import traceback
                 print(f"ERROR calculating stats for merged {merged_upload.upload_id}: {e}")
                 traceback.print_exc()
-            
-            # Delete the original logs after successful merge
-            for log in ordered_logs:
-                log.delete()
-            
+
             messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
             return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
         
@@ -682,8 +683,12 @@ def uploaded_logs_view(request):
                 messages.error(request, 'Invalid username selection.')
                 return redirect('uploaded_logs')
             
+            retained_id = ordered_logs[0].upload_id
             merged_content = _merge_logs_content(ordered_logs)
+            for log in ordered_logs:
+                log.delete()
             merged_upload = UploadedLog.objects.create(
+                upload_id=retained_id,
                 reddit_username=selected_username,
                 original_filename='merged-logs.txt',
                 content=merged_content,
@@ -695,11 +700,7 @@ def uploaded_logs_view(request):
                 import traceback
                 print(f"ERROR calculating stats for merged {merged_upload.upload_id}: {e}")
                 traceback.print_exc()
-            
-            # Delete the original logs after successful merge
-            for log in ordered_logs:
-                log.delete()
-            
+
             messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
             return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
 

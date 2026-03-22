@@ -348,13 +348,39 @@ class UploadedLogViewTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(UploadedLog.objects.count(), 3)
-        merged = UploadedLog.objects.exclude(pk__in=[first.pk, second.pk]).first()
+        self.assertEqual(UploadedLog.objects.count(), 1)
+        merged = UploadedLog.objects.first()
         self.assertIsNotNone(merged)
         self.assertEqual(merged.content, 'aaa\nbbb')
-        self.assertTrue(merged.upload_id)
         self.assertEqual(merged.total_line_count, 2)
         self.assertEqual(merged.count_unknown, 2)
+
+    def test_merge_retains_first_upload_id_and_deletes_originals(self):
+        first = UploadedLog.objects.create(
+            upload_id='amber-meadow',
+            reddit_username='reddit_name',
+            original_filename='first.txt',
+            content='aaa',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='azure-harbor',
+            reddit_username='reddit_name',
+            original_filename='second.txt',
+            content='bbb',
+        )
+        self.client.login(username='alice', password='password123')
+
+        self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'merge',
+                'selected_upload_ids': [first.upload_id, second.upload_id],
+            },
+        )
+
+        self.assertFalse(UploadedLog.objects.filter(upload_id='azure-harbor').exists())
+        merged = UploadedLog.objects.get(upload_id='amber-meadow')
+        self.assertEqual(merged.content, 'aaa\nbbb')
 
     def test_merge_requires_at_least_two_uploads(self):
         only = UploadedLog.objects.create(

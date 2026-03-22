@@ -53,9 +53,8 @@ A minimalistic, terminal-style Django web application for managing and sharing F
 
 5. **Run migrations**
    ```bash
-   python manage.py migrate
    python manage.py makemigrations fixlist
-   python manage.py migrate fixlist
+   python manage.py migrate
    ```
 
 6. **Create a superuser** (required for admin)

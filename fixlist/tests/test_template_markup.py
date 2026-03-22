@@ -78,7 +78,7 @@ class TemplateMarkupTests(TestCase):
         self.assertIn('id="conflictWizardDialog"', content)
         self.assertIn('id="plannedExistingRuleChangesList"', content)
         self.assertIn('id="saveRulesRescanButton"', content)
-        self.assertIn('>save changes<', content)
+        self.assertIn('>save rules<', content)
         self.assertIn('id="questionCursorModeButton"', content)
         self.assertIn('id="lineInspectorModal"', content)
         self.assertIn('id="lineInspectorDialog"', content)
