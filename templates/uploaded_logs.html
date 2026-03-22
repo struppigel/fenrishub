@@ -6,6 +6,10 @@
 
 {% block extra_css %}
 <style>
+    .duplicate-hash {
+        color: var(--la-warning-text);
+    }
+
     .upload-select {
         margin-right: 8px;
     }
@@ -110,7 +114,7 @@
                     <a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>
                 </div>
                 <div class="fixlist-meta">
-                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}
+                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.content_hash %} | <span class="content-hash{% if uploaded_log.content_hash in duplicate_hashes %} duplicate-hash{% endif %}" title="{{ uploaded_log.content_hash }}">{{ uploaded_log.content_hash|truncatechars:11 }}</span>{% endif %}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}
                 </div>
                 <div class="fixlist-meta upload-stats">
                     lines {{ uploaded_log.total_line_count }}

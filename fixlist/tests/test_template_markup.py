@@ -39,6 +39,13 @@ class TemplateMarkupTests(TestCase):
         self.assertIn('class="action-btn" onclick="copyShareLink', content)
         self.assertIn('class="action-btn">edit</a>', content)
 
+    def test_dashboard_template_delete_button_text(self):
+        content = self._read_template("dashboard.html")
+
+        self.assertIn('class="action-btn delete-btn"', content)
+        self.assertIn('>delete</button>', content)
+        self.assertNotIn('>trash</button>', content)
+
     def test_base_template_navigation_omits_upload_link(self):
         content = self._read_template("base.html")
 
@@ -124,9 +131,13 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("focusStatusPickerButton", script_content)
         self.assertIn("lineDetailsUrl", content)
         self.assertIn("initialUploadId", content)
+        self.assertIn("isSuperuser", content)
         self.assertIn("loadInitialUploadForAnalyzer", script_content)
         self.assertIn("config.initialUploadId", script_content)
         self.assertNotIn("{% url 'analyze_log_api' %}", script_content)
+        self.assertIn("addRemainingAsClean", script_content)
+        self.assertIn("addRemainingCleanButton", script_content)
+        self.assertIn("is_superuser", content)
 
     def test_create_fixlist_template_only_uses_prefill_handoff(self):
         content = self._read_template("create_fixlist.html")

@@ -71,6 +71,7 @@
         <button type="button" id="saveRulesRescanButton">save rules</button>
         <button type="button" id="toggleLoadUploadButton">logs</button>
         <button type="button" id="copyFrstPathButton">FRST path</button>
+        {% if is_superuser %}<button type="button" id="addRemainingCleanButton" title="Mark remaining parsed entries as clean (like CLI --clean_save)">remaining = C</button>{% endif %}
     </div>
     <div class="analyzer-toolbar analyzer-toolbar-right">
         <div class="bulk-insert-controls" aria-label="bulk insert by status">
@@ -229,6 +230,7 @@ window.logAnalyzerConfig = {
     createFixlistUrl: "{% url 'create_fixlist' %}",
     uploadedLogContentUrlTemplate: "{% url 'uploaded_log_content_api' '__UPLOAD_ID__' %}",
     initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
+    isSuperuser: {{ is_superuser|yesno:"true,false" }},
 };
 </script>
 <script src="{% static 'js/log_analyzer/shared.js' %}"></script>

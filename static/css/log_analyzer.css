@@ -437,7 +437,7 @@ body.question-cursor-mode .line-text {
 .rule-candidates-list {
     display: grid;
     gap: 6px;
-    max-height: 220px;
+    max-height: 50vh;
     overflow: auto;
     border: 1px solid var(--la-border-muted);
     padding: 8px;

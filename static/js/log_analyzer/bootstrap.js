@@ -276,6 +276,7 @@ function bindAnalyzerControls() {
     bindAnalyzerButton('wizardNextButton', () => advanceConflictWizard());
     bindAnalyzerButton('toggleLoadUploadButton', () => toggleUploadSourceRow());
     bindAnalyzerButton('copyFrstPathButton', () => copyFrstPathFromLog());
+    bindAnalyzerButton('addRemainingCleanButton', () => addRemainingAsClean());
     
     const uploadSourceSelect = document.getElementById('uploadSourceSelect');
     if (uploadSourceSelect) {
@@ -344,6 +345,7 @@ function exposeLegacyAnalyzerGlobals() {
         closeLineInspectorModal,
         fetchRulePreview,
         goToCreateFixlist,
+        addRemainingAsClean,
         insertAllStatus,
         insertLine,
         openConflictWizardModal,

@@ -328,6 +328,107 @@ class UploadedLogViewTests(TestCase):
         uploaded.refresh_from_db()
         self.assertIsNotNone(uploaded.deleted_at)
 
+    def test_rename_reddit_username_on_upload_detail(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='rename-test',
+            reddit_username='old_name',
+            original_filename='x.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('view_uploaded_log', args=[uploaded.upload_id]),
+            {'action': 'rename_reddit', 'reddit_username': 'new_name'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        uploaded.refresh_from_db()
+        self.assertEqual(uploaded.reddit_username, 'new_name')
+
+    def test_rename_reddit_ignores_empty_username(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='rename-empty',
+            reddit_username='keep_this',
+            original_filename='x.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        self.client.post(
+            reverse('view_uploaded_log', args=[uploaded.upload_id]),
+            {'action': 'rename_reddit', 'reddit_username': ''},
+        )
+
+        uploaded.refresh_from_db()
+        self.assertEqual(uploaded.reddit_username, 'keep_this')
+
+    def test_upload_detail_shows_content_hash(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='hash-detail',
+            reddit_username='test_user',
+            original_filename='x.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
+
+        self.assertContains(response, uploaded.content_hash)
+
+    def test_uploads_list_shows_content_hash(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='hash-list',
+            reddit_username='test_user',
+            original_filename='x.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'))
+
+        self.assertContains(response, uploaded.content_hash[:8])
+
+    def test_uploads_list_highlights_duplicate_hashes(self):
+        UploadedLog.objects.create(
+            upload_id='dup-one',
+            reddit_username='test_user',
+            original_filename='a.txt',
+            content='duplicate content',
+        )
+        UploadedLog.objects.create(
+            upload_id='dup-two',
+            reddit_username='test_user',
+            original_filename='b.txt',
+            content='duplicate content',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'))
+        html = response.content.decode()
+
+        self.assertIn('content-hash duplicate-hash', html)
+
+    def test_uploads_list_no_duplicate_class_for_unique_hashes(self):
+        UploadedLog.objects.create(
+            upload_id='unique-one',
+            reddit_username='test_user',
+            original_filename='a.txt',
+            content='completely unique content alpha',
+        )
+        UploadedLog.objects.create(
+            upload_id='unique-two',
+            reddit_username='test_user',
+            original_filename='b.txt',
+            content='completely unique content beta',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'))
+        html = response.content.decode()
+
+        self.assertNotIn('content-hash duplicate-hash', html)
+
     def test_merge_selected_uploads_creates_new_record(self):
         first = UploadedLog.objects.create(
             upload_id='amber-meadow',
@@ -564,6 +665,29 @@ class UploadedLogViewTests(TestCase):
         rendered_context = mock_render.call_args.args[2]
         self.assertEqual(response.status_code, 200)
         self.assertEqual(rendered_context.get('initial_upload_id'), uploaded.upload_id)
+
+    def test_log_analyzer_view_passes_is_superuser_true_for_superuser(self):
+        superuser = User.objects.create_superuser(
+            username='admin', password='password123',
+        )
+        request = RequestFactory().get(reverse('log_analyzer'))
+        request.user = superuser
+
+        with patch('fixlist.views.render', return_value=HttpResponse('ok')) as mock_render:
+            log_analyzer_view(request)
+
+        rendered_context = mock_render.call_args.args[2]
+        self.assertTrue(rendered_context.get('is_superuser'))
+
+    def test_log_analyzer_view_passes_is_superuser_false_for_regular_user(self):
+        request = RequestFactory().get(reverse('log_analyzer'))
+        request.user = self.user
+
+        with patch('fixlist.views.render', return_value=HttpResponse('ok')) as mock_render:
+            log_analyzer_view(request)
+
+        rendered_context = mock_render.call_args.args[2]
+        self.assertFalse(rendered_context.get('is_superuser'))
 
     def test_log_analyzer_excludes_trashed_uploads(self):
         from django.utils import timezone as tz

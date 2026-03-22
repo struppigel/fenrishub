@@ -9,7 +9,7 @@ from django.core.cache import cache
 from django.http import Http404, JsonResponse, HttpResponse, FileResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.db.models import F, Q
+from django.db.models import Count, F
 from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
@@ -769,7 +769,21 @@ def uploaded_logs_view(request):
         uploads = uploads.filter(reddit_username=username_filter)
     all_usernames = UploadedLog.objects.filter(deleted_at__isnull=True).values_list('reddit_username', flat=True).distinct().order_by('reddit_username')
     trash_count = UploadedLog.objects.filter(deleted_at__isnull=False).count()
-    return render(request, 'uploaded_logs.html', {'uploads': uploads, 'username_filter': username_filter, 'all_usernames': all_usernames, 'trash_count': trash_count})
+    duplicate_hashes = set(
+        UploadedLog.objects.filter(deleted_at__isnull=True)
+        .exclude(content_hash='')
+        .values('content_hash')
+        .annotate(cnt=Count('id'))
+        .filter(cnt__gt=1)
+        .values_list('content_hash', flat=True)
+    )
+    return render(request, 'uploaded_logs.html', {
+        'uploads': uploads,
+        'username_filter': username_filter,
+        'all_usernames': all_usernames,
+        'trash_count': trash_count,
+        'duplicate_hashes': duplicate_hashes,
+    })
 
 
 @login_required
@@ -778,12 +792,22 @@ def view_uploaded_log(request, upload_id):
     """View a single uploaded log by memorable ID."""
     uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
 
-    if request.method == 'POST' and request.POST.get('action') == 'delete':
-        uploaded_log.deleted_at = timezone.now()
-        uploaded_log.save(update_fields=['deleted_at'])
-        _purge_old_trash()
-        messages.success(request, f'Upload {upload_id} moved to trash.')
-        return redirect('uploaded_logs')
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+
+        if action == 'delete':
+            uploaded_log.deleted_at = timezone.now()
+            uploaded_log.save(update_fields=['deleted_at'])
+            _purge_old_trash()
+            messages.success(request, f'Upload {upload_id} moved to trash.')
+            return redirect('uploaded_logs')
+
+        if action == 'rename_reddit':
+            new_username = request.POST.get('reddit_username', '').strip()
+            if new_username:
+                uploaded_log.reddit_username = new_username
+                uploaded_log.save(update_fields=['reddit_username'])
+            return redirect('view_uploaded_log', upload_id=upload_id)
 
     return render(request, 'view_uploaded_log.html', {'uploaded_log': uploaded_log})
 
@@ -1024,6 +1048,7 @@ def log_analyzer_view(request):
         {
             'uploaded_logs': uploads,
             'initial_upload_id': initial_upload_id,
+            'is_superuser': request.user.is_superuser,
         },
     )
 

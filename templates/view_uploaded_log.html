@@ -65,7 +65,19 @@
     <div class="meta-key">filename</div>
     <div>{{ uploaded_log.original_filename }}</div>
     <div class="meta-key">reddit</div>
-    <div>u/{{ uploaded_log.reddit_username }}</div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+        <span id="redditDisplay">u/{{ uploaded_log.reddit_username }}</span>
+        <button type="button" id="redditEditButton" style="padding: 2px 8px;" onclick="document.getElementById('redditDisplay').hidden=true;this.hidden=true;document.getElementById('redditEditForm').style.display='flex';document.getElementById('redditInput').focus();">edit</button>
+        <form method="post" id="redditEditForm" style="display: none; align-items: center; gap: 6px; margin: 0;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="rename_reddit">
+            <span>u/</span><input type="text" id="redditInput" name="reddit_username" value="{{ uploaded_log.reddit_username }}" style="background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); padding: 2px 6px; font-family: inherit; font-size: inherit; width: 160px;">
+            <button type="submit" style="padding: 2px 8px;">save</button>
+            <button type="button" style="padding: 2px 8px;" onclick="document.getElementById('redditEditForm').style.display='none';document.getElementById('redditDisplay').hidden=false;document.getElementById('redditEditButton').hidden=false;">cancel</button>
+        </form>
+    </div>
+    <div class="meta-key">hash</div>
+    <div>{{ uploaded_log.content_hash }}</div>
     <div class="meta-key">created</div>
     <div>{{ uploaded_log.created_at|date:"Y-m-d H:i" }}</div>
 </div>

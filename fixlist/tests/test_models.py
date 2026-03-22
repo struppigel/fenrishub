@@ -115,6 +115,66 @@ _FRST_COMPLETE = (
 )
 
 
+class ContentHashTests(TestCase):
+    def test_content_hash_populated_on_create(self):
+        uploaded = UploadedLog.objects.create(
+            reddit_username='test_user',
+            original_filename='log.txt',
+            content='hello world',
+        )
+        self.assertTrue(uploaded.content_hash)
+        self.assertEqual(len(uploaded.content_hash), 32)
+
+    def test_content_hash_is_deterministic(self):
+        a = UploadedLog.objects.create(
+            upload_id='hash-a',
+            reddit_username='test_user',
+            original_filename='a.txt',
+            content='same content',
+        )
+        b = UploadedLog.objects.create(
+            upload_id='hash-b',
+            reddit_username='test_user',
+            original_filename='b.txt',
+            content='same content',
+        )
+        self.assertEqual(a.content_hash, b.content_hash)
+
+    def test_content_hash_differs_for_different_content(self):
+        a = UploadedLog.objects.create(
+            upload_id='diff-a',
+            reddit_username='test_user',
+            original_filename='a.txt',
+            content='content A',
+        )
+        b = UploadedLog.objects.create(
+            upload_id='diff-b',
+            reddit_username='test_user',
+            original_filename='b.txt',
+            content='content B',
+        )
+        self.assertNotEqual(a.content_hash, b.content_hash)
+
+    def test_content_hash_updates_on_content_change(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='hash-update',
+            reddit_username='test_user',
+            original_filename='log.txt',
+            content='original',
+        )
+        original_hash = uploaded.content_hash
+        uploaded.content = 'modified'
+        uploaded.save()
+        uploaded.refresh_from_db()
+        self.assertNotEqual(uploaded.content_hash, original_hash)
+
+    def test_compute_content_hash_matches_mmh3(self):
+        import mmh3
+        content = 'test string'
+        expected = format(mmh3.hash128(content.encode('utf-8'), signed=False), '032x')
+        self.assertEqual(UploadedLog.compute_content_hash(content), expected)
+
+
 class IncompleteLogFlagTests(TestCase):
     def _make_log(self, log_type, content):
         return UploadedLog.objects.create(

@@ -738,6 +738,46 @@ function insertAllStatus(status) {
     }
 }
 
+function addRemainingAsClean() {
+    if (!analyzedLines.length) {
+        alert('No analyzed lines.');
+        return;
+    }
+
+    const exclusions = ['ATTENTION', 'No File', '[X]', 'Access Denied', 'not found'];
+    let count = 0;
+
+    for (let index = 0; index < analyzedLines.length; index++) {
+        const entry = analyzedLines[index];
+        const effectiveStatus = entry.dominant_status || '?';
+        if (effectiveStatus !== '?') continue;
+        if (!entry.entry_type) continue;
+        if (exclusions.some((ex) => entry.line.includes(ex))) continue;
+
+        const lineKey = pendingOverrideKeyForEntry(entry, index);
+        if (pendingStatusChanges.has(lineKey)) continue;
+
+        pendingChangeSequence += 1;
+        pendingStatusChanges.set(lineKey, {
+            id: String(pendingChangeSequence),
+            order: pendingChangeSequence,
+            line: entry.line,
+            original_status: '?',
+            new_status: 'C',
+        });
+        count++;
+    }
+
+    if (count === 0) {
+        alert('No remaining parsed unknown entries to mark as clean.');
+        return;
+    }
+
+    applyPendingOverrides();
+    updateSummary(summarizeEffectiveStatuses(analyzedLines), analyzedLines.length);
+    renderLogLines();
+}
+
 function beginRuleWorkflow(target) {
     setRuleSubmitTarget(target);
 

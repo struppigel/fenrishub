@@ -5,6 +5,8 @@ import secrets
 import string
 import re
 
+import mmh3
+
 
 def get_default_rule_owner_id():
     """Resolve a stable owner id for rules that are created without an explicit owner."""
@@ -205,6 +207,7 @@ class UploadedLog(models.Model):
     log_type = models.CharField(max_length=16, choices=LOG_TYPE_CHOICES, default='Unknown')
     is_incomplete = models.BooleanField(default=False)
     content = models.TextField()
+    content_hash = models.CharField(max_length=18, blank=True, db_index=True)
     created_by = models.ForeignKey(
         User,
         null=True,
@@ -251,10 +254,16 @@ class UploadedLog(models.Model):
             raise ValidationError({'content': 'Uploaded content cannot be empty.'})
         self.reddit_username = username
 
+    @staticmethod
+    def compute_content_hash(content: str) -> str:
+        raw = (content or '').encode('utf-8')
+        return format(mmh3.hash128(raw, signed=False), '032x')
+
     def save(self, *args, **kwargs):
         self.clean()
         if not self.upload_id:
             self.upload_id = self._generate_unique_upload_id()
+        self.content_hash = self.compute_content_hash(self.content)
         super().save(*args, **kwargs)
 
     @classmethod
