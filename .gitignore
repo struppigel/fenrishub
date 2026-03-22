@@ -51,6 +51,9 @@ Fenris/
 .env
 .env.local
 
+# Claude Code
+.claude/
+
 # macOS
 .DS_Store
 
