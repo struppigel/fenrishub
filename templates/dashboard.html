@@ -43,6 +43,7 @@
 <div>
     <div class="button-group">
         <a href="{% url 'create_fixlist' %}"><button type="button">create new</button></a>
+        <a href="{% url 'fixlists_trash' %}"><button type="button"{% if fixlist_trash_count %} style="color: var(--la-warning-text);"{% endif %}>trash{% if fixlist_trash_count %} ({{ fixlist_trash_count }}){% endif %}</button></a>
     </div>
 
     <div class="divider"></div>
@@ -64,7 +65,7 @@
                 <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="delete">
-                    <button type="submit" class="action-btn delete-btn" onclick="return confirm('Delete this fixlist?');">delete</button>
+                    <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this fixlist to trash?');">trash</button>
                 </form>
             </div>
         </div>

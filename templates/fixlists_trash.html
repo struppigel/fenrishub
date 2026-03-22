@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+
+{% block title %}Trash - Fenris{% endblock %}
+
+{% block page_context_label %}fixlists{% endblock %}
+
+{% block extra_css %}
+<style>
+    .fixlist-actions .action-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 32px;
+        padding: 0 10px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-primary);
+        border: 1px solid var(--la-border);
+        font-size: 12px;
+        font-family: inherit;
+        line-height: 1;
+        text-decoration: none;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+
+    .fixlist-actions .action-btn:hover {
+        text-decoration: underline;
+    }
+
+    .fixlist-actions form {
+        display: inline;
+    }
+
+    .fixlist-actions .delete-btn {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+        border-color: var(--la-error-border);
+    }
+
+    .trash-controls {
+        margin-bottom: 12px;
+        justify-content: space-between;
+        width: 100%;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h3>trash</h3>
+
+<form id="emptyTrashForm" method="post" action="{% url 'fixlists_trash' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="empty_trash">
+</form>
+
+<div class="trash-controls button-group">
+    <a href="{% url 'dashboard' %}"><button type="button">back to fixlists</button></a>
+    <button type="submit" form="emptyTrashForm" {% if not fixlists %}disabled{% endif %} class="delete-btn" onclick="return confirm('Permanently delete all trashed fixlists?');">empty trash</button>
+</div>
+
+{% if fixlists %}
+    {% for fixlist in fixlists %}
+    <div class="fixlist-item">
+        <div style="flex: 1;">
+            <div class="fixlist-title">{{ fixlist.title }}</div>
+            <div class="fixlist-meta">
+                created {{ fixlist.created_at|date:"Y-m-d H:i" }} | deleted {{ fixlist.deleted_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }}
+            </div>
+        </div>
+        <div class="fixlist-actions">
+            <form method="post" action="{% url 'fixlists_trash' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="restore">
+                <input type="hidden" name="pk" value="{{ fixlist.pk }}">
+                <button type="submit" class="action-btn">restore</button>
+            </form>
+            <form method="post" action="{% url 'fixlists_trash' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete_permanent">
+                <input type="hidden" name="pk" value="{{ fixlist.pk }}">
+                <button type="submit" class="action-btn delete-btn" onclick="return confirm('Permanently delete this fixlist?');">delete</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="info-box">trash is empty.</div>
+{% endif %}
+{% endblock %}

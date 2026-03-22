@@ -88,7 +88,7 @@ class FixlistCrudViewTests(TestCase):
         self.assertEqual(fixlist.content, "new-content")
         self.assertEqual(fixlist.internal_note, "new-note")
 
-    def test_delete_fixlist_removes_record(self):
+    def test_delete_fixlist_moves_to_trash(self):
         fixlist = Fixlist.objects.create(owner=self.user, title="Delete Me", content="x")
 
         response = self.client.post(
@@ -96,9 +96,11 @@ class FixlistCrudViewTests(TestCase):
             {"action": "delete"},
         )
 
+        fixlist.refresh_from_db()
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse("dashboard"))
-        self.assertFalse(Fixlist.objects.filter(pk=fixlist.pk).exists())
+        self.assertIsNotNone(fixlist.deleted_at)
+        self.assertTrue(Fixlist.objects.filter(pk=fixlist.pk).exists())
 
     def test_view_fixlist_context_includes_guest_preview_url(self):
         fixlist = Fixlist.objects.create(
@@ -439,12 +441,12 @@ class UploadedLogViewTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse('uploaded_logs'))
-        self.assertEqual(first.total_line_count, 2)
+        self.assertEqual(first.total_line_count, 3)
         self.assertEqual(first.count_malware, 1)
-        self.assertEqual(first.count_unknown, 1)
-        self.assertEqual(second.total_line_count, 1)
+        self.assertEqual(first.count_unknown, 2)
+        self.assertEqual(second.total_line_count, 2)
         self.assertEqual(second.count_malware, 1)
-        self.assertEqual(second.count_unknown, 0)
+        self.assertEqual(second.count_unknown, 1)
 
     def test_username_filter_shows_only_matching_uploads(self):
         UploadedLog.objects.create(
@@ -562,6 +564,28 @@ class UploadedLogViewTests(TestCase):
         rendered_context = mock_render.call_args.args[2]
         self.assertEqual(response.status_code, 200)
         self.assertEqual(rendered_context.get('initial_upload_id'), uploaded.upload_id)
+
+    def test_log_analyzer_excludes_trashed_uploads(self):
+        from django.utils import timezone as tz
+        active = UploadedLog.objects.create(
+            upload_id='active-log',
+            reddit_username='reddit_name',
+            original_filename='active.txt',
+            content='payload',
+        )
+        trashed = UploadedLog.objects.create(
+            upload_id='trashed-log',
+            reddit_username='reddit_name',
+            original_filename='trashed.txt',
+            content='payload',
+            deleted_at=tz.now(),
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('log_analyzer'))
+
+        self.assertContains(response, 'active-log')
+        self.assertNotContains(response, 'trashed-log')
 
 
 class TrashViewTests(TestCase):

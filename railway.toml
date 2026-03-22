@@ -1,5 +1,5 @@
 [build]
-buildCommand = "python manage.py collectstatic --noinput"
+buildCommand = "python manage.py test && python manage.py collectstatic --noinput"
 
 [deploy]
 preDeployCommand = "python manage.py migrate && python manage.py ensure_superuser"
