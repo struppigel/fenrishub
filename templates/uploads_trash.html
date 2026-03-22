@@ -1,15 +1,11 @@
 {% extends 'base.html' %}
 
-{% block title %}Uploads - Fenris{% endblock %}
+{% block title %}Trash - Fenris{% endblock %}
 
 {% block page_context_label %}uploads{% endblock %}
 
 {% block extra_css %}
 <style>
-    .upload-select {
-        margin-right: 8px;
-    }
-
     .fixlist-actions .action-btn {
         display: inline-flex;
         align-items: center;
@@ -41,7 +37,7 @@
         border-color: var(--la-error-border);
     }
 
-    .merge-controls {
+    .trash-controls {
         margin-bottom: 12px;
         justify-content: space-between;
         width: 100%;
@@ -66,51 +62,32 @@
     .upload-stats .stat-i { color: var(--la-status-i); }
     .upload-stats .stat-j { color: var(--la-status-j); }
     .upload-stats .stat-u { color: var(--la-status-u); }
-
 </style>
 {% endblock %}
 
 {% block content %}
-<h3>uploaded logs</h3>
+<h3>trash</h3>
 
-<form id="mergeUploadsForm" method="post" action="{% url 'uploaded_logs' %}">
+<form id="emptyTrashForm" method="post" action="{% url 'uploads_trash' %}">
     {% csrf_token %}
-    <input type="hidden" name="action" value="merge">
+    <input type="hidden" name="action" value="empty_trash">
 </form>
 
-<form id="rescanUploadsStatsForm" method="post" action="{% url 'uploaded_logs' %}">
-    {% csrf_token %}
-    <input type="hidden" name="action" value="rescan_stats_all">
-</form>
-
-<form method="get" action="{% url 'uploaded_logs' %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">
-    <select name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px;">
-        <option value="">all users</option>
-        {% for username in all_usernames %}
-        <option value="{{ username }}" {% if username == username_filter %}selected{% endif %}>u/{{ username }}</option>
-        {% endfor %}
-    </select>
-    {% if username_filter %}<a href="{% url 'uploaded_logs' %}"><button type="button">clear</button></a>{% endif %}
-</form>
-
-<div class="merge-controls button-group">
-    <button type="submit" form="mergeUploadsForm" onclick="return confirmMerge();">merge selected</button>
-    <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan logs</button>
-    <a href="{% url 'upload_log' %}"><button type="button">upload new log</button></a>
-    <a href="{% url 'uploads_trash' %}"><button type="button"{% if trash_count %} style="color: var(--la-warning-text);"{% endif %}>trash{% if trash_count %} ({{ trash_count }}){% endif %}</button></a>
+<div class="trash-controls button-group">
+    <a href="{% url 'uploaded_logs' %}"><button type="button">back to uploads</button></a>
+    <button type="submit" form="emptyTrashForm" {% if not uploads %}disabled{% endif %} class="delete-btn" onclick="return confirm('Permanently delete all trashed uploads?');">empty trash</button>
 </div>
 
 {% if uploads %}
     {% for uploaded_log in uploads %}
     <div class="fixlist-item">
         <div style="display: flex; align-items: flex-start; gap: 10px; flex: 1;">
-            <input class="upload-select" form="mergeUploadsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">
             <div>
                 <div class="fixlist-title">
-                    <a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>
+                    <span class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}">{{ uploaded_log.upload_id }}</span>
                 </div>
                 <div class="fixlist-meta">
-                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}
+                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}
                 </div>
                 <div class="fixlist-meta upload-stats">
                     lines {{ uploaded_log.total_line_count }}
@@ -137,31 +114,22 @@
             </div>
         </div>
         <div class="fixlist-actions">
-            <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn">view</a>
-            <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}" class="action-btn">analyze</a>
-            <form method="post" action="{% url 'uploaded_logs' %}">
+            <form method="post" action="{% url 'uploads_trash' %}">
                 {% csrf_token %}
-                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="action" value="restore">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this upload to trash?');">delete</button>
+                <button type="submit" class="action-btn">restore</button>
+            </form>
+            <form method="post" action="{% url 'uploads_trash' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete_permanent">
+                <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                <button type="submit" class="action-btn delete-btn" onclick="return confirm('Permanently delete this upload?');">delete</button>
             </form>
         </div>
     </div>
     {% endfor %}
 {% else %}
-    <div class="info-box">no uploaded logs yet.</div>
+    <div class="info-box">trash is empty.</div>
 {% endif %}
-{% endblock %}
-
-{% block extra_js %}
-<script>
-function confirmMerge() {
-    const selected = document.querySelectorAll('input[name="selected_upload_ids"]:checked');
-    if (selected.length === 0) {
-        alert('Select at least one upload to merge.');
-        return false;
-    }
-    return confirm('Merge ' + selected.length + ' selected upload(s)?');
-}
-</script>
 {% endblock %}

@@ -26,7 +26,8 @@ class FixlistForm(forms.ModelForm):
 
 class UploadedLogForm(forms.Form):
     reddit_username = forms.CharField(max_length=20, required=True)
-    log_file = forms.FileField(required=True)
+    log_file = forms.FileField(required=False)
+    log_text = forms.CharField(required=False, widget=forms.Textarea)
 
     def clean_reddit_username(self):
         username = (self.cleaned_data.get('reddit_username') or '').strip()
@@ -37,7 +38,7 @@ class UploadedLogForm(forms.Form):
     def clean_log_file(self):
         uploaded_file = self.cleaned_data.get('log_file')
         if not uploaded_file:
-            raise forms.ValidationError('A .txt file is required.')
+            return None
 
         filename = (uploaded_file.name or '').strip()
         if not filename.lower().endswith('.txt'):
@@ -55,3 +56,13 @@ class UploadedLogForm(forms.Form):
         uploaded_file.seek(0)
         uploaded_file.decoded_content = decoded_content
         return uploaded_file
+
+    def clean(self):
+        cleaned = super().clean()
+        has_file = bool(cleaned.get('log_file'))
+        has_text = bool((cleaned.get('log_text') or '').strip())
+        if not has_file and not has_text:
+            raise forms.ValidationError('Provide either a .txt file or paste the log content.')
+        if has_file and has_text:
+            raise forms.ValidationError('Provide a file or pasted text, not both.')
+        return cleaned

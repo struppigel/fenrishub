@@ -11,6 +11,11 @@
     .upload-log-page input[type="text"] {
         color: var(--la-text-primary);
     }
+
+    .tab-active {
+        border-color: var(--la-focus);
+        color: var(--la-focus);
+    }
 </style>
 {% endblock %}
 
@@ -46,6 +51,11 @@ function copyUploadId(button) {
 }
 </script>
 
+<div class="button-group" style="margin-bottom: 12px;">
+    <button type="button" id="tabFile" onclick="switchTab('file')" class="tab-active">upload file</button>
+    <button type="button" id="tabPaste" onclick="switchTab('paste')">paste text</button>
+</div>
+
 <form method="post" enctype="multipart/form-data">
     {% csrf_token %}
     {% if form.non_field_errors %}
@@ -59,11 +69,19 @@ function copyUploadId(button) {
         {% endif %}
     </div>
 
-    <div class="form-group">
+    <div class="form-group" id="fileInputGroup">
         <label for="id_log_file">log file (.txt only)</label>
-        <input type="file" id="id_log_file" name="log_file" accept=".txt,text/plain" required>
+        <input type="file" id="id_log_file" name="log_file" accept=".txt,text/plain">
         {% if form.log_file.errors %}
             <div class="error-box">{{ form.log_file.errors|join:', ' }}</div>
+        {% endif %}
+    </div>
+
+    <div class="form-group" id="pasteInputGroup" style="display:none;">
+        <label for="id_log_text">paste log content</label>
+        <textarea id="id_log_text" name="log_text" rows="12" style="width:100%; font-family:inherit; font-size:12px; background:var(--la-bg-1); color:var(--la-text-main); border:1px solid var(--la-border); padding:8px; box-sizing:border-box; resize:vertical;">{{ form.log_text.value|default:'' }}</textarea>
+        {% if form.log_text.errors %}
+            <div class="error-box">{{ form.log_text.errors|join:', ' }}</div>
         {% endif %}
     </div>
 
@@ -71,5 +89,17 @@ function copyUploadId(button) {
         <button type="submit">upload</button>
     </div>
 </form>
+
+<script>
+function switchTab(tab) {
+    const isFile = tab === 'file';
+    document.getElementById('fileInputGroup').style.display = isFile ? '' : 'none';
+    document.getElementById('pasteInputGroup').style.display = isFile ? 'none' : '';
+    document.getElementById('tabFile').classList.toggle('tab-active', isFile);
+    document.getElementById('tabPaste').classList.toggle('tab-active', !isFile);
+}
+
+{% if form.log_text.value %}switchTab('paste');{% endif %}
+</script>
 </div>
 {% endblock %}

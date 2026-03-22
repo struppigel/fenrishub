@@ -7,6 +7,7 @@ urlpatterns = [
     path('account/password/', views.change_password_view, name='change_password'),
     path('dashboard/', views.dashboard_view, name='dashboard'),
     path('uploads/', views.uploaded_logs_view, name='uploaded_logs'),
+    path('uploads/trash/', views.uploads_trash_view, name='uploads_trash'),
     path('uploads/<str:upload_id>/', views.view_uploaded_log, name='view_uploaded_log'),
     path('fixlists/create/', views.create_fixlist_view, name='create_fixlist'),
     path('fixlists/analyze/', views.log_analyzer_view, name='log_analyzer'),

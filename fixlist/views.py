@@ -11,6 +11,7 @@ from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.db.models import F, Q
 from django.db import transaction
+from django.utils import timezone
 from io import BytesIO
 import json
 import re
@@ -551,12 +552,19 @@ def upload_log_view(request):
                 )
 
         if form.is_valid():
-            log_file = form.cleaned_data['log_file']
+            log_file = form.cleaned_data.get('log_file')
+            if log_file:
+                filename = log_file.name
+                content = getattr(log_file, 'decoded_content', '')
+            else:
+                filename = 'pasted.txt'
+                content = form.cleaned_data['log_text']
             created_log = UploadedLog.objects.create(
                 reddit_username=form.cleaned_data['reddit_username'],
-                original_filename=log_file.name,
-                content=getattr(log_file, 'decoded_content', ''),
+                original_filename=filename,
+                content=content,
             )
+            created_log.recalculate_log_type()
             try:
                 created_log.recalculate_analysis_stats()
             except Exception as e:
@@ -593,9 +601,10 @@ def uploaded_logs_view(request):
 
         if action == 'delete':
             upload_id = request.POST.get('upload_id', '').strip()
-            uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
-            uploaded_log.delete()
-            messages.success(request, f'Upload {upload_id} deleted.')
+            uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
+            uploaded_log.deleted_at = timezone.now()
+            uploaded_log.save(update_fields=['deleted_at'])
+            messages.success(request, f'Upload {upload_id} moved to trash.')
             return redirect('uploaded_logs')
 
         if action == 'merge':
@@ -637,8 +646,11 @@ def uploaded_logs_view(request):
             selected_username = usernames[0]
             retained_id = ordered_logs[0].upload_id
             merged_content = _merge_logs_content(ordered_logs)
+            now = timezone.now()
             for log in ordered_logs:
-                log.delete()
+                log.upload_id = log.upload_id + '-trsh'
+                log.deleted_at = now
+                log.save(update_fields=['upload_id', 'deleted_at'])
             merged_upload = UploadedLog.objects.create(
                 upload_id=retained_id,
                 reddit_username=selected_username,
@@ -646,6 +658,7 @@ def uploaded_logs_view(request):
                 content=merged_content,
                 created_by=request.user,
             )
+            merged_upload.recalculate_log_type()
             try:
                 merged_upload.recalculate_analysis_stats()
             except Exception as e:
@@ -655,7 +668,7 @@ def uploaded_logs_view(request):
 
             messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
             return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
-        
+
         if action == 'confirm_merge':
             selected_ids = request.POST.getlist('selected_upload_ids')
             selected_username = request.POST.get('selected_username', '').strip()
@@ -685,8 +698,11 @@ def uploaded_logs_view(request):
             
             retained_id = ordered_logs[0].upload_id
             merged_content = _merge_logs_content(ordered_logs)
+            now = timezone.now()
             for log in ordered_logs:
-                log.delete()
+                log.upload_id = log.upload_id + '-trsh'
+                log.deleted_at = now
+                log.save(update_fields=['upload_id', 'deleted_at'])
             merged_upload = UploadedLog.objects.create(
                 upload_id=retained_id,
                 reddit_username=selected_username,
@@ -694,6 +710,7 @@ def uploaded_logs_view(request):
                 content=merged_content,
                 created_by=request.user,
             )
+            merged_upload.recalculate_log_type()
             try:
                 merged_upload.recalculate_analysis_stats()
             except Exception as e:
@@ -708,9 +725,10 @@ def uploaded_logs_view(request):
             rescanned_count = 0
             failed_upload_ids = []
 
-            for uploaded_log in UploadedLog.objects.all().iterator():
+            for uploaded_log in UploadedLog.objects.filter(deleted_at__isnull=True).iterator():
                 try:
                     uploaded_log.recalculate_analysis_stats()
+                    uploaded_log.recalculate_log_type()
                     rescanned_count += 1
                 except Exception:
                     failed_upload_ids.append(uploaded_log.upload_id)
@@ -734,29 +752,69 @@ def uploaded_logs_view(request):
         messages.error(request, 'Invalid action.')
         return redirect('uploaded_logs')
 
-    uploads = UploadedLog.objects.all()
-    return render(request, 'uploaded_logs.html', {'uploads': uploads})
+    username_filter = request.GET.get('u', '').strip()
+    uploads = UploadedLog.objects.filter(deleted_at__isnull=True)
+    if username_filter:
+        uploads = uploads.filter(reddit_username=username_filter)
+    all_usernames = UploadedLog.objects.filter(deleted_at__isnull=True).values_list('reddit_username', flat=True).distinct().order_by('reddit_username')
+    trash_count = UploadedLog.objects.filter(deleted_at__isnull=False).count()
+    return render(request, 'uploaded_logs.html', {'uploads': uploads, 'username_filter': username_filter, 'all_usernames': all_usernames, 'trash_count': trash_count})
 
 
 @login_required
 @require_http_methods(["GET", "POST"])
 def view_uploaded_log(request, upload_id):
     """View a single uploaded log by memorable ID."""
-    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
+    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
 
     if request.method == 'POST' and request.POST.get('action') == 'delete':
-        uploaded_log.delete()
-        messages.success(request, f'Upload {upload_id} deleted.')
+        uploaded_log.deleted_at = timezone.now()
+        uploaded_log.save(update_fields=['deleted_at'])
+        messages.success(request, f'Upload {upload_id} moved to trash.')
         return redirect('uploaded_logs')
 
     return render(request, 'view_uploaded_log.html', {'uploaded_log': uploaded_log})
 
 
 @login_required
+@require_http_methods(["GET", "POST"])
+def uploads_trash_view(request):
+    """Trash bin for soft-deleted uploaded logs."""
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+
+        if action == 'restore':
+            upload_id = request.POST.get('upload_id', '').strip()
+            uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=False)
+            uploaded_log.deleted_at = None
+            uploaded_log.save(update_fields=['deleted_at'])
+            messages.success(request, f'Upload {upload_id} restored.')
+            return redirect('uploads_trash')
+
+        if action == 'delete_permanent':
+            upload_id = request.POST.get('upload_id', '').strip()
+            uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=False)
+            uploaded_log.delete()
+            messages.success(request, f'Upload {upload_id} permanently deleted.')
+            return redirect('uploads_trash')
+
+        if action == 'empty_trash':
+            count, _ = UploadedLog.objects.filter(deleted_at__isnull=False).delete()
+            messages.success(request, f'Trash emptied ({count} upload(s) permanently deleted).')
+            return redirect('uploads_trash')
+
+        messages.error(request, 'Invalid action.')
+        return redirect('uploads_trash')
+
+    trashed = UploadedLog.objects.filter(deleted_at__isnull=False).order_by('-deleted_at')
+    return render(request, 'uploads_trash.html', {'uploads': trashed})
+
+
+@login_required
 @require_http_methods(["GET"])
 def uploaded_log_content_api(request, upload_id):
     """Return upload content for analyzer prefill."""
-    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
+    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
     return JsonResponse(
         {
             'upload_id': uploaded_log.upload_id,

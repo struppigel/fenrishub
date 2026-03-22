@@ -170,10 +170,39 @@ class ClassificationRule(models.Model):
         return f"{self.status} [{self.match_type}] {self.source_text[:80]} ({owner_name})"
 
 
+_FRST_MARKER = 'Scan result of Farbar Recovery Scan Tool'
+_ADDITION_MARKER = 'Additional scan result of Farbar Recovery Scan Tool'
+_FIXLIST_MARKER = 'Fix result of Farbar Recovery Scan Tool'
+
+
+def detect_log_type(content: str) -> str:
+    has_frst = _FRST_MARKER in content
+    has_addition = _ADDITION_MARKER in content
+    if has_frst and has_addition:
+        return 'FRST&Addition'
+    if has_frst:
+        return 'FRST'
+    if has_addition:
+        return 'Addition'
+    if content.lstrip().startswith(_FIXLIST_MARKER):
+        return 'Fixlist'
+    return 'Unknown'
+
+
 class UploadedLog(models.Model):
-    upload_id = models.CharField(max_length=48, unique=True, db_index=True)
+    LOG_TYPE_CHOICES = [
+        ('FRST', 'FRST'),
+        ('Addition', 'Addition'),
+        ('FRST&Addition', 'FRST&Addition'),
+        ('Fixlist', 'Fixlist'),
+        ('Unknown', 'Unknown'),
+    ]
+
+    upload_id = models.CharField(max_length=64, unique=True, db_index=True)
     reddit_username = models.CharField(max_length=20, db_index=True)
     original_filename = models.CharField(max_length=255)
+    log_type = models.CharField(max_length=16, choices=LOG_TYPE_CHOICES, default='Unknown')
+    is_incomplete = models.BooleanField(default=False)
     content = models.TextField()
     created_by = models.ForeignKey(
         User,
@@ -184,6 +213,7 @@ class UploadedLog(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    deleted_at = models.DateTimeField(null=True, blank=True, default=None)
     total_line_count = models.PositiveIntegerField(default=0)
     count_malware = models.PositiveIntegerField(default=0)
     count_pup = models.PositiveIntegerField(default=0)
@@ -244,12 +274,26 @@ class UploadedLog(models.Model):
         for status_code, field_name in self.ANALYSIS_STATUS_FIELD_MAP.items():
             setattr(self, field_name, max(0, int(status_counts.get(status_code, 0) or 0)))
 
-    def recalculate_analysis_stats(self):
-        from .analyzer import analyze_log_text
+    ANALYZED_LOG_TYPES = {'FRST', 'Addition', 'FRST&Addition'}
 
-        analysis = analyze_log_text(self.content or '')
-        self.apply_analysis_summary(analysis.get('summary', {}))
-        self.save(update_fields=self.analysis_stat_update_fields())
+    def recalculate_analysis_stats(self):
+        if self.log_type in self.ANALYZED_LOG_TYPES:
+            from .analyzer import analyze_log_text, _detect_incomplete_log_warning
+            content = self.content or ''
+            analysis = analyze_log_text(content)
+            self.apply_analysis_summary(analysis.get('summary', {}))
+            self.is_incomplete = _detect_incomplete_log_warning(content) is not None
+        else:
+            content = self.content or ''
+            self.total_line_count = len([l for l in content.splitlines() if l.strip()])
+            for field_name in self.ANALYSIS_STATUS_FIELD_MAP.values():
+                setattr(self, field_name, 0)
+            self.is_incomplete = False
+        self.save(update_fields=[*self.analysis_stat_update_fields(), 'is_incomplete'])
+
+    def recalculate_log_type(self):
+        self.log_type = detect_log_type(self.content or '')
+        self.save(update_fields=['log_type', 'updated_at'])
 
     @classmethod
     def _generate_unique_upload_id(cls):
