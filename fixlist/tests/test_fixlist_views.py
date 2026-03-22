@@ -1,4 +1,5 @@
 ﻿import json
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser, User
@@ -805,4 +806,76 @@ class TrashViewTests(TestCase):
         trashed.refresh_from_db()
         self.assertEqual(active.count_malware, 1)
         self.assertEqual(trashed.count_malware, 0)
+
+
+class PurgeOldTrashTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='alice', password='password123')
+        self.client.login(username='alice', password='password123')
+
+    def _make_log(self, upload_id, **kwargs):
+        return UploadedLog.objects.create(
+            upload_id=upload_id,
+            reddit_username='test_user',
+            original_filename='x.txt',
+            content='payload',
+            **kwargs,
+        )
+
+    def _old_deleted_at(self):
+        from django.utils import timezone as tz
+        return tz.now() - timedelta(days=31)
+
+    def _recent_deleted_at(self):
+        from django.utils import timezone as tz
+        return tz.now() - timedelta(days=1)
+
+    def test_delete_from_list_purges_old_trash(self):
+        old = self._make_log('old-trash', deleted_at=self._old_deleted_at())
+        target = self._make_log('new-victim')
+
+        self.client.post(reverse('uploaded_logs'), {'action': 'delete', 'upload_id': target.upload_id})
+
+        self.assertFalse(UploadedLog.objects.filter(pk=old.pk).exists())
+
+    def test_delete_from_list_keeps_recent_trash(self):
+        recent = self._make_log('recent-trash', deleted_at=self._recent_deleted_at())
+        target = self._make_log('new-victim')
+
+        self.client.post(reverse('uploaded_logs'), {'action': 'delete', 'upload_id': target.upload_id})
+
+        self.assertTrue(UploadedLog.objects.filter(pk=recent.pk).exists())
+
+    def test_delete_from_detail_purges_old_trash(self):
+        old = self._make_log('old-trash', deleted_at=self._old_deleted_at())
+        target = self._make_log('new-victim')
+
+        self.client.post(
+            reverse('view_uploaded_log', args=[target.upload_id]),
+            {'action': 'delete'},
+        )
+
+        self.assertFalse(UploadedLog.objects.filter(pk=old.pk).exists())
+
+    def test_merge_purges_old_trash(self):
+        old = self._make_log('old-trash', deleted_at=self._old_deleted_at())
+        first = self._make_log('merge-a')
+        second = self._make_log('merge-b')
+
+        self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'merge', 'selected_upload_ids': [first.upload_id, second.upload_id]},
+        )
+
+        self.assertFalse(UploadedLog.objects.filter(pk=old.pk).exists())
+
+    def test_purge_does_not_delete_active_logs(self):
+        active = self._make_log('active-log')
+        target = self._make_log('new-victim')
+        # put something old in trash to trigger purge
+        self._make_log('old-trash', deleted_at=self._old_deleted_at())
+
+        self.client.post(reverse('uploaded_logs'), {'action': 'delete', 'upload_id': target.upload_id})
+
+        self.assertTrue(UploadedLog.objects.filter(pk=active.pk).exists())
 

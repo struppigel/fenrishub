@@ -12,6 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.db.models import F, Q
 from django.db import transaction
 from django.utils import timezone
+from datetime import timedelta
 from io import BytesIO
 import json
 import re
@@ -19,6 +20,11 @@ import re
 from .analyzer import analyze_log_text, parse_rule_line, inspect_line_matches, VALID_STATUSES
 from .forms import UploadedLogForm
 from .models import Fixlist, AccessLog, ClassificationRule, UploadedLog
+
+
+def _purge_old_trash():
+    cutoff = timezone.now() - timedelta(days=30)
+    UploadedLog.objects.filter(deleted_at__isnull=False, deleted_at__lt=cutoff).delete()
 
 
 CONFLICT_ACTION_UPDATE_EXISTING = 'update_existing_status'
@@ -604,6 +610,7 @@ def uploaded_logs_view(request):
             uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
             uploaded_log.deleted_at = timezone.now()
             uploaded_log.save(update_fields=['deleted_at'])
+            _purge_old_trash()
             messages.success(request, f'Upload {upload_id} moved to trash.')
             return redirect('uploaded_logs')
 
@@ -651,6 +658,7 @@ def uploaded_logs_view(request):
                 log.upload_id = log.upload_id + '-trsh'
                 log.deleted_at = now
                 log.save(update_fields=['upload_id', 'deleted_at'])
+            _purge_old_trash()
             merged_upload = UploadedLog.objects.create(
                 upload_id=retained_id,
                 reddit_username=selected_username,
@@ -703,6 +711,7 @@ def uploaded_logs_view(request):
                 log.upload_id = log.upload_id + '-trsh'
                 log.deleted_at = now
                 log.save(update_fields=['upload_id', 'deleted_at'])
+            _purge_old_trash()
             merged_upload = UploadedLog.objects.create(
                 upload_id=retained_id,
                 reddit_username=selected_username,
@@ -770,6 +779,7 @@ def view_uploaded_log(request, upload_id):
     if request.method == 'POST' and request.POST.get('action') == 'delete':
         uploaded_log.deleted_at = timezone.now()
         uploaded_log.save(update_fields=['deleted_at'])
+        _purge_old_trash()
         messages.success(request, f'Upload {upload_id} moved to trash.')
         return redirect('uploaded_logs')
 
