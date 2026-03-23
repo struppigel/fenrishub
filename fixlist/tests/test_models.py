@@ -221,11 +221,47 @@ class IncompleteLogFlagTests(TestCase):
         log.refresh_from_db()
         self.assertFalse(log.is_incomplete)
 
-    def test_fixlist_type_is_never_incomplete(self):
-        log = self._make_log('Fixlist', 'Fix result of Farbar Recovery Scan Tool\nsome fix')
+    def test_fixlog_type_is_never_incomplete(self):
+        log = self._make_log('Fixlog', 'Fix result of Farbar Recovery Scan Tool\nsome fix')
         log.recalculate_analysis_stats()
         log.refresh_from_db()
         self.assertFalse(log.is_incomplete)
+
+
+class FixlogStatsTests(TestCase):
+    def _make_fixlog(self, content):
+        log = UploadedLog.objects.create(
+            upload_id='test-fixlog-stats',
+            reddit_username='test_user',
+            original_filename='fixlog.txt',
+            log_type='Fixlog',
+            content=content,
+        )
+        log.recalculate_analysis_stats()
+        log.refresh_from_db()
+        return log
+
+    def test_counts_all_status_messages(self):
+        content = (
+            'Fix result of Farbar Recovery Scan Tool\n'
+            'HKLM\\Something => removed successfully\n'
+            'HKLM\\Other => Error setting value.\n'
+            '"HKU\\Run\\App" => not found\n'
+            'D:\\Games\\Foo => moved successfully\n'
+            'some line without arrow\n'
+        )
+        log = self._make_fixlog(content)
+        self.assertEqual(log.fixlog_total, 4)
+        self.assertEqual(log.fixlog_success, 2)
+        self.assertEqual(log.fixlog_not_found, 1)
+        self.assertEqual(log.fixlog_error, 1)
+
+    def test_no_status_lines(self):
+        log = self._make_fixlog('Fix result of Farbar Recovery Scan Tool\njust text\n')
+        self.assertEqual(log.fixlog_total, 0)
+        self.assertEqual(log.fixlog_success, 0)
+        self.assertEqual(log.fixlog_not_found, 0)
+        self.assertEqual(log.fixlog_error, 0)
 
 
 class DetectLogTypeTests(TestCase):
@@ -241,10 +277,10 @@ class DetectLogTypeTests(TestCase):
             'Addition',
         )
 
-    def test_fixlist(self):
+    def test_fixlog(self):
         self.assertEqual(
             detect_log_type('Fix result of Farbar Recovery Scan Tool\nline2'),
-            'Fixlist',
+            'Fixlog',
         )
 
     def test_frst_and_addition_when_both_present(self):
@@ -265,8 +301,8 @@ class DetectLogTypeTests(TestCase):
         content = 'Additional scan result of Farbar Recovery Scan Tool\nline2'
         self.assertEqual(detect_log_type(content), 'Addition')
 
-    def test_leading_whitespace_ignored_for_fixlist(self):
+    def test_leading_whitespace_ignored_for_fixlog(self):
         self.assertEqual(
             detect_log_type('\n\nFix result of Farbar Recovery Scan Tool\nline2'),
-            'Fixlist',
+            'Fixlog',
         )

@@ -188,7 +188,7 @@ def detect_log_type(content: str) -> str:
     if has_addition:
         return 'Addition'
     if content.lstrip().startswith(_FIXLIST_MARKER):
-        return 'Fixlist'
+        return 'Fixlog'
     return 'Unknown'
 
 
@@ -197,7 +197,7 @@ class UploadedLog(models.Model):
         ('FRST', 'FRST'),
         ('Addition', 'Addition'),
         ('FRST&Addition', 'FRST&Addition'),
-        ('Fixlist', 'Fixlist'),
+        ('Fixlog', 'Fixlog'),
         ('Unknown', 'Unknown'),
     ]
 
@@ -228,6 +228,11 @@ class UploadedLog(models.Model):
     count_info = models.PositiveIntegerField(default=0)
     count_junk = models.PositiveIntegerField(default=0)
     count_unknown = models.PositiveIntegerField(default=0)
+    fixlog_total = models.PositiveIntegerField(default=0)
+    fixlog_success = models.PositiveIntegerField(default=0)
+    fixlog_not_found = models.PositiveIntegerField(default=0)
+    fixlog_error = models.PositiveIntegerField(default=0)
+    FIXLOG_STAT_FIELDS = ['fixlog_total', 'fixlog_success', 'fixlog_not_found', 'fixlog_error']
     ANALYSIS_STATUS_FIELD_MAP = {
         'B': 'count_malware',
         'P': 'count_pup',
@@ -268,7 +273,7 @@ class UploadedLog(models.Model):
 
     @classmethod
     def analysis_stat_fields(cls):
-        return ['total_line_count', *cls.ANALYSIS_STATUS_FIELD_MAP.values()]
+        return ['total_line_count', *cls.ANALYSIS_STATUS_FIELD_MAP.values(), *cls.FIXLOG_STAT_FIELDS]
 
     @classmethod
     def analysis_stat_update_fields(cls):
@@ -293,13 +298,42 @@ class UploadedLog(models.Model):
             analysis = analyze_log_text(content)
             self.apply_analysis_summary(analysis.get('summary', {}))
             self.is_incomplete = _detect_incomplete_log_warning(content) is not None
+            for field_name in self.FIXLOG_STAT_FIELDS:
+                setattr(self, field_name, 0)
         else:
             content = self.content or ''
             self.total_line_count = len([l for l in content.splitlines() if l.strip()])
             for field_name in self.ANALYSIS_STATUS_FIELD_MAP.values():
                 setattr(self, field_name, 0)
             self.is_incomplete = False
+            if self.log_type == 'Fixlog':
+                self._compute_fixlog_stats(content)
+            else:
+                for field_name in self.FIXLOG_STAT_FIELDS:
+                    setattr(self, field_name, 0)
         self.save(update_fields=[*self.analysis_stat_update_fields(), 'is_incomplete'])
+
+    def _compute_fixlog_stats(self, content):
+        total = 0
+        success = 0
+        not_found = 0
+        error = 0
+        for line in content.splitlines():
+            idx = line.find(' => ')
+            if idx == -1:
+                continue
+            total += 1
+            status = line[idx + 4:]
+            if 'successfully' in status:
+                success += 1
+            elif 'not found' in status:
+                not_found += 1
+            elif 'Error' in status:
+                error += 1
+        self.fixlog_total = total
+        self.fixlog_success = success
+        self.fixlog_not_found = not_found
+        self.fixlog_error = error
 
     def recalculate_log_type(self):
         self.log_type = detect_log_type(self.content or '')

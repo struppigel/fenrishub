@@ -50,7 +50,7 @@
     .upload-id-link.log-type-frst            { color: var(--la-log-type-frst) !important; }
     .upload-id-link.log-type-addition        { color: var(--la-log-type-addition) !important; }
     .upload-id-link.log-type-frstaddition    { color: var(--la-log-type-frst-addition) !important; }
-    .upload-id-link.log-type-fixlist         { color: var(--la-log-type-fixlist) !important; }
+    .upload-id-link.log-type-fixlog          { color: var(--la-log-type-fixlog) !important; }
     .upload-id-link.log-type-unknown         { color: var(--la-log-type-unknown) !important; }
 
     .upload-stats .stat-b { color: var(--la-status-b); }
@@ -109,6 +109,11 @@
                             <span class="stat-match">-> 0% known</span>
                         {% endif %}
                     {% endwith %}
+                    {% elif uploaded_log.log_type == 'Fixlog' %}
+                    | {{ uploaded_log.fixlog_total }} ops |
+                    <span class="stat-c">ok {{ uploaded_log.fixlog_success }}</span>
+                    <span class="stat-u">n/f {{ uploaded_log.fixlog_not_found }}</span>
+                    <span class="stat-b">err {{ uploaded_log.fixlog_error }}</span>
                     {% endif %}
                 </div>
             </div>

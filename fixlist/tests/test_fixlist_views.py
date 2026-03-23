@@ -630,7 +630,7 @@ class UploadedLogViewTests(TestCase):
             ('FRST', 'log-type-frst'),
             ('Addition', 'log-type-addition'),
             ('FRST&Addition', 'log-type-frstaddition'),
-            ('Fixlist', 'log-type-fixlist'),
+            ('Fixlog', 'log-type-fixlog'),
             ('Unknown', 'log-type-unknown'),
         ]
         self.client.login(username='alice', password='password123')
