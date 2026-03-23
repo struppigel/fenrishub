@@ -357,6 +357,22 @@ class UploadedLog(models.Model):
         raise ValidationError('Unable to generate a unique upload id.')
 
 
+class FixlistSnippet(models.Model):
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fixlist_snippets')
+    name = models.CharField(max_length=255)
+    content = models.TextField()
+    is_shared = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        unique_together = ('owner', 'name')
+
+    def __str__(self):
+        return f"{self.name} ({self.owner.username})"
+
+
 class ParsedFilepathExclusion(models.Model):
     normalized_filepath = models.TextField(unique=True)
     note = models.TextField(blank=True)

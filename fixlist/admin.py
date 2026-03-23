@@ -5,7 +5,7 @@ from django.template.response import TemplateResponse
 from django.urls import path, reverse
 
 from .analyzer import import_rules_from_lines
-from .models import AccessLog, ClassificationRule, Fixlist, ParsedFilepathExclusion
+from .models import AccessLog, ClassificationRule, Fixlist, FixlistSnippet, ParsedFilepathExclusion
 
 
 class RuleImportForm(forms.Form):
@@ -174,6 +174,15 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             'form': form,
         }
         return TemplateResponse(request, 'admin/fixlist/classificationrule/import_rules.html', context)
+
+
+@admin.register(FixlistSnippet)
+class FixlistSnippetAdmin(admin.ModelAdmin):
+    list_display = ('name', 'owner', 'updated_at')
+    list_filter = ('owner',)
+    search_fields = ('name', 'content')
+    readonly_fields = ('created_at', 'updated_at')
+    fields = ('owner', 'name', 'content', 'created_at', 'updated_at')
 
 
 @admin.register(ParsedFilepathExclusion)

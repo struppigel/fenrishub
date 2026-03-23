@@ -55,6 +55,24 @@
     .bulk-filter-toggle input[type="checkbox"] {
         accent-color: var(--la-focus);
     }
+
+    #snippetSelect {
+        padding: 4px 6px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-main);
+        border: 1px solid var(--la-border);
+        font-family: inherit;
+        font-size: 12px;
+        height: 28px;
+        max-width: 160px;
+    }
+
+    #snippetSelect:focus {
+        outline: none;
+        border-color: var(--la-focus);
+    }
+
+
 </style>
 {% endblock %}
 
@@ -82,9 +100,12 @@
             <button type="button" class="bulk-status-button status-w" data-insert-status="!" aria-label="add all warn" title="add all warn">!</button>
             <label class="bulk-filter-toggle" for="bulkIgnoreFirewallRules">
                 <input type="checkbox" id="bulkIgnoreFirewallRules" checked>
-                ignore FirewallRules:
+                ignore FW
             </label>
         </div>
+        <select id="snippetSelect" title="Insert snippet at cursor">
+            <option value="">snippets</option>
+        </select>
         <button type="button" id="saveFixlistButton" class="save-fixlist-button">save as fixlist</button>
     </div>
 </div>
@@ -230,6 +251,7 @@ window.logAnalyzerConfig = {
     createFixlistUrl: "{% url 'create_fixlist' %}",
     uploadedLogContentUrlTemplate: "{% url 'uploaded_log_content_api' '__UPLOAD_ID__' %}",
     initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
+    snippetsApiUrl: "{% url 'snippets_api' %}",
     isSuperuser: {{ is_superuser|yesno:"true,false" }},
 };
 </script>
@@ -238,4 +260,59 @@ window.logAnalyzerConfig = {
 <script src="{% static 'js/log_analyzer/conflict_wizard.js' %}"></script>
 <script src="{% static 'js/log_analyzer/rule_preview.js' %}"></script>
 <script src="{% static 'js/log_analyzer/bootstrap.js' %}"></script>
+<script>
+(function() {
+    const snippetSelect = document.getElementById('snippetSelect');
+    if (!snippetSelect) return;
+
+    let snippetsData = [];
+
+    async function loadSnippets() {
+        const url = (window.logAnalyzerConfig || {}).snippetsApiUrl;
+        if (!url) return;
+        try {
+            const resp = await fetch(url, {
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            snippetsData = data.snippets || [];
+            snippetSelect.innerHTML = '<option value="">snippets</option>';
+            snippetsData.forEach(function(s) {
+                const opt = document.createElement('option');
+                opt.value = s.id;
+                opt.textContent = s.name;
+                snippetSelect.appendChild(opt);
+            });
+        } catch (e) {
+            // silent
+        }
+    }
+
+    snippetSelect.addEventListener('change', function() {
+        const selectedId = parseInt(snippetSelect.value, 10);
+        if (!selectedId) return;
+
+        const snippet = snippetsData.find(function(s) { return s.id === selectedId; });
+        if (!snippet) return;
+
+        const textarea = document.getElementById('selectedLines');
+        if (!textarea) return;
+
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const text = textarea.value;
+        const inserted = snippet.content;
+
+        textarea.value = text.substring(0, start) + inserted + text.substring(end);
+        textarea.selectionStart = textarea.selectionEnd = start + inserted.length;
+        textarea.focus();
+
+        // Reset combobox to placeholder
+        snippetSelect.value = '';
+    });
+
+    loadSnippets();
+})();
+</script>
 {% endblock %}
