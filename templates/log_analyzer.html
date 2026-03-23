@@ -266,6 +266,15 @@ window.logAnalyzerConfig = {
     if (!snippetSelect) return;
 
     let snippetsData = [];
+    let lastCursorPos = 0;
+
+    // Save cursor position right before the combobox steals focus
+    const selectedLines = document.getElementById('selectedLines');
+    snippetSelect.addEventListener('mousedown', function() {
+        if (selectedLines) {
+            lastCursorPos = selectedLines.selectionStart;
+        }
+    });
 
     async function loadSnippets() {
         const url = (window.logAnalyzerConfig || {}).snippetsApiUrl;
@@ -299,17 +308,26 @@ window.logAnalyzerConfig = {
         const textarea = document.getElementById('selectedLines');
         if (!textarea) return;
 
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
         const text = textarea.value;
-        const inserted = snippet.content;
+        const pos = lastCursorPos;
+        let inserted = snippet.content.replace(/\r\n/g, '\n');
+        if (!inserted.endsWith('\n')) inserted += '\n';
 
-        textarea.value = text.substring(0, start) + inserted + text.substring(end);
-        textarea.selectionStart = textarea.selectionEnd = start + inserted.length;
-        textarea.focus();
+        // If cursor is not at start of a line, prepend newline
+        if (pos > 0 && text[pos - 1] !== '\n') inserted = '\n' + inserted;
 
-        // Reset combobox to placeholder
+        const before = text.substring(0, pos);
+        const after = text.substring(pos);
+        textarea.value = before + inserted + after;
+        // Read back actual length after browser normalization
+        const cursorPos = textarea.value.length - after.length;
+        lastCursorPos = cursorPos;
+
+        // Reset combobox before focusing textarea
         snippetSelect.value = '';
+
+        textarea.focus();
+        textarea.setSelectionRange(cursorPos, cursorPos);
     });
 
     loadSnippets();
