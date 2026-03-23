@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load rule_tags %}
 
 {% block title %}Rules - Fenris{% endblock %}
 
@@ -168,6 +169,7 @@
 
     .filter-tabs a:hover {
         color: var(--la-text-primary);
+        text-decoration: underline;
     }
 
     .filter-tabs a.active {
@@ -208,6 +210,16 @@
         font-size: 12px;
     }
 
+    .search-mode-select {
+        padding: 6px 8px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-main);
+        border: 1px solid var(--la-border);
+        font-family: inherit;
+        font-size: 12px;
+        flex-shrink: 0;
+    }
+
     .checkbox-label {
         display: inline-flex;
         align-items: center;
@@ -222,6 +234,47 @@
         color: var(--la-text-muted);
         margin-bottom: 8px;
     }
+
+    .pagination {
+        display: flex;
+        gap: 4px;
+        margin-top: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        font-size: 12px;
+    }
+
+    .pagination a {
+        padding: 4px 8px;
+        color: var(--la-text-muted);
+        text-decoration: none;
+        border: 1px solid var(--la-border);
+        background-color: var(--la-bg-1);
+    }
+
+    .pagination a:hover {
+        color: var(--la-text-primary);
+    }
+
+    .pagination .current-page {
+        padding: 4px 8px;
+        color: var(--la-text-primary);
+        border: 1px solid var(--la-text-primary);
+        background-color: var(--la-bg-1);
+    }
+
+    .pagination .ellipsis {
+        padding: 4px 4px;
+        color: var(--la-text-muted);
+    }
+
+    .rule-source .parsed-entry-type { color: var(--la-parsed-entry-type); }
+    .rule-source .parsed-clsid { color: var(--la-parsed-clsid); }
+    .rule-source .parsed-name { color: var(--la-parsed-name); }
+    .rule-source .parsed-filepath { color: var(--la-parsed-filepath); }
+    .rule-source .parsed-filename { color: var(--la-parsed-filename); }
+    .rule-source .parsed-company { color: var(--la-parsed-company); }
+    .rule-source .parsed-arguments { color: var(--la-parsed-arguments); }
 </style>
 {% endblock %}
 
@@ -306,9 +359,9 @@
     <div class="divider"></div>
 
     <div class="filter-tabs">
-        <a href="?filter=own{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}" {% if filter_mode == 'own' %}class="active"{% endif %}>own</a>
-        <a href="?filter=others{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}" {% if filter_mode == 'others' %}class="active"{% endif %}>others</a>
-        <a href="?filter=all{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}" {% if filter_mode == 'all' %}class="active"{% endif %}>all</a>
+        <a href="?filter=own{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}" {% if filter_mode == 'own' %}class="active"{% endif %}>own</a>
+        <a href="?filter=others{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}" {% if filter_mode == 'others' %}class="active"{% endif %}>others</a>
+        <a href="?filter=all{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}" {% if filter_mode == 'all' %}class="active"{% endif %}>all</a>
         <span class="spacer"></span>
         {% if filter_mode == 'own' %}
         <button type="button" onclick="showCreate()">add rule</button>
@@ -319,7 +372,11 @@
         <input type="hidden" name="filter" value="{{ filter_mode }}">
         {% if filter_status %}<input type="hidden" name="status" value="{{ filter_status }}">{% endif %}
         {% if filter_match %}<input type="hidden" name="match" value="{{ filter_match }}">{% endif %}
-        <input type="text" name="q" value="{{ search_q }}" placeholder="Search rules...">
+        <select name="search_mode" class="search-mode-select">
+            <option value="text" {% if search_mode == 'text' %}selected{% endif %}>text search</option>
+            <option value="line" {% if search_mode == 'line' %}selected{% endif %}>match by line</option>
+        </select>
+        <input type="text" name="q" value="{{ search_q }}" placeholder="{% if search_mode == 'line' %}Paste a log line...{% else %}Search rules...{% endif %}">
         <button type="submit">search</button>
         {% if search_q %}<a href="?filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}"><button type="button">clear</button></a>{% endif %}
     </form>
@@ -339,15 +396,15 @@
         </select>
     </div>
 
-    <div class="rule-count">{{ rules|length }} rule{{ rules|length|pluralize }} shown (max 500)</div>
+    <div class="rule-count">{{ page_obj.paginator.count }} rule{{ page_obj.paginator.count|pluralize }} found{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
 
-    {% if rules %}
-        {% for rule in rules %}
+    {% if page_obj %}
+        {% for rule in page_obj %}
         <div class="rule-item{% if not rule.is_enabled %} disabled{% endif %}">
             <div class="rule-row">
                 <span class="rule-status-badge {{ rule.status_css_class }}">{{ rule.status }}</span>
                 <span class="rule-match-type">{{ rule.get_match_type_display }}</span>
-                <span class="rule-source" title="{{ rule.source_text }}">{{ rule.source_text|truncatechars:120 }}</span>
+                <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
                 {% if filter_mode != 'own' %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
                 {% if rule.owner_id == request.user.id %}
                 <div class="rule-actions">
@@ -364,6 +421,26 @@
         <div class="info-box">
             no rules found.
         </div>
+    {% endif %}
+
+    {% if page_obj.paginator.num_pages > 1 %}
+    <div class="pagination">
+        {% if page_obj.has_previous %}
+        <a href="?page={{ page_obj.previous_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}">prev</a>
+        {% endif %}
+        {% for num in page_obj.paginator.page_range %}
+            {% if num == page_obj.number %}
+            <span class="current-page">{{ num }}</span>
+            {% elif num == 1 or num == page_obj.paginator.num_pages or num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
+            <a href="?page={{ num }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}">{{ num }}</a>
+            {% elif num == 2 or num == page_obj.paginator.num_pages|add:"-1" %}
+            <span class="ellipsis">&hellip;</span>
+            {% endif %}
+        {% endfor %}
+        {% if page_obj.has_next %}
+        <a href="?page={{ page_obj.next_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}">next</a>
+        {% endif %}
+    </div>
     {% endif %}
 </div>
 
@@ -400,5 +477,10 @@ function applyFilter(param, value) {
     }
     window.location = url;
 }
+
+document.querySelector('.search-mode-select').addEventListener('change', function () {
+    const input = document.querySelector('.search-bar input[name="q"]');
+    input.placeholder = this.value === 'line' ? 'Paste a log line...' : 'Search rules...';
+});
 </script>
 {% endblock %}

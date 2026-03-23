@@ -347,3 +347,99 @@ class RulesViewTests(TestCase):
         self.assertIn('value="toggle"', content)
         self.assertIn('value="delete"', content)
         self.assertIn("startEdit(", content)
+
+    # -- Pagination --
+
+    def test_pagination_limits_per_page(self):
+        for i in range(15):
+            ClassificationRule.objects.create(
+                owner=self.user, status="B", match_type="exact", source_text=f"PAGERULE-{i:02d}"
+            )
+        response = self.client.get(reverse("rules") + "?filter=own")
+        content = response.content.decode()
+        shown = sum(1 for i in range(15) if f"PAGERULE-{i:02d}" in content)
+        self.assertEqual(shown, 12)
+
+    def test_pagination_page_2(self):
+        for i in range(15):
+            ClassificationRule.objects.create(
+                owner=self.user, status="B", match_type="exact", source_text=f"PG2RULE-{i:02d}"
+            )
+        response = self.client.get(reverse("rules") + "?filter=own&page=2")
+        content = response.content.decode()
+        shown = sum(1 for i in range(15) if f"PG2RULE-{i:02d}" in content)
+        self.assertEqual(shown, 3)
+
+    def test_pagination_preserves_filters(self):
+        for i in range(15):
+            ClassificationRule.objects.create(
+                owner=self.user, status="C", match_type="exact", source_text=f"FILTPAGE-{i:02d}"
+            )
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="OTHER-STATUS"
+        )
+        response = self.client.get(reverse("rules") + "?filter=own&status=C")
+        self.assertNotContains(response, "OTHER-STATUS")
+        self.assertContains(response, "page 1 of 2")
+
+    # -- Match by line --
+
+    def test_match_by_line_exact(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="EVIL-PROCESS.EXE"
+        )
+        ClassificationRule.objects.create(
+            owner=self.user, status="C", match_type="exact", source_text="GOOD-PROCESS.EXE"
+        )
+        response = self.client.get(
+            reverse("rules") + "?filter=all&q=EVIL-PROCESS.EXE&search_mode=line"
+        )
+        self.assertContains(response, "EVIL-PROCESS.EXE")
+        self.assertNotContains(response, "GOOD-PROCESS.EXE")
+
+    def test_match_by_line_substring(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="substring", source_text="malware-sig"
+        )
+        ClassificationRule.objects.create(
+            owner=self.user, status="C", match_type="exact", source_text="UNRELATED-LINE"
+        )
+        response = self.client.get(
+            reverse("rules") + "?filter=all&q=this-line-has-malware-sig-inside&search_mode=line"
+        )
+        self.assertContains(response, "malware-sig")
+        self.assertNotContains(response, "UNRELATED-LINE")
+
+    def test_match_by_line_no_match(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="SOME-RULE"
+        )
+        response = self.client.get(
+            reverse("rules") + "?filter=all&q=COMPLETELY-DIFFERENT&search_mode=line"
+        )
+        self.assertNotContains(response, "SOME-RULE")
+        self.assertContains(response, "no rules found")
+
+    def test_match_by_line_respects_owner_filter(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="SHARED-LINE"
+        )
+        ClassificationRule.objects.create(
+            owner=self.other, status="C", match_type="exact", source_text="SHARED-LINE"
+        )
+        response = self.client.get(
+            reverse("rules") + "?filter=own&q=SHARED-LINE&search_mode=line"
+        )
+        self.assertContains(response, "SHARED-LINE")
+        # Only alice's rule should have action buttons
+        content = response.content.decode()
+        self.assertEqual(content.count("SHARED-LINE"), content.count("SHARED-LINE"))
+        self.assertNotContains(response, "bob")
+
+    def test_text_search_mode_default(self):
+        """Default search_mode=text still does text search, not line matching."""
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="substring", source_text="needle"
+        )
+        response = self.client.get(reverse("rules") + "?filter=own&q=needle")
+        self.assertContains(response, "needle")

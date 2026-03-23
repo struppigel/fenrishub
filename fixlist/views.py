@@ -17,7 +17,7 @@ from io import BytesIO
 import json
 import re
 
-from .analyzer import analyze_log_text, parse_rule_line, inspect_line_matches, VALID_STATUSES
+from .analyzer import analyze_log_text, parse_rule_line, inspect_line_matches, VALID_STATUSES, _load_rule_buckets
 from .forms import UploadedLogForm
 from .models import Fixlist, AccessLog, ClassificationRule, FixlistSnippet, UploadedLog
 
@@ -317,6 +317,12 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
     create_count = 0
     update_count = 0
 
+    buckets = _load_rule_buckets()
+    user_rules_index = {
+        (r.status, r.match_type, r.source_text): r
+        for r in ClassificationRule.objects.filter(owner=owner)
+    }
+
     for change in sorted(pending_changes, key=lambda item: item['order']):
         line = change['line']
         new_status = change['new_status']
@@ -336,20 +342,15 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
         if not parsed:
             continue
 
-        lookup = {
-            'owner': owner,
-            'status': parsed['status'],
-            'match_type': parsed['match_type'],
-            'source_text': parsed['source_text'],
-        }
-        existing_rule = ClassificationRule.objects.filter(**lookup).first()
+        key = (parsed['status'], parsed['match_type'], parsed['source_text'])
+        existing_rule = user_rules_index.get(key)
         action = 'update' if existing_rule else 'create'
         if action == 'create':
             create_count += 1
         else:
             update_count += 1
 
-        inspection = inspect_line_matches(line)
+        inspection = inspect_line_matches(line, buckets=buckets)
         dominant_existing = inspection['dominant_status']
         status_codes = inspection['status_codes']
         dominant_matching_rules = [
@@ -1312,6 +1313,7 @@ def snippets_api(request):
 @require_http_methods(["GET", "POST"])
 def rules_view(request):
     """Manage classification rules: create, edit, delete, view others'."""
+    from django.core.paginator import Paginator
     from django.db.models import Q
 
     STATUS_MAP = dict(ClassificationRule.STATUS_CHOICES)
@@ -1399,6 +1401,7 @@ def rules_view(request):
     filter_status = request.GET.get('status', '')
     filter_match = request.GET.get('match', '')
     search_q = request.GET.get('q', '').strip()
+    search_mode = request.GET.get('search_mode', 'text')
 
     if filter_mode == 'all':
         rules = ClassificationRule.objects.all().select_related('owner')
@@ -1413,18 +1416,33 @@ def rules_view(request):
     if filter_match and filter_match in dict(ClassificationRule.MATCH_TYPE_CHOICES):
         rules = rules.filter(match_type=filter_match)
     if search_q:
-        rules = rules.filter(
-            Q(source_text__icontains=search_q) | Q(description__icontains=search_q)
-        )
+        if search_mode == 'line':
+            from django.db.models import Case, When
+            inspection = inspect_line_matches(search_q)
+            ordered_ids = []
+            seen = set()
+            for m in inspection['matches'] + inspection.get('shadowed_matches', []):
+                if m['id'] not in seen:
+                    ordered_ids.append(m['id'])
+                    seen.add(m['id'])
+            rules = rules.filter(id__in=ordered_ids).order_by(
+                Case(*[When(id=rid, then=pos) for pos, rid in enumerate(ordered_ids)])
+            )
+        else:
+            rules = rules.filter(
+                Q(source_text__icontains=search_q) | Q(description__icontains=search_q)
+            )
 
-    rules = rules[:500]
+    paginator = Paginator(rules, 12)
+    page_obj = paginator.get_page(request.GET.get('page'))
 
     context = {
-        'rules': rules,
+        'page_obj': page_obj,
         'filter_mode': filter_mode,
         'filter_status': filter_status,
         'filter_match': filter_match,
         'search_q': search_q,
+        'search_mode': search_mode,
         'status_choices': ClassificationRule.STATUS_CHOICES,
         'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
         'status_map': STATUS_MAP,
