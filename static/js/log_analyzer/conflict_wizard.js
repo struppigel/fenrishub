@@ -17,17 +17,43 @@ function statusDominance(statuses) {
     return '?';
 }
 
-function precedenceSummary(newStatus, existingStatus) {
-    const winner = statusDominance([newStatus, existingStatus]);
-    const winnerLabel = STATUS_LABEL_MAP[winner] || 'unknown';
+function matchTypePrecedenceRank(matchType) {
+    const index = MATCH_TYPE_PRECEDENCE_ORDER.indexOf(matchType);
+    return index === -1 ? MATCH_TYPE_PRECEDENCE_ORDER.length : index;
+}
+
+function precedenceSummary(newStatus, existingStatus, newMatchType, existingMatchType) {
     const newLabel = STATUS_LABEL_MAP[newStatus] || 'unknown';
     const existingLabel = STATUS_LABEL_MAP[existingStatus] || 'unknown';
     if (!newStatus || !existingStatus) {
         return 'Insufficient data to compute precedence.';
     }
+
+    const newRank = matchTypePrecedenceRank(newMatchType);
+    const existingRank = matchTypePrecedenceRank(existingMatchType);
+    const newMatchLabel = MATCH_TYPE_LABEL_MAP[newMatchType] || newMatchType || '?';
+    const existingMatchLabel = MATCH_TYPE_LABEL_MAP[existingMatchType] || existingMatchType || '?';
+
     if (newStatus === existingStatus) {
+        const winner = statusDominance([newStatus, existingStatus]);
+        const winnerLabel = STATUS_LABEL_MAP[winner] || 'unknown';
         return `Both rules resolve to ${winner} (${winnerLabel}), so either rule set produces the same status.`;
     }
+
+    if (newMatchType && existingMatchType && newRank !== existingRank) {
+        const matchWinner = newRank < existingRank ? 'new rule' : 'existing rule';
+        const matchWinnerStatus = newRank < existingRank ? newStatus : existingStatus;
+        const matchWinnerLabel = newRank < existingRank ? newLabel : existingLabel;
+        const higherType = newRank < existingRank ? newMatchLabel : existingMatchLabel;
+        const lowerType = newRank < existingRank ? existingMatchLabel : newMatchLabel;
+        return (
+            `new: ${newStatus} (${newLabel}) [${newMatchLabel}], existing: ${existingStatus} (${existingLabel}) [${existingMatchLabel}]. ` +
+            `If both stay enabled, ${matchWinnerStatus} (${matchWinnerLabel}) wins because ${higherType} takes precedence over ${lowerType} (${matchWinner}).`
+        );
+    }
+
+    const winner = statusDominance([newStatus, existingStatus]);
+    const winnerLabel = STATUS_LABEL_MAP[winner] || 'unknown';
     const winnerSource = winner === newStatus ? 'new rule' : 'existing rule';
     return (
         `new: ${newStatus} (${newLabel}), existing: ${existingStatus} (${existingLabel}). ` +
@@ -497,7 +523,7 @@ function renderConflictWizardStep() {
     ]);
 
     if (precedenceEl) {
-        precedenceEl.textContent = precedenceSummary(newRule.to_status, existingRule.status);
+        precedenceEl.textContent = precedenceSummary(newRule.to_status, existingRule.status, newRule.match_type, existingRule.match_type);
     }
 
     renderConflictWizardActions(item);

@@ -19,6 +19,7 @@ urlpatterns = [
     path('api/fixlist/rules-preview/', views.preview_pending_rule_changes_api, name='preview_pending_rule_changes_api'),
     path('api/fixlist/rules-persist/', views.persist_pending_rule_changes_api, name='persist_pending_rule_changes_api'),
     path('fixlists/snippets/', views.snippets_view, name='snippets'),
+    path('rules/', views.rules_view, name='rules'),
     path('api/snippets/', views.snippets_api, name='snippets_api'),
     path('fixlist/<int:pk>/', views.view_fixlist, name='view_fixlist'),
     path('share/<str:token>/', views.shared_fixlist_view, name='shared_fixlist'),

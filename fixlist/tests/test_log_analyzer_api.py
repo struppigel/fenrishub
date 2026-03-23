@@ -1052,4 +1052,148 @@ class LogAnalyzerApiTests(TestCase):
         self.assertIn("low_memory", warnings_by_code)
         self.assertIn("Memory information incomplete", warnings_by_code["low_memory"]["message"])
 
+    def test_match_type_precedence_parsed_over_substring(self):
+        """Parsed entry match takes precedence over a substring match on the same line."""
+        from ..analyzer import inspect_line_matches, parse_rule_line
+
+        self.client.login(username="analyzer", password="password123")
+        service_line = (
+            r"R3 TestService; C:\Program Files\TestApp\service.exe "
+            r"[123456 2026-01-01] (TestCorp -> TestApp)"
+        )
+
+        parsed_rule = parse_rule_line(
+            service_line,
+            status=ClassificationRule.STATUS_CLEAN,
+            source_name="test-suite",
+        )
+        self.assertIsNotNone(parsed_rule)
+        ClassificationRule.objects.create(owner=self.user, **parsed_rule)
+
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+            source_text="TestService",
+        )
+
+        inspection = inspect_line_matches(service_line)
+
+        self.assertEqual(inspection["effective_matcher"], "parsed_entry")
+        self.assertEqual(inspection["dominant_status"], ClassificationRule.STATUS_CLEAN)
+        shadowed_matchers = {m["matcher"] for m in inspection["shadowed_matches"]}
+        self.assertIn("substring", shadowed_matchers)
+
+    def test_match_type_precedence_exact_over_parsed(self):
+        """Exact match takes precedence over a parsed entry match."""
+        from ..analyzer import inspect_line_matches, parse_rule_line
+
+        self.client.login(username="analyzer", password="password123")
+        service_line = (
+            r"R3 ExactTestSvc; C:\Program Files\ExactApp\svc.exe "
+            r"[654321 2026-02-01] (ExactCorp -> ExactApp)"
+        )
+
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text=service_line,
+        )
+
+        parsed_rule = parse_rule_line(
+            service_line,
+            status=ClassificationRule.STATUS_CLEAN,
+            source_name="test-suite",
+        )
+        self.assertIsNotNone(parsed_rule)
+        ClassificationRule.objects.create(owner=self.user, **parsed_rule)
+
+        inspection = inspect_line_matches(service_line)
+
+        self.assertEqual(inspection["effective_matcher"], "exact")
+        self.assertEqual(inspection["dominant_status"], ClassificationRule.STATUS_MALWARE)
+        shadowed_matchers = {m["matcher"] for m in inspection["shadowed_matches"]}
+        self.assertIn("parsed_entry", shadowed_matchers)
+
+    def test_match_type_precedence_filepath_over_regex(self):
+        """Filepath match takes precedence over a regex match."""
+        from ..analyzer import inspect_line_matches
+
+        self.client.login(username="analyzer", password="password123")
+        # Use a FRST-style line so extract_any_frst_path can find the path
+        line_with_path = (
+            r"2026-01-01 12:00 - 2026-01-01 12:00 - 0001234 _____ "
+            r"C:\Windows\System32\fptest.dll"
+        )
+
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_FILEPATH,
+            source_text=r"C:\Windows\System32\fptest.dll",
+            filepath=r"C:\Windows\System32\fptest.dll",
+            normalized_filepath=r"c:\windows\system32\fptest.dll",
+        )
+
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_REGEX,
+            source_text=r"fptest\.dll",
+        )
+
+        inspection = inspect_line_matches(line_with_path)
+
+        self.assertEqual(inspection["effective_matcher"], "filepath")
+        self.assertEqual(inspection["dominant_status"], ClassificationRule.STATUS_CLEAN)
+        shadowed_matchers = {m["matcher"] for m in inspection["shadowed_matches"]}
+        self.assertIn("regex", shadowed_matchers)
+
+    def test_preview_conflict_includes_match_type_for_precedence(self):
+        """Preview API includes match_type on both new and existing rules for precedence display."""
+        from ..analyzer import parse_rule_line
+
+        self.client.login(username="analyzer", password="password123")
+        service_line = (
+            r"R3 PrecedenceSvc; C:\Program Files\PrecApp\svc.exe "
+            r"[111111 2026-01-15] (PrecCorp -> PrecApp)"
+        )
+
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+            source_text="PrecedenceSvc",
+        )
+
+        response = self.client.post(
+            reverse("preview_pending_rule_changes_api"),
+            data=json.dumps(
+                {
+                    "pending_changes": [
+                        {
+                            "id": "mt-1",
+                            "line": service_line,
+                            "original_status": "?",
+                            "new_status": ClassificationRule.STATUS_CLEAN,
+                            "order": 1,
+                        }
+                    ]
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+
+        rule_change = payload["rule_changes"][0]
+        self.assertIn("match_type", rule_change)
+
+        overlap_conflicts = payload["contradictions"]["overlaps_other_status_rules"]
+        if overlap_conflicts:
+            for match in overlap_conflicts[0]["matching_rules"]:
+                self.assertIn("match_type", match)
+
 

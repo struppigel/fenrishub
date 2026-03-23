@@ -873,41 +873,27 @@ body.question-cursor-mode .line-text {
     cursor: wait;
 }
 
-.status-b {
-    color: var(--la-status-b);
-}
+.status-picker-option.status-b { color: var(--la-status-b); }
+.status-picker-option.status-p { color: var(--la-status-p); }
+.status-picker-option.status-c { color: var(--la-status-c); }
+.status-picker-option.status-w { color: var(--la-status-w); }
+.status-picker-option.status-g { color: var(--la-status-g); }
+.status-picker-option.status-s { color: var(--la-status-s); }
+.status-picker-option.status-i { color: var(--la-status-i); }
+.status-picker-option.status-j { color: var(--la-status-j); }
+.status-picker-option.status-unknown { color: var(--la-status-unknown); }
 
-.status-p {
-    color: var(--la-status-p);
-}
 
-.status-c {
-    color: var(--la-status-c);
-}
-
-.status-w {
-    color: var(--la-status-w);
-}
-
-.status-g {
-    color: var(--la-status-g);
-}
-
-.status-s {
-    color: var(--la-status-s);
-}
-
-.status-i {
-    color: var(--la-status-i);
-}
-
-.status-j {
-    color: var(--la-status-j);
-}
-
-.status-unknown {
-    color: var(--la-status-unknown);
-}
+/* Override .log-line base color when a status class is applied */
+.log-line.status-b { color: var(--la-status-b); }
+.log-line.status-p { color: var(--la-status-p); }
+.log-line.status-c { color: var(--la-status-c); }
+.log-line.status-w { color: var(--la-status-w); }
+.log-line.status-g { color: var(--la-status-g); }
+.log-line.status-s { color: var(--la-status-s); }
+.log-line.status-i { color: var(--la-status-i); }
+.log-line.status-j { color: var(--la-status-j); }
+.log-line.status-unknown { color: var(--la-status-unknown); }
 
 .log-line.copied .status-badge,
 .log-line.copied .line-text {

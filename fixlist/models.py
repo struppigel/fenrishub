@@ -123,6 +123,12 @@ class ClassificationRule(models.Model):
         (STATUS_UNKNOWN, 'Unknown'),
     ]
 
+    STATUS_CSS_CLASS_MAP = {
+        'B': 'status-b', 'P': 'status-p', 'C': 'status-c',
+        '!': 'status-w', 'G': 'status-g', 'S': 'status-s',
+        'I': 'status-i', 'J': 'status-j', '?': 'status-unknown',
+    }
+
     MATCH_EXACT = 'exact'
     MATCH_SUBSTRING = 'substring'
     MATCH_REGEX = 'regex'
@@ -134,7 +140,7 @@ class ClassificationRule(models.Model):
         (MATCH_SUBSTRING, 'Substring'),
         (MATCH_REGEX, 'Regex'),
         (MATCH_FILEPATH, 'File path'),
-        (MATCH_PARSED_ENTRY, 'Parsed FRST entry'),
+        (MATCH_PARSED_ENTRY, 'Parsed'),
     ]
 
     status = models.CharField(max_length=1, choices=STATUS_CHOICES)
@@ -167,6 +173,10 @@ class ClassificationRule(models.Model):
     class Meta:
         ordering = ['status', 'match_type', 'source_text']
         unique_together = ('owner', 'status', 'match_type', 'source_text')
+
+    @property
+    def status_css_class(self):
+        return self.STATUS_CSS_CLASS_MAP.get(self.status, 'status-unknown')
 
     def __str__(self):
         owner_name = self.owner.username if self.owner_id else 'unknown'

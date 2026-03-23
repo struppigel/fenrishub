@@ -1,0 +1,404 @@
+{% extends 'base.html' %}
+
+{% block title %}Rules - Fenris{% endblock %}
+
+{% block page_context_label %}rules{% endblock %}
+
+{% block extra_css %}
+<style>
+    .rule-item {
+        padding: 5px 8px;
+        border-bottom: 1px solid var(--la-border-muted);
+    }
+
+    .rule-item:nth-child(odd) {
+        background-color: var(--la-bg-2);
+    }
+
+    .rule-item:nth-child(even) {
+        background-color: var(--la-bg-0);
+    }
+
+    .rule-item:hover {
+        background-color: var(--la-bg-hover);
+    }
+
+    .rule-item.disabled {
+        opacity: 0.5;
+    }
+
+    .rule-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .rule-status-badge {
+        display: inline-block;
+        min-width: 20px;
+        text-align: center;
+        font-weight: 700;
+        border: 1px solid var(--la-border);
+        background-color: var(--la-bg-0);
+        padding: 0 4px;
+        line-height: 1.2;
+        font-size: 12px;
+        flex-shrink: 0;
+    }
+
+    .rule-match-type {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        flex-shrink: 0;
+        width: 70px;
+    }
+
+    .rule-source {
+        font-size: 12px;
+        color: var(--la-text-neutral);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+        flex: 1;
+    }
+
+    .rule-owner {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        flex-shrink: 0;
+    }
+
+    .rule-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex-shrink: 0;
+    }
+
+    .rule-actions form {
+        display: flex;
+    }
+
+    .rule-description {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        margin-top: 1px;
+        padding-left: 108px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .rule-act {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 24px;
+        padding: 0 8px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-primary);
+        border: 1px solid var(--la-border);
+        font-size: 11px;
+        font-family: inherit;
+        line-height: 1;
+        cursor: pointer;
+    }
+
+    .rule-act:hover {
+        text-decoration: underline;
+    }
+
+    .rule-act-del {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+        border-color: var(--la-error-border);
+    }
+
+    .rule-form-section {
+        margin-bottom: 16px;
+        padding: 10px;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border);
+    }
+
+    .rule-form-section textarea {
+        min-height: 60px;
+    }
+
+    .rule-form-section select {
+        width: 100%;
+        padding: 8px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-main);
+        border: 1px solid var(--la-border);
+        font-family: inherit;
+        font-size: 12px;
+    }
+
+    .rule-form-section select:focus {
+        outline: none;
+        border-color: var(--la-focus);
+    }
+
+    #createSection, #editSection {
+        display: none;
+    }
+
+    .filter-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .filter-tabs .spacer {
+        flex: 1;
+    }
+
+    .filter-tabs a {
+        padding: 4px 10px;
+        font-size: 12px;
+        color: var(--la-text-muted);
+        text-decoration: none;
+        border: 1px solid var(--la-border);
+        background-color: var(--la-bg-1);
+    }
+
+    .filter-tabs a:hover {
+        color: var(--la-text-primary);
+    }
+
+    .filter-tabs a.active {
+        color: var(--la-text-primary);
+        border-color: var(--la-text-primary);
+    }
+
+    .search-bar {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 10px;
+    }
+
+    .search-bar input[type="text"] {
+        flex: 1;
+        padding: 6px 8px;
+        font-size: 12px;
+    }
+
+    .search-bar button {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+
+    .filter-dropdowns {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+    }
+
+    .filter-dropdowns select {
+        padding: 4px 8px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-main);
+        border: 1px solid var(--la-border);
+        font-family: inherit;
+        font-size: 12px;
+    }
+
+    .checkbox-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--la-text-neutral);
+        cursor: pointer;
+    }
+
+    .rule-count {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        margin-bottom: 8px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div>
+    <div id="createSection" class="rule-form-section">
+        <h3>new rule</h3>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create">
+            <div class="form-group">
+                <label for="createStatus">status</label>
+                <select id="createStatus" name="status" required>
+                    {% for code, label in status_choices %}
+                    <option value="{{ code }}">{{ code }} - {{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="createMatchType">match type</label>
+                <select id="createMatchType" name="match_type" required>
+                    {% for code, label in match_type_choices %}
+                    <option value="{{ code }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="createSourceText">source text</label>
+                <textarea id="createSourceText" name="source_text" placeholder="Rule matching pattern..." required></textarea>
+            </div>
+            <div class="form-group">
+                <label for="createDescription">description (optional)</label>
+                <input type="text" id="createDescription" name="description" placeholder="What this rule matches...">
+            </div>
+            <div class="button-group">
+                <button type="submit">create</button>
+                <button type="button" onclick="cancelForm()">cancel</button>
+            </div>
+        </form>
+    </div>
+
+    <div id="editSection" class="rule-form-section">
+        <h3>edit rule</h3>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="edit">
+            <input type="hidden" name="pk" id="editPk">
+            <div class="form-group">
+                <label for="editStatus">status</label>
+                <select id="editStatus" name="status" required>
+                    {% for code, label in status_choices %}
+                    <option value="{{ code }}">{{ code }} - {{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="editMatchType">match type</label>
+                <select id="editMatchType" name="match_type" required>
+                    {% for code, label in match_type_choices %}
+                    <option value="{{ code }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="editSourceText">source text</label>
+                <textarea id="editSourceText" name="source_text" required></textarea>
+            </div>
+            <div class="form-group">
+                <label for="editDescription">description</label>
+                <input type="text" id="editDescription" name="description">
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label"><input type="checkbox" name="is_enabled" id="editIsEnabled" checked> enabled</label>
+            </div>
+            <div class="button-group">
+                <button type="submit">save</button>
+                <button type="button" onclick="cancelForm()">cancel</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="filter-tabs">
+        <a href="?filter=own{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}" {% if filter_mode == 'own' %}class="active"{% endif %}>own</a>
+        <a href="?filter=others{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}" {% if filter_mode == 'others' %}class="active"{% endif %}>others</a>
+        <a href="?filter=all{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}" {% if filter_mode == 'all' %}class="active"{% endif %}>all</a>
+        <span class="spacer"></span>
+        {% if filter_mode == 'own' %}
+        <button type="button" onclick="showCreate()">add rule</button>
+        {% endif %}
+    </div>
+
+    <form method="get" class="search-bar">
+        <input type="hidden" name="filter" value="{{ filter_mode }}">
+        {% if filter_status %}<input type="hidden" name="status" value="{{ filter_status }}">{% endif %}
+        {% if filter_match %}<input type="hidden" name="match" value="{{ filter_match }}">{% endif %}
+        <input type="text" name="q" value="{{ search_q }}" placeholder="Search rules...">
+        <button type="submit">search</button>
+        {% if search_q %}<a href="?filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}"><button type="button">clear</button></a>{% endif %}
+    </form>
+
+    <div class="filter-dropdowns">
+        <select onchange="applyFilter('status', this.value)">
+            <option value="">all statuses</option>
+            {% for code, label in status_choices %}
+            <option value="{{ code }}" {% if filter_status == code %}selected{% endif %}>{{ code }} - {{ label }}</option>
+            {% endfor %}
+        </select>
+        <select onchange="applyFilter('match', this.value)">
+            <option value="">all match types</option>
+            {% for code, label in match_type_choices %}
+            <option value="{{ code }}" {% if filter_match == code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="rule-count">{{ rules|length }} rule{{ rules|length|pluralize }} shown (max 500)</div>
+
+    {% if rules %}
+        {% for rule in rules %}
+        <div class="rule-item{% if not rule.is_enabled %} disabled{% endif %}">
+            <div class="rule-row">
+                <span class="rule-status-badge {{ rule.status_css_class }}">{{ rule.status }}</span>
+                <span class="rule-match-type">{{ rule.get_match_type_display }}</span>
+                <span class="rule-source" title="{{ rule.source_text }}">{{ rule.source_text|truncatechars:120 }}</span>
+                {% if filter_mode != 'own' %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
+                {% if rule.owner_id == request.user.id %}
+                <div class="rule-actions">
+                    <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
+                    <button type="button" class="rule-act" onclick="startEdit({{ rule.pk }}, '{{ rule.status|escapejs }}', '{{ rule.match_type|escapejs }}', `{{ rule.source_text|escapejs }}`, '{{ rule.description|escapejs }}', {{ rule.is_enabled|yesno:'true,false' }})">edit</button>
+                    <form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act rule-act-del" onclick="return confirm('Delete this rule?');">delete</button></form>
+                </div>
+                {% endif %}
+            </div>
+            {% if rule.description %}<div class="rule-description">{{ rule.description }}</div>{% endif %}
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="info-box">
+            no rules found.
+        </div>
+    {% endif %}
+</div>
+
+<script>
+function startEdit(pk, status, matchType, sourceText, description, isEnabled) {
+    document.getElementById('editPk').value = pk;
+    document.getElementById('editStatus').value = status;
+    document.getElementById('editMatchType').value = matchType;
+    document.getElementById('editSourceText').value = sourceText;
+    document.getElementById('editDescription').value = description;
+    document.getElementById('editIsEnabled').checked = isEnabled;
+    document.getElementById('editSection').style.display = 'block';
+    document.getElementById('createSection').style.display = 'none';
+    document.getElementById('editSourceText').focus();
+}
+
+function showCreate() {
+    document.getElementById('editSection').style.display = 'none';
+    document.getElementById('createSection').style.display = 'block';
+    document.getElementById('createSourceText').focus();
+}
+
+function cancelForm() {
+    document.getElementById('editSection').style.display = 'none';
+    document.getElementById('createSection').style.display = 'none';
+}
+
+function applyFilter(param, value) {
+    const url = new URL(window.location);
+    if (value) {
+        url.searchParams.set(param, value);
+    } else {
+        url.searchParams.delete(param);
+    }
+    window.location = url;
+}
+</script>
+{% endblock %}

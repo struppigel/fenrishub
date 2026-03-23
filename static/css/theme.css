@@ -74,3 +74,14 @@
     --la-log-type-fixlog: #d38cff;
     --la-log-type-unknown: #7a7a7a;
 }
+
+/* Status color utility classes */
+.status-b { color: var(--la-status-b); }
+.status-p { color: var(--la-status-p); }
+.status-c { color: var(--la-status-c); }
+.status-w { color: var(--la-status-w); }
+.status-g { color: var(--la-status-g); }
+.status-s { color: var(--la-status-s); }
+.status-i { color: var(--la-status-i); }
+.status-j { color: var(--la-status-j); }
+.status-unknown { color: var(--la-status-unknown); }

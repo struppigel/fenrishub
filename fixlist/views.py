@@ -1306,3 +1306,128 @@ def snippets_api(request):
         for s in qs
     ]
     return JsonResponse({'snippets': snippets})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def rules_view(request):
+    """Manage classification rules: create, edit, delete, view others'."""
+    from django.db.models import Q
+
+    STATUS_MAP = dict(ClassificationRule.STATUS_CHOICES)
+    MATCH_TYPE_MAP = dict(ClassificationRule.MATCH_TYPE_CHOICES)
+
+
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+
+        if action == 'create':
+            status = request.POST.get('status', '').strip()
+            match_type = request.POST.get('match_type', '').strip()
+            source_text = request.POST.get('source_text', '').strip()
+            description = request.POST.get('description', '').strip()
+            if not source_text:
+                messages.error(request, 'Rule source text is required.')
+            elif status not in dict(ClassificationRule.STATUS_CHOICES):
+                messages.error(request, 'Invalid status.')
+            elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
+                messages.error(request, 'Invalid match type.')
+            elif ClassificationRule.objects.filter(
+                owner=request.user, status=status, match_type=match_type, source_text=source_text
+            ).exists():
+                messages.error(request, 'A rule with this status, match type, and source text already exists.')
+            else:
+                ClassificationRule.objects.create(
+                    owner=request.user,
+                    status=status,
+                    match_type=match_type,
+                    source_text=source_text,
+                    description=description,
+                )
+                messages.success(request, 'Rule created.')
+            return redirect('rules')
+
+        if action == 'edit':
+            pk = request.POST.get('pk', '').strip()
+            rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
+            status = request.POST.get('status', '').strip()
+            match_type = request.POST.get('match_type', '').strip()
+            source_text = request.POST.get('source_text', '').strip()
+            description = request.POST.get('description', '').strip()
+            is_enabled = request.POST.get('is_enabled') == 'on'
+            if not source_text:
+                messages.error(request, 'Rule source text is required.')
+            elif status not in dict(ClassificationRule.STATUS_CHOICES):
+                messages.error(request, 'Invalid status.')
+            elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
+                messages.error(request, 'Invalid match type.')
+            else:
+                duplicate = ClassificationRule.objects.filter(
+                    owner=request.user, status=status, match_type=match_type, source_text=source_text
+                ).exclude(pk=rule.pk).exists()
+                if duplicate:
+                    messages.error(request, 'A rule with this status, match type, and source text already exists.')
+                else:
+                    rule.status = status
+                    rule.match_type = match_type
+                    rule.source_text = source_text
+                    rule.description = description
+                    rule.is_enabled = is_enabled
+                    rule.save(update_fields=[
+                        'status', 'match_type', 'source_text', 'description', 'is_enabled', 'updated_at',
+                    ])
+                    messages.success(request, 'Rule updated.')
+            return redirect('rules')
+
+        if action == 'delete':
+            pk = request.POST.get('pk', '').strip()
+            rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
+            rule.delete()
+            messages.success(request, 'Rule deleted.')
+            return redirect('rules')
+
+        if action == 'toggle':
+            pk = request.POST.get('pk', '').strip()
+            rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
+            rule.is_enabled = not rule.is_enabled
+            rule.save(update_fields=['is_enabled', 'updated_at'])
+            label = 'enabled' if rule.is_enabled else 'disabled'
+            messages.success(request, f'Rule {label}.')
+            return redirect('rules')
+
+    filter_mode = request.GET.get('filter', 'own')
+    filter_status = request.GET.get('status', '')
+    filter_match = request.GET.get('match', '')
+    search_q = request.GET.get('q', '').strip()
+
+    if filter_mode == 'all':
+        rules = ClassificationRule.objects.all().select_related('owner')
+    elif filter_mode == 'others':
+        rules = ClassificationRule.objects.exclude(owner=request.user).select_related('owner')
+    else:
+        filter_mode = 'own'
+        rules = ClassificationRule.objects.filter(owner=request.user)
+
+    if filter_status and filter_status in dict(ClassificationRule.STATUS_CHOICES):
+        rules = rules.filter(status=filter_status)
+    if filter_match and filter_match in dict(ClassificationRule.MATCH_TYPE_CHOICES):
+        rules = rules.filter(match_type=filter_match)
+    if search_q:
+        rules = rules.filter(
+            Q(source_text__icontains=search_q) | Q(description__icontains=search_q)
+        )
+
+    rules = rules[:500]
+
+    context = {
+        'rules': rules,
+        'filter_mode': filter_mode,
+        'filter_status': filter_status,
+        'filter_match': filter_match,
+        'search_q': search_q,
+        'status_choices': ClassificationRule.STATUS_CHOICES,
+        'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
+        'status_map': STATUS_MAP,
+        'match_type_map': MATCH_TYPE_MAP,
+    }
+    return render(request, 'rules.html', context)

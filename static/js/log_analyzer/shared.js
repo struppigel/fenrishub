@@ -24,6 +24,14 @@ const STATUS_LABEL_MAP = {
     '?': 'unknown',
 };
 const STATUS_PRECEDENCE_ORDER = ['B', 'P', 'C', '!', 'G', 'S', 'I', 'J', '?'];
+const MATCH_TYPE_PRECEDENCE_ORDER = ['exact', 'parsed', 'filepath', 'substring', 'regex'];
+const MATCH_TYPE_LABEL_MAP = {
+    exact: 'Exact line',
+    parsed: 'Parsed',
+    filepath: 'File path',
+    substring: 'Substring',
+    regex: 'Regex',
+};
 const PENDING_STATUS_STORAGE_KEY = 'fenrishub_pending_status_changes';
 const CONFLICT_RESOLUTION_STORAGE_KEY = 'fenrishub_conflict_resolutions';
 const CONFLICT_ACTION_UPDATE_EXISTING = 'update_existing_status';
