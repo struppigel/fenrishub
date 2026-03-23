@@ -207,7 +207,7 @@ class UploadedLog(models.Model):
     log_type = models.CharField(max_length=16, choices=LOG_TYPE_CHOICES, default='Unknown')
     is_incomplete = models.BooleanField(default=False)
     content = models.TextField()
-    content_hash = models.CharField(max_length=18, blank=True, db_index=True)
+    content_hash = models.CharField(max_length=32, blank=True, db_index=True)
     created_by = models.ForeignKey(
         User,
         null=True,
