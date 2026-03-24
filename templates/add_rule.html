@@ -1,0 +1,602 @@
+{% extends 'base.html' %}
+
+{% block title %}Add Rule - Fenris{% endblock %}
+
+{% block page_context_label %}rules / add{% endblock %}
+
+{% block extra_css %}
+<style>
+    .add-rule-top {
+        display: grid;
+        grid-template-columns: 340px 1fr;
+        gap: 14px;
+        margin-bottom: 14px;
+    }
+
+    @media (max-width: 900px) {
+        .add-rule-top {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .rule-form-panel {
+        min-width: 0;
+    }
+
+    .rule-form-panel select {
+        width: 100%;
+        padding: 8px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-main);
+        border: 1px solid var(--la-border);
+        font-family: inherit;
+        font-size: 12px;
+    }
+
+    .rule-form-panel select:focus {
+        outline: none;
+        border-color: var(--la-focus);
+    }
+
+    .rule-form-panel textarea {
+        min-height: 60px;
+    }
+
+    .log-input-panel {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .log-input-panel .form-group {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #logLinesInput {
+        min-height: 160px;
+        flex: 1;
+    }
+
+    .match-count {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        margin-bottom: 6px;
+    }
+
+    .preview-output {
+        overflow-y: auto;
+        max-height: 600px;
+        border: 1px solid var(--la-border-muted);
+        background-color: var(--la-bg-0);
+    }
+
+    .preview-line {
+        padding: 3px 6px;
+        font-size: 12px;
+        border-bottom: 1px solid var(--la-border-muted);
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+
+    .preview-line {
+        background-color: rgba(80, 120, 180, 0.06);
+    }
+
+    .preview-line:nth-child(odd) {
+        background-color: rgba(80, 120, 180, 0.10);
+    }
+
+    .preview-line.matched {
+        background-color: rgba(100, 180, 80, 0.08);
+    }
+
+    .preview-line:nth-child(odd).matched {
+        background-color: rgba(100, 180, 80, 0.12);
+    }
+
+    .match-highlight {
+        background-color: rgba(100, 180, 80, 0.25);
+        border-bottom: 1px solid var(--la-text-primary);
+    }
+
+    .parsed-entry-type { color: var(--la-parsed-entry-type); }
+    .parsed-clsid { color: var(--la-parsed-clsid); }
+    .parsed-name { color: var(--la-parsed-name); }
+    .parsed-filepath { color: var(--la-parsed-filepath); }
+    .parsed-filename { color: var(--la-parsed-filename); }
+    .parsed-company { color: var(--la-parsed-company); }
+    .parsed-arguments { color: var(--la-parsed-arguments); }
+
+    .parsed-details-grid {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 1px 8px;
+        font-size: 11px;
+        padding: 4px 6px;
+        background: var(--la-bg-1);
+        border: 1px solid var(--la-border-muted);
+        margin-top: 2px;
+    }
+
+    .parsed-detail-key {
+        color: var(--la-text-muted);
+    }
+
+    .parsed-detail-value {
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+
+    .preview-error {
+        padding: 6px 8px;
+        font-size: 11px;
+        color: var(--la-error-text);
+        background-color: var(--la-error-bg);
+        border: 1px solid var(--la-error-border);
+    }
+
+    .line-status-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        padding: 2px 6px;
+        color: var(--la-text-muted);
+    }
+
+    .line-status-badge {
+        display: inline-block;
+        min-width: 16px;
+        text-align: center;
+        font-weight: 700;
+        border: 1px solid var(--la-border);
+        background-color: var(--la-bg-0);
+        padding: 0 3px;
+        line-height: 1.2;
+        font-size: 11px;
+        flex-shrink: 0;
+    }
+
+    .status-b { color: #ff0000; border-color: #ff0000; }
+    .status-p { color: #ff5f00; border-color: #ff5f00; }
+    .status-c { color: #00ff00; border-color: #00ff00; }
+    .status-w { color: #ffff00; border-color: #ffff00; }
+    .status-g { color: #af00ff; border-color: #af00ff; }
+    .status-s { color: #00ffff; border-color: #00ffff; }
+    .status-i { color: #ffffd7; border-color: #ffffd7; }
+    .status-j { color: #8a8a8a; border-color: #8a8a8a; }
+    .status-unknown { color: #ffffff; border-color: #ffffff; }
+
+    .existing-matches {
+        font-size: 11px;
+        padding: 2px 6px 4px;
+        color: var(--la-text-muted);
+    }
+
+    .existing-match-item {
+        padding: 1px 0;
+    }
+
+    .existing-match-item .match-scope {
+        font-size: 10px;
+        opacity: 0.6;
+    }
+
+    .new-rule-notice {
+        font-size: 11px;
+        padding: 3px 6px;
+        color: var(--la-warning-text);
+        background-color: var(--la-warning-bg);
+        border: 1px solid var(--la-warning-border);
+        margin-top: 2px;
+    }
+
+    .color-legend {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+        font-size: 11px;
+    }
+
+    .color-legend-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .color-swatch {
+        width: 10px;
+        height: 10px;
+        border: 1px solid var(--la-border);
+        flex-shrink: 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="add-rule-top">
+    <div class="rule-form-panel">
+        <h2>add rule</h2>
+        <form method="post" id="addRuleForm">
+            {% csrf_token %}
+            <div class="form-group">
+                <label for="ruleStatus">status</label>
+                <select id="ruleStatus" name="status" required>
+                    {% for code, label in status_choices %}
+                    <option value="{{ code }}">{{ code }} - {{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="ruleMatchType">match type</label>
+                <select id="ruleMatchType" name="match_type" required>
+                    {% for code, label in match_type_choices %}
+                    <option value="{{ code }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="ruleSourceText">source text</label>
+                <textarea id="ruleSourceText" name="source_text" placeholder="Rule matching pattern..." required></textarea>
+            </div>
+            <div class="form-group">
+                <label for="ruleDescription">description (optional)</label>
+                <input type="text" id="ruleDescription" name="description" placeholder="What this rule matches...">
+            </div>
+            <div class="button-group">
+                <button type="submit">create</button>
+                <a href="{% url 'rules' %}"><button type="button">cancel</button></a>
+            </div>
+        </form>
+    </div>
+
+    <div class="log-input-panel">
+        <h2>log lines</h2>
+        <div class="form-group">
+            <label for="logLinesInput">paste log lines to preview matches</label>
+            <textarea id="logLinesInput" placeholder="Paste log lines here to test if your rule matches them..."></textarea>
+        </div>
+    </div>
+</div>
+
+<div class="preview-results-panel">
+    <div id="colorLegend" class="color-legend" style="display:none;">
+        <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-entry-type)"></span>entry type</div>
+        <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-clsid)"></span>clsid</div>
+        <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-name)"></span>name</div>
+        <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-filepath)"></span>filepath</div>
+        <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-filename)"></span>filename</div>
+        <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-company)"></span>company</div>
+        <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-arguments)"></span>arguments</div>
+    </div>
+    <div class="match-count" id="matchCount"></div>
+    <div class="preview-output" id="previewOutput"></div>
+</div>
+
+<script>
+(function () {
+    const TEST_RULE_URL = "{% url 'test_rule_api' %}";
+    let debounceTimer = null;
+    let fetchController = null;
+    const DEBOUNCE_MS = 300;
+
+    const STATUS_CSS = {
+        'B': 'status-b', 'P': 'status-p', 'C': 'status-c', '!': 'status-w',
+        'G': 'status-g', 'S': 'status-s', 'I': 'status-i', 'J': 'status-j', '?': 'status-unknown',
+    };
+
+    function getCsrfToken() {
+        const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/);
+        return match ? decodeURIComponent(match[1]) : '';
+    }
+
+    /* ── highlight utilities (from rule_preview.js) ── */
+
+    function collectInlineHighlightMatches(sourceText, change) {
+        if (typeof sourceText !== 'string' || !sourceText.length || !change) return [];
+        const fields = [
+            { key: 'entry_type', className: 'parsed-entry-type' },
+            { key: 'clsid', className: 'parsed-clsid' },
+            { key: 'filepath', className: 'parsed-filepath' },
+            { key: 'arguments', className: 'parsed-arguments' },
+            { key: 'company', className: 'parsed-company' },
+            { key: 'name', className: 'parsed-name' },
+            { key: 'filename', className: 'parsed-filename' },
+        ];
+        const lowerSource = sourceText.toLowerCase();
+        const candidates = [];
+        fields.forEach(function (field, priority) {
+            const rawValue = change[field.key];
+            if (rawValue === null || rawValue === undefined) return;
+            const needle = String(rawValue).trim();
+            if (!needle) return;
+            const lowerNeedle = needle.toLowerCase();
+            let fromIndex = 0;
+            while (fromIndex < lowerSource.length) {
+                const start = lowerSource.indexOf(lowerNeedle, fromIndex);
+                if (start === -1) break;
+                candidates.push({ start: start, end: start + lowerNeedle.length, className: field.className, priority: priority });
+                fromIndex = start + lowerNeedle.length;
+            }
+        });
+        candidates.sort(function (a, b) {
+            if (a.start !== b.start) return a.start - b.start;
+            const aLen = a.end - a.start;
+            const bLen = b.end - b.start;
+            if (aLen !== bLen) return bLen - aLen;
+            return a.priority - b.priority;
+        });
+        const accepted = [];
+        candidates.forEach(function (candidate) {
+            const overlaps = accepted.some(function (existing) {
+                return !(candidate.end <= existing.start || candidate.start >= existing.end);
+            });
+            if (!overlaps) accepted.push(candidate);
+        });
+        accepted.sort(function (a, b) { return a.start - b.start; });
+        return accepted;
+    }
+
+    function appendHighlightedRuleLine(container, sourceText, change) {
+        const text = typeof sourceText === 'string' ? sourceText : '';
+        if (!text.length) return;
+        const matches = collectInlineHighlightMatches(text, change);
+        if (!matches.length) { container.appendChild(document.createTextNode(text)); return; }
+        let cursor = 0;
+        matches.forEach(function (match) {
+            if (cursor < match.start)
+                container.appendChild(document.createTextNode(text.slice(cursor, match.start)));
+            const span = document.createElement('span');
+            span.className = match.className;
+            span.textContent = text.slice(match.start, match.end);
+            container.appendChild(span);
+            cursor = match.end;
+        });
+        if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
+    }
+
+    /* ── rendering helpers ── */
+
+    function renderHighlightSpans(container, text, ranges, className) {
+        let cursor = 0;
+        ranges.forEach(function (r) {
+            if (cursor < r[0])
+                container.appendChild(document.createTextNode(text.slice(cursor, r[0])));
+            const span = document.createElement('span');
+            span.className = className;
+            span.textContent = text.slice(r[0], r[1]);
+            container.appendChild(span);
+            cursor = r[1];
+        });
+        if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
+    }
+
+    function buildParsedDetailsGrid(parsed) {
+        const fields = [
+            { key: 'entry_type', label: 'entry type', cls: 'parsed-entry-type' },
+            { key: 'clsid', label: 'clsid', cls: 'parsed-clsid' },
+            { key: 'name', label: 'name', cls: 'parsed-name' },
+            { key: 'filepath', label: 'filepath', cls: 'parsed-filepath' },
+            { key: 'filename', label: 'filename', cls: 'parsed-filename' },
+            { key: 'company', label: 'company', cls: 'parsed-company' },
+            { key: 'arguments', label: 'arguments', cls: 'parsed-arguments' },
+        ];
+        const populated = fields.filter(function (f) { return parsed[f.key]; });
+        if (!populated.length) return null;
+        const grid = document.createElement('div');
+        grid.className = 'parsed-details-grid';
+        populated.forEach(function (f) {
+            const key = document.createElement('div');
+            key.className = 'parsed-detail-key';
+            key.textContent = f.label;
+            const val = document.createElement('div');
+            val.className = 'parsed-detail-value ' + f.cls;
+            val.textContent = parsed[f.key];
+            grid.appendChild(key);
+            grid.appendChild(val);
+        });
+        return grid;
+    }
+
+    function makeStatusBadge(statusCode) {
+        const badge = document.createElement('span');
+        badge.className = 'line-status-badge ' + (STATUS_CSS[statusCode] || 'status-unknown');
+        badge.textContent = statusCode;
+        return badge;
+    }
+
+    function buildStatusRow(result, statusLabels) {
+        const row = document.createElement('div');
+        row.className = 'line-status-row';
+
+        row.appendChild(makeStatusBadge(result.combined_status));
+        const label = document.createElement('span');
+        label.textContent = result.combined_status_label + ' (effective)';
+        row.appendChild(label);
+
+        if (result.existing_status !== '?' && result.existing_status !== result.combined_status) {
+            const sep = document.createElement('span');
+            sep.textContent = ' \u2190 was ';
+            row.appendChild(sep);
+            row.appendChild(makeStatusBadge(result.existing_status));
+            const existLabel = document.createElement('span');
+            existLabel.textContent = result.existing_status_label;
+            row.appendChild(existLabel);
+        }
+
+        return row;
+    }
+
+    function buildExistingMatchesBlock(result) {
+        const all = (result.existing_matches || []).concat(result.existing_shadowed || []);
+        if (!all.length) return null;
+
+        const block = document.createElement('div');
+        block.className = 'existing-matches';
+
+        all.forEach(function (m) {
+            const isShadowed = (result.existing_shadowed || []).some(function (s) { return s.id === m.id; });
+            const item = document.createElement('div');
+            item.className = 'existing-match-item';
+
+            const badge = makeStatusBadge(m.status);
+            item.appendChild(badge);
+
+            const text = document.createElement('span');
+            var desc = ' #' + m.id + ' ' + m.match_type;
+            if (m.reason) desc += ' \u2013 ' + m.reason;
+            if (isShadowed) desc += ' (shadowed)';
+            text.textContent = desc;
+            if (isShadowed) text.className = 'match-scope';
+            item.appendChild(text);
+
+            block.appendChild(item);
+        });
+        return block;
+    }
+
+    function setMatchCount(matched, total) {
+        document.getElementById('matchCount').textContent =
+            matched + ' of ' + total + ' line' + (total === 1 ? '' : 's') + ' matched by new rule';
+    }
+
+    function clearPreview() {
+        document.getElementById('previewOutput').innerHTML = '';
+        document.getElementById('matchCount').textContent = '';
+        document.getElementById('colorLegend').style.display = 'none';
+    }
+
+    /* ── server-side preview (all match types) ── */
+
+    async function renderPreview(lines, sourceText, matchType, status) {
+        if (fetchController) fetchController.abort();
+        fetchController = new AbortController();
+
+        const container = document.getElementById('previewOutput');
+
+        try {
+            const resp = await fetch(TEST_RULE_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                body: JSON.stringify({ source_text: sourceText, status: status, match_type: matchType, lines: lines }),
+                signal: fetchController.signal,
+            });
+
+            const data = await resp.json();
+            if (data.error) {
+                container.innerHTML = '';
+                var errDiv = document.createElement('div');
+                errDiv.className = 'preview-error';
+                errDiv.textContent = data.error;
+                container.appendChild(errDiv);
+                document.getElementById('matchCount').textContent = '';
+                return;
+            }
+
+            container.innerHTML = '';
+            let matchCount = 0;
+            const statusLabels = data.status_labels || {};
+            const showLegend = matchType === 'parsed';
+            document.getElementById('colorLegend').style.display = showLegend ? 'flex' : 'none';
+
+            (data.results || []).forEach(function (result) {
+                const wrapper = document.createElement('div');
+
+                /* ── line text with highlights ── */
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'preview-line';
+
+                if (result.matched) {
+                    lineDiv.classList.add('matched');
+                    matchCount++;
+                }
+
+                if (result.parsed && matchType === 'parsed') {
+                    appendHighlightedRuleLine(lineDiv, result.line, result.parsed);
+                } else if (result.match_ranges && result.match_ranges.length) {
+                    renderHighlightSpans(lineDiv, result.line, result.match_ranges, 'match-highlight');
+                } else {
+                    lineDiv.textContent = result.line;
+                }
+                wrapper.appendChild(lineDiv);
+
+                /* ── parsed details grid ── */
+                if (result.parsed && matchType === 'parsed') {
+                    const grid = buildParsedDetailsGrid(result.parsed);
+                    if (grid) wrapper.appendChild(grid);
+                }
+
+                /* ── status row (show when line has any matches) ── */
+                const hasExisting = (result.existing_matches && result.existing_matches.length) ||
+                                    (result.existing_shadowed && result.existing_shadowed.length);
+                if (result.matched || hasExisting) {
+                    wrapper.appendChild(buildStatusRow(result, statusLabels));
+                }
+
+                /* ── new rule shadowed / outranked notices ── */
+                if (result.new_rule_shadowed) {
+                    const notice = document.createElement('div');
+                    notice.className = 'new-rule-notice';
+                    notice.textContent = 'new rule matched but is shadowed by higher-precedence ' +
+                        result.new_rule_shadowed_by + ' matcher \u2014 it will have no effect on this line';
+                    wrapper.appendChild(notice);
+                } else if (result.new_rule_outranked) {
+                    const notice = document.createElement('div');
+                    notice.className = 'new-rule-notice';
+                    notice.textContent = 'new rule matched but its status is outranked by ' +
+                        result.new_rule_outranked_by + ' at the same matcher tier \u2014 ' +
+                        result.combined_status_label + ' (' + result.combined_status +
+                        ') takes precedence over this rule\u2019s status';
+                    wrapper.appendChild(notice);
+                }
+
+                /* ── existing rule matches ── */
+                const existingBlock = buildExistingMatchesBlock(result);
+                if (existingBlock) wrapper.appendChild(existingBlock);
+
+                container.appendChild(wrapper);
+            });
+
+            setMatchCount(matchCount, lines.length);
+        } catch (e) {
+            if (e.name === 'AbortError') return;
+            container.innerHTML = '';
+            var errDiv2 = document.createElement('div');
+            errDiv2.className = 'preview-error';
+            errDiv2.textContent = 'Request failed: ' + e.message;
+            container.appendChild(errDiv2);
+        }
+    }
+
+    /* ── main update ── */
+
+    function updatePreview() {
+        const sourceText = document.getElementById('ruleSourceText').value.trim();
+        const matchType = document.getElementById('ruleMatchType').value;
+        const logText = document.getElementById('logLinesInput').value.replace(/\r\n/g, '\n');
+        const lines = logText.split('\n').filter(function (l) { return l.trim().length > 0; });
+
+        if (!sourceText || !lines.length) { clearPreview(); return; }
+
+        document.getElementById('colorLegend').style.display = 'none';
+        var status = document.getElementById('ruleStatus').value;
+        renderPreview(lines, sourceText, matchType, status);
+    }
+
+    function schedulePreviewUpdate() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(updatePreview, DEBOUNCE_MS);
+    }
+
+    /* ── event listeners ── */
+
+    document.getElementById('ruleSourceText').addEventListener('input', schedulePreviewUpdate);
+    document.getElementById('ruleMatchType').addEventListener('change', schedulePreviewUpdate);
+    document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
+    document.getElementById('ruleStatus').addEventListener('change', schedulePreviewUpdate);
+})();
+</script>
+{% endblock %}

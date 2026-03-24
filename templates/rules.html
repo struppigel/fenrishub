@@ -142,7 +142,7 @@
         border-color: var(--la-focus);
     }
 
-    #createSection, #editSection {
+    #editSection {
         display: none;
     }
 
@@ -280,42 +280,6 @@
 
 {% block content %}
 <div>
-    <div id="createSection" class="rule-form-section">
-        <h3>new rule</h3>
-        <form method="post">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="create">
-            <div class="form-group">
-                <label for="createStatus">status</label>
-                <select id="createStatus" name="status" required>
-                    {% for code, label in status_choices %}
-                    <option value="{{ code }}">{{ code }} - {{ label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="createMatchType">match type</label>
-                <select id="createMatchType" name="match_type" required>
-                    {% for code, label in match_type_choices %}
-                    <option value="{{ code }}">{{ label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="createSourceText">source text</label>
-                <textarea id="createSourceText" name="source_text" placeholder="Rule matching pattern..." required></textarea>
-            </div>
-            <div class="form-group">
-                <label for="createDescription">description (optional)</label>
-                <input type="text" id="createDescription" name="description" placeholder="What this rule matches...">
-            </div>
-            <div class="button-group">
-                <button type="submit">create</button>
-                <button type="button" onclick="cancelForm()">cancel</button>
-            </div>
-        </form>
-    </div>
-
     <div id="editSection" class="rule-form-section">
         <h3>edit rule</h3>
         <form method="post">
@@ -359,26 +323,25 @@
     <div class="divider"></div>
 
     <div class="filter-tabs">
-        <a href="?filter=own{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}" {% if filter_mode == 'own' %}class="active"{% endif %}>own</a>
-        <a href="?filter=others{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}" {% if filter_mode == 'others' %}class="active"{% endif %}>others</a>
-        <a href="?filter=all{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}" {% if filter_mode == 'all' %}class="active"{% endif %}>all</a>
+        <a href="?filter=own{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}" {% if filter_mode == 'own' %}class="active"{% endif %}>own</a>
+        <a href="?filter=others{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}" {% if filter_mode == 'others' %}class="active"{% endif %}>others</a>
+        <a href="?filter=all{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}" {% if filter_mode == 'all' %}class="active"{% endif %}>all</a>
         <span class="spacer"></span>
-        {% if filter_mode == 'own' %}
-        <button type="button" onclick="showCreate()">add rule</button>
-        {% endif %}
+        <a href="{% url 'add_rule' %}">add rule</a>
     </div>
 
     <form method="get" class="search-bar">
         <input type="hidden" name="filter" value="{{ filter_mode }}">
         {% if filter_status %}<input type="hidden" name="status" value="{{ filter_status }}">{% endif %}
         {% if filter_match %}<input type="hidden" name="match" value="{{ filter_match }}">{% endif %}
+        {% if sort != 'recent' %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
         <select name="search_mode" class="search-mode-select">
             <option value="text" {% if search_mode == 'text' %}selected{% endif %}>text search</option>
             <option value="line" {% if search_mode == 'line' %}selected{% endif %}>match by line</option>
         </select>
         <input type="text" name="q" value="{{ search_q }}" placeholder="{% if search_mode == 'line' %}Paste a log line...{% else %}Search rules...{% endif %}">
         <button type="submit">search</button>
-        {% if search_q %}<a href="?filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}"><button type="button">clear</button></a>{% endif %}
+        {% if search_q %}<a href="?filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}"><button type="button">clear</button></a>{% endif %}
     </form>
 
     <div class="filter-dropdowns">
@@ -393,6 +356,11 @@
             {% for code, label in match_type_choices %}
             <option value="{{ code }}" {% if filter_match == code %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
+        </select>
+        <select onchange="applyFilter('sort', this.value)">
+            <option value="recent" {% if sort == 'recent' %}selected{% endif %}>recently edited</option>
+            <option value="created" {% if sort == 'created' %}selected{% endif %}>recently created</option>
+            <option value="status" {% if sort == 'status' %}selected{% endif %}>by status</option>
         </select>
     </div>
 
@@ -426,19 +394,19 @@
     {% if page_obj.paginator.num_pages > 1 %}
     <div class="pagination">
         {% if page_obj.has_previous %}
-        <a href="?page={{ page_obj.previous_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}">prev</a>
+        <a href="?page={{ page_obj.previous_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}">prev</a>
         {% endif %}
         {% for num in page_obj.paginator.page_range %}
             {% if num == page_obj.number %}
             <span class="current-page">{{ num }}</span>
             {% elif num == 1 or num == page_obj.paginator.num_pages or num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
-            <a href="?page={{ num }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}">{{ num }}</a>
+            <a href="?page={{ num }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}">{{ num }}</a>
             {% elif num == 2 or num == page_obj.paginator.num_pages|add:"-1" %}
             <span class="ellipsis">&hellip;</span>
             {% endif %}
         {% endfor %}
         {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}">next</a>
+        <a href="?page={{ page_obj.next_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}">next</a>
         {% endif %}
     </div>
     {% endif %}
@@ -453,19 +421,11 @@ function startEdit(pk, status, matchType, sourceText, description, isEnabled) {
     document.getElementById('editDescription').value = description;
     document.getElementById('editIsEnabled').checked = isEnabled;
     document.getElementById('editSection').style.display = 'block';
-    document.getElementById('createSection').style.display = 'none';
     document.getElementById('editSourceText').focus();
-}
-
-function showCreate() {
-    document.getElementById('editSection').style.display = 'none';
-    document.getElementById('createSection').style.display = 'block';
-    document.getElementById('createSourceText').focus();
 }
 
 function cancelForm() {
     document.getElementById('editSection').style.display = 'none';
-    document.getElementById('createSection').style.display = 'none';
 }
 
 function applyFilter(param, value) {

@@ -112,14 +112,14 @@ class ClassificationRule(models.Model):
     STATUS_UNKNOWN = '?'
 
     STATUS_CHOICES = [
-        (STATUS_MALWARE, 'Userdefined malware'),
-        (STATUS_PUP, 'Userdefined potentially unwanted'),
-        (STATUS_CLEAN, 'Userdefined clean entries'),
-        (STATUS_WARNING, 'Userdefined warning'),
-        (STATUS_GRAYWARE, 'Userdefined grayware'),
-        (STATUS_SECURITY, 'Userdefined security software'),
-        (STATUS_INFO, 'Userdefined informational'),
-        (STATUS_JUNK, 'Userdefined junk'),
+        (STATUS_MALWARE, 'Malware'),
+        (STATUS_PUP, 'Potentially unwanted'),
+        (STATUS_CLEAN, 'Clean'),
+        (STATUS_WARNING, 'Warning'),
+        (STATUS_GRAYWARE, 'Grayware'),
+        (STATUS_SECURITY, 'Security software'),
+        (STATUS_INFO, 'Informational'),
+        (STATUS_JUNK, 'Junk'),
         (STATUS_UNKNOWN, 'Unknown'),
     ]
 

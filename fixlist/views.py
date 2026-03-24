@@ -17,7 +17,11 @@ from io import BytesIO
 import json
 import re
 
-from .analyzer import analyze_log_text, parse_rule_line, inspect_line_matches, VALID_STATUSES, _load_rule_buckets
+from .analyzer import (
+    analyze_log_text, parse_rule_line, inspect_line_matches,
+    VALID_STATUSES, STATUS_LABELS, STATUS_PRECEDENCE, _load_rule_buckets,
+)
+from . import frst_extractors as ex
 from .forms import UploadedLogForm
 from .models import Fixlist, AccessLog, ClassificationRule, FixlistSnippet, UploadedLog
 
@@ -1402,6 +1406,13 @@ def rules_view(request):
     filter_match = request.GET.get('match', '')
     search_q = request.GET.get('q', '').strip()
     search_mode = request.GET.get('search_mode', 'text')
+    sort = request.GET.get('sort', 'recent')
+
+    SORT_OPTIONS = {
+        'recent': '-updated_at',
+        'created': '-created_at',
+        'status': ('status', 'match_type', 'source_text'),
+    }
 
     if filter_mode == 'all':
         rules = ClassificationRule.objects.all().select_related('owner')
@@ -1432,6 +1443,12 @@ def rules_view(request):
             rules = rules.filter(
                 Q(source_text__icontains=search_q) | Q(description__icontains=search_q)
             )
+    else:
+        sort_value = SORT_OPTIONS.get(sort, '-updated_at')
+        if isinstance(sort_value, tuple):
+            rules = rules.order_by(*sort_value)
+        else:
+            rules = rules.order_by(sort_value)
 
     paginator = Paginator(rules, 12)
     page_obj = paginator.get_page(request.GET.get('page'))
@@ -1443,9 +1460,256 @@ def rules_view(request):
         'filter_match': filter_match,
         'search_q': search_q,
         'search_mode': search_mode,
+        'sort': sort,
         'status_choices': ClassificationRule.STATUS_CHOICES,
         'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
         'status_map': STATUS_MAP,
         'match_type_map': MATCH_TYPE_MAP,
     }
     return render(request, 'rules.html', context)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def add_rule_view(request):
+    """Dedicated page for adding a new classification rule with log preview."""
+    if request.method == 'POST':
+        status = request.POST.get('status', '').strip()
+        match_type = request.POST.get('match_type', '').strip()
+        source_text = request.POST.get('source_text', '').strip()
+        description = request.POST.get('description', '').strip()
+        if not source_text:
+            messages.error(request, 'Rule source text is required.')
+        elif status not in dict(ClassificationRule.STATUS_CHOICES):
+            messages.error(request, 'Invalid status.')
+        elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
+            messages.error(request, 'Invalid match type.')
+        else:
+            parsed = parse_rule_line(source_text, status=status, source_name=f'web-add-rule:{request.user.username}')
+            if parsed and match_type in (ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH):
+                parsed['match_type'] = match_type
+            create_kwargs = {
+                'owner': request.user,
+                'status': status,
+                'match_type': match_type,
+                'source_text': source_text,
+                'description': description,
+            }
+            if parsed:
+                for field in ('entry_type', 'clsid', 'name', 'filepath', 'normalized_filepath',
+                              'filename', 'company', 'arguments', 'file_not_signed', 'source_name'):
+                    if parsed.get(field):
+                        create_kwargs[field] = parsed[field]
+
+            duplicate = ClassificationRule.objects.filter(
+                owner=request.user, status=status, match_type=match_type, source_text=source_text,
+            ).exists()
+            if duplicate:
+                messages.error(request, 'A rule with this status, match type, and source text already exists.')
+            else:
+                ClassificationRule.objects.create(**create_kwargs)
+                messages.success(request, 'Rule created.')
+                return redirect('rules')
+
+    context = {
+        'status_choices': ClassificationRule.STATUS_CHOICES,
+        'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
+    }
+    return render(request, 'add_rule.html', context)
+
+
+@login_required
+@require_http_methods(["POST"])
+def test_rule_api(request):
+    """Test a rule definition against a list of log lines and return per-line match results."""
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+
+    source_text = (payload.get('source_text') or '').strip()
+    status = (payload.get('status') or '?').strip()
+    match_type = (payload.get('match_type') or '').strip()
+    lines = payload.get('lines', [])
+
+    if not isinstance(lines, list) or len(lines) > 500:
+        return JsonResponse({'error': 'Field "lines" must be a list with at most 500 entries.'}, status=400)
+    if not source_text:
+        return JsonResponse({'error': 'Field "source_text" is required.'}, status=400)
+    if status not in VALID_STATUSES:
+        status = '?'
+
+    parsed_rule = parse_rule_line(source_text, status=status)
+
+    if match_type == 'regex':
+        try:
+            compiled = re.compile(source_text)
+        except re.error as e:
+            return JsonResponse({'error': f'Invalid regex: {e}'}, status=400)
+    else:
+        compiled = None
+
+    # Pre-compute match-type-specific state once.
+    rule_entry = None
+    rule_norm_path = ''
+    if match_type == 'parsed':
+        if parsed_rule and parsed_rule.get('match_type') == ClassificationRule.MATCH_PARSED_ENTRY:
+            rule_entry = ex.FrstEntry(
+                entry_type=parsed_rule.get('entry_type', ''),
+                clsid=parsed_rule.get('clsid', ''),
+                name=parsed_rule.get('name', ''),
+                filepath=parsed_rule.get('filepath', ''),
+                filename=parsed_rule.get('filename', ''),
+                company=parsed_rule.get('company', ''),
+                arguments=parsed_rule.get('arguments', ''),
+                file_not_signed=parsed_rule.get('file_not_signed', False),
+            )
+    elif match_type == 'filepath':
+        if parsed_rule and parsed_rule.get('normalized_filepath'):
+            rule_norm_path = parsed_rule['normalized_filepath']
+        elif parsed_rule and parsed_rule.get('filepath'):
+            rule_norm_path = ex.normalize_path(parsed_rule['filepath']).lower().strip()
+        else:
+            rule_norm_path = ex.normalize_path(source_text).lower().strip()
+    elif match_type not in ('exact', 'substring', 'regex'):
+        return JsonResponse({'error': f'Unsupported match_type: {match_type}'}, status=400)
+
+    # Matcher type precedence (same order as _analyze_single_line in analyzer.py).
+    MATCHER_ORDER = ['exact', 'parsed_entry', 'filepath', 'substring', 'regex']
+    MATCH_TYPE_TO_MATCHER = {
+        'exact': 'exact', 'parsed': 'parsed_entry', 'filepath': 'filepath',
+        'substring': 'substring', 'regex': 'regex',
+    }
+    new_matcher = MATCH_TYPE_TO_MATCHER.get(match_type, 'unknown')
+    try:
+        new_matcher_idx = MATCHER_ORDER.index(new_matcher)
+    except ValueError:
+        new_matcher_idx = len(MATCHER_ORDER)
+
+    # Load existing rule buckets once for inspect_line_matches.
+    buckets = _load_rule_buckets()
+
+    results = []
+    for raw_line in lines:
+        line = (raw_line or '').strip() if match_type in ('exact', 'parsed', 'filepath') else (raw_line or '')
+        result = {'line': line, 'matched': False, 'parsed': None, 'match_ranges': None}
+
+        if match_type == 'exact':
+            result['matched'] = line == source_text.strip()
+
+        elif match_type == 'substring':
+            ranges = []
+            lower_line = line.lower()
+            lower_pat = source_text.lower()
+            idx = 0
+            while idx < len(lower_line):
+                pos = lower_line.find(lower_pat, idx)
+                if pos == -1:
+                    break
+                ranges.append([pos, pos + len(lower_pat)])
+                idx = pos + len(lower_pat)
+            result['matched'] = len(ranges) > 0
+            result['match_ranges'] = ranges or None
+
+        elif match_type == 'regex':
+            ranges = [[m.start(), m.end()] for m in compiled.finditer(line) if m.end() > m.start()]
+            result['matched'] = len(ranges) > 0
+            result['match_ranges'] = ranges or None
+
+        elif match_type == 'parsed':
+            if line:
+                line_entry = ex.get_frst_entry(line)
+                if line_entry:
+                    result['parsed'] = {
+                        'entry_type': line_entry.entry_type,
+                        'clsid': line_entry.clsid,
+                        'name': line_entry.name,
+                        'filepath': line_entry.filepath,
+                        'filename': line_entry.filename,
+                        'company': line_entry.company,
+                        'arguments': line_entry.arguments,
+                    }
+                result['matched'] = bool(rule_entry and line_entry and line_entry == rule_entry)
+
+        elif match_type == 'filepath':
+            line_path = ex.extract_any_frst_path(line)
+            if line_path:
+                line_norm = ex.normalize_path(line_path).lower().strip()
+                result['matched'] = line_norm == rule_norm_path and bool(rule_norm_path)
+                result['parsed'] = {'filepath': line_path, 'normalized_filepath': line_norm}
+
+        # Inspect existing rule matches for this line.
+        stripped = line.strip()
+        if stripped:
+            inspection = inspect_line_matches(stripped, buckets=buckets)
+            result['existing_status'] = inspection['dominant_status']
+            result['existing_status_label'] = STATUS_LABELS.get(inspection['dominant_status'], 'unknown')
+            result['existing_matches'] = inspection['matches']
+            result['existing_shadowed'] = inspection['shadowed_matches']
+
+            # Compute combined status respecting matcher type precedence.
+            # The analyzer picks the first matcher tier that has any matches;
+            # lower tiers are shadowed entirely.
+            existing_matcher = inspection.get('effective_matcher', 'unknown')
+            try:
+                existing_matcher_idx = MATCHER_ORDER.index(existing_matcher)
+            except ValueError:
+                existing_matcher_idx = len(MATCHER_ORDER)
+
+            new_rule_shadowed = False
+            if result['matched']:
+                if new_matcher_idx < existing_matcher_idx:
+                    # New rule's matcher tier is higher → it shadows existing.
+                    effective_statuses = [status]
+                elif new_matcher_idx == existing_matcher_idx:
+                    # Same tier → combine statuses.
+                    effective_statuses = [m['status'] for m in inspection['matches']] + [status]
+                else:
+                    # New rule's matcher tier is lower → shadowed by existing.
+                    effective_statuses = [m['status'] for m in inspection['matches']]
+                    new_rule_shadowed = True
+            else:
+                effective_statuses = [m['status'] for m in inspection['matches']]
+            result['new_rule_shadowed'] = new_rule_shadowed
+            result['new_rule_shadowed_by'] = existing_matcher if new_rule_shadowed else None
+
+            combined = '?'
+            for s in STATUS_PRECEDENCE:
+                if s in effective_statuses:
+                    combined = s
+                    break
+            result['combined_status'] = combined
+            result['combined_status_label'] = STATUS_LABELS.get(combined, 'unknown')
+
+            # Detect when new rule matched at the same tier but is outranked by status precedence.
+            new_rule_outranked = (
+                result['matched']
+                and not new_rule_shadowed
+                and combined != status
+                and combined != '?'
+            )
+            result['new_rule_outranked'] = new_rule_outranked
+            if new_rule_outranked:
+                result['new_rule_outranked_by'] = STATUS_LABELS.get(combined, combined)
+            else:
+                result['new_rule_outranked_by'] = None
+        else:
+            result['existing_status'] = '?'
+            result['existing_status_label'] = 'unknown'
+            result['existing_matches'] = []
+            result['existing_shadowed'] = []
+            result['combined_status'] = '?'
+            result['combined_status_label'] = 'unknown'
+            result['new_rule_shadowed'] = False
+            result['new_rule_shadowed_by'] = None
+            result['new_rule_outranked'] = False
+            result['new_rule_outranked_by'] = None
+
+        results.append(result)
+
+    return JsonResponse({
+        'rule': parsed_rule,
+        'results': results,
+        'status_labels': STATUS_LABELS,
+        'status_precedence': STATUS_PRECEDENCE,
+    })

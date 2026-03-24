@@ -443,3 +443,74 @@ class RulesViewTests(TestCase):
         )
         response = self.client.get(reverse("rules") + "?filter=own&q=needle")
         self.assertContains(response, "needle")
+
+    # -- Sort --
+
+    def test_default_sort_is_recently_edited(self):
+        import time
+        r1 = ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="FIRST-CREATED",
+        )
+        r2 = ClassificationRule.objects.create(
+            owner=self.user, status="C", match_type="exact", source_text="SECOND-CREATED",
+        )
+        # Touch r1 so it has a later updated_at
+        r1.description = "edited"
+        r1.save(update_fields=["description", "updated_at"])
+
+        response = self.client.get(reverse("rules"))
+        content = response.content.decode()
+        pos_first = content.index("FIRST-CREATED")
+        pos_second = content.index("SECOND-CREATED")
+        self.assertLess(pos_first, pos_second, "Recently edited rule should appear first")
+
+    def test_sort_by_created(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="OLDER-RULE",
+        )
+        ClassificationRule.objects.create(
+            owner=self.user, status="C", match_type="exact", source_text="NEWER-RULE",
+        )
+        response = self.client.get(reverse("rules") + "?sort=created")
+        content = response.content.decode()
+        pos_newer = content.index("NEWER-RULE")
+        pos_older = content.index("OLDER-RULE")
+        self.assertLess(pos_newer, pos_older, "Most recently created rule should appear first")
+
+    def test_sort_by_status(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="C", match_type="exact", source_text="CLEAN-RULE",
+        )
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="MALWARE-RULE",
+        )
+        response = self.client.get(reverse("rules") + "?sort=status")
+        content = response.content.decode()
+        pos_malware = content.index("MALWARE-RULE")
+        pos_clean = content.index("CLEAN-RULE")
+        self.assertLess(pos_malware, pos_clean, "Status B should appear before C in status sort")
+
+    def test_sort_preserved_in_context(self):
+        response = self.client.get(reverse("rules") + "?sort=created")
+        self.assertEqual(response.context["sort"], "created")
+
+    def test_invalid_sort_falls_back_to_recent(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="SOME-RULE",
+        )
+        response = self.client.get(reverse("rules") + "?sort=bogus")
+        self.assertEqual(response.status_code, 200)
+
+    # -- Add rule link visible on all tabs --
+
+    def test_add_rule_link_visible_on_own_tab(self):
+        response = self.client.get(reverse("rules") + "?filter=own")
+        self.assertContains(response, reverse("add_rule"))
+
+    def test_add_rule_link_visible_on_others_tab(self):
+        response = self.client.get(reverse("rules") + "?filter=others")
+        self.assertContains(response, reverse("add_rule"))
+
+    def test_add_rule_link_visible_on_all_tab(self):
+        response = self.client.get(reverse("rules") + "?filter=all")
+        self.assertContains(response, reverse("add_rule"))
