@@ -210,6 +210,26 @@ def extract_package(line):
     return extract_frst_entry(line, regexp, group_map, entry_type="package")
 
 
+_FIREWALL_CLSID_RE = re.compile(r'\{([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\}')
+
+
+def extract_firewall_rule(line):
+    if not line.startswith("FirewallRules:"):
+        return None
+    if line.rstrip().endswith("=> No File"):
+        return None
+    regexp = r'FirewallRules: \[([^\]]+)\] => \((Allow|Block)\) ([^\(\n]+?)\s*(?:\(([^)]+)\s*->\s*([^)]+)\))?$'
+    group_map = {"name": 2, "filepath": 3, "company": 5}
+    entry = extract_frst_entry(line, regexp, group_map, entry_type="firewall")
+    if entry:
+        bracket_content = re.match(r'FirewallRules: \[([^\]]+)\]', line)
+        if bracket_content:
+            clsid_match = _FIREWALL_CLSID_RE.search(bracket_content.group(1))
+            if clsid_match:
+                entry.clsid = clsid_match.group(1)
+    return entry
+
+
 def get_frst_entry(line):
     extractors = [
         extract_frst_service,
@@ -217,6 +237,7 @@ def get_frst_entry(line):
         extract_frst_activesetup,
         extract_frst_shortcut,
         extract_frst_scheduled_task,
+        extract_firewall_rule,
         extract_onemonth,
         extract_process,
         extract_installed_software,
@@ -248,6 +269,7 @@ def extract_any_frst_path(line):
         extract_frst_activesetup,
         extract_frst_shortcut,
         extract_frst_scheduled_task,
+        extract_firewall_rule,
         extract_onemonth,
         extract_process,
         extract_browser_extension,

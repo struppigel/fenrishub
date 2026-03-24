@@ -49,6 +49,7 @@ PARSER_ORDER = [
     ex.extract_frst_service,
     ex.extract_frst_shortcut,
     ex.extract_frst_scheduled_task,
+    ex.extract_firewall_rule,
     ex.extract_process,
     ex.extract_installed_software,
     ex.extract_bho,

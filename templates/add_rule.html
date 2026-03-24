@@ -264,7 +264,6 @@
 
 <div class="preview-results-panel">
     <div id="colorLegend" class="color-legend" style="display:none;">
-        <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-entry-type)"></span>entry type</div>
         <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-clsid)"></span>clsid</div>
         <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-name)"></span>name</div>
         <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-filepath)"></span>filepath</div>
@@ -298,7 +297,6 @@
     function collectInlineHighlightMatches(sourceText, change) {
         if (typeof sourceText !== 'string' || !sourceText.length || !change) return [];
         const fields = [
-            { key: 'entry_type', className: 'parsed-entry-type' },
             { key: 'clsid', className: 'parsed-clsid' },
             { key: 'filepath', className: 'parsed-filepath' },
             { key: 'arguments', className: 'parsed-arguments' },
