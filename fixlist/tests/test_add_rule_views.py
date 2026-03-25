@@ -235,7 +235,7 @@ class TestRuleApiTests(TestCase):
     # -- Parsed matching --
 
     def test_parsed_returns_parsed_components(self):
-        line = "HKLM\\...\\Run: [TestApp] => C:\\Program Files\\test.exe [2024-01-01] (Test Corp)"
+        line = r"HKLM\...\Run: [Virtual Pet] => C:\Program Files\ASUS\Virtual Pet\Virtual Pet.exe [33712544 2026-01-17] (ASUSTeK COMPUTER INC. -> ASUSTeK Computer Inc.)"
         response = self._post({
             "source_text": line,
             "match_type": "parsed",
@@ -246,12 +246,13 @@ class TestRuleApiTests(TestCase):
         result = data["results"][0]
         self.assertTrue(result["matched"])
         self.assertIsNotNone(result["parsed"])
-        self.assertIn("entry_type", result["parsed"])
         self.assertEqual(result["parsed"]["entry_type"], "runkey")
+        self.assertEqual(result["parsed"]["name"], "Virtual Pet")
+        self.assertIn("Virtual Pet.exe", result["parsed"]["filepath"])
 
     def test_parsed_non_parseable_line(self):
         response = self._post({
-            "source_text": "HKLM\\...\\Run: [TestApp] => C:\\Program Files\\test.exe [2024-01-01] (Test Corp)",
+            "source_text": r"HKLM\...\Run: [Virtual Pet] => C:\Program Files\ASUS\Virtual Pet\Virtual Pet.exe [33712544 2026-01-17] (ASUSTeK COMPUTER INC. -> ASUSTeK Computer Inc.)",
             "match_type": "parsed",
             "status": "B",
             "lines": ["just a plain text line"],

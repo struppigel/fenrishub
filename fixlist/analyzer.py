@@ -373,7 +373,7 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
 
 
 def _load_rule_buckets():
-    rules = ClassificationRule.objects.filter(is_enabled=True)
+    rules = ClassificationRule.objects.filter(is_enabled=True).select_related('owner')
     parsed_filepath_exclusions = {
         (path or "").strip().lower()
         for path in ParsedFilepathExclusion.objects.filter(is_enabled=True).values_list(
@@ -622,6 +622,7 @@ def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]
                 "file_not_signed": rule.file_not_signed,
                 "matcher": matcher,
                 "reason": reason_value,
+                "owner_username": rule.owner.username if rule.owner_id else "",
             }
         )
 

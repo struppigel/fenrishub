@@ -828,6 +828,15 @@ body.question-cursor-mode .line-text {
     border-color: var(--la-border-hover);
 }
 
+.wizard-action-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.wizard-action-disabled:hover {
+    border-color: var(--la-border);
+}
+
 .wizard-action-option input {
     margin-right: 6px;
 }

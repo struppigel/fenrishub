@@ -229,6 +229,52 @@ class UploadedLogViewTests(TestCase):
         self.assertEqual(uploaded.total_line_count, 2)
         self.assertEqual(uploaded.count_unknown, 0)  # Unknown type logs are not analyzed
 
+    def test_upload_with_u_slash_prefix_strips_prefix_and_succeeds(self):
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'u/reddit_name',
+                'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(UploadedLog.objects.filter(reddit_username='reddit_name').exists())
+
+    def test_upload_with_slash_u_slash_prefix_strips_prefix_and_succeeds(self):
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': '/u/reddit_name',
+                'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(UploadedLog.objects.filter(reddit_username='reddit_name').exists())
+
+    def test_upload_with_special_chars_in_username_shows_form_error(self):
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'some-user!',
+                'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '3-20 letters, numbers, or underscores')
+        self.assertEqual(UploadedLog.objects.count(), 0)
+
+    def test_upload_with_too_short_username_shows_form_error(self):
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'ab',
+                'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '3-20 letters, numbers, or underscores')
+        self.assertEqual(UploadedLog.objects.count(), 0)
+
     def test_upload_log_view_rejects_non_txt_extension(self):
         response = self.client.post(
             reverse('upload_log'),

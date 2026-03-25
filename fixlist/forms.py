@@ -1,3 +1,5 @@
+import re
+
 from django import forms
 from .models import Fixlist
 
@@ -33,6 +35,13 @@ class UploadedLogForm(forms.Form):
         username = (self.cleaned_data.get('reddit_username') or '').strip()
         if not username:
             raise forms.ValidationError('Reddit username is required.')
+        # Strip leading "u/" or "/u/" that users often include
+        username = re.sub(r'^/?u/', '', username)
+        if not re.fullmatch(r'[A-Za-z0-9_]{3,20}', username):
+            raise forms.ValidationError(
+                'Enter just the username (3-20 letters, numbers, or underscores). '
+                'No need for the u/ prefix.'
+            )
         return username
 
     def clean_log_file(self):

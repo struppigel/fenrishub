@@ -199,13 +199,21 @@ function getResolutionsForChange(changeId) {
     );
 }
 
+function isOwnResolution(entry) {
+    if (!CURRENT_USERNAME || !entry.existing_rule_owner) {
+        return true;
+    }
+    return entry.existing_rule_owner === CURRENT_USERNAME;
+}
+
 function buildRuleResolutionPlan(change) {
     const entries = getResolutionsForChange(change.id);
+    const ownEntries = entries.filter(isOwnResolution);
     const hasDiscard = entries.some((entry) => entry.action === CONFLICT_ACTION_DISCARD_NEW);
-    const hasUpdateExisting = entries.some((entry) => entry.action === CONFLICT_ACTION_UPDATE_EXISTING);
+    const hasUpdateExisting = ownEntries.some((entry) => entry.action === CONFLICT_ACTION_UPDATE_EXISTING);
     const disableRuleIds = [
         ...new Set(
-            entries
+            ownEntries
                 .filter((entry) => entry.action === CONFLICT_ACTION_KEEP_NEW_DISABLE_OTHER)
                 .map((entry) => entry.existing_rule_id)
                 .filter((value) => value !== null && value !== undefined)
@@ -213,7 +221,7 @@ function buildRuleResolutionPlan(change) {
     ];
     const updateRuleIds = [
         ...new Set(
-            entries
+            ownEntries
                 .filter((entry) => entry.action === CONFLICT_ACTION_UPDATE_EXISTING)
                 .map((entry) => entry.existing_rule_id)
                 .filter((value) => value !== null && value !== undefined)
@@ -371,6 +379,13 @@ function renderWizardRulePanel(containerId, rows) {
     container.appendChild(grid);
 }
 
+function isOwnRule(existingRule) {
+    if (!CURRENT_USERNAME || !existingRule) {
+        return false;
+    }
+    return existingRule.owner_username === CURRENT_USERNAME;
+}
+
 function renderConflictWizardActions(item) {
     const panel = document.getElementById('wizardActionPanel');
     if (!panel) {
@@ -381,33 +396,45 @@ function renderConflictWizardActions(item) {
     const currentResolution = conflictWizardState.resolutions[item.key];
     const selectedAction = currentResolution ? currentResolution.action : '';
     const statusText = `${item.selected_status} (${STATUS_LABEL_MAP[item.selected_status] || 'unknown'})`;
+    const ownedByCurrentUser = isOwnRule(item.existing_rule);
+    const otherOwner = !ownedByCurrentUser && item.existing_rule
+        ? (item.existing_rule.owner_username || 'another user')
+        : '';
 
     const options = [
         {
             value: CONFLICT_ACTION_UPDATE_EXISTING,
             title: `only change status of existing rule to ${statusText}`,
             description: 'Does not create a new rule for this conflict pair.',
+            requiresOwnership: true,
         },
         {
             value: CONFLICT_ACTION_KEEP_BOTH,
             title: 'keep both rules',
             description: 'Both rules remain enabled; precedence decides runtime status.',
+            requiresOwnership: false,
         },
         {
             value: CONFLICT_ACTION_KEEP_NEW_DISABLE_OTHER,
             title: 'keep new rule and disable existing conflicting rule',
             description: 'Existing conflicting rule is soft-disabled (is_enabled=false).',
+            requiresOwnership: true,
         },
         {
             value: CONFLICT_ACTION_DISCARD_NEW,
             title: 'discard own new rule',
             description: 'This new rule is removed from persistence for all of its contradictions.',
+            requiresOwnership: false,
         },
     ];
 
     options.forEach((option) => {
+        const disabled = option.requiresOwnership && !ownedByCurrentUser;
         const label = document.createElement('label');
         label.className = 'wizard-action-option';
+        if (disabled) {
+            label.classList.add('wizard-action-disabled');
+        }
 
         const title = document.createElement('div');
         title.className = 'wizard-action-title';
@@ -416,7 +443,8 @@ function renderConflictWizardActions(item) {
         radio.type = 'radio';
         radio.name = 'wizardActionChoice';
         radio.value = option.value;
-        radio.checked = selectedAction === option.value;
+        radio.disabled = disabled;
+        radio.checked = !disabled && selectedAction === option.value;
         radio.addEventListener('change', () => {
             setWizardResolution(item, option.value);
         });
@@ -426,7 +454,9 @@ function renderConflictWizardActions(item) {
 
         const description = document.createElement('div');
         description.className = 'wizard-action-description';
-        description.textContent = option.description;
+        description.textContent = disabled
+            ? `Not available \u2014 this rule belongs to ${otherOwner}.`
+            : option.description;
 
         label.appendChild(title);
         label.appendChild(description);
@@ -444,6 +474,7 @@ function setWizardResolution(item, action) {
         contradiction_type: item.contradiction_type,
         change_id: item.change_id,
         existing_rule_id: item.existing_rule ? item.existing_rule.id : null,
+        existing_rule_owner: item.existing_rule ? (item.existing_rule.owner_username || '') : '',
         action,
     };
 
@@ -510,6 +541,7 @@ function renderConflictWizardStep() {
 
     renderWizardRulePanel('wizardExistingRulePanel', [
         { key: 'existing_rule_db_id', value: existingRule.id },
+        { key: 'owner', value: existingRule.owner_username || '(unknown)' },
         { key: 'status', value: `${existingRule.status} (${STATUS_LABEL_MAP[existingRule.status] || 'unknown'})` },
         { key: 'match_type', value: existingRule.match_type },
         { key: 'source_text', value: existingRule.source_text },

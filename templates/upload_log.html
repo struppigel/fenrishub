@@ -63,7 +63,7 @@ function copyUploadId(button) {
     {% endif %}
     <div class="form-group">
         <label for="id_reddit_username">reddit username</label>
-        <input type="text" id="id_reddit_username" name="reddit_username" maxlength="20" value="{{ form.reddit_username.value|default:'' }}" required>
+        <input type="text" id="id_reddit_username" name="reddit_username" maxlength="20" value="{{ form.reddit_username.value|default:'' }}" required placeholder="e.g. SomeUser (no u/ prefix)">
         {% if form.reddit_username.errors %}
             <div class="error-box">{{ form.reddit_username.errors|join:', ' }}</div>
         {% endif %}

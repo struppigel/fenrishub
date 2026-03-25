@@ -253,6 +253,7 @@ window.logAnalyzerConfig = {
     initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
     snippetsApiUrl: "{% url 'snippets_api' %}",
     isSuperuser: {{ is_superuser|yesno:"true,false" }},
+    currentUsername: "{{ request.user.username|escapejs }}",
 };
 </script>
 <script src="{% static 'js/log_analyzer/shared.js' %}"></script>
