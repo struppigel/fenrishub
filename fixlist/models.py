@@ -263,8 +263,8 @@ class UploadedLog(models.Model):
 
     def clean(self):
         username = (self.reddit_username or '').strip()
-        if not re.fullmatch(r'[A-Za-z0-9_]{3,20}', username):
-            raise ValidationError({'reddit_username': 'Use 3-20 letters, numbers, or underscores.'})
+        if not re.fullmatch(r'[A-Za-z0-9_-]{3,20}', username):
+            raise ValidationError({'reddit_username': 'Use 3-20 letters, numbers, underscores, or hyphens.'})
         if not (self.content or '').strip():
             raise ValidationError({'content': 'Uploaded content cannot be empty.'})
         self.reddit_username = username

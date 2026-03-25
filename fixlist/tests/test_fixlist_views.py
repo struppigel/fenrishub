@@ -251,16 +251,27 @@ class UploadedLogViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(UploadedLog.objects.filter(reddit_username='reddit_name').exists())
 
+    def test_upload_with_hyphenated_username_succeeds(self):
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'Dazzling-Substance57',
+                'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(UploadedLog.objects.filter(reddit_username='Dazzling-Substance57').exists())
+
     def test_upload_with_special_chars_in_username_shows_form_error(self):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'some-user!',
+                'reddit_username': 'some user!',
                 'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '3-20 letters, numbers, or underscores')
+        self.assertContains(response, '3-20 letters, numbers, underscores, or hyphens')
         self.assertEqual(UploadedLog.objects.count(), 0)
 
     def test_upload_with_too_short_username_shows_form_error(self):
@@ -272,7 +283,7 @@ class UploadedLogViewTests(TestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '3-20 letters, numbers, or underscores')
+        self.assertContains(response, '3-20 letters, numbers, underscores, or hyphens')
         self.assertEqual(UploadedLog.objects.count(), 0)
 
     def test_upload_log_view_rejects_non_txt_extension(self):
