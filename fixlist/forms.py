@@ -54,10 +54,18 @@ class UploadedLogForm(forms.Form):
             raise forms.ValidationError('Only .txt files are allowed.')
 
         raw_bytes = uploaded_file.read()
-        try:
-            decoded_content = raw_bytes.decode('utf-8')
-        except UnicodeDecodeError as exc:
-            raise forms.ValidationError('File must be valid UTF-8 text.') from exc
+
+        # FRST log files are usually UTF-8 but can be ANSI (Windows-1252) or
+        # UTF-16 depending on the system locale and FRST version.
+        decoded_content = None
+        for encoding in ('utf-8-sig', 'utf-16', 'windows-1252'):
+            try:
+                decoded_content = raw_bytes.decode(encoding)
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        if decoded_content is None:
+            raise forms.ValidationError('File must be valid text (UTF-8, UTF-16, or ANSI encoded).')
 
         if not decoded_content.strip():
             raise forms.ValidationError('Uploaded file is empty.')
