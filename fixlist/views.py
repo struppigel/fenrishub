@@ -14,6 +14,7 @@ from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
 from io import BytesIO
+import difflib
 import json
 import re
 
@@ -838,6 +839,69 @@ def view_uploaded_log(request, upload_id):
             return redirect('view_uploaded_log', upload_id=upload_id)
 
     return render(request, 'view_uploaded_log.html', {'uploaded_log': uploaded_log})
+
+
+@login_required
+@require_http_methods(["GET"])
+def diff_uploaded_logs_view(request, id1, id2):
+    """Show a side-by-side diff of two uploaded logs."""
+    log1 = get_object_or_404(UploadedLog, upload_id=id1, deleted_at__isnull=True)
+    log2 = get_object_or_404(UploadedLog, upload_id=id2, deleted_at__isnull=True)
+
+    lines1 = log1.content.splitlines()
+    lines2 = log2.content.splitlines()
+
+    matcher = difflib.SequenceMatcher(None, lines1, lines2, autojunk=False)
+    rows = []
+    left_lineno = 0
+    right_lineno = 0
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        left_chunk = lines1[i1:i2]
+        right_chunk = lines2[j1:j2]
+
+        if tag == 'equal':
+            for left, right in zip(left_chunk, right_chunk):
+                left_lineno += 1
+                right_lineno += 1
+                rows.append({'tag': 'equal', 'left': left, 'right': right,
+                             'left_lineno': left_lineno, 'right_lineno': right_lineno})
+        elif tag == 'replace':
+            for k in range(max(len(left_chunk), len(right_chunk))):
+                has_left = k < len(left_chunk)
+                has_right = k < len(right_chunk)
+                if has_left:
+                    left_lineno += 1
+                if has_right:
+                    right_lineno += 1
+                rows.append({
+                    'tag': 'replace',
+                    'left': left_chunk[k] if has_left else None,
+                    'right': right_chunk[k] if has_right else None,
+                    'left_lineno': left_lineno if has_left else None,
+                    'right_lineno': right_lineno if has_right else None,
+                })
+        elif tag == 'delete':
+            for line in left_chunk:
+                left_lineno += 1
+                rows.append({'tag': 'delete', 'left': line, 'right': None,
+                             'left_lineno': left_lineno, 'right_lineno': None})
+        elif tag == 'insert':
+            for line in right_chunk:
+                right_lineno += 1
+                rows.append({'tag': 'insert', 'left': None, 'right': line,
+                             'left_lineno': None, 'right_lineno': right_lineno})
+
+    equal_count = sum(1 for r in rows if r['tag'] == 'equal')
+    changed_count = len(rows) - equal_count
+
+    return render(request, 'diff_uploaded_logs.html', {
+        'log1': log1,
+        'log2': log2,
+        'rows': rows,
+        'equal_count': equal_count,
+        'changed_count': changed_count,
+    })
 
 
 @login_required

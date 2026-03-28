@@ -1,0 +1,143 @@
+{% extends 'base.html' %}
+
+{% block title %}Diff - Fenris{% endblock %}
+
+{% block page_context_label %}diff{% endblock %}
+
+{% block extra_css %}
+<style>
+    .diff-header {
+        margin-bottom: 12px;
+    }
+
+    .diff-meta {
+        font-size: 12px;
+        color: var(--la-text-muted);
+        margin-bottom: 10px;
+    }
+
+    .diff-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        font-family: inherit;
+        table-layout: fixed;
+    }
+
+    .diff-table colgroup .col-lineno {
+        width: 42px;
+    }
+
+    .diff-table colgroup .col-content {
+        width: calc(50% - 42px);
+    }
+
+    .diff-table td {
+        padding: 1px 6px;
+        vertical-align: top;
+        white-space: pre-wrap;
+        word-break: break-all;
+        border: none;
+    }
+
+    .diff-lineno {
+        color: var(--la-text-muted);
+        text-align: right;
+        user-select: none;
+        width: 42px;
+        min-width: 42px;
+        border-right: 1px solid var(--la-border) !important;
+    }
+
+    .diff-divider td {
+        border-right: 1px solid var(--la-border-strong) !important;
+        padding: 0;
+    }
+
+    .diff-row-equal td {
+        color: var(--la-text-main);
+    }
+
+    .diff-row-delete .diff-left-content {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+    }
+
+    .diff-row-delete .diff-right-content {
+        background-color: var(--la-bg-1);
+    }
+
+    .diff-row-insert .diff-left-content {
+        background-color: var(--la-bg-1);
+    }
+
+    .diff-row-insert .diff-right-content {
+        background-color: color-mix(in srgb, var(--la-status-c) 15%, transparent);
+        color: var(--la-status-c);
+    }
+
+    .diff-row-replace .diff-left-content {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+    }
+
+    .diff-row-replace .diff-right-content {
+        background-color: color-mix(in srgb, var(--la-status-c) 15%, transparent);
+        color: var(--la-status-c);
+    }
+
+    .diff-row-equal .diff-left-content,
+    .diff-row-equal .diff-right-content {
+        color: var(--la-text-main);
+    }
+
+    .diff-empty-cell {
+        background-color: var(--la-bg-hover);
+        opacity: 0.5;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="diff-header button-group">
+    <a href="{% url 'uploaded_logs' %}"><button type="button">back to uploads</button></a>
+    <a href="{% url 'view_uploaded_log' log1.upload_id %}"><button type="button">{{ log1.upload_id }}</button></a>
+    <a href="{% url 'view_uploaded_log' log2.upload_id %}"><button type="button">{{ log2.upload_id }}</button></a>
+</div>
+
+<div class="diff-meta">
+    {{ equal_count }} line{{ equal_count|pluralize }} identical &mdash;
+    {{ changed_count }} line{{ changed_count|pluralize }} differ
+</div>
+
+{% if rows %}
+<table class="diff-table">
+    <colgroup>
+        <col class="col-lineno">
+        <col class="col-content">
+        <col class="col-lineno">
+        <col class="col-content">
+    </colgroup>
+    <thead>
+        <tr>
+            <th class="diff-lineno" style="font-weight: normal; color: var(--la-text-muted); padding-bottom: 4px;">#</th>
+            <th style="padding: 2px 6px 4px; color: var(--la-text-muted); font-weight: normal; font-size: 12px;">{{ log1.upload_id }} &mdash; {{ log1.original_filename }}</th>
+            <th class="diff-lineno" style="font-weight: normal; color: var(--la-text-muted); padding-bottom: 4px;">#</th>
+            <th style="padding: 2px 6px 4px; color: var(--la-text-muted); font-weight: normal; font-size: 12px;">{{ log2.upload_id }} &mdash; {{ log2.original_filename }}</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+        <tr class="diff-row-{{ row.tag }}">
+            <td class="diff-lineno">{% if row.left_lineno %}{{ row.left_lineno }}{% endif %}</td>
+            <td class="diff-left-content{% if row.left is None %} diff-empty-cell{% endif %}">{{ row.left|default:"" }}</td>
+            <td class="diff-lineno">{% if row.right_lineno %}{{ row.right_lineno }}{% endif %}</td>
+            <td class="diff-right-content{% if row.right is None %} diff-empty-cell{% endif %}">{{ row.right|default:"" }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+    <div class="info-box">The two logs are identical.</div>
+{% endif %}
+{% endblock %}

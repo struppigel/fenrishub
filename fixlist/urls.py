@@ -9,6 +9,7 @@ urlpatterns = [
     path('uploads/', views.uploaded_logs_view, name='uploaded_logs'),
     path('uploads/trash/', views.uploads_trash_view, name='uploads_trash'),
     path('uploads/<str:upload_id>/', views.view_uploaded_log, name='view_uploaded_log'),
+    path('uploads/diff/<str:id1>/<str:id2>/', views.diff_uploaded_logs_view, name='diff_uploaded_logs'),
     path('fixlists/trash/', views.fixlists_trash_view, name='fixlists_trash'),
     path('fixlists/create/', views.create_fixlist_view, name='create_fixlist'),
     path('fixlists/analyze/', views.log_analyzer_view, name='log_analyzer'),

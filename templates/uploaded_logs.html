@@ -98,6 +98,7 @@
 
 <div class="merge-controls button-group">
     <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();">merge</button>
+    <button type="button" onclick="confirmDiff();">diff</button>
     <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();">delete</button>
     <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan</button>
     <a href="{% url 'upload_log' %}"><button type="button">upload</button></a>
@@ -180,6 +181,16 @@ function confirmDeleteSelected() {
         return false;
     }
     return confirm('Move ' + selected.length + ' selected upload(s) to trash?');
+}
+
+function confirmDiff() {
+    const selected = [...document.querySelectorAll('input[name="selected_upload_ids"]:checked')].map(el => el.value);
+    if (selected.length !== 2) {
+        alert('Select exactly two uploads to diff.');
+        return;
+    }
+    const urlTemplate = "{% url 'diff_uploaded_logs' '__ID1__' '__ID2__' %}";
+    window.location.href = urlTemplate.replace('__ID1__', selected[0]).replace('__ID2__', selected[1]);
 }
 </script>
 {% endblock %}
