@@ -97,12 +97,16 @@
 </form>
 
 <div class="merge-controls button-group">
-    <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();">merge</button>
-    <button type="button" onclick="confirmDiff();">diff</button>
-    <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();">delete</button>
-    <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan</button>
-    <a href="{% url 'upload_log' %}"><button type="button">upload</button></a>
-    <a href="{% url 'uploads_trash' %}"><button type="button"{% if trash_count %} style="color: var(--la-warning-text);"{% endif %}>trash{% if trash_count %} ({{ trash_count }}){% endif %}</button></a>
+    <div style="display: flex; gap: 8px;">
+        <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();">merge</button>
+        <button type="button" onclick="confirmDiff();">diff</button>
+        <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();">delete</button>
+        <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan</button>
+    </div>
+    <div style="display: flex; gap: 8px;">
+        <a href="{% url 'upload_log' %}"><button type="button">upload</button></a>
+        <a href="{% url 'uploads_trash' %}"><button type="button"{% if trash_count %} style="color: var(--la-warning-text);"{% endif %}>trash{% if trash_count %} ({{ trash_count }}){% endif %}</button></a>
+    </div>
 </div>
 
 {% if uploads %}
