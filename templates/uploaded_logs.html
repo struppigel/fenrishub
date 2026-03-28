@@ -79,7 +79,6 @@
 
 <form id="mergeUploadsForm" method="post" action="{% url 'uploaded_logs' %}">
     {% csrf_token %}
-    <input type="hidden" name="action" value="merge">
 </form>
 
 <form id="rescanUploadsStatsForm" method="post" action="{% url 'uploaded_logs' %}">
@@ -98,9 +97,10 @@
 </form>
 
 <div class="merge-controls button-group">
-    <button type="submit" form="mergeUploadsForm" onclick="return confirmMerge();">merge selected</button>
-    <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan logs</button>
-    <a href="{% url 'upload_log' %}"><button type="button">upload new log</button></a>
+    <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();">merge</button>
+    <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();">delete</button>
+    <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan</button>
+    <a href="{% url 'upload_log' %}"><button type="button">upload</button></a>
     <a href="{% url 'uploads_trash' %}"><button type="button"{% if trash_count %} style="color: var(--la-warning-text);"{% endif %}>trash{% if trash_count %} ({{ trash_count }}){% endif %}</button></a>
 </div>
 
@@ -171,6 +171,15 @@ function confirmMerge() {
         return false;
     }
     return confirm('Merge ' + selected.length + ' selected upload(s)?');
+}
+
+function confirmDeleteSelected() {
+    const selected = document.querySelectorAll('input[name="selected_upload_ids"]:checked');
+    if (selected.length === 0) {
+        alert('Select at least one upload to delete.');
+        return false;
+    }
+    return confirm('Move ' + selected.length + ' selected upload(s) to trash?');
 }
 </script>
 {% endblock %}

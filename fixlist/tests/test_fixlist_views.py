@@ -566,6 +566,65 @@ class UploadedLogViewTests(TestCase):
         self.assertEqual(response.url, reverse('uploaded_logs'))
         self.assertEqual(UploadedLog.objects.count(), 1)
 
+    def test_delete_selected_uploads_moves_selected_to_trash(self):
+        first = UploadedLog.objects.create(
+            upload_id='drift-spark',
+            reddit_username='reddit_name',
+            original_filename='first.txt',
+            content='aaa',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='echo-meadow',
+            reddit_username='reddit_name',
+            original_filename='second.txt',
+            content='bbb',
+        )
+        keep = UploadedLog.objects.create(
+            upload_id='frost-cove',
+            reddit_username='reddit_name',
+            original_filename='keep.txt',
+            content='ccc',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'delete_selected',
+                'selected_upload_ids': [first.upload_id, second.upload_id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('uploaded_logs'))
+        first.refresh_from_db()
+        second.refresh_from_db()
+        keep.refresh_from_db()
+        self.assertIsNotNone(first.deleted_at)
+        self.assertIsNotNone(second.deleted_at)
+        self.assertIsNone(keep.deleted_at)
+
+    def test_delete_selected_uploads_requires_selection(self):
+        existing = UploadedLog.objects.create(
+            upload_id='glint-grove',
+            reddit_username='reddit_name',
+            original_filename='only.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'delete_selected',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('uploaded_logs'))
+        existing.refresh_from_db()
+        self.assertIsNone(existing.deleted_at)
+
     def test_bulk_rescan_recalculates_stats_for_all_uploads(self):
         first = UploadedLog.objects.create(
             upload_id='silent-river',

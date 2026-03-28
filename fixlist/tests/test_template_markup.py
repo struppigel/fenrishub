@@ -58,12 +58,14 @@ class TemplateMarkupTests(TestCase):
 
         self.assertIn('id="uploadedLogId"', upload_page)
         self.assertIn('copyUploadId', upload_page)
-        self.assertIn('>upload new log<', uploads_page)
-        self.assertIn('>merge selected<', uploads_page)
-        self.assertIn('>rescan logs<', uploads_page)
+        self.assertIn('>upload<', uploads_page)
+        self.assertIn('>merge<', uploads_page)
+        self.assertIn('>rescan<', uploads_page)
         self.assertIn('>analyze</a>', uploads_page)
         self.assertIn('?upload_id={{ uploaded_log.upload_id|urlencode }}', uploads_page)
         self.assertIn('class="merge-controls button-group"', uploads_page)
+        self.assertIn('name="action" value="delete_selected"', uploads_page)
+        self.assertIn('confirmDeleteSelected', uploads_page)
         self.assertIn('lines {{ uploaded_log.total_line_count }}', uploads_page)
         self.assertIn('? {{ uploaded_log.count_unknown }}', uploads_page)
 

@@ -612,6 +612,15 @@ def uploaded_logs_view(request):
     if request.method == 'POST':
         action = request.POST.get('action', '')
 
+        selected_ids = []
+        seen_ids = set()
+        for upload_id in request.POST.getlist('selected_upload_ids'):
+            normalized_id = str(upload_id).strip()
+            if not normalized_id or normalized_id in seen_ids:
+                continue
+            seen_ids.add(normalized_id)
+            selected_ids.append(normalized_id)
+
         if action == 'delete':
             upload_id = request.POST.get('upload_id', '').strip()
             uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
@@ -621,16 +630,30 @@ def uploaded_logs_view(request):
             messages.success(request, f'Upload {upload_id} moved to trash.')
             return redirect('uploaded_logs')
 
-        if action == 'merge':
-            selected_ids = []
-            seen_ids = set()
-            for upload_id in request.POST.getlist('selected_upload_ids'):
-                normalized_id = str(upload_id).strip()
-                if not normalized_id or normalized_id in seen_ids:
-                    continue
-                seen_ids.add(normalized_id)
-                selected_ids.append(normalized_id)
+        if action == 'delete_selected':
+            if not selected_ids:
+                messages.error(request, 'Select at least one upload to delete.')
+                return redirect('uploaded_logs')
 
+            selected_logs = list(
+                UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=True)
+            )
+            found_ids = {entry.upload_id for entry in selected_logs}
+            missing_ids = [upload_id for upload_id in selected_ids if upload_id not in found_ids]
+            if missing_ids:
+                messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
+                return redirect('uploaded_logs')
+
+            now = timezone.now()
+            for log in selected_logs:
+                log.deleted_at = now
+                log.save(update_fields=['deleted_at'])
+
+            _purge_old_trash()
+            messages.success(request, f'Moved {len(selected_logs)} selected upload(s) to trash.')
+            return redirect('uploaded_logs')
+
+        if action == 'merge':
             if len(selected_ids) < 2:
                 messages.error(request, 'Select at least two uploads to merge.')
                 return redirect('uploaded_logs')
