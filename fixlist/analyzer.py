@@ -214,6 +214,11 @@ def _detect_multiple_enabled_av_warning(raw_log_text: str) -> dict | None:
     if len(enabled_av_lines) < 2:
         return None
 
+    # Extract unique AV product names (text between "AV: " and the first "(")
+    unique_products = {line.split("(")[0].strip() for line in enabled_av_lines}
+    if len(unique_products) < 2:
+        return None
+
     return _build_warning(
         "multiple_enabled_av",
         "Multiple enabled antivirus products detected",

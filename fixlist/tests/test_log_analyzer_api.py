@@ -491,6 +491,28 @@ class LogAnalyzerApiTests(TestCase):
         self.assertIn("multiple_enabled_av", warnings_by_code)
         self.assertIn("Multiple AV products are enabled", warnings_by_code["multiple_enabled_av"]["message"])
 
+    def test_analyze_api_does_not_warn_for_same_av_product_multiple_entries(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "AV: Kaspersky (Enabled - Up to date) {DABD1ABC-6D70-BB0E-89E6-BFA3FC920FD1}\n"
+                    "AV: Kaspersky (Enabled - Up to date) {70E35457-C7D9-669C-FEA5-55382EABDC78}\n"
+                    "AV: Windows Defender (Disabled - Up to date) {D68DDC3A-831F-4fae-9E44-DA132C1ACF46}\n"
+                    "AV: Kaspersky (Enabled - Up to date) {4F76F112-43EB-40E8-11D8-F7BD1853EA23}\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warning_codes = {warning["code"] for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("multiple_enabled_av", warning_codes)
+
     def test_analyze_api_does_not_warn_for_single_enabled_av_entry(self):
         self.client.login(username="analyzer", password="password123")
 

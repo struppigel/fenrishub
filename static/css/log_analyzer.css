@@ -86,7 +86,8 @@ body {
     border-color: var(--la-success-border);
 }
 
-#questionCursorModeButton {
+#questionCursorModeButton,
+#cleanCursorModeButton {
     min-width: 32px;
     padding-left: 10px;
     padding-right: 10px;
@@ -99,11 +100,23 @@ body {
     color: var(--la-status-i);
 }
 
+#cleanCursorModeButton.is-active {
+    border-color: var(--la-focus);
+    color: var(--la-status-c);
+}
+
 body.question-cursor-mode .log-lines-container,
 body.question-cursor-mode .log-lines-container *,
 body.question-cursor-mode .status-badge,
 body.question-cursor-mode .line-text {
     cursor: help !important;
+}
+
+body.clean-cursor-mode .log-lines-container,
+body.clean-cursor-mode .log-lines-container *,
+body.clean-cursor-mode .status-badge,
+body.clean-cursor-mode .line-text {
+    cursor: crosshair !important;
 }
 
 #saveRulesRescanButton.has-pending-changes {

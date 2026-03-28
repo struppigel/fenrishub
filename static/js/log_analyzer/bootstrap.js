@@ -266,6 +266,7 @@ function bindAnalyzerControls() {
     bindAnalyzerButton('parseButton', () => parseLogs());
     bindAnalyzerButton('resetButton', () => resetToInput());
     bindAnalyzerButton('questionCursorModeButton', () => toggleQuestionCursorMode());
+    bindAnalyzerButton('cleanCursorModeButton', () => toggleCleanCursorMode());
     bindAnalyzerButton('saveRulesRescanButton', () => saveRulesAndRescan());
     bindAnalyzerButton('saveFixlistButton', () => goToCreateFixlist());
     bindAnalyzerButton('lineInspectorCloseButton', () => closeLineInspectorModal());
@@ -361,6 +362,7 @@ function exposeLegacyAnalyzerGlobals() {
         saveStatusSelection,
         submitWithRulePersist,
         toggleQuestionCursorMode,
+        toggleCleanCursorMode,
     });
 }
 
@@ -372,6 +374,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initializePendingStatusChanges();
     if (typeof applyQuestionCursorModeState === 'function') {
         applyQuestionCursorModeState();
+    }
+    if (typeof applyCleanCursorModeState === 'function') {
+        applyCleanCursorModeState();
     }
     bindAnalyzerControls();
     bindAnalyzerModalDismissals();

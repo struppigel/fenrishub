@@ -40,6 +40,7 @@ async function requestLineDetails(line, status) {
 }
 
 let questionCursorModeActive = false;
+let cleanCursorModeActive = false;
 let lineInspectorInFlight = false;
 
 function closeLineInspectorModal(options = {}) {
@@ -76,7 +77,32 @@ function applyQuestionCursorModeState() {
 
 function toggleQuestionCursorMode() {
     questionCursorModeActive = !questionCursorModeActive;
+    if (questionCursorModeActive) {
+        cleanCursorModeActive = false;
+        applyCleanCursorModeState();
+    }
     applyQuestionCursorModeState();
+}
+
+function applyCleanCursorModeState() {
+    document.body.classList.toggle('clean-cursor-mode', cleanCursorModeActive);
+
+    const button = document.getElementById('cleanCursorModeButton');
+    if (!button) {
+        return;
+    }
+
+    button.setAttribute('aria-pressed', cleanCursorModeActive ? 'true' : 'false');
+    button.classList.toggle('is-active', cleanCursorModeActive);
+}
+
+function toggleCleanCursorMode() {
+    cleanCursorModeActive = !cleanCursorModeActive;
+    if (cleanCursorModeActive) {
+        questionCursorModeActive = false;
+        applyQuestionCursorModeState();
+    }
+    applyCleanCursorModeState();
 }
 
 function buildLineInspectorRows(parsedRule) {
@@ -614,6 +640,10 @@ function renderLogLines() {
                 openLineInspectorForIndex(index, { triggerElement: badge });
                 return;
             }
+            if (cleanCursorModeActive) {
+                saveStatusSelection(index, 'C');
+                return;
+            }
             openStatusPicker(badge, index);
         });
 
@@ -629,6 +659,10 @@ function renderLogLines() {
         lineDiv.addEventListener('click', () => {
             if (questionCursorModeActive) {
                 openLineInspectorForIndex(index, { triggerElement: lineDiv });
+                return;
+            }
+            if (cleanCursorModeActive) {
+                saveStatusSelection(index, 'C');
                 return;
             }
             if (copiedLineIndexes.has(index)) {
@@ -681,10 +715,6 @@ function shouldSkipFirewallRulesLine(line) {
 
 function insertLine(line, index) {
     if (analyzedLines[index] && analyzedLines[index].dominant_status === 'I') {
-        return;
-    }
-
-    if (shouldSkipFirewallRulesLine(line)) {
         return;
     }
 
