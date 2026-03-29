@@ -403,6 +403,51 @@
             font-size: 12px;
         }
 
+        .faq-modal-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .faq-modal-backdrop.show {
+            display: flex;
+        }
+
+        .faq-modal {
+            background-color: var(--la-bg-4);
+            border: 1px solid var(--la-border-strong);
+            max-width: 620px;
+            width: 96vw;
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .faq-modal h2 {
+            margin-bottom: 14px;
+        }
+
+        .faq-modal h3 {
+            margin-top: 16px;
+            margin-bottom: 6px;
+            color: var(--la-text-primary);
+        }
+
+        .faq-modal p {
+            font-size: 12px;
+            color: var(--la-text-neutral);
+            margin-bottom: 8px;
+            line-height: 1.6;
+        }
+
+        .faq-modal .button-group {
+            margin-top: 16px;
+        }
+
         @media (max-width: 768px) {
             .fixlist-item {
                 flex-direction: column;
@@ -492,12 +537,18 @@
                     <a href="{% url 'snippets' %}">snippets</a>
                     <a href="{% url 'rules' %}">rules</a>
                 </div>
-                <div id="bannerStatistics" class="nav-right banner-statistics" style="display: none;"></div>
+                <div class="nav-right" style="display: flex; gap: 8px; align-items: center;">
+                    <button type="button" class="profile-btn" onclick="document.getElementById('faqModal').classList.add('show')">what is this?</button>
+                    <div id="bannerStatistics" class="banner-statistics" style="display: none;"></div>
+                </div>
             </div>
             {% else %}
             {% block nav %}
             <div class="nav">
                 <a href="{% url 'login' %}">Login</a>
+                <div class="nav-right">
+                    <button type="button" class="profile-btn" onclick="document.getElementById('faqModal').classList.add('show')">what is this?</button>
+                </div>
             </div>
             {% endblock %}
             {% endif %}
@@ -512,6 +563,31 @@
             {% block content %}{% endblock %}
         </div>
     </div>
+    <div id="faqModal" class="faq-modal-backdrop" role="dialog" aria-modal="true" aria-label="FAQ">
+        <div class="faq-modal">
+            <h2>FAQ</h2>
+
+            <h3>What is this website?</h3>
+            <p>This website is a convenient way to share FRST.txt, Addition.txt and similar logs with malware removal helpers that occur during malware removal. It makes sure that other people cannot see your logs.</p>
+            <p>Farbar Recovery Scan Tool does not expose private information except for the username and computer name. However, for some people this is already more than they are willing to expose.</p>
+            <p>Sites like pastebin.com sometimes refuse to let you upload logs from these tools because depending on the infection they may contain malware commands that these websites deem suspicious.</p>
+
+            <h3>How long do you keep the logs?</h3>
+            <p>Logs get deleted automatically after 30 days.</p>
+
+            <h3>Who created this website?</h3>
+            <p>I am Karsten Hahn, Principal Malware Researcher. I work at GDATA CyberDefense AG, which is an XDR and antivirus vendor. This is a private website, no registration is possible, my employer has nothing to do with it.</p>
+
+            <div class="button-group">
+                <button type="button" onclick="document.getElementById('faqModal').classList.remove('show')">close</button>
+            </div>
+        </div>
+    </div>
+    <script>
+    document.getElementById('faqModal').addEventListener('click', function(e) {
+        if (e.target === this) this.classList.remove('show');
+    });
+    </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>
