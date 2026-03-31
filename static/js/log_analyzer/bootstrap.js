@@ -29,6 +29,9 @@ async function loadSelectedUploadForAnalyzer() {
     const uploadId = (selectElement.value || '').trim();
     if (!uploadId) {
         statusElement.textContent = '';
+        const url = new URL(window.location);
+        url.searchParams.delete('upload_id');
+        window.history.replaceState(null, '', url);
         return;
     }
 
@@ -58,6 +61,9 @@ async function loadSelectedUploadForAnalyzer() {
         }
         logInputElement.value = payload.content || '';
         statusElement.textContent = `loaded ${payload.upload_id}`;
+        const url = new URL(window.location);
+        url.searchParams.set('upload_id', uploadId);
+        window.history.replaceState(null, '', url);
         logInputElement.focus();
     } catch (error) {
         statusElement.textContent = 'failed to load upload';
@@ -262,6 +268,94 @@ async function copyFrstPathFromLog() {
     }
 }
 
+function toggleStatusVisibility(statusClass) {
+    if (!statusClass) {
+        return;
+    }
+
+    const container = document.getElementById('logLines');
+    if (!container) {
+        return;
+    }
+
+    const hideClass = HIDE_CLASS_PREFIX + statusClass;
+    const isCurrentlyHidden = hiddenStatuses.has(statusClass);
+
+    if (isCurrentlyHidden) {
+        hiddenStatuses.delete(statusClass);
+        container.classList.remove(hideClass);
+    } else {
+        hiddenStatuses.add(statusClass);
+        container.classList.add(hideClass);
+    }
+
+    const legendItem = document.querySelector(
+        `.legend-item[data-status-class="${statusClass}"]`
+    );
+    if (legendItem) {
+        legendItem.classList.toggle('legend-hidden', !isCurrentlyHidden);
+    }
+}
+
+function toggleAllStatusVisibility() {
+    const container = document.getElementById('logLines');
+    if (!container) {
+        return;
+    }
+
+    const allHidden = ALL_LEGEND_STATUS_CLASSES.every((sc) => hiddenStatuses.has(sc));
+
+    ALL_LEGEND_STATUS_CLASSES.forEach((statusClass) => {
+        const hideClass = HIDE_CLASS_PREFIX + statusClass;
+        if (allHidden) {
+            hiddenStatuses.delete(statusClass);
+            container.classList.remove(hideClass);
+        } else {
+            hiddenStatuses.add(statusClass);
+            container.classList.add(hideClass);
+        }
+    });
+
+    document.querySelectorAll('.legend-item[data-status-class]').forEach((item) => {
+        item.classList.toggle('legend-hidden', !allHidden);
+    });
+}
+
+function bindLegendToggle() {
+    const legend = document.getElementById('statusLegend');
+    if (!legend) {
+        return;
+    }
+
+    const toggleAllButton = document.getElementById('legendToggleAllButton');
+    if (toggleAllButton) {
+        toggleAllButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            toggleAllStatusVisibility();
+        });
+    }
+
+    legend.addEventListener('click', (event) => {
+        const item = event.target.closest('.legend-item[data-status-class]');
+        if (!item) {
+            return;
+        }
+        toggleStatusVisibility(item.dataset.statusClass);
+    });
+
+    legend.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+            return;
+        }
+        const item = event.target.closest('.legend-item[data-status-class]');
+        if (!item) {
+            return;
+        }
+        event.preventDefault();
+        toggleStatusVisibility(item.dataset.statusClass);
+    });
+}
+
 function bindAnalyzerControls() {
     bindAnalyzerButton('parseButton', () => parseLogs());
     bindAnalyzerButton('resetButton', () => resetToInput());
@@ -290,6 +384,8 @@ function bindAnalyzerControls() {
             insertAllStatus(button.dataset.insertStatus);
         });
     });
+
+    bindLegendToggle();
 }
 
 function bindAnalyzerModalDismissals() {

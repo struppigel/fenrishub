@@ -141,6 +141,67 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("addRemainingCleanButton", script_content)
         self.assertIn("is_superuser", content)
 
+    def test_log_analyzer_legend_has_toggle_data_attributes_for_all_statuses(self):
+        content = self._read_template("log_analyzer.html")
+
+        expected_statuses = [
+            ("status-b", "B"),
+            ("status-p", "P"),
+            ("status-c", "C"),
+            ("status-w", "!"),
+            ("status-g", "G"),
+            ("status-s", "S"),
+            ("status-i", "I"),
+            ("status-j", "J"),
+            ("status-unknown", "?"),
+        ]
+        for status_class, label in expected_statuses:
+            self.assertIn(
+                f'data-status-class="{status_class}"',
+                content,
+                f"Legend item missing data-status-class for {label}",
+            )
+
+    def test_log_analyzer_css_has_legend_toggle_hide_rules(self):
+        css_content = self._read_static_asset("css", "log_analyzer.css")
+
+        hide_classes = [
+            "hide-status-b",
+            "hide-status-p",
+            "hide-status-c",
+            "hide-status-w",
+            "hide-status-g",
+            "hide-status-s",
+            "hide-status-i",
+            "hide-status-j",
+            "hide-status-unknown",
+        ]
+        for hide_class in hide_classes:
+            self.assertIn(hide_class, css_content)
+
+        self.assertIn("legend-hidden", css_content)
+
+    def test_log_analyzer_js_has_legend_toggle_functions(self):
+        shared_js = self._read_static_asset("js", "log_analyzer", "shared.js")
+        bootstrap_js = self._read_static_asset("js", "log_analyzer", "bootstrap.js")
+
+        self.assertIn("HIDE_CLASS_PREFIX", shared_js)
+        self.assertIn("hiddenStatuses", shared_js)
+        self.assertIn("ALL_LEGEND_STATUS_CLASSES", shared_js)
+        self.assertIn("toggleStatusVisibility", bootstrap_js)
+        self.assertIn("toggleAllStatusVisibility", bootstrap_js)
+        self.assertIn("bindLegendToggle", bootstrap_js)
+        self.assertIn("legend-hidden", bootstrap_js)
+        self.assertIn("legendToggleAllButton", bootstrap_js)
+
+    def test_log_analyzer_legend_has_toggle_all_button(self):
+        content = self._read_template("log_analyzer.html")
+        css_content = self._read_static_asset("css", "log_analyzer.css")
+
+        self.assertIn('id="legendToggleAllButton"', content)
+        self.assertIn("legend-toggle-all", content)
+        self.assertIn(".legend-toggle-all", css_content)
+
     def test_create_fixlist_template_only_uses_prefill_handoff(self):
         content = self._read_template("create_fixlist.html")
 

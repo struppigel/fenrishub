@@ -170,6 +170,36 @@ body.clean-cursor-mode .line-text {
     font-size: 12px;
 }
 
+.legend-item[data-status-class] {
+    cursor: pointer;
+    user-select: none;
+}
+
+.legend-item[data-status-class]:hover {
+    text-decoration: underline;
+}
+
+.legend-item.legend-hidden {
+    opacity: 0.35;
+    text-decoration: line-through;
+}
+
+.legend-toggle-all {
+    border: none;
+    background: transparent;
+    color: var(--la-text-muted);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 0;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.legend-toggle-all:hover {
+    color: var(--la-text-neutral);
+    text-decoration: underline;
+}
+
 .analysis-warnings {
     display: grid;
     gap: 8px;
@@ -916,6 +946,19 @@ body.clean-cursor-mode .line-text {
 .log-line.status-i { color: var(--la-status-i); }
 .log-line.status-j { color: var(--la-status-j); }
 .log-line.status-unknown { color: var(--la-status-unknown); }
+
+/* Legend toggle: hide log lines by status via container class */
+.log-lines-container.hide-status-b > .log-line.status-b,
+.log-lines-container.hide-status-p > .log-line.status-p,
+.log-lines-container.hide-status-c > .log-line.status-c,
+.log-lines-container.hide-status-w > .log-line.status-w,
+.log-lines-container.hide-status-g > .log-line.status-g,
+.log-lines-container.hide-status-s > .log-line.status-s,
+.log-lines-container.hide-status-i > .log-line.status-i,
+.log-lines-container.hide-status-j > .log-line.status-j,
+.log-lines-container.hide-status-unknown > .log-line.status-unknown {
+    display: none;
+}
 
 .log-line.copied .status-badge,
 .log-line.copied .line-text {

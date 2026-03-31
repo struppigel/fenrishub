@@ -12,6 +12,9 @@ const STATUS_CLASS_MAP = {
     J: 'status-j',
     '?': 'status-unknown',
 };
+const HIDE_CLASS_PREFIX = 'hide-';
+const hiddenStatuses = new Set();
+const ALL_LEGEND_STATUS_CLASSES = Object.values(STATUS_CLASS_MAP);
 const STATUS_LABEL_MAP = {
     B: 'malware',
     P: 'potentially unwanted',
