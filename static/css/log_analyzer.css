@@ -929,6 +929,7 @@ body.clean-cursor-mode .line-text {
 .status-picker-option.status-p { color: var(--la-status-p); }
 .status-picker-option.status-c { color: var(--la-status-c); }
 .status-picker-option.status-w { color: var(--la-status-w); }
+.status-picker-option.status-a { color: var(--la-status-a); }
 .status-picker-option.status-g { color: var(--la-status-g); }
 .status-picker-option.status-s { color: var(--la-status-s); }
 .status-picker-option.status-i { color: var(--la-status-i); }
@@ -941,6 +942,7 @@ body.clean-cursor-mode .line-text {
 .log-line.status-p { color: var(--la-status-p); }
 .log-line.status-c { color: var(--la-status-c); }
 .log-line.status-w { color: var(--la-status-w); }
+.log-line.status-a { color: var(--la-status-a); }
 .log-line.status-g { color: var(--la-status-g); }
 .log-line.status-s { color: var(--la-status-s); }
 .log-line.status-i { color: var(--la-status-i); }
@@ -952,6 +954,7 @@ body.clean-cursor-mode .line-text {
 .log-lines-container.hide-status-p > .log-line.status-p,
 .log-lines-container.hide-status-c > .log-line.status-c,
 .log-lines-container.hide-status-w > .log-line.status-w,
+.log-lines-container.hide-status-a > .log-line.status-a,
 .log-lines-container.hide-status-g > .log-line.status-g,
 .log-lines-container.hide-status-s > .log-line.status-s,
 .log-lines-container.hide-status-i > .log-line.status-i,

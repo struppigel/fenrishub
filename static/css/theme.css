@@ -62,6 +62,7 @@
     --la-status-p: #ff5f00;
     --la-status-c: #00ff00;
     --la-status-w: #ffff00;
+    --la-status-a: #ff87af;
     --la-status-g: #af00ff;
     --la-status-s: #00ffff;
     --la-status-i: #ffffd7;
@@ -80,6 +81,7 @@
 .status-p { color: var(--la-status-p); }
 .status-c { color: var(--la-status-c); }
 .status-w { color: var(--la-status-w); }
+.status-a { color: var(--la-status-a); }
 .status-g { color: var(--la-status-g); }
 .status-s { color: var(--la-status-s); }
 .status-i { color: var(--la-status-i); }

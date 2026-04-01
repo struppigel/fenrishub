@@ -420,6 +420,61 @@ class LogAnalyzerApiTests(TestCase):
         self.assertIn("low_memory", warnings_by_code)
         self.assertIn("RAM usage above 80%", warnings_by_code["low_memory"]["message"])
 
+    def test_analyze_api_returns_alert_warning_from_matched_alert_rule_description(self):
+        self.client.login(username="analyzer", password="password123")
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_ALERT,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="ALERT-LINE",
+            description="Investigate this suspicious pattern",
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": "ALERT-LINE\nOTHER-LINE"}),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings = payload["warnings"]
+        alert_warnings = [w for w in warnings if w.get("title") == "Alert rule matched"]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(alert_warnings), 1)
+        self.assertEqual(alert_warnings[0]["message"], "Investigate this suspicious pattern")
+
+    def test_analyze_api_deduplicates_alert_warnings_for_same_description(self):
+        self.client.login(username="analyzer", password="password123")
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_ALERT,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="ALERT-LINE-1",
+            description="Shared alert description",
+        )
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_ALERT,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="ALERT-LINE-2",
+            description="Shared alert description",
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": "ALERT-LINE-1\nALERT-LINE-2"}),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings = payload["warnings"]
+        alert_warnings = [w for w in warnings if w.get("title") == "Alert rule matched"]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(alert_warnings), 1)
+        self.assertEqual(alert_warnings[0]["message"], "Shared alert description")
+
     def test_analyze_api_accepts_windows_ssd_drive_line_for_memory_check(self):
         self.client.login(username="analyzer", password="password123")
 
@@ -566,6 +621,30 @@ class LogAnalyzerApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Informational lines cannot be edited.")
+
+    def test_update_status_api_rejects_alert_line_edits(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("update_analyzed_line_status_api"),
+            data=json.dumps({"line": "example", "status": "B", "current_status": "A"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Alert lines cannot be edited.")
+
+    def test_update_status_api_rejects_setting_alert_status(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("update_analyzed_line_status_api"),
+            data=json.dumps({"line": "example", "status": "A", "current_status": "?"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Setting alert status from analyzer is not allowed.")
 
     def test_update_status_api_validates_payload_without_persisting(self):
         self.client.login(username="analyzer", password="password123")

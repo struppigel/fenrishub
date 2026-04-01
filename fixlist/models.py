@@ -105,6 +105,7 @@ class ClassificationRule(models.Model):
     STATUS_PUP = 'P'
     STATUS_CLEAN = 'C'
     STATUS_WARNING = '!'
+    STATUS_ALERT = 'A'
     STATUS_GRAYWARE = 'G'
     STATUS_SECURITY = 'S'
     STATUS_INFO = 'I'
@@ -116,6 +117,7 @@ class ClassificationRule(models.Model):
         (STATUS_PUP, 'Potentially unwanted'),
         (STATUS_CLEAN, 'Clean'),
         (STATUS_WARNING, 'Warning'),
+        (STATUS_ALERT, 'Alert'),
         (STATUS_GRAYWARE, 'Grayware'),
         (STATUS_SECURITY, 'Security software'),
         (STATUS_INFO, 'Informational'),
@@ -125,7 +127,7 @@ class ClassificationRule(models.Model):
 
     STATUS_CSS_CLASS_MAP = {
         'B': 'status-b', 'P': 'status-p', 'C': 'status-c',
-        '!': 'status-w', 'G': 'status-g', 'S': 'status-s',
+        '!': 'status-w', 'A': 'status-a', 'G': 'status-g', 'S': 'status-s',
         'I': 'status-i', 'J': 'status-j', '?': 'status-unknown',
     }
 

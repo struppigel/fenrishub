@@ -6,6 +6,7 @@ const STATUS_CLASS_MAP = {
     P: 'status-p',
     C: 'status-c',
     '!': 'status-w',
+    A: 'status-a',
     G: 'status-g',
     S: 'status-s',
     I: 'status-i',
@@ -20,13 +21,14 @@ const STATUS_LABEL_MAP = {
     P: 'potentially unwanted',
     C: 'clean',
     '!': 'warning',
+    A: 'alert',
     G: 'grayware',
     S: 'security',
     I: 'informational',
     J: 'junk',
     '?': 'unknown',
 };
-const STATUS_PRECEDENCE_ORDER = ['B', 'P', 'C', '!', 'G', 'S', 'I', 'J', '?'];
+const STATUS_PRECEDENCE_ORDER = ['B', 'P', 'C', 'A', '!', 'G', 'S', 'I', 'J', '?'];
 const MATCH_TYPE_PRECEDENCE_ORDER = ['exact', 'parsed', 'filepath', 'substring', 'regex'];
 const MATCH_TYPE_LABEL_MAP = {
     exact: 'Exact line',

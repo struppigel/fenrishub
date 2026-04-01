@@ -1300,8 +1300,12 @@ def update_analyzed_line_status_api(request):
         return JsonResponse({'error': f'Invalid status: {status}'}, status=400)
     if current_status == ClassificationRule.STATUS_INFO:
         return JsonResponse({'error': 'Informational lines cannot be edited.'}, status=400)
+    if current_status == ClassificationRule.STATUS_ALERT:
+        return JsonResponse({'error': 'Alert lines cannot be edited.'}, status=400)
     if status == ClassificationRule.STATUS_INFO:
         return JsonResponse({'error': 'Setting informational status from analyzer is not allowed.'}, status=400)
+    if status == ClassificationRule.STATUS_ALERT:
+        return JsonResponse({'error': 'Setting alert status from analyzer is not allowed.'}, status=400)
 
     source_name = f'analyzer-ui:{request.user.username}'
     parsed = parse_rule_line(line, status=status, source_name=source_name)

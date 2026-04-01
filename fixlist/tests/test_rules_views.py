@@ -291,6 +291,24 @@ class RulesViewTests(TestCase):
         self.assertContains(response, "MALWARE-FILTER")
         self.assertNotContains(response, "CLEAN-FILTER")
 
+    def test_filter_by_alert_status(self):
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_ALERT,
+            match_type="exact",
+            source_text="ALERT-FILTER",
+        )
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type="exact",
+            source_text="NON-ALERT-FILTER",
+        )
+
+        response = self.client.get(reverse("rules") + "?filter=own&status=A")
+        self.assertContains(response, "ALERT-FILTER")
+        self.assertNotContains(response, "NON-ALERT-FILTER")
+
     def test_filter_by_match_type(self):
         ClassificationRule.objects.create(
             owner=self.user, status="B", match_type="exact", source_text="EXACT-MT"

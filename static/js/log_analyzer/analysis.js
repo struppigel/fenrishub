@@ -501,8 +501,8 @@ function openStatusPicker(anchor, index) {
     if (!entry) {
         return;
     }
-    if ((entry._baseDominantStatus || entry.dominant_status) === 'I') {
-        alert('Informational lines cannot be edited.');
+    if (['I', 'A'].includes(entry._baseDominantStatus || entry.dominant_status)) {
+        alert('Informational and alert lines cannot be edited.');
         return;
     }
 
@@ -560,8 +560,8 @@ async function saveStatusSelection(index, newStatus) {
         closeStatusPicker();
         return;
     }
-    if (baseStatus === 'I') {
-        alert('Informational lines cannot be edited.');
+    if (['I', 'A'].includes(baseStatus)) {
+        alert('Informational and alert lines cannot be edited.');
         closeStatusPicker();
         return;
     }

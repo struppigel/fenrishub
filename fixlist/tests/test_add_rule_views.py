@@ -53,6 +53,21 @@ class AddRuleViewTests(TestCase):
         self.assertEqual(rule.description, "test rule")
         self.assertTrue(rule.is_enabled)
 
+    def test_create_rule_with_alert_status(self):
+        response = self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_ALERT,
+                "match_type": ClassificationRule.MATCH_EXACT,
+                "source_text": "ALERT-ONLY-LINE",
+                "description": "Alert description",
+            },
+        )
+
+        self.assertRedirects(response, reverse("rules"))
+        rule = ClassificationRule.objects.get(source_text="ALERT-ONLY-LINE")
+        self.assertEqual(rule.status, ClassificationRule.STATUS_ALERT)
+
     def test_create_rule_requires_source_text(self):
         response = self.client.post(
             reverse("add_rule"),

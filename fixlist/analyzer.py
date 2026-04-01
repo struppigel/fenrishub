@@ -4,7 +4,7 @@ from typing import Iterable
 from . import frst_extractors as ex
 from .models import ClassificationRule, ParsedFilepathExclusion, get_default_rule_owner_id
 
-STATUS_PRECEDENCE = "BPC!GSIJ?"
+STATUS_PRECEDENCE = "BPCA!GSIJ?"
 VALID_STATUSES = set(STATUS_PRECEDENCE)
 
 STATUS_LABELS = {
@@ -12,6 +12,7 @@ STATUS_LABELS = {
     "P": "potentially unwanted",
     "C": "clean",
     "!": "warning",
+    "A": "alert",
     "G": "grayware",
     "S": "security",
     "I": "informational",
@@ -24,6 +25,7 @@ STATUS_CSS_CLASS = {
     "P": "status-p",
     "C": "status-c",
     "!": "status-w",
+    "A": "status-a",
     "G": "status-g",
     "S": "status-s",
     "I": "status-i",
@@ -102,6 +104,30 @@ def _build_warning(code: str, title: str, message: str, details: Iterable[str] |
         "message": message,
         "details": detail_list,
     }
+
+
+def _build_alert_rule_warnings(analyzed_lines: list[dict]) -> list[dict]:
+    seen_descriptions = set()
+    ordered_descriptions = []
+
+    for entry in analyzed_lines:
+        for description in entry.get("_alert_descriptions", []):
+            value = (description or "").strip()
+            if not value or value in seen_descriptions:
+                continue
+            seen_descriptions.add(value)
+            ordered_descriptions.append(value)
+
+    warnings = []
+    for index, description in enumerate(ordered_descriptions, start=1):
+        warnings.append(
+            _build_warning(
+                code=f"alert_rule_{index}",
+                title="Alert rule matched",
+                message=description,
+            )
+        )
+    return warnings
 
 
 def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
@@ -443,16 +469,26 @@ def _load_rule_buckets():
 def _status_and_reason_from_matches(matches):
     statuses = []
     reasons = []
+    alert_descriptions = []
     for rule, reason in matches:
         statuses.append(rule.status)
         if rule.description:
             reasons.append(f"{rule.status}: {rule.description}")
+            if rule.status == ClassificationRule.STATUS_ALERT:
+                alert_descriptions.append(rule.description)
         if reason:
             reasons.append(f"{rule.status}: {reason}")
-    return _ordered_status_codes(statuses), _dedupe(reasons)
+    return _ordered_status_codes(statuses), _dedupe(reasons), _dedupe(alert_descriptions)
 
 
-def _build_line_result(line: str, status_codes: str, entry_type: str, reasons: list[str], matcher: str):
+def _build_line_result(
+    line: str,
+    status_codes: str,
+    entry_type: str,
+    reasons: list[str],
+    matcher: str,
+    alert_descriptions: list[str] | None = None,
+):
     dominant_status = _dominant_status(status_codes)
     return {
         "line": line,
@@ -464,6 +500,7 @@ def _build_line_result(line: str, status_codes: str, entry_type: str, reasons: l
         "reasons": reasons,
         "matcher": matcher,
         "matched": dominant_status != "?",
+        "_alert_descriptions": alert_descriptions or [],
     }
 
 
@@ -473,8 +510,15 @@ def _analyze_single_line(line: str, buckets):
         if rule.source_text.strip() == line.strip():
             exact_matches.append((rule, "found exact match"))
     if exact_matches:
-        status_codes, reasons = _status_and_reason_from_matches(exact_matches)
-        return _build_line_result(line, status_codes, "exactmatch", reasons, "exact")
+        status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(exact_matches)
+        return _build_line_result(
+            line,
+            status_codes,
+            "exactmatch",
+            reasons,
+            "exact",
+            alert_descriptions,
+        )
 
     for extractor in PARSER_ORDER:
         entry = extractor(line)
@@ -487,8 +531,15 @@ def _analyze_single_line(line: str, buckets):
                 parsed_matches.append((rule, f"matched {entry.entry_type or 'parsed'} entry"))
 
         if parsed_matches:
-            status_codes, reasons = _status_and_reason_from_matches(parsed_matches)
-            return _build_line_result(line, status_codes, entry.entry_type, reasons, "parsed_entry")
+            status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(parsed_matches)
+            return _build_line_result(
+                line,
+                status_codes,
+                entry.entry_type,
+                reasons,
+                "parsed_entry",
+                alert_descriptions,
+            )
 
     filepath = ex.extract_any_frst_path(line)
     if filepath:
@@ -501,8 +552,15 @@ def _analyze_single_line(line: str, buckets):
                 path_matches.append((rule, "found matching normalized path"))
 
         if path_matches:
-            status_codes, reasons = _status_and_reason_from_matches(path_matches)
-            return _build_line_result(line, status_codes, "filepath", reasons, "filepath")
+            status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(path_matches)
+            return _build_line_result(
+                line,
+                status_codes,
+                "filepath",
+                reasons,
+                "filepath",
+                alert_descriptions,
+            )
 
     substring_matches = []
     for rule in buckets[ClassificationRule.MATCH_SUBSTRING]:
@@ -510,8 +568,15 @@ def _analyze_single_line(line: str, buckets):
             substring_matches.append((rule, f'found substring "{rule.source_text}"'))
 
     if substring_matches:
-        status_codes, reasons = _status_and_reason_from_matches(substring_matches)
-        return _build_line_result(line, status_codes, "substrings", reasons, "substring")
+        status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(substring_matches)
+        return _build_line_result(
+            line,
+            status_codes,
+            "substrings",
+            reasons,
+            "substring",
+            alert_descriptions,
+        )
 
     regex_matches = []
     for rule, compiled_regex in buckets[ClassificationRule.MATCH_REGEX]:
@@ -519,8 +584,15 @@ def _analyze_single_line(line: str, buckets):
             regex_matches.append((rule, f'found regex match for "{rule.source_text}"'))
 
     if regex_matches:
-        status_codes, reasons = _status_and_reason_from_matches(regex_matches)
-        return _build_line_result(line, status_codes, "regex", reasons, "regex")
+        status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(regex_matches)
+        return _build_line_result(
+            line,
+            status_codes,
+            "regex",
+            reasons,
+            "regex",
+            alert_descriptions,
+        )
 
     unknown_entry = ex.get_frst_entry(line)
     unknown_entry_type = unknown_entry.entry_type if unknown_entry else ""
@@ -678,6 +750,10 @@ def analyze_log_text(raw_log_text: str) -> dict:
         if not line:
             continue
         analyzed_lines.append(_analyze_single_line(line, buckets))
+
+    warnings.extend(_build_alert_rule_warnings(analyzed_lines))
+    for entry in analyzed_lines:
+        entry.pop("_alert_descriptions", None)
 
     status_counts = {status: 0 for status in STATUS_PRECEDENCE}
     for entry in analyzed_lines:
