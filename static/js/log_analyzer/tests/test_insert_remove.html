@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<!--
+  Tests for the setCopiedState / insertLine / removeLine / insertAllStatus
+  targeted-DOM-update optimisation in analysis.js.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>analysis.js insert/remove tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>analysis.js – insert / remove / setCopiedState tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<!-- Minimal DOM the module needs -->
+<div id="logLines"></div>
+<textarea id="selectedLines"></textarea>
+<textarea id="logInput"></textarea>
+<input type="checkbox" id="bulkIgnoreFirewallRules">
+
+<script>
+// ---------------------------------------------------------------------------
+// Minimal stubs so analysis.js loads without errors
+// ---------------------------------------------------------------------------
+window.logAnalyzerConfig = {
+    analyzeLogUrl: '/fake/analyze/',
+    lineDetailsUrl: '/fake/details/',
+    previewRuleChangesUrl: '/fake/preview/',
+    persistRuleChangesUrl: '/fake/persist/',
+    createFixlistUrl: '/fake/create/',
+    uploadedLogContentUrlTemplate: '/fake/__UPLOAD_ID__/',
+    initialUploadId: '',
+    snippetsApiUrl: '/fake/snippets/',
+    isSuperuser: false,
+    currentUsername: 'tester',
+};
+
+// analysis.js calls renderLogLines which touches these; provide stubs.
+function updateSummary() {}
+function applyPendingOverrides() {}
+function summarizeEffectiveStatuses() { return {}; }
+function formatRuleDetailValue(v) { return String(v); }
+function renderConflictWizardStep() {}
+function appendHighlightedRuleLine() {}
+function fetchRulePreview() {}
+function setRuleSubmitTarget() {}
+window.handleAnalyzerModalOpen = function() {};
+window.handleAnalyzerModalClose = function() {};
+</script>
+
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Tiny test harness
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal rendered log-lines DOM identical to what renderLogLines()
+ * produces, for N entries with the given statuses.
+ */
+function buildRenderedLines(entries) {
+    const container = document.getElementById('logLines');
+    container.innerHTML = '';
+
+    entries.forEach(function(entry, index) {
+        const lineDiv = document.createElement('div');
+        lineDiv.className = 'log-line ' + (entry.css_class || 'status-unknown');
+
+        const badge = document.createElement('button');
+        badge.type = 'button';
+        badge.className = 'status-badge ' + (entry.css_class || 'status-unknown');
+        badge.dataset.lineIndex = String(index);
+        badge.textContent = entry.dominant_status || '?';
+
+        lineDiv.appendChild(badge);
+        container.appendChild(lineDiv);
+    });
+}
+
+function resetState(entries) {
+    // Reset module-level globals accessed by insertLine / removeLine
+    analyzedLines = entries.slice();
+    copiedLineIndexes = new Set();
+    document.getElementById('selectedLines').value = 'Start::\n\nEnd::';
+    buildRenderedLines(entries);
+}
+
+function logLineDivAt(index) {
+    const badge = document.querySelector('#logLines .status-badge[data-line-index="' + index + '"]');
+    return badge ? badge.parentElement : null;
+}
+
+// ---------------------------------------------------------------------------
+// Tests — setCopiedState
+// ---------------------------------------------------------------------------
+
+(function testSetCopiedState() {
+    const entries = [
+        { line: 'foo.exe', dominant_status: 'B', css_class: 'status-b' },
+        { line: 'bar.dll', dominant_status: 'J', css_class: 'status-j' },
+    ];
+    resetState(entries);
+
+    setCopiedState(0, true);
+    assert(
+        'setCopiedState(0, true) adds "copied" class to the correct line div',
+        logLineDivAt(0).classList.contains('copied')
+    );
+    assert(
+        'setCopiedState(0, true) does not add "copied" to unrelated line',
+        !logLineDivAt(1).classList.contains('copied')
+    );
+
+    setCopiedState(0, false);
+    assert(
+        'setCopiedState(0, false) removes "copied" class',
+        !logLineDivAt(0).classList.contains('copied')
+    );
+
+    setCopiedState(1, true);
+    assert(
+        'setCopiedState(1, true) adds "copied" to index 1',
+        logLineDivAt(1).classList.contains('copied')
+    );
+})();
+
+// setCopiedState falls back to renderLogLines when the DOM element is missing
+(function testSetCopiedStateFallback() {
+    const entries = [
+        { line: 'foo.exe', dominant_status: 'B', css_class: 'status-b' },
+    ];
+    resetState(entries);
+    // Clear the DOM so the badge is gone
+    document.getElementById('logLines').innerHTML = '';
+
+    let renderCalled = false;
+    const origRender = window.renderLogLines;
+    // renderLogLines is a module-local function; we test the fallback indirectly
+    // by verifying no exception is thrown and the call completes.
+    try {
+        setCopiedState(0, true);
+        assert('setCopiedState fallback (no DOM): no exception thrown', true);
+    } catch (e) {
+        assert('setCopiedState fallback (no DOM): no exception thrown', false, e.message);
+    }
+
+    // Restore DOM for subsequent tests
+    buildRenderedLines(entries);
+})();
+
+// ---------------------------------------------------------------------------
+// Tests — insertLine
+// ---------------------------------------------------------------------------
+
+(function testInsertLine() {
+    const entries = [
+        { line: 'bad.exe', dominant_status: 'B', css_class: 'status-b' },
+        { line: 'junk.dll', dominant_status: 'J', css_class: 'status-j' },
+    ];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    textarea.value = 'Start::\nEnd::';
+    textarea.selectionStart = textarea.selectionEnd = 8; // after "Start::\n"
+
+    insertLine('bad.exe', 0);
+
+    assert(
+        'insertLine: textarea contains inserted line',
+        textarea.value.includes('bad.exe')
+    );
+    assert(
+        'insertLine: copiedLineIndexes contains the index',
+        copiedLineIndexes.has(0)
+    );
+    assert(
+        'insertLine: "copied" CSS class added to the correct log-line div',
+        logLineDivAt(0) && logLineDivAt(0).classList.contains('copied')
+    );
+    assert(
+        'insertLine: other lines not marked as copied',
+        logLineDivAt(1) && !logLineDivAt(1).classList.contains('copied')
+    );
+    assert(
+        'insertLine: container child count unchanged (no full re-render)',
+        document.getElementById('logLines').children.length === entries.length
+    );
+})();
+
+// insertLine on an informational line should be a no-op
+(function testInsertLineInfo() {
+    const entries = [
+        { line: 'info line', dominant_status: 'I', css_class: 'status-i' },
+    ];
+    resetState(entries);
+    const textarea = document.getElementById('selectedLines');
+    const before = textarea.value;
+
+    insertLine('info line', 0);
+
+    assert(
+        'insertLine: informational line is not inserted',
+        textarea.value === before
+    );
+    assert(
+        'insertLine: informational index not added to copiedLineIndexes',
+        !copiedLineIndexes.has(0)
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Tests — removeLine
+// ---------------------------------------------------------------------------
+
+(function testRemoveLine() {
+    const entries = [
+        { line: 'bad.exe', dominant_status: 'B', css_class: 'status-b' },
+        { line: 'junk.dll', dominant_status: 'J', css_class: 'status-j' },
+    ];
+    resetState(entries);
+
+    // Pre-populate textarea and mark index 0 as copied
+    const textarea = document.getElementById('selectedLines');
+    textarea.value = 'Start::\nbad.exe\nEnd::';
+    copiedLineIndexes.add(0);
+    logLineDivAt(0).classList.add('copied');
+
+    removeLine('bad.exe', 0);
+
+    assert(
+        'removeLine: line removed from textarea',
+        !textarea.value.includes('bad.exe')
+    );
+    assert(
+        'removeLine: copiedLineIndexes no longer contains the index',
+        !copiedLineIndexes.has(0)
+    );
+    assert(
+        'removeLine: "copied" CSS class removed from the log-line div',
+        logLineDivAt(0) && !logLineDivAt(0).classList.contains('copied')
+    );
+    assert(
+        'removeLine: container child count unchanged (no full re-render)',
+        document.getElementById('logLines').children.length === entries.length
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Tests — insertAllStatus
+// ---------------------------------------------------------------------------
+
+(function testInsertAllStatus() {
+    const entries = [
+        { line: 'bad1.exe', dominant_status: 'B', css_class: 'status-b' },
+        { line: 'clean.dll', dominant_status: 'C', css_class: 'status-c' },
+        { line: 'bad2.exe', dominant_status: 'B', css_class: 'status-b' },
+    ];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    textarea.value = 'Start::\nEnd::';
+    textarea.selectionStart = textarea.selectionEnd = 8;
+
+    // Uncheck the FW filter so it doesn't interfere
+    document.getElementById('bulkIgnoreFirewallRules').checked = false;
+
+    insertAllStatus('B');
+
+    assert(
+        'insertAllStatus: both B lines appear in textarea',
+        textarea.value.includes('bad1.exe') && textarea.value.includes('bad2.exe')
+    );
+    assert(
+        'insertAllStatus: C line not included',
+        !textarea.value.includes('clean.dll')
+    );
+    assert(
+        'insertAllStatus: indexes 0 and 2 in copiedLineIndexes',
+        copiedLineIndexes.has(0) && copiedLineIndexes.has(2)
+    );
+    assert(
+        'insertAllStatus: "copied" class added to index 0',
+        logLineDivAt(0) && logLineDivAt(0).classList.contains('copied')
+    );
+    assert(
+        'insertAllStatus: "copied" class added to index 2',
+        logLineDivAt(2) && logLineDivAt(2).classList.contains('copied')
+    );
+    assert(
+        'insertAllStatus: "copied" class NOT added to index 1 (clean)',
+        logLineDivAt(1) && !logLineDivAt(1).classList.contains('copied')
+    );
+    assert(
+        'insertAllStatus: container child count unchanged (no full re-render)',
+        document.getElementById('logLines').children.length === entries.length
+    );
+})();
+
+// insertAllStatus skips already-copied indexes
+(function testInsertAllStatusSkipAlreadyCopied() {
+    const entries = [
+        { line: 'bad1.exe', dominant_status: 'B', css_class: 'status-b' },
+        { line: 'bad2.exe', dominant_status: 'B', css_class: 'status-b' },
+    ];
+    resetState(entries);
+    copiedLineIndexes.add(0);
+    logLineDivAt(0).classList.add('copied');
+
+    const textarea = document.getElementById('selectedLines');
+    textarea.value = 'Start::\nbad1.exe\nEnd::';
+    const originalText = textarea.value;
+    textarea.selectionStart = textarea.selectionEnd = 8;
+
+    document.getElementById('bulkIgnoreFirewallRules').checked = false;
+    insertAllStatus('B');
+
+    const count = (textarea.value.match(/bad1\.exe/g) || []).length;
+    assert(
+        'insertAllStatus: already-copied line is not duplicated',
+        count === 1
+    );
+    assert(
+        'insertAllStatus: non-copied B line was still added',
+        textarea.value.includes('bad2.exe')
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+const summary = document.getElementById('summary');
+summary.textContent = passed + ' passed, ' + failed + ' failed';
+summary.style.color = failed === 0 ? '#6f9' : '#f66';
+</script>
+</body>
+</html>

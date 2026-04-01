@@ -676,6 +676,20 @@ function renderLogLines() {
     container.scrollTop = savedScrollTop;
 }
 
+function setCopiedState(index, isCopied) {
+    const badge = document.querySelector(`#logLines .status-badge[data-line-index="${index}"]`);
+    if (!badge) {
+        renderLogLines();
+        return;
+    }
+    const lineDiv = badge.parentElement;
+    if (isCopied) {
+        lineDiv.classList.add('copied');
+    } else {
+        lineDiv.classList.remove('copied');
+    }
+}
+
 function removeLine(line, index) {
     const textarea = document.getElementById('selectedLines');
     const cursorPos = textarea.selectionStart;
@@ -700,7 +714,7 @@ function removeLine(line, index) {
         textarea.focus();
     }
     copiedLineIndexes.delete(index);
-    renderLogLines();
+    setCopiedState(index, false);
 }
 
 function shouldSkipFirewallRulesLine(line) {
@@ -730,13 +744,14 @@ function insertLine(line, index) {
     textarea.focus();
 
     copiedLineIndexes.add(index);
-    renderLogLines();
+    setCopiedState(index, true);
 }
 
 function insertAllStatus(status) {
     const textarea = document.getElementById('selectedLines');
     let insertPosition = textarea.selectionStart;
     let linesAdded = 0;
+    const addedIndexes = [];
 
     for (let index = 0; index < analyzedLines.length; index++) {
         if (copiedLineIndexes.has(index)) {
@@ -757,6 +772,7 @@ function insertAllStatus(status) {
             insertPosition += line.length + 1;
 
             copiedLineIndexes.add(index);
+            addedIndexes.push(index);
             linesAdded++;
         }
     }
@@ -764,7 +780,7 @@ function insertAllStatus(status) {
     if (linesAdded > 0) {
         textarea.selectionStart = textarea.selectionEnd = insertPosition;
         textarea.focus();
-        renderLogLines();
+        addedIndexes.forEach((idx) => setCopiedState(idx, true));
     }
 }
 
