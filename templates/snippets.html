@@ -36,6 +36,7 @@
         white-space: pre-wrap;
         word-wrap: break-word;
         display: -webkit-box;
+        line-clamp: 2;
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
         overflow: hidden;
@@ -137,6 +138,53 @@
         color: var(--la-text-muted);
         font-weight: normal;
     }
+
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 16px;
+    }
+
+    .modal-card {
+        width: min(900px, 100%);
+        max-height: 90vh;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border-strong);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px;
+        border-bottom: 1px solid var(--la-border);
+    }
+
+    .modal-title {
+        font-size: 13px;
+        color: var(--la-text-primary);
+        font-weight: 600;
+    }
+
+    .modal-body {
+        padding: 10px;
+        overflow: auto;
+    }
+
+    .modal-content {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        color: var(--la-text-primary);
+    }
 </style>
 {% endblock %}
 
@@ -204,8 +252,9 @@
             <div class="snippet-header">
                 <span class="snippet-name">{{ snippet.name }}{% if snippet.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if filter_mode != 'own' %} <span class="snippet-owner">by {{ snippet.owner.username }}</span>{% endif %}</span>
                 <div class="snippet-actions">
+                    <button type="button" class="action-btn view-btn" data-name="{{ snippet.name|escapejs }}" data-content-id="snippet-content-{{ snippet.pk }}">view</button>
                     {% if snippet.owner_id == request.user.id %}
-                    <button type="button" class="action-btn" onclick="startEdit({{ snippet.pk }}, '{{ snippet.name|escapejs }}', `{{ snippet.content|escapejs }}`, {{ snippet.is_shared|yesno:'true,false' }})">edit</button>
+                    <button type="button" class="action-btn edit-btn" data-pk="{{ snippet.pk }}" data-name="{{ snippet.name|escapejs }}" data-content-id="snippet-content-{{ snippet.pk }}" data-is-shared="{% if snippet.is_shared %}1{% else %}0{% endif %}">edit</button>
                     <form method="post" style="display: inline;">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="delete">
@@ -216,6 +265,7 @@
                 </div>
             </div>
             <div class="snippet-content-preview">{{ snippet.content }}</div>
+            <pre id="snippet-content-{{ snippet.pk }}" style="display:none;">{{ snippet.content }}</pre>
         </div>
         {% endfor %}
     {% else %}
@@ -223,6 +273,18 @@
             no snippets yet.
         </div>
     {% endif %}
+</div>
+
+<div id="viewModal" class="modal-overlay" onclick="closeViewModal(event)">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="viewModalTitle">
+        <div class="modal-header">
+            <span id="viewModalTitle" class="modal-title">snippet</span>
+            <button type="button" class="action-btn" onclick="closeViewModal()">close</button>
+        </div>
+        <div class="modal-body">
+            <pre id="viewModalContent" class="modal-content"></pre>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -236,6 +298,11 @@ function startEdit(pk, name, content, isShared) {
     document.getElementById('editName').focus();
 }
 
+function startEditById(pk, name, contentElementId, isShared) {
+    const contentElement = document.getElementById(contentElementId);
+    startEdit(pk, name, contentElement ? contentElement.textContent : '', isShared);
+}
+
 function showCreate() {
     document.getElementById('editSection').style.display = 'none';
     document.getElementById('createSection').style.display = 'block';
@@ -246,5 +313,46 @@ function cancelEdit() {
     document.getElementById('editSection').style.display = 'none';
     document.getElementById('createSection').style.display = 'none';
 }
+
+function openViewModal(name, content) {
+    document.getElementById('viewModalTitle').textContent = name;
+    document.getElementById('viewModalContent').textContent = content;
+    document.getElementById('viewModal').style.display = 'flex';
+}
+
+function openViewModalById(name, contentElementId) {
+    const contentElement = document.getElementById(contentElementId);
+    openViewModal(name, contentElement ? contentElement.textContent : '');
+}
+
+function closeViewModal(event) {
+    if (event && event.target !== event.currentTarget) {
+        return;
+    }
+    document.getElementById('viewModal').style.display = 'none';
+}
+
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        closeViewModal();
+    }
+});
+
+document.querySelectorAll('.view-btn').forEach(function(button) {
+    button.addEventListener('click', function() {
+        openViewModalById(button.dataset.name || '', button.dataset.contentId || '');
+    });
+});
+
+document.querySelectorAll('.edit-btn').forEach(function(button) {
+    button.addEventListener('click', function() {
+        startEditById(
+            Number(button.dataset.pk || 0),
+            button.dataset.name || '',
+            button.dataset.contentId || '',
+            button.dataset.isShared === '1'
+        );
+    });
+});
 </script>
 {% endblock %}
