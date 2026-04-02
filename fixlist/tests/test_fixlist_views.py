@@ -425,6 +425,42 @@ class UploadedLogViewTests(TestCase):
         uploaded.refresh_from_db()
         self.assertIsNotNone(uploaded.deleted_at)
 
+    def test_authenticated_user_cannot_delete_other_helpers_assigned_upload_from_detail(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='private-delete-denied',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('view_uploaded_log', args=[uploaded.upload_id]),
+            {'action': 'delete'},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Only the assigned helper can delete private-delete-denied.')
+        uploaded.refresh_from_db()
+        self.assertIsNone(uploaded.deleted_at)
+
+    def test_delete_button_hidden_for_other_helpers_assigned_upload(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='delete-hidden-other-helper',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'name="action" value="delete"')
+
     def test_assign_unassigned_upload_to_current_user_from_list(self):
         uploaded = UploadedLog.objects.create(
             upload_id='assign-me-list',
@@ -664,6 +700,60 @@ class UploadedLogViewTests(TestCase):
         self.assertContains(response, 'alice-log-all')
         self.assertContains(response, 'bob-log-all')
         self.assertTrue(response.context.get('show_all'))
+
+    def test_uploaded_logs_list_is_paginated(self):
+        for index in range(26):
+            UploadedLog.objects.create(
+                upload_id=f'page-log-{index}',
+                reddit_username='paged_user',
+                original_filename='x.txt',
+                content='payload',
+                recipient_user=self.user,
+            )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['page_obj'].paginator.num_pages, 2)
+        self.assertEqual(len(response.context['page_obj'].object_list), 25)
+        self.assertContains(response, 'page 1 of 2')
+        self.assertContains(response, 'page-log-25')
+        self.assertNotContains(response, 'page-log-0')
+
+        second_page = self.client.get(reverse('uploaded_logs'), {'page': '2'})
+
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(second_page.context['page_obj'].number, 2)
+        self.assertContains(second_page, 'page-log-0')
+        self.assertNotContains(second_page, 'page-log-25')
+
+    def test_uploaded_logs_pagination_preserves_filter_and_channel_state(self):
+        for index in range(26):
+            UploadedLog.objects.create(
+                upload_id=f'alice-page-log-{index}',
+                reddit_username='alice_user',
+                original_filename='x.txt',
+                content='payload',
+                recipient_user=self.user,
+            )
+        UploadedLog.objects.create(
+            upload_id='bob-page-log',
+            reddit_username='bob_user',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'page': '2', 'u': 'alice_user', 'show_all': '1'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['page_obj'].number, 2)
+        self.assertEqual(response.context['pagination_query'], 'u=alice_user&show_all=1')
+        self.assertContains(response, '?page=1&amp;u=alice_user&amp;show_all=1')
+        self.assertContains(response, 'alice-page-log-0')
+        self.assertNotContains(response, 'bob-page-log')
 
     def test_authenticated_user_can_view_other_helper_channel_upload_by_detail_link(self):
         bob_upload = UploadedLog.objects.create(
@@ -922,6 +1012,40 @@ class UploadedLogViewTests(TestCase):
         self.assertEqual(response.url, reverse('uploaded_logs'))
         existing.refresh_from_db()
         self.assertIsNone(existing.deleted_at)
+
+    def test_delete_selected_uploads_rejects_other_helpers_assigned_uploads(self):
+        own = UploadedLog.objects.create(
+            upload_id='delete-selected-own',
+            reddit_username='reddit_name',
+            original_filename='own.txt',
+            content='aaa',
+            recipient_user=self.user,
+        )
+        other = UploadedLog.objects.create(
+            upload_id='delete-selected-foreign',
+            reddit_username='reddit_name',
+            original_filename='foreign.txt',
+            content='bbb',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'delete_selected',
+                'selected_upload_ids': [own.upload_id, other.upload_id],
+                'show_all': '1',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Only the assigned helper can delete: delete-selected-foreign.')
+        own.refresh_from_db()
+        other.refresh_from_db()
+        self.assertIsNone(own.deleted_at)
+        self.assertIsNone(other.deleted_at)
 
     def test_diff_view_requires_login(self):
         response = self.client.get(reverse('diff_uploaded_logs', args=['a', 'b']))
@@ -1285,6 +1409,28 @@ class TrashViewTests(TestCase):
         self.assertContains(response, 'trashed-log')
         self.assertNotContains(response, 'active-log')
 
+    def test_trash_view_is_paginated(self):
+        from django.utils import timezone as tz
+
+        for index in range(26):
+            self._make_log(
+                f'trashed-page-{index}',
+                deleted_at=tz.now() + timedelta(seconds=index),
+            )
+
+        first_page = self.client.get(reverse('uploads_trash'))
+        second_page = self.client.get(reverse('uploads_trash'), {'page': '2'})
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(first_page.context['page_obj'].paginator.num_pages, 2)
+        self.assertEqual(len(first_page.context['page_obj'].object_list), 25)
+        self.assertContains(first_page, 'page 1 of 2')
+        self.assertContains(first_page, '?page=2')
+
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(second_page.context['page_obj'].number, 2)
+        self.assertEqual(len(second_page.context['page_obj'].object_list), 1)
+
     def test_uploads_list_shows_trash_count(self):
         from django.utils import timezone as tz
         self._make_log('active-log')
@@ -1294,6 +1440,18 @@ class TrashViewTests(TestCase):
         response = self.client.get(reverse('uploaded_logs'))
 
         self.assertContains(response, 'trash (2)')
+
+    def test_uploads_list_trash_count_does_not_change_in_show_all_mode(self):
+        from django.utils import timezone as tz
+        self._make_log('own-active')
+        self._make_log('own-trashed', deleted_at=tz.now())
+        self._make_log('other-trashed', deleted_at=tz.now(), recipient_user=User.objects.create_user(username='bob', password='password123'))
+
+        default_response = self.client.get(reverse('uploaded_logs'))
+        show_all_response = self.client.get(reverse('uploaded_logs'), {'show_all': '1'})
+
+        self.assertContains(default_response, 'trash (1)')
+        self.assertContains(show_all_response, 'trash (1)')
 
     def test_uploads_list_shows_no_count_when_trash_empty(self):
         self._make_log('active-log')

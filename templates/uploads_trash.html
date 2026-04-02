@@ -43,6 +43,12 @@
         width: 100%;
     }
 
+    .trash-controls .delete-btn {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+        border-color: var(--la-error-border);
+    }
+
     .upload-id-link {
         font-weight: 600;
     }
@@ -63,10 +69,40 @@
     .upload-stats .stat-j { color: var(--la-status-j); }
     .upload-stats .stat-u { color: var(--la-status-u); }
 
-    .channel-unassigned {
-        color: var(--la-warning-text);
-        font-weight: 600;
+    .uploads-count {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        margin-bottom: 8px;
     }
+
+    .pagination {
+        display: flex;
+        gap: 4px;
+        margin-top: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        font-size: 12px;
+    }
+
+    .pagination a {
+        padding: 4px 8px;
+        color: var(--la-text-muted);
+        text-decoration: none;
+        border: 1px solid var(--la-border);
+        background-color: var(--la-bg-1);
+    }
+
+    .pagination a:hover {
+        color: var(--la-text-primary);
+    }
+
+    .pagination .current-page {
+        padding: 4px 8px;
+        border: 1px solid var(--la-text-primary);
+        color: var(--la-text-primary);
+        background-color: var(--la-bg-0);
+    }
+
 </style>
 {% endblock %}
 
@@ -83,6 +119,8 @@
     <button type="submit" form="emptyTrashForm" {% if not uploads %}disabled{% endif %} class="delete-btn" onclick="return confirm('Permanently delete all trashed uploads?');">empty trash</button>
 </div>
 
+<div class="uploads-count">{{ page_obj.paginator.count }} trashed upload{{ page_obj.paginator.count|pluralize }}{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
+
 {% if uploads %}
     {% for uploaded_log in uploads %}
     <div class="fixlist-item">
@@ -90,15 +128,15 @@
             <div>
                 <div class="fixlist-title">
                     <span class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}">{{ uploaded_log.upload_id }}</span>
+                    {% if uploaded_log.recipient_user %}
+                    <span>({{ uploaded_log.recipient_user.username }})</span>
+                    {% else %}
+                    <span>(unassigned)</span>
+                    {% endif %}
                 </div>
                 <div class="fixlist-meta">
                     {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} |
-                    {% if uploaded_log.recipient_user %}
-                    to {{ uploaded_log.recipient_user.username }}
-                    {% else %}
-                    <span class="channel-unassigned">general (unassigned)</span>
-                    {% endif %}
-                    | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}
+                    {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}
                 </div>
                 <div class="fixlist-meta upload-stats">
                     lines {{ uploaded_log.total_line_count }}
@@ -145,6 +183,24 @@
         </div>
     </div>
     {% endfor %}
+
+    {% if page_obj.paginator.num_pages > 1 %}
+    <div class="pagination">
+        {% if page_obj.has_previous %}
+        <a href="?page={{ page_obj.previous_page_number }}">prev</a>
+        {% endif %}
+        {% for num in page_obj.paginator.page_range %}
+            {% if num == page_obj.number %}
+            <span class="current-page">{{ num }}</span>
+            {% elif num == 1 or num == page_obj.paginator.num_pages or num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
+            <a href="?page={{ num }}">{{ num }}</a>
+            {% endif %}
+        {% endfor %}
+        {% if page_obj.has_next %}
+        <a href="?page={{ page_obj.next_page_number }}">next</a>
+        {% endif %}
+    </div>
+    {% endif %}
 {% else %}
     <div class="info-box">trash is empty.</div>
 {% endif %}

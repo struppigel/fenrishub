@@ -108,7 +108,9 @@
         {% elif uploaded_log.recipient_user == user %}
         <button type="submit" name="action" value="unassign_to_general">unassign</button>
         {% endif %}
+        {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == user %}
         <button type="submit" name="action" value="delete" onclick="return confirm('Delete this upload?');">delete</button>
+        {% endif %}
     </div>
 </form>
 </div>
