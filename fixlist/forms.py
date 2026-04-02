@@ -50,8 +50,8 @@ class UploadedLogForm(forms.Form):
             return None
 
         filename = (uploaded_file.name or '').strip()
-        if not filename.lower().endswith('.txt'):
-            raise forms.ValidationError('Only .txt files are allowed.')
+        if not filename.lower().endswith(('.txt', '.log')):
+            raise forms.ValidationError('Only .txt or .log files are allowed.')
 
         raw_bytes = uploaded_file.read()
 
@@ -79,7 +79,7 @@ class UploadedLogForm(forms.Form):
         has_file = bool(cleaned.get('log_file'))
         has_text = bool((cleaned.get('log_text') or '').strip())
         if not has_file and not has_text:
-            raise forms.ValidationError('Provide either a .txt file or paste the log content.')
+            raise forms.ValidationError('Provide either a .txt/.log file or paste the log content.')
         if has_file and has_text:
             raise forms.ValidationError('Provide a file or pasted text, not both.')
         return cleaned

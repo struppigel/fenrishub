@@ -81,8 +81,8 @@ function copyUploadId(button) {
     </div>
 
     <div class="form-group" id="fileInputGroup">
-        <label for="id_log_file">log file (.txt only)</label>
-        <input type="file" id="id_log_file" name="log_file" accept=".txt,text/plain">
+        <label for="id_log_file">log file (.txt or .log)</label>
+        <input type="file" id="id_log_file" name="log_file" accept=".txt,.log,text/plain">
         {% if form.log_file.errors %}
             <div class="error-box">{{ form.log_file.errors|join:', ' }}</div>
         {% endif %}

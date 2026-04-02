@@ -326,18 +326,32 @@ class UploadedLogViewTests(TestCase):
         self.assertContains(response, '3-20 letters, numbers, underscores, or hyphens')
         self.assertEqual(UploadedLog.objects.count(), 0)
 
-    def test_upload_log_view_rejects_non_txt_extension(self):
+    def test_upload_log_view_rejects_unsupported_extension(self):
         response = self.client.post(
             reverse('upload_log'),
             {
                 'reddit_username': 'reddit_name',
-                'log_file': SimpleUploadedFile('sample.log', b'line-a', content_type='text/plain'),
+                'log_file': SimpleUploadedFile('sample.csv', b'line-a', content_type='text/plain'),
             },
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Only .txt files are allowed.')
+        self.assertContains(response, 'Only .txt or .log files are allowed.')
         self.assertEqual(UploadedLog.objects.count(), 0)
+
+    def test_upload_log_view_allows_log_extension(self):
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('sample.log', b'line-a\nline-b', content_type='text/plain'),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('upload_log'))
+        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        self.assertEqual(uploaded.original_filename, 'sample.log')
 
     @override_settings(ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600)
     def test_anonymous_upload_rate_limit_blocks_second_attempt(self):
