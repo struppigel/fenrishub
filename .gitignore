@@ -60,3 +60,4 @@ Fenris/
 # Test coverage
 .coverage
 htmlcov/
+testfile.txt
