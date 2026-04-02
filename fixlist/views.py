@@ -898,7 +898,7 @@ def uploaded_logs_view(request):
         else UploadedLog.objects.filter(recipient_user=request.user)
     )
 
-    uploads = list_visible_uploads.filter(deleted_at__isnull=True)
+    uploads = list_visible_uploads.filter(deleted_at__isnull=True).select_related('recipient_user').defer('content')
     if username_filter:
         uploads = uploads.filter(reddit_username=username_filter)
     page_obj = Paginator(uploads, 25).get_page(request.GET.get('page'))
@@ -909,14 +909,20 @@ def uploaded_logs_view(request):
         pagination_params['show_all'] = '1'
     all_usernames = list_visible_uploads.filter(deleted_at__isnull=True).values_list('reddit_username', flat=True).distinct().order_by('reddit_username')
     trash_count = action_scope_uploads.filter(deleted_at__isnull=False).count()
-    duplicate_hashes = set(
-        list_visible_uploads.filter(deleted_at__isnull=True)
-        .exclude(content_hash='')
-        .values('content_hash')
-        .annotate(cnt=Count('id'))
-        .filter(cnt__gt=1)
-        .values_list('content_hash', flat=True)
-    )
+    page_content_hashes = {
+        uploaded_log.content_hash
+        for uploaded_log in page_obj.object_list
+        if uploaded_log.content_hash
+    }
+    duplicate_hashes = set()
+    if page_content_hashes:
+        duplicate_hashes = set(
+            list_visible_uploads.filter(deleted_at__isnull=True, content_hash__in=page_content_hashes)
+            .values('content_hash')
+            .annotate(cnt=Count('id'))
+            .filter(cnt__gt=1)
+            .values_list('content_hash', flat=True)
+        )
     helper_upload_url = request.build_absolute_uri(reverse('upload_log_for_helper', args=[request.user.username]))
     return render(request, 'uploaded_logs.html', {
         'uploads': page_obj.object_list,
