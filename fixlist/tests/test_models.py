@@ -1,4 +1,5 @@
 ﻿from django.contrib.auth.models import User
+from django.db import IntegrityError
 from django.test import TestCase
 from unittest.mock import patch
 
@@ -48,6 +49,34 @@ class UploadedLogModelTests(TestCase):
             )
 
         self.assertRegex(uploaded.upload_id, r'^amber-otter-[a-z0-9]{2}$')
+
+    def test_save_retries_when_generated_upload_id_hits_unique_race(self):
+        UploadedLog.objects.create(
+            upload_id='amber-otter',
+            reddit_username='first_user',
+            original_filename='a.txt',
+            content='aaa',
+        )
+
+        from django.db.models.base import Model
+        original_model_save = Model.save
+
+        def first_insert_collides_then_retry(self, *args, **kwargs):
+            if self._state.adding and self.upload_id == 'amber-otter':
+                raise IntegrityError('UNIQUE constraint failed: fixlist_uploadedlog.upload_id')
+            return original_model_save(self, *args, **kwargs)
+
+        with (
+            patch.object(UploadedLog, '_generate_unique_upload_id', side_effect=['amber-otter', 'quiet-valley']),
+            patch('django.db.models.base.Model.save', autospec=True, side_effect=first_insert_collides_then_retry),
+        ):
+            uploaded = UploadedLog.objects.create(
+                reddit_username='second_user',
+                original_filename='b.txt',
+                content='bbb',
+            )
+
+        self.assertEqual(uploaded.upload_id, 'quiet-valley')
 
     def test_log_type_defaults_to_unknown(self):
         uploaded = UploadedLog.objects.create(

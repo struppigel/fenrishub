@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import IntegrityError, models
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 import secrets
@@ -285,10 +285,30 @@ class UploadedLog(models.Model):
 
     def save(self, *args, **kwargs):
         self.clean()
+        generated_upload_id = False
         if not self.upload_id:
             self.upload_id = self._generate_unique_upload_id()
+            generated_upload_id = True
         self.content_hash = self.compute_content_hash(self.content)
-        super().save(*args, **kwargs)
+        try:
+            super().save(*args, **kwargs)
+            return
+        except IntegrityError as exc:
+            if not (self._state.adding and generated_upload_id and 'upload_id' in str(exc).lower()):
+                raise
+
+        # A concurrent insert can still win between existence check and insert.
+        # Retry a few times with a new generated id instead of surfacing a 500.
+        for _ in range(5):
+            self.upload_id = self._generate_unique_upload_id()
+            try:
+                super().save(*args, **kwargs)
+                return
+            except IntegrityError as retry_exc:
+                if 'upload_id' not in str(retry_exc).lower():
+                    raise
+
+        raise IntegrityError('Could not persist UploadedLog after upload_id collision retries.')
 
     @classmethod
     def analysis_stat_fields(cls):
