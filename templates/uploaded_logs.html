@@ -174,7 +174,7 @@
     <label style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 0; color: var(--la-text-primary); font-size: 12px;">
         <span>all channels</span>
         <span class="toggle-switch">
-            <input type="checkbox" name="show_all" value="1" {% if show_all %}checked{% endif %} onchange="this.form.submit()">
+            <input type="checkbox" id="allChannelsToggle" name="show_all" value="1" {% if show_all %}checked{% endif %}>
             <span class="toggle-slider"></span>
         </span>
     </label>
@@ -184,6 +184,7 @@
     </div>
 </form>
 
+<div id="uploadsListContainer">
 <div class="merge-controls button-group">
     <div style="display: flex; gap: 8px;">
         <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();">merge</button>
@@ -301,10 +302,101 @@
 {% else %}
     <div class="info-box">no uploaded logs yet.</div>
 {% endif %}
+</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
+const uploadsListCache = {};
+const uploadsPrefetchPromises = {};
+
+function uploadsModeKey(showAll) {
+    return showAll ? 'all' : 'own';
+}
+
+function buildUploadsModeUrl(showAll) {
+    const url = new URL(window.location.href);
+    if (showAll) {
+        url.searchParams.set('show_all', '1');
+    } else {
+        url.searchParams.delete('show_all');
+    }
+    return url.toString();
+}
+
+async function ensureUploadsModeCached(showAll) {
+    const key = uploadsModeKey(showAll);
+    if (uploadsListCache[key]) {
+        return;
+    }
+    if (uploadsPrefetchPromises[key]) {
+        await uploadsPrefetchPromises[key];
+        return;
+    }
+
+    const fetchPromise = fetch(buildUploadsModeUrl(showAll), {
+        credentials: 'same-origin',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    })
+        .then(response => response.text())
+        .then(html => {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const remoteContainer = doc.getElementById('uploadsListContainer');
+            if (!remoteContainer) {
+                throw new Error('uploads list container missing in response');
+            }
+            uploadsListCache[key] = remoteContainer.innerHTML;
+        })
+        .finally(() => {
+            delete uploadsPrefetchPromises[key];
+        });
+
+    uploadsPrefetchPromises[key] = fetchPromise;
+    await fetchPromise;
+}
+
+function updateUploadsModeInUrl(showAll) {
+    const url = new URL(window.location.href);
+    if (showAll) {
+        url.searchParams.set('show_all', '1');
+    } else {
+        url.searchParams.delete('show_all');
+    }
+    window.history.replaceState({}, '', url.toString());
+}
+
+async function handleAllChannelsToggle(checkbox) {
+    const showAll = checkbox.checked;
+    const targetKey = uploadsModeKey(showAll);
+    const uploadsListContainer = document.getElementById('uploadsListContainer');
+
+    try {
+        await ensureUploadsModeCached(showAll);
+        uploadsListContainer.innerHTML = uploadsListCache[targetKey];
+        updateUploadsModeInUrl(showAll);
+        ensureUploadsModeCached(!showAll).catch(() => {});
+    } catch (error) {
+        checkbox.form.submit();
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const toggle = document.getElementById('allChannelsToggle');
+    const uploadsListContainer = document.getElementById('uploadsListContainer');
+    const currentShowAll = toggle && toggle.checked;
+
+    if (!toggle || !uploadsListContainer) {
+        return;
+    }
+
+    uploadsListCache[uploadsModeKey(currentShowAll)] = uploadsListContainer.innerHTML;
+    ensureUploadsModeCached(!currentShowAll).catch(() => {});
+
+    toggle.addEventListener('change', function() {
+        handleAllChannelsToggle(toggle);
+    });
+});
+
 function copyHelperUploadUrl(button) {
     const value = document.getElementById('helperUploadUrl').textContent;
     navigator.clipboard.writeText(value).then(function() {
