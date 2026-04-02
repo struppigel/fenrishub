@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+
+{% block title %}Page Not Found - Fenris{% endblock %}
+{% block page_context_label %}404{% endblock %}
+
+{% block header_context %}
+<div class="page-context">
+    <div>
+        <span class="page-context-label">page not found</span>
+    </div>
+</div>
+{% endblock %}
+
+{% block nav %}
+<div class="nav">
+    <a href="{% url 'login' %}">home</a>
+    <div class="nav-right">
+        <button type="button" class="profile-btn" onclick="document.getElementById('faqModal').classList.add('show')">what is this?</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="error-box" role="alert" style="margin-bottom: 16px;">
+    The page you requested could not be found.
+</div>
+
+<div class="info-box">
+    The link may be outdated, mistyped, or the content may have been removed.
+</div>
+
+<div class="button-group" style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
+    <a href="{% url 'login' %}"><button type="button">go to home</button></a>
+    {% if user.is_authenticated %}
+    <a href="{% url 'dashboard' %}"><button type="button">open fixlists</button></a>
+    <a href="{% url 'uploaded_logs' %}"><button type="button">open uploads</button></a>
+    {% else %}
+    <a href="{% url 'upload_log' %}"><button type="button">upload a log</button></a>
+    {% endif %}
+</div>
+{% endblock %}

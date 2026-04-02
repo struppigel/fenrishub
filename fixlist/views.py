@@ -142,6 +142,10 @@ def get_client_ip(request):
     return ip
 
 
+def custom_404_view(request, exception):
+    return render(request, '404.html', status=404)
+
+
 def _rule_defaults_from_parsed(parsed: dict) -> dict:
     return {
         'description': parsed['description'],
