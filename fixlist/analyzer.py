@@ -2,7 +2,7 @@ import re
 from typing import Iterable
 
 from . import frst_extractors as ex
-from .models import ClassificationRule, ParsedFilepathExclusion, get_default_rule_owner_id
+from .models import ClassificationRule, ParsedFilepathExclusion, get_default_rule_owner_id, detect_log_type
 
 STATUS_PRECEDENCE = "BPCA!GSIJ?"
 VALID_STATUSES = set(STATUS_PRECEDENCE)
@@ -131,16 +131,29 @@ def _build_alert_rule_warnings(analyzed_lines: list[dict]) -> list[dict]:
 
 
 def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
-    has_frst_context = any(marker in raw_log_text for marker in FRST_CONTEXT_MARKERS)
-    if not has_frst_context:
+    detected_type = detect_log_type(raw_log_text or "")
+    if detected_type not in {"FRST", "Addition", "FRST&Addition"}:
         return None
 
     end_of_addition_found = FRST_END_OF_ADDITION in raw_log_text
     end_of_frst_found = FRST_END_OF_LOG in raw_log_text
-    if end_of_addition_found and end_of_frst_found:
+
+    if detected_type == "FRST":
+        is_complete = end_of_frst_found
+        expected_endings = ["FRST end marker"]
+    elif detected_type == "Addition":
+        is_complete = end_of_addition_found
+        expected_endings = ["Addition end marker"]
+    else:
+        is_complete = end_of_frst_found and end_of_addition_found
+        expected_endings = ["FRST end marker", "Addition end marker"]
+
+    if is_complete:
         return None
 
     details = [
+        f"Detected log type: {detected_type}",
+        f"Expected endings: {', '.join(expected_endings)}",
         f"Addition end found: {'yes' if end_of_addition_found else 'no'}",
         f"FRST end found: {'yes' if end_of_frst_found else 'no'}",
     ]

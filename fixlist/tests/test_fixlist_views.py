@@ -201,6 +201,7 @@ class SharingAndDownloadTests(TestCase):
 class UploadedLogViewTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='alice', password='password123')
+        self.other_user = User.objects.create_user(username='bob', password='password123')
         cache.clear()
 
     def test_upload_log_view_allows_anonymous_upload_and_returns_id(self):
@@ -261,6 +262,45 @@ class UploadedLogViewTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertTrue(UploadedLog.objects.filter(reddit_username='Dazzling-Substance57').exists())
+
+    def test_upload_to_helper_url_assigns_recipient_channel(self):
+        response = self.client.post(
+            reverse('upload_log_for_helper', args=['alice']),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        self.assertEqual(uploaded.recipient_user, self.user)
+
+    def test_upload_to_unknown_helper_url_falls_back_to_general_channel(self):
+        response = self.client.post(
+            reverse('upload_log_for_helper', args=['missing_helper']),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        self.assertIsNone(uploaded.recipient_user)
+
+    def test_upload_to_unknown_helper_url_shows_general_fallback_message(self):
+        response = self.client.post(
+            reverse('upload_log_for_helper', args=['missing_helper']),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Upload was saved to the general channel')
 
     def test_upload_with_special_chars_in_username_shows_form_error(self):
         response = self.client.post(
@@ -385,6 +425,261 @@ class UploadedLogViewTests(TestCase):
         uploaded.refresh_from_db()
         self.assertIsNotNone(uploaded.deleted_at)
 
+    def test_assign_unassigned_upload_to_current_user_from_list(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='assign-me-list',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=None,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'assign_to_me', 'upload_id': uploaded.upload_id},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('uploaded_logs'))
+        uploaded.refresh_from_db()
+        self.assertEqual(uploaded.recipient_user, self.user)
+
+    def test_assign_from_list_preserves_show_all_toggle_on_redirect(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='assign-keep-show-all',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=None,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'assign_to_me', 'upload_id': uploaded.upload_id, 'show_all': '1'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, f"{reverse('uploaded_logs')}?show_all=1")
+
+    def test_assign_from_list_preserves_username_filter_on_redirect(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='assign-keep-filter',
+            reddit_username='alice_user',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=None,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'assign_to_me', 'upload_id': uploaded.upload_id, 'u': 'alice_user'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, f"{reverse('uploaded_logs')}?u=alice_user")
+
+    def test_assign_unassigned_upload_to_current_user_from_detail(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='assign-me-detail',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=None,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('view_uploaded_log', args=[uploaded.upload_id]),
+            {'action': 'assign_to_me'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('view_uploaded_log', args=[uploaded.upload_id]))
+        uploaded.refresh_from_db()
+        self.assertEqual(uploaded.recipient_user, self.user)
+
+    def test_assign_to_me_action_rejects_already_assigned_upload(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='assign-already-owned',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'assign_to_me', 'upload_id': uploaded.upload_id},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'already assigned')
+        uploaded.refresh_from_db()
+        self.assertEqual(uploaded.recipient_user, self.user)
+
+    def test_unassign_to_general_from_list(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='unassign-list',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'unassign_to_general', 'upload_id': uploaded.upload_id},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('uploaded_logs'))
+        uploaded.refresh_from_db()
+        self.assertIsNone(uploaded.recipient_user)
+
+    def test_unassign_to_general_from_detail(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='unassign-detail',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('view_uploaded_log', args=[uploaded.upload_id]),
+            {'action': 'unassign_to_general'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('view_uploaded_log', args=[uploaded.upload_id]))
+        uploaded.refresh_from_db()
+        self.assertIsNone(uploaded.recipient_user)
+
+    def test_unassign_to_general_denied_for_non_assigned_user(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='unassign-denied',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('view_uploaded_log', args=[uploaded.upload_id]),
+            {'action': 'unassign_to_general'},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Only the assigned helper can unassign')
+        uploaded.refresh_from_db()
+        self.assertEqual(uploaded.recipient_user, self.other_user)
+
+    def test_uploaded_logs_list_shows_assign_only_for_unassigned_in_show_all_mode(self):
+        UploadedLog.objects.create(
+            upload_id='assign-visible-general',
+            reddit_username='general_user',
+            original_filename='g.txt',
+            content='payload',
+            recipient_user=None,
+        )
+        UploadedLog.objects.create(
+            upload_id='assign-hidden-owned',
+            reddit_username='alice_user',
+            original_filename='a.txt',
+            content='payload',
+            recipient_user=self.user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'show_all': '1'})
+
+        self.assertContains(response, '>assign</button>', count=1)
+
+    def test_uploaded_logs_list_shows_own_channel_only_by_default(self):
+        UploadedLog.objects.create(
+            upload_id='general-log',
+            reddit_username='general_user',
+            original_filename='g.txt',
+            content='payload',
+            recipient_user=None,
+        )
+        UploadedLog.objects.create(
+            upload_id='alice-log',
+            reddit_username='alice_user',
+            original_filename='a.txt',
+            content='payload',
+            recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='bob-log',
+            reddit_username='bob_user',
+            original_filename='b.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'))
+
+        self.assertContains(response, 'alice-log')
+        self.assertNotContains(response, 'general-log')
+        self.assertNotContains(response, 'bob-log')
+
+    def test_uploaded_logs_list_show_all_includes_other_helpers_uploads(self):
+        UploadedLog.objects.create(
+            upload_id='general-log-all',
+            reddit_username='general_user',
+            original_filename='g.txt',
+            content='payload',
+            recipient_user=None,
+        )
+        UploadedLog.objects.create(
+            upload_id='alice-log-all',
+            reddit_username='alice_user',
+            original_filename='a.txt',
+            content='payload',
+            recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='bob-log-all',
+            reddit_username='bob_user',
+            original_filename='b.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'show_all': '1'})
+
+        self.assertContains(response, 'general-log-all')
+        self.assertContains(response, 'alice-log-all')
+        self.assertContains(response, 'bob-log-all')
+        self.assertTrue(response.context.get('show_all'))
+
+    def test_authenticated_user_can_view_other_helper_channel_upload_by_detail_link(self):
+        bob_upload = UploadedLog.objects.create(
+            upload_id='bob-private',
+            reddit_username='bob_user',
+            original_filename='b.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('view_uploaded_log', args=[bob_upload.upload_id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'payload')
+
     def test_rename_reddit_username_on_upload_detail(self):
         uploaded = UploadedLog.objects.create(
             upload_id='rename-test',
@@ -439,6 +734,7 @@ class UploadedLogViewTests(TestCase):
             reddit_username='test_user',
             original_filename='x.txt',
             content='payload',
+            recipient_user=self.user,
         )
         self.client.login(username='alice', password='password123')
 
@@ -452,12 +748,14 @@ class UploadedLogViewTests(TestCase):
             reddit_username='test_user',
             original_filename='a.txt',
             content='duplicate content',
+            recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='dup-two',
             reddit_username='test_user',
             original_filename='b.txt',
             content='duplicate content',
+            recipient_user=self.user,
         )
         self.client.login(username='alice', password='password123')
 
@@ -741,12 +1039,14 @@ class UploadedLogViewTests(TestCase):
             reddit_username='alice_user',
             original_filename='a.txt',
             content='aaa',
+            recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='azure-bear',
             reddit_username='bob_user',
             original_filename='b.txt',
             content='bbb',
+            recipient_user=self.user,
         )
         self.client.login(username='alice', password='password123')
 
@@ -762,12 +1062,14 @@ class UploadedLogViewTests(TestCase):
             reddit_username='alice_user',
             original_filename='a.txt',
             content='aaa',
+            recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='azure-bear',
             reddit_username='bob_user',
             original_filename='b.txt',
             content='bbb',
+            recipient_user=self.user,
         )
         self.client.login(username='alice', password='password123')
 
@@ -783,12 +1085,14 @@ class UploadedLogViewTests(TestCase):
             reddit_username='alice_user',
             original_filename='a.txt',
             content='aaa',
+            recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='azure-bear',
             reddit_username='bob_user',
             original_filename='b.txt',
             content='bbb',
+            recipient_user=self.user,
         )
         self.client.login(username='alice', password='password123')
 
@@ -904,6 +1208,8 @@ class TrashViewTests(TestCase):
         self.client.login(username='alice', password='password123')
 
     def _make_log(self, upload_id, **kwargs):
+        if 'recipient_user' not in kwargs:
+            kwargs['recipient_user'] = self.user
         return UploadedLog.objects.create(
             upload_id=upload_id,
             reddit_username='test_user',

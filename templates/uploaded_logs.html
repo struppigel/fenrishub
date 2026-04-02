@@ -71,6 +71,50 @@
     .upload-stats .stat-j { color: var(--la-status-j); }
     .upload-stats .stat-u { color: var(--la-status-u); }
 
+    .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 34px;
+        height: 18px;
+    }
+
+    .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+
+    .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background: var(--la-bg-2);
+        border: 1px solid var(--la-border);
+        transition: 0.2s;
+        border-radius: 999px;
+    }
+
+    .toggle-slider:before {
+        position: absolute;
+        content: "";
+        width: 12px;
+        height: 12px;
+        left: 2px;
+        top: 2px;
+        background: var(--la-text-primary);
+        transition: 0.2s;
+        border-radius: 50%;
+    }
+
+    .toggle-switch input:checked + .toggle-slider {
+        background: color-mix(in srgb, var(--la-status-c) 20%, var(--la-bg-2));
+        border-color: var(--la-status-c);
+    }
+
+    .toggle-switch input:checked + .toggle-slider:before {
+        transform: translateX(16px);
+    }
+
 </style>
 {% endblock %}
 
@@ -87,13 +131,23 @@
 </form>
 
 <form method="get" action="{% url 'uploaded_logs' %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">
-    <select name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px;">
+    <select name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 180px;">
         <option value="">all users</option>
         {% for username in all_usernames %}
         <option value="{{ username }}" {% if username == username_filter %}selected{% endif %}>u/{{ username }}</option>
         {% endfor %}
     </select>
-    {% if username_filter %}<a href="{% url 'uploaded_logs' %}"><button type="button">clear</button></a>{% endif %}
+    <label style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 0; color: var(--la-text-primary); font-size: 12px;">
+        <span>all channels</span>
+        <span class="toggle-switch">
+            <input type="checkbox" name="show_all" value="1" {% if show_all %}checked{% endif %} onchange="this.form.submit()">
+            <span class="toggle-slider"></span>
+        </span>
+    </label>
+    <div style="margin-left: auto; display: flex; gap: 6px; align-items: center; font-size: 11px; line-height: 1.2; color: var(--la-text-primary);">
+        <span>helper URL: <strong id="helperUploadUrl">{{ helper_upload_url }}</strong></span>
+        <button type="button" onclick="copyHelperUploadUrl(this)" style="padding: 3px 8px; font-size: 11px; line-height: 1;">copy</button>
+    </div>
 </form>
 
 <div class="merge-controls button-group">
@@ -104,7 +158,7 @@
         <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan</button>
     </div>
     <div style="display: flex; gap: 8px;">
-        <a href="{% url 'upload_log' %}"><button type="button">upload</button></a>
+        <a href="{% url 'upload_log_for_helper' request.user.username %}"><button type="button">upload</button></a>
         <a href="{% url 'uploads_trash' %}"><button type="button"{% if trash_count %} style="color: var(--la-warning-text);"{% endif %}>trash{% if trash_count %} ({{ trash_count }}){% endif %}</button></a>
     </div>
 </div>
@@ -117,6 +171,11 @@
             <div>
                 <div class="fixlist-title">
                     <a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>
+                    {% if uploaded_log.recipient_user %}
+                    <span>({{ uploaded_log.recipient_user.username }})</span>
+                    {% elif show_all %}
+                    <span>(unassigned)</span>
+                    {% endif %}
                 </div>
                 <div class="fixlist-meta">
                     {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.content_hash %} | <span class="content-hash{% if uploaded_log.content_hash in duplicate_hashes %} duplicate-hash{% endif %}" title="{{ uploaded_log.content_hash }}">{{ uploaded_log.content_hash|truncatechars:11 }}</span>{% endif %}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}
@@ -151,6 +210,25 @@
             </div>
         </div>
         <div class="fixlist-actions">
+            {% if not uploaded_log.recipient_user %}
+            <form method="post" action="{% url 'uploaded_logs' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="assign_to_me">
+                <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                <button type="submit" class="action-btn">assign</button>
+            </form>
+            {% elif uploaded_log.recipient_user == request.user %}
+            <form method="post" action="{% url 'uploaded_logs' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="unassign_to_general">
+                <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                <button type="submit" class="action-btn">unassign</button>
+            </form>
+            {% endif %}
             <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn">view</a>
             <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}" class="action-btn">analyze</a>
             <form method="post" action="{% url 'uploaded_logs' %}">
@@ -169,6 +247,15 @@
 
 {% block extra_js %}
 <script>
+function copyHelperUploadUrl(button) {
+    const value = document.getElementById('helperUploadUrl').textContent;
+    navigator.clipboard.writeText(value).then(function() {
+        const original = button.textContent;
+        button.textContent = 'copied';
+        setTimeout(() => { button.textContent = original; }, 1200);
+    });
+}
+
 function confirmMerge() {
     const selected = document.querySelectorAll('input[name="selected_upload_ids"]:checked');
     if (selected.length === 0) {

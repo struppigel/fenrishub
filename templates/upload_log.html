@@ -26,9 +26,19 @@
 <div class="upload-log-page">
 <h2>log upload</h2>
 
+{% if target_helper %}
+<div class="info-box" style="margin: 12px 0; padding: 12px;">
+    this upload is assigned to helper <strong>{{ target_helper.username }}</strong>.
+</div>
+{% elif invalid_helper_username %}
+<div class="warning-box" style="margin: 12px 0; padding: 12px;">
+    helper <strong>{{ invalid_helper_username }}</strong> was not found. uploads from this page go to the general channel.
+</div>
+{% endif %}
+
 {% if not user.is_authenticated %}
 <div class="info-box" style="margin: 12px 0; padding: 12px; background-color: var(--la-bg-2, #f5f5f5); border-left: 4px solid var(--la-focus, #007bff); border-radius: 4px;">
-    <strong>note:</strong> Uploaded logs will only be visible to the helper you share the upload keyword with. All logs are automatically deleted after 30 days.
+    <strong>note:</strong> Uploaded logs are visible to the intended helper channel and to the general review channel. All logs are automatically deleted after 30 days.
 </div>
 {% endif %}
 
@@ -36,6 +46,7 @@
 <div class="success-box">
     uploaded {{ uploaded_original_filename }}<br>
     keyword: <strong id="uploadedLogId">{{ uploaded_log_id }}</strong>
+    {% if uploaded_channel %}<br>channel: <strong>{{ uploaded_channel }}</strong>{% endif %}
     <button type="button" onclick="copyUploadId(this)" style="margin-left: 10px;">copy keyword</button>
 </div>
 {% endif %}

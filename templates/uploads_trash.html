@@ -62,6 +62,11 @@
     .upload-stats .stat-i { color: var(--la-status-i); }
     .upload-stats .stat-j { color: var(--la-status-j); }
     .upload-stats .stat-u { color: var(--la-status-u); }
+
+    .channel-unassigned {
+        color: var(--la-warning-text);
+        font-weight: 600;
+    }
 </style>
 {% endblock %}
 
@@ -87,7 +92,13 @@
                     <span class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}">{{ uploaded_log.upload_id }}</span>
                 </div>
                 <div class="fixlist-meta">
-                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}
+                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} |
+                    {% if uploaded_log.recipient_user %}
+                    to {{ uploaded_log.recipient_user.username }}
+                    {% else %}
+                    <span class="channel-unassigned">general (unassigned)</span>
+                    {% endif %}
+                    | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}
                 </div>
                 <div class="fixlist-meta upload-stats">
                     lines {{ uploaded_log.total_line_count }}

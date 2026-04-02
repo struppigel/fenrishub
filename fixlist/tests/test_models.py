@@ -113,6 +113,7 @@ _FRST_COMPLETE = (
     f'Scan result of Farbar Recovery Scan Tool\ncontent\n{FRST_END_OF_LOG}\n'
     f'Additional scan result of Farbar Recovery Scan Tool\ncontent\n{FRST_END_OF_ADDITION}'
 )
+_ADDITION_CONTENT = 'Additional scan result of Farbar Recovery Scan Tool\ncontent'
 
 
 class ContentHashTests(TestCase):
@@ -204,10 +205,22 @@ class IncompleteLogFlagTests(TestCase):
         self.assertFalse(log.is_incomplete)
 
     def test_addition_without_end_markers_is_incomplete(self):
-        log = self._make_log('Addition', 'Additional scan result of Farbar Recovery Scan Tool\ncontent')
+        log = self._make_log('Addition', _ADDITION_CONTENT)
         log.recalculate_analysis_stats()
         log.refresh_from_db()
         self.assertTrue(log.is_incomplete)
+
+    def test_frst_with_only_frst_ending_is_not_incomplete(self):
+        log = self._make_log('FRST', f'{_FRST_CONTENT}\n{FRST_END_OF_LOG}')
+        log.recalculate_analysis_stats()
+        log.refresh_from_db()
+        self.assertFalse(log.is_incomplete)
+
+    def test_addition_with_only_addition_ending_is_not_incomplete(self):
+        log = self._make_log('Addition', f'{_ADDITION_CONTENT}\n{FRST_END_OF_ADDITION}')
+        log.recalculate_analysis_stats()
+        log.refresh_from_db()
+        self.assertFalse(log.is_incomplete)
 
     def test_frst_and_addition_without_end_markers_is_incomplete(self):
         log = self._make_log('FRST&Addition', _FRST_CONTENT)
@@ -220,6 +233,17 @@ class IncompleteLogFlagTests(TestCase):
         log.recalculate_analysis_stats()
         log.refresh_from_db()
         self.assertFalse(log.is_incomplete)
+
+    def test_frst_and_addition_with_only_one_ending_is_incomplete(self):
+        content = (
+            'Scan result of Farbar Recovery Scan Tool\nfrst content\n'
+            'Additional scan result of Farbar Recovery Scan Tool\naddition content\n'
+            f'{FRST_END_OF_LOG}'
+        )
+        log = self._make_log('FRST&Addition', content)
+        log.recalculate_analysis_stats()
+        log.refresh_from_db()
+        self.assertTrue(log.is_incomplete)
 
     def test_fixlog_type_is_never_incomplete(self):
         log = self._make_log('Fixlog', 'Fix result of Farbar Recovery Scan Tool\nsome fix')

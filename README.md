@@ -1,215 +1,240 @@
-# FenrisHub - Secure Fixlist Manager
+# FenrisHub
 
-A minimalistic, terminal-style Django web application for managing and sharing Fixlists securely.
+FenrisHub is a Django application for FRST/Fixlog intake, line-by-line analysis, rule management, and fixlist sharing. It started as a secure fixlist manager and now also includes public log upload, analyst review workflows, reusable snippets, and owner-scoped classification rules.
 
-## Features
+## What It Does
 
-- **No Self-Registration**: Users are manually added by administrators via Django admin
-- **User Authentication**: Login system for defenders
-- **Fixlist Management**: Create, edit, and delete fixlists
-- **Secure Sharing**: Generate unique share tokens for each fixlist
-- **Non-Authenticated Access**: Anyone with a share link can view fixlists
-- **Warning Messages**: Recipients are warned that the fixlist is intended for a specific user
-- **Easy Copying**: One-click copy-to-clipboard functionality
-- **Download Support**: Download fixlists as .txt files
-- **Access Logging**: Track who accessed your shared fixlists
-- **Terminal Aesthetic**: Green-on-black terminal-style UI
+- Accepts pasted or uploaded `.txt` logs through a public upload form
+- Detects FRST, Addition, combined FRST+Addition, and Fixlog content
+- Analyzes uploaded logs into per-line status classifications and warnings
+- Lets authenticated users inspect, diff, merge, rename, trash, and restore uploads
+- Supports owner-scoped classification rules for exact, substring, regex, filepath, and parsed-entry matching
+- Lets analysts build and share fixlists with tokenized public links
+- Stores reusable fixlist snippets, including optionally shared snippets for other authenticated users
+- Preserves a terminal-style UI while using static assets and Django templates
 
+## Main Workflows
 
-## Installation
+### Public users
+
+- Submit a FRST or Fixlog text file at `/upload/`
+- Paste log text instead of uploading a file
+- Receive a memorable upload ID after submission
+- Open shared fixlist links without authentication
+
+Anonymous uploads are rate-limited by client IP.
+
+### Authenticated analysts
+
+- Review uploaded logs from `/uploads/`
+- Open a log by memorable upload ID
+- Compare two uploads side by side
+- Merge multiple uploads into a new combined upload
+- Run analyzer workflows from `/fixlists/analyze/`
+- Preview and optionally persist analyzer-derived rules
+- Create fixlists from analyzed content
+- Manage their own classification rules and snippets
+- Soft-delete and restore both uploads and fixlists from trash views
+
+## Core Data Model
+
+### Fixlist
+
+User-owned remediation content with a title, freeform text, internal note, soft-delete support, download count, and a unique share token for public access.
+
+### AccessLog
+
+Audit record for public fixlist access, including timestamp, IP address, and user agent.
+
+### UploadedLog
+
+Stored raw log content with Reddit username, original filename, memorable `upload_id`, content hash, detected log type, incomplete-log flag, and cached analysis counters.
+
+### ClassificationRule
+
+Owner-scoped rules that classify lines by status using one of five match types:
+
+- `exact`
+- `substring`
+- `regex`
+- `filepath`
+- `parsed`
+
+Rules can carry parsed metadata such as CLSID, filepath, filename, company, arguments, and signature state.
+
+### FixlistSnippet
+
+Reusable content blocks owned by a user and optionally shared with other authenticated users.
+
+### ParsedFilepathExclusion
+
+Normalized file paths that should be excluded or treated specially when parsed filepath matching would otherwise create noise.
+
+## Analyzer Notes
+
+The analyzer in `fixlist/analyzer.py` parses FRST-style lines, evaluates them against stored rules, and emits warnings for common conditions such as:
+
+- incomplete FRST/Addition logs
+- low-memory or low-disk conditions visible in the log
+- multiple enabled antivirus products
+
+Analyzer overrides are validated first and can later be previewed and optionally persisted as rules.
+
+## Project Layout
+
+```text
+FenrisHub/
+├── fenrishub/                  # Django project settings and root URLConf
+├── fixlist/                    # Main application: models, views, analyzer, forms, admin
+│   ├── management/commands/    # Utility commands such as ensure_superuser
+│   ├── migrations/
+│   └── tests/
+├── templates/                  # Django templates for uploads, analyzer, rules, snippets, fixlists
+├── static/                     # CSS and JavaScript assets
+├── Fenris/                     # FRST parsing/reference assets and legacy helper scripts
+├── manage.py
+├── manage_users.py             # Interactive local user-management helper
+├── requirements.txt
+├── Procfile
+└── railway.toml
+```
+
+## Local Setup
 
 ### Prerequisites
+
 - Python 3.8+
 - pip
 
-### Setup
+### Install
 
-1. **Clone the repository**
-   ```bash
-   cd FenrisHub
-   ```
+1. Create and activate a virtual environment.
 
-2. **Create a virtual environment** (required)
-   ```bash
-   python -m venv venv
-   ```
+```bash
+python -m venv venv
+```
 
-3. **Activate the virtual environment**
-   
-   On Windows:
-   ```bash
-   .\venv\Scripts\activate
-   ```
-   
-   On macOS/Linux:
-   ```bash
-   source venv/bin/activate
-   ```
+Windows:
 
-4. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+.\venv\Scripts\activate
+```
 
-5. **Run migrations**
-   ```bash
-   python manage.py makemigrations fixlist
-   python manage.py migrate
-   ```
+macOS/Linux:
 
-6. **Create a superuser** (required for admin)
-   ```bash
-   python manage.py createsuperuser
-   ```
+```bash
+source venv/bin/activate
+```
 
-7. **Run the development server**
-   ```bash
-   python manage.py runserver
-   ```
+2. Install dependencies.
 
-8. **Access the application**
-   - Open your browser and go to `http://localhost:8000`
-   - Admin panel: `http://localhost:8000/admin/`
+```bash
+pip install -r requirements.txt
+```
+
+3. Run migrations.
+
+```bash
+python manage.py migrate
+```
+
+4. Create an admin account.
+
+```bash
+python manage.py createsuperuser
+```
+
+5. Start the development server.
+
+```bash
+python manage.py runserver
+```
+
+6. Open the app.
+
+- App: `http://localhost:8000`
+- Admin: `http://localhost:8000/admin/`
 
 ## User Management
 
-**Users are NOT self-registered.** All users must be manually created by an administrator.
+Self-registration is not enabled. Users must be created by an administrator.
 
-### Adding New Users
+### Option 1: Django admin
 
-**Option 1: Via Admin Panel**
-1. Login to `http://localhost:8000/admin/`
-2. Click on "Users" under Authentication and Authorization
-3. Click "Add User" and fill in the details
+Create users from `/admin/` under Authentication and Authorization.
 
-**Option 2: Via Management Script**
+### Option 2: helper script
+
 ```bash
 python manage_users.py
 ```
 
-This interactive script allows you to:
-- Create new users
-- List all users
-- Delete users
-- Grant staff privileges
+The script supports creating, listing, and deleting users, plus optionally granting staff access.
 
-## Usage
+## Configuration
 
-### As a Defender (Logged-in User)
+FenrisHub is configured primarily through environment variables.
 
-1. **Login**: Use credentials created by an administrator
-2. **Create a Fixlist**: 
-   - Go to the Dashboard
-   - Fill in the title and content
-   - Click "CREATE"
-3. **Share a Fixlist**:
-   - Click "EDIT" on any fixlist
-   - Copy the share link from the green box
-   - Share this link with anyone (no login required)
-4. **Manage Fixlists**:
-   - View all your fixlists on the dashboard
-   - Edit content at any time
-   - Delete fixlists you no longer need
+### Common settings
 
-### As a Recipient (Non-Logged-in User)
+- `SECRET_KEY`: Django secret key
+- `DEBUG`: `true` or `false`
+- `ALLOWED_HOSTS`: comma-separated hostnames
+- `CSRF_TRUSTED_ORIGINS`: comma-separated trusted origins
+- `DATABASE_URL`: optional database URL; if omitted, SQLite is used
 
-1. **Access a Fixlist**: Click the shared link sent by a defender
-2. **View the Content**: Read the fixlist with a warning message
-3. **Copy Content**: Click "COPY_ALL" to copy all text to clipboard
-4. **Download**: Click "DOWNLOAD" to save as a .txt file
+### Anonymous upload rate limiting
 
+- `ANON_UPLOAD_RATE_LIMIT_COUNT`: max anonymous uploads per window, default `15`
+- `ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS`: window length in seconds, default `3600`
 
-## Project Structure
+### Optional automatic superuser bootstrap
 
-```
-FenrisHub/
-├── fenrishub/                 # Main project folder
-│   ├── __init__.py
-│   ├── settings.py           # Django settings
-│   ├── urls.py               # URL configuration
-│   └── wsgi.py
-├── fixlist/                  # Main app
-│   ├── migrations/
-│   ├── __init__.py
-│   ├── admin.py             # Django admin configuration
-│   ├── apps.py
-│   ├── forms.py             # Django forms
-│   ├── models.py            # Database models
-│   ├── urls.py              # App URL patterns
-│   └── views.py             # View functions
-├── templates/               # HTML templates
-│   ├── base.html           # Base template with styling
-│   ├── login.html
-│   ├── register.html
-│   ├── dashboard.html
-│   ├── view_fixlist.html
-│   └── shared_fixlist.html
-├── manage.py
-└── requirements.txt
-```
+The `ensure_superuser` management command will create or update a superuser during deploy if these are set:
 
-## Models
+- `AUTO_CREATE_SUPERUSER=true`
+- `DJANGO_SUPERUSER_USERNAME`
+- `DJANGO_SUPERUSER_PASSWORD`
+- `DJANGO_SUPERUSER_EMAIL` (optional)
 
-### Fixlist
-- `owner`: Foreign key to User
-- `title`: Title of the fixlist
-- `content`: The actual content (text)
-- `share_token`: Unique 32-character token for sharing
-- `created_at`: Creation timestamp
-- `updated_at`: Last update timestamp
-- `is_public`: Boolean flag (for future features)
+## Deployment
 
-### AccessLog
-- `fixlist`: Foreign key to Fixlist
-- `accessed_at`: When it was accessed
-- `ip_address`: IP of the visitor
-- `user_agent`: Browser user agent
+The repo includes deployment config for Gunicorn and Railway-style platforms.
 
-## API Endpoints
+### Procfile
 
-- `GET /` - Login page
-- `POST /` - Login action
-- `GET/POST /register/` - Registration
-- `GET/POST /dashboard/` - User dashboard
-- `GET/POST /fixlist/<id>/` - Edit fixlist
-- `GET /share/<token>/` - View shared fixlist
-- `GET /download/<token>/` - Download fixlist as text
-- `POST /logout/` - Logout
+The web process runs migrations, applies optional superuser bootstrap, and starts Gunicorn.
 
-## Security Notes
+### railway.toml
 
-- Change `SECRET_KEY` in `settings.py` before production
-- Set `DEBUG = False` in production
-- Set `ALLOWED_HOSTS` to your domain(s) in production
-- Use HTTPS in production
-- Use a proper database (PostgreSQL/MySQL) instead of SQLite in production
-- Set up proper authentication and CSRF protection
+The Railway config:
 
-## Terminal Styling
+- runs `collectstatic` at build time
+- runs tests, migrations, and `ensure_superuser` before deploy
+- starts `gunicorn fenrishub.wsgi:application`
 
-The application features a minimalist terminal aesthetic:
-- Black background (#0a0a0a)
-- Green text (#00ff00) - Classic terminal style
-- Monospace font (Courier New)
-- Glow effects on interactions
-- Command-line style UI
+When `DEBUG` is false, WhiteNoise is enabled for static file serving and secure cookie settings are applied.
 
-**CSS convention**: All colors must use the global CSS variables defined in `static/css/theme.css`. Never use hardcoded hex values in stylesheets — always reference a `--la-*` variable instead. Add new variables to `theme.css` if an existing one does not fit.
+## Key Routes
 
-## Future Enhancements
+- `/` login page
+- `/upload/` public upload form
+- `/dashboard/` authenticated fixlist dashboard
+- `/uploads/` uploaded log management
+- `/fixlists/analyze/` log analyzer UI
+- `/rules/` classification rule management
+- `/fixlists/snippets/` snippet management
+- `/share/<token>/` public fixlist view
+- `/download/<token>/` fixlist text download
 
-- Export multiple fixlists as archive
-- Search functionality
-- Fixlist categories/tags
-- Expiring share links
-- Password-protected shares
-- Integration with external storage
-- Dark/Light theme toggle
+## Development Notes
+
+- The primary application logic lives in `fixlist/`
+- Static assets live in `static/`
+- Templates live in `templates/`
+- Global site colors should use CSS variables from `static/css/theme.css`
+- In production, prefer a real database via `DATABASE_URL` instead of local SQLite
 
 ## License
 
-MIT License - Feel free to use and modify
-
-## Support
-
-For issues or questions, please check the documentation or create an issue in the repository.
+MIT

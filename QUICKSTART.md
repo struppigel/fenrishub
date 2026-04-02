@@ -1,93 +1,216 @@
-# FenrisHub - Quick Start Guide
+# FenrisHub Quick Start
 
-## Initial Setup
+This guide is for getting a local FenrisHub instance running quickly and walking through the main workflows.
 
-This project has been created with **no user registration**. All users must be manually created by an administrator using the Django admin panel.
+## 1. Create a local environment
 
-### 1. Run the development server
+From the repository root:
 
 ```bash
-cd c:\Users\strup\Repos\FenrisHub
-.\venv\Scripts\activate
-python manage.py runserver
+python -m venv venv
 ```
 
-The application will be available at `http://localhost:8000`
+Windows:
 
-### 2. Create a superuser (admin account)
+```bash
+.\venv\Scripts\activate
+```
+
+macOS/Linux:
+
+```bash
+source venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Apply migrations:
+
+```bash
+python manage.py migrate
+```
+
+## 2. Create an admin account
+
+FenrisHub does not support self-registration. Create a superuser first:
 
 ```bash
 python manage.py createsuperuser
 ```
 
-Follow the prompts to create an admin account. You'll need:
-- Username
-- Email (can be blank)
-- Password (twice for confirmation)
-
-### 3. Add defender users via admin
-
-1. Go to `http://localhost:8000/admin/`
-2. Login with your superuser credentials
-3. Click on "Users" under Authentication and Authorization
-4. Click "Add User" button
-5. Enter username and password, then save
-6. (Optional) Make them staff members or give them permissions
-
-### 4. Users can now login
-
-Users can login at `http://localhost:8000` with their credentials.
-
-## User Management Commands (Optional)
-
-You can also create users from the command line:
+Then start the dev server:
 
 ```bash
-python manage.py shell
+python manage.py runserver
 ```
 
-Then in the Python shell:
+Open:
 
-```python
-from django.contrib.auth.models import User
+- App: `http://localhost:8000`
+- Admin: `http://localhost:8000/admin/`
 
-# Create a new user
-User.objects.create_user(username='defender_name', password='secure_password')
+## 3. Add analyst users
 
-# Exit the shell
-exit()
+Create users in one of two ways.
+
+### Option 1: Django admin
+
+1. Sign in to `/admin/`
+2. Open Users under Authentication and Authorization
+3. Add a user
+4. Optionally grant staff access
+
+### Option 2: helper script
+
+```bash
+python manage_users.py
 ```
 
-## User Workflow
+The helper script can create, list, and delete users.
 
-### For Defenders (Logged-in users):
-1. Login with credentials
-2. Create a Fixlist by providing a title and pasting/typing content
-3. Copy the share link
-4. Share it with anyone (they don't need to login)
+## 4. First login
 
-### For Recipients (Non-logged-in users):
-1. Receive a share link
-2. Click the link - they'll see a warning that it's meant for a specific user
-3. Copy the content or download as a .txt file
-4. No login required
+Go to `/` and sign in with the account you created.
 
-## Admin Features
+Useful authenticated routes:
 
-Access the admin panel at `/admin/`:
-- Manage users and permissions
-- View all fixlists and who owns them
-- Track access logs for shared fixlists
-- Delete or modify fixlists if needed
+- `/dashboard/`
+- `/uploads/`
+- `/fixlists/analyze/`
+- `/rules/`
+- `/fixlists/snippets/`
 
-## Stopping the Server
+## 5. Test the upload flow
 
-Press `Ctrl+C` in your terminal to stop the development server.
+FenrisHub accepts uploads from unauthenticated users at `/upload/`.
 
-## Important Notes
+You can test either of these:
 
-- The database is SQLite (db.sqlite3) - fine for development
-- For production, use PostgreSQL or MySQL
-- Change the SECRET_KEY in settings.py before deploying
-- Set DEBUG = False in production settings.py
-- Update ALLOWED_HOSTS with your domain
+- upload a `.txt` file
+- paste log text directly into the form
+
+After submission, the app stores the content as an `UploadedLog`, detects the log type, calculates analysis stats, and returns a memorable upload ID.
+
+Notes:
+
+- anonymous uploads are rate-limited by IP
+- usernames are expected in Reddit-style format without the `u/` prefix
+- uploads can be FRST, Addition, combined FRST+Addition, Fixlog, or Unknown
+
+## 6. Review uploaded logs
+
+As an authenticated user, go to `/uploads/`.
+
+From there you can:
+
+- open a single upload
+- rename the stored Reddit username on an upload
+- select multiple uploads and merge them
+- compare two uploads with the diff view
+- move uploads to trash and restore them later
+
+## 7. Use the analyzer
+
+Open `/fixlists/analyze/`.
+
+The analyzer can:
+
+- classify lines with stored rules
+- show warnings for incomplete logs and other conditions
+- inspect how a specific line matched rules
+- let you change statuses in the UI
+- preview optional rule persistence before saving changes as rules
+
+Important behavior:
+
+- status overrides are validated first
+- analyzer changes do not have to be persisted immediately
+- rule preview and persistence use dedicated API routes
+
+## 8. Create and share a fixlist
+
+Authenticated users can create fixlists at `/fixlists/create/` and manage them from `/dashboard/`.
+
+Each fixlist:
+
+- is owned by a user
+- has a unique share token
+- can include an internal note for logged-in use
+- can be downloaded as text
+- can be accessed publicly by share link
+
+Public routes:
+
+- `/share/<token>/`
+- `/download/<token>/`
+
+## 9. Manage rules and snippets
+
+### Rules
+
+Go to `/rules/` to manage classification rules.
+
+Supported rule match types:
+
+- exact
+- substring
+- regex
+- filepath
+- parsed
+
+Rules are owner-scoped and can be enabled or disabled.
+
+### Snippets
+
+Go to `/fixlists/snippets/` to manage reusable fixlist snippets.
+
+Snippets can be:
+
+- private to the owner
+- shared with other authenticated users
+
+## 10. Optional environment configuration
+
+For local work, the app defaults to SQLite if `DATABASE_URL` is not set.
+
+Common environment variables:
+
+- `SECRET_KEY`
+- `DEBUG`
+- `ALLOWED_HOSTS`
+- `CSRF_TRUSTED_ORIGINS`
+- `DATABASE_URL`
+- `ANON_UPLOAD_RATE_LIMIT_COUNT`
+- `ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS`
+
+Optional deploy-time superuser bootstrap:
+
+- `AUTO_CREATE_SUPERUSER=true`
+- `DJANGO_SUPERUSER_USERNAME`
+- `DJANGO_SUPERUSER_PASSWORD`
+- `DJANGO_SUPERUSER_EMAIL`
+
+## 11. Stopping the server
+
+Press `Ctrl+C` in the terminal running `python manage.py runserver`.
+
+## 12. Common local commands
+
+```bash
+python manage.py runserver
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py test
+python manage_users.py
+```
+
+## 13. If something looks wrong
+
+- confirm the virtual environment is active
+- confirm dependencies from `requirements.txt` are installed
+- run `python manage.py migrate`
+- verify you are opening the routes listed above instead of older docs or bookmarks

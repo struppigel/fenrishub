@@ -24,6 +24,11 @@
         color: var(--la-text-muted);
     }
 
+    .channel-unassigned {
+        color: var(--la-warning-text);
+        font-weight: 600;
+    }
+
     .uploaded-content {
         min-height: 300px;
         font-family: inherit;
@@ -76,6 +81,14 @@
             <button type="button" style="padding: 2px 8px;" onclick="document.getElementById('redditEditForm').style.display='none';document.getElementById('redditDisplay').hidden=false;document.getElementById('redditEditButton').hidden=false;">cancel</button>
         </form>
     </div>
+    <div class="meta-key">channel</div>
+    <div>
+        {% if uploaded_log.recipient_user %}
+        helper {{ uploaded_log.recipient_user.username }}
+        {% else %}
+        <span class="channel-unassigned">general (unassigned)</span>
+        {% endif %}
+    </div>
     <div class="meta-key">hash</div>
     <div>{{ uploaded_log.content_hash }}</div>
     <div class="meta-key">created</div>
@@ -89,9 +102,13 @@
 
 <form method="post">
     {% csrf_token %}
-    <input type="hidden" name="action" value="delete">
     <div class="button-group">
-        <button type="submit" onclick="return confirm('Delete this upload?');">delete</button>
+        {% if not uploaded_log.recipient_user %}
+        <button type="submit" name="action" value="assign_to_me">assign</button>
+        {% elif uploaded_log.recipient_user == user %}
+        <button type="submit" name="action" value="unassign_to_general">unassign</button>
+        {% endif %}
+        <button type="submit" name="action" value="delete" onclick="return confirm('Delete this upload?');">delete</button>
     </div>
 </form>
 </div>

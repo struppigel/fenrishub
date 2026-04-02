@@ -58,9 +58,13 @@ class TemplateMarkupTests(TestCase):
 
         self.assertIn('id="uploadedLogId"', upload_page)
         self.assertIn('copyUploadId', upload_page)
+        self.assertIn('target_helper', upload_page)
         self.assertIn('>upload<', uploads_page)
         self.assertIn('>merge<', uploads_page)
         self.assertIn('>rescan<', uploads_page)
+        self.assertIn('helperUploadUrl', uploads_page)
+        self.assertIn('copyHelperUploadUrl', uploads_page)
+        self.assertIn("{% url 'upload_log_for_helper' request.user.username %}", uploads_page)
         self.assertIn('>analyze</a>', uploads_page)
         self.assertIn('?upload_id={{ uploaded_log.upload_id|urlencode }}', uploads_page)
         self.assertIn('class="merge-controls button-group"', uploads_page)

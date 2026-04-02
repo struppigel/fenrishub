@@ -66,6 +66,7 @@ class LogAnalyzerCleanSaveTests(TestCase):
 class LogAnalyzerApiTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="analyzer", password="password123")
+        self.other_user = User.objects.create_user(username="other_helper", password="password123")
 
     def test_analyze_api_requires_login(self):
         response = self.client.post(
@@ -107,6 +108,20 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(payload['original_filename'], 'content.txt')
         self.assertEqual(payload['reddit_username'], 'reddit_name')
         self.assertEqual(payload['content'], 'line-1\nline-2')
+
+    def test_uploaded_log_content_api_blocks_other_helper_channel_upload(self):
+        self.client.login(username='analyzer', password='password123')
+        uploaded = UploadedLog.objects.create(
+            upload_id='private-rapid-trail',
+            reddit_username='reddit_name',
+            original_filename='content.txt',
+            content='line-1\nline-2',
+            recipient_user=self.other_user,
+        )
+
+        response = self.client.get(reverse('uploaded_log_content_api', args=[uploaded.upload_id]))
+
+        self.assertEqual(response.status_code, 404)
 
     def test_analyze_line_details_api_requires_login(self):
         response = self.client.post(
@@ -203,6 +218,31 @@ class LogAnalyzerApiTests(TestCase):
         self.assertEqual(other_upload.total_line_count, 0)
         self.assertEqual(other_upload.count_malware, 0)
         self.assertEqual(other_upload.count_unknown, 0)
+
+    def test_analyze_api_does_not_update_out_of_scope_upload(self):
+        self.client.login(username="analyzer", password="password123")
+        uploaded = UploadedLog.objects.create(
+            upload_id='blocked-update',
+            reddit_username='stats_user',
+            original_filename='blocked.txt',
+            log_type='FRST',
+            content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE',
+            recipient_user=self.other_user,
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({
+                "log": "Scan result of Farbar Recovery Scan Tool\\nMAL-LINE",
+                "upload_id": uploaded.upload_id,
+            }),
+            content_type="application/json",
+        )
+
+        uploaded.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(uploaded.total_line_count, 0)
+        self.assertEqual(uploaded.count_malware, 0)
 
     def test_persist_pending_rule_changes_api_requires_login(self):
         payload = {

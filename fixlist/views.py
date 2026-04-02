@@ -9,14 +9,16 @@ from django.core.cache import cache
 from django.http import Http404, JsonResponse, HttpResponse, FileResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.db.models import Count, F
+from django.db.models import Count, F, Q
 from django.db import transaction
 from django.utils import timezone
+from django.urls import reverse
 from datetime import timedelta
 from io import BytesIO
 import difflib
 import json
 import re
+from urllib.parse import urlencode
 
 from .analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
@@ -88,6 +90,41 @@ def _merge_logs_content(logs):
             merged_parts[-1] = f"{merged_parts[-1]}\n"
         merged_parts.append(piece)
     return ''.join(merged_parts)
+
+
+def _resolve_upload_recipient_username(helper_username: str):
+    """Resolve helper username from route for recipient channel assignment."""
+    normalized_username = (helper_username or '').strip()
+    if not normalized_username:
+        return None, ''
+    recipient_user = User.objects.filter(username__iexact=normalized_username).first()
+    if recipient_user:
+        return recipient_user, ''
+    return None, normalized_username
+
+
+def _visible_uploaded_logs_for_user(user):
+    """Uploads visible to a helper: own channel plus general channel."""
+    return UploadedLog.objects.filter(
+        Q(recipient_user=user) | Q(recipient_user__isnull=True)
+    )
+
+
+def _uploads_redirect_with_state(request):
+    query_params = {}
+
+    show_all = (request.POST.get('show_all') or request.GET.get('show_all') or '').strip().lower()
+    if show_all in {'1', 'true', 'on', 'yes'}:
+        query_params['show_all'] = '1'
+
+    username_filter = (request.POST.get('u') or request.GET.get('u') or '').strip()
+    if username_filter:
+        query_params['u'] = username_filter
+
+    if query_params:
+        return redirect(f"{reverse('uploaded_logs')}?{urlencode(query_params)}")
+
+    return redirect('uploaded_logs')
 
 
 def get_client_ip(request):
@@ -536,11 +573,12 @@ def dashboard_view(request):
 
 
 @require_http_methods(["GET", "POST"])
-def upload_log_view(request):
+def upload_log_view(request, helper_username=None):
     """Public upload endpoint for text logs."""
     uploaded_log_id = None
     uploaded_original_filename = None
     upload_limit, upload_window_seconds = _anonymous_upload_limit()
+    recipient_user, invalid_helper_username = _resolve_upload_recipient_username(helper_username)
 
     if request.method == 'POST':
         form = UploadedLogForm(request.POST, request.FILES)
@@ -577,6 +615,7 @@ def upload_log_view(request):
                 reddit_username=form.cleaned_data['reddit_username'],
                 original_filename=filename,
                 content=content,
+                recipient_user=recipient_user,
             )
             created_log.recalculate_log_type()
             try:
@@ -587,6 +626,12 @@ def upload_log_view(request):
                 traceback.print_exc()
             request.session['upload_success_id'] = created_log.upload_id
             request.session['upload_success_filename'] = created_log.original_filename
+            request.session['upload_success_channel'] = recipient_user.username if recipient_user else 'general'
+            if helper_username and invalid_helper_username:
+                messages.warning(
+                    request,
+                    f'Could not find helper "{invalid_helper_username}". Upload was saved to the general channel.',
+                )
             return redirect('upload_log')
     else:
         prefill = request.GET.get('u', '')
@@ -594,6 +639,7 @@ def upload_log_view(request):
 
     uploaded_log_id = request.session.pop('upload_success_id', None)
     uploaded_original_filename = request.session.pop('upload_success_filename', None)
+    uploaded_channel = request.session.pop('upload_success_channel', None)
 
     return render(
         request,
@@ -602,6 +648,9 @@ def upload_log_view(request):
             'form': form,
             'uploaded_log_id': uploaded_log_id,
             'uploaded_original_filename': uploaded_original_filename,
+            'uploaded_channel': uploaded_channel,
+            'target_helper': recipient_user,
+            'invalid_helper_username': invalid_helper_username,
         },
     )
 
@@ -610,6 +659,8 @@ def upload_log_view(request):
 @require_http_methods(["GET", "POST"])
 def uploaded_logs_view(request):
     """List uploaded logs for authenticated users and support merge/delete actions."""
+    action_visible_uploads = _visible_uploaded_logs_for_user(request.user)
+
     if request.method == 'POST':
         action = request.POST.get('action', '')
 
@@ -624,12 +675,39 @@ def uploaded_logs_view(request):
 
         if action == 'delete':
             upload_id = request.POST.get('upload_id', '').strip()
-            uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
+            uploaded_log = get_object_or_404(action_visible_uploads, upload_id=upload_id, deleted_at__isnull=True)
             uploaded_log.deleted_at = timezone.now()
             uploaded_log.save(update_fields=['deleted_at'])
             _purge_old_trash()
             messages.success(request, f'Upload {upload_id} moved to trash.')
             return redirect('uploaded_logs')
+
+        if action == 'assign_to_me':
+            upload_id = request.POST.get('upload_id', '').strip()
+            uploaded_log = get_object_or_404(action_visible_uploads, upload_id=upload_id, deleted_at__isnull=True)
+            if uploaded_log.recipient_user_id is not None:
+                messages.error(request, f'Upload {upload_id} is already assigned.')
+                return _uploads_redirect_with_state(request)
+
+            uploaded_log.recipient_user = request.user
+            uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
+            messages.success(request, f'Upload {upload_id} assigned to {request.user.username}.')
+            return _uploads_redirect_with_state(request)
+
+        if action == 'unassign_to_general':
+            upload_id = request.POST.get('upload_id', '').strip()
+            uploaded_log = get_object_or_404(action_visible_uploads, upload_id=upload_id, deleted_at__isnull=True)
+            if uploaded_log.recipient_user_id is None:
+                messages.error(request, f'Upload {upload_id} is already unassigned.')
+                return _uploads_redirect_with_state(request)
+            if uploaded_log.recipient_user_id != request.user.id:
+                messages.error(request, f'Only the assigned helper can unassign {upload_id}.')
+                return _uploads_redirect_with_state(request)
+
+            uploaded_log.recipient_user = None
+            uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
+            messages.success(request, f'{upload_id} was unassigned')
+            return _uploads_redirect_with_state(request)
 
         if action == 'delete_selected':
             if not selected_ids:
@@ -637,7 +715,7 @@ def uploaded_logs_view(request):
                 return redirect('uploaded_logs')
 
             selected_logs = list(
-                UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=True)
+                action_visible_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True)
             )
             found_ids = {entry.upload_id for entry in selected_logs}
             missing_ids = [upload_id for upload_id in selected_ids if upload_id not in found_ids]
@@ -659,7 +737,7 @@ def uploaded_logs_view(request):
                 messages.error(request, 'Select at least two uploads to merge.')
                 return redirect('uploaded_logs')
 
-            selected_logs = list(UploadedLog.objects.filter(upload_id__in=selected_ids))
+            selected_logs = list(action_visible_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
             logs_by_id = {entry.upload_id: entry for entry in selected_logs}
             missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
             if missing_ids:
@@ -696,6 +774,7 @@ def uploaded_logs_view(request):
                 original_filename='merged-logs.txt',
                 content=merged_content,
                 created_by=request.user,
+                recipient_user=request.user,
             )
             merged_upload.recalculate_log_type()
             try:
@@ -720,7 +799,7 @@ def uploaded_logs_view(request):
                 messages.error(request, 'Please select a username.')
                 return redirect('uploaded_logs')
             
-            selected_logs = list(UploadedLog.objects.filter(upload_id__in=selected_ids))
+            selected_logs = list(action_visible_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
             logs_by_id = {entry.upload_id: entry for entry in selected_logs}
             missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
             if missing_ids:
@@ -749,6 +828,7 @@ def uploaded_logs_view(request):
                 original_filename='merged-logs.txt',
                 content=merged_content,
                 created_by=request.user,
+                recipient_user=request.user,
             )
             merged_upload.recalculate_log_type()
             try:
@@ -765,7 +845,7 @@ def uploaded_logs_view(request):
             rescanned_count = 0
             failed_upload_ids = []
 
-            for uploaded_log in UploadedLog.objects.filter(deleted_at__isnull=True).iterator():
+            for uploaded_log in action_visible_uploads.filter(deleted_at__isnull=True).iterator():
                 try:
                     uploaded_log.recalculate_analysis_stats()
                     uploaded_log.recalculate_log_type()
@@ -793,25 +873,36 @@ def uploaded_logs_view(request):
         return redirect('uploaded_logs')
 
     username_filter = request.GET.get('u', '').strip()
-    uploads = UploadedLog.objects.filter(deleted_at__isnull=True)
+    show_all = request.GET.get('show_all', '').strip() in {'1', 'true', 'on', 'yes'}
+
+    list_visible_uploads = (
+        UploadedLog.objects.all()
+        if show_all
+        else UploadedLog.objects.filter(recipient_user=request.user)
+    )
+
+    uploads = list_visible_uploads.filter(deleted_at__isnull=True)
     if username_filter:
         uploads = uploads.filter(reddit_username=username_filter)
-    all_usernames = UploadedLog.objects.filter(deleted_at__isnull=True).values_list('reddit_username', flat=True).distinct().order_by('reddit_username')
-    trash_count = UploadedLog.objects.filter(deleted_at__isnull=False).count()
+    all_usernames = list_visible_uploads.filter(deleted_at__isnull=True).values_list('reddit_username', flat=True).distinct().order_by('reddit_username')
+    trash_count = list_visible_uploads.filter(deleted_at__isnull=False).count()
     duplicate_hashes = set(
-        UploadedLog.objects.filter(deleted_at__isnull=True)
+        list_visible_uploads.filter(deleted_at__isnull=True)
         .exclude(content_hash='')
         .values('content_hash')
         .annotate(cnt=Count('id'))
         .filter(cnt__gt=1)
         .values_list('content_hash', flat=True)
     )
+    helper_upload_url = request.build_absolute_uri(reverse('upload_log_for_helper', args=[request.user.username]))
     return render(request, 'uploaded_logs.html', {
         'uploads': uploads,
         'username_filter': username_filter,
         'all_usernames': all_usernames,
         'trash_count': trash_count,
         'duplicate_hashes': duplicate_hashes,
+        'helper_upload_url': helper_upload_url,
+        'show_all': show_all,
     })
 
 
@@ -838,6 +929,29 @@ def view_uploaded_log(request, upload_id):
                 uploaded_log.save(update_fields=['reddit_username'])
             return redirect('view_uploaded_log', upload_id=upload_id)
 
+        if action == 'assign_to_me':
+            if uploaded_log.recipient_user_id is not None:
+                messages.error(request, f'Upload {upload_id} is already assigned.')
+                return redirect('view_uploaded_log', upload_id=upload_id)
+
+            uploaded_log.recipient_user = request.user
+            uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
+            messages.success(request, f'Upload {upload_id} assigned to {request.user.username}.')
+            return redirect('view_uploaded_log', upload_id=upload_id)
+
+        if action == 'unassign_to_general':
+            if uploaded_log.recipient_user_id is None:
+                messages.error(request, f'Upload {upload_id} is already unassigned.')
+                return redirect('view_uploaded_log', upload_id=upload_id)
+            if uploaded_log.recipient_user_id != request.user.id:
+                messages.error(request, f'Only the assigned helper can unassign {upload_id}.')
+                return redirect('view_uploaded_log', upload_id=upload_id)
+
+            uploaded_log.recipient_user = None
+            uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
+            messages.success(request, f'{upload_id} was unassigned')
+            return redirect('view_uploaded_log', upload_id=upload_id)
+
     return render(request, 'view_uploaded_log.html', {'uploaded_log': uploaded_log})
 
 
@@ -845,8 +959,9 @@ def view_uploaded_log(request, upload_id):
 @require_http_methods(["GET"])
 def diff_uploaded_logs_view(request, id1, id2):
     """Show a side-by-side diff of two uploaded logs."""
-    log1 = get_object_or_404(UploadedLog, upload_id=id1, deleted_at__isnull=True)
-    log2 = get_object_or_404(UploadedLog, upload_id=id2, deleted_at__isnull=True)
+    visible_uploads = _visible_uploaded_logs_for_user(request.user)
+    log1 = get_object_or_404(visible_uploads, upload_id=id1, deleted_at__isnull=True)
+    log2 = get_object_or_404(visible_uploads, upload_id=id2, deleted_at__isnull=True)
 
     lines1 = log1.content.splitlines()
     lines2 = log2.content.splitlines()
@@ -908,12 +1023,14 @@ def diff_uploaded_logs_view(request, id1, id2):
 @require_http_methods(["GET", "POST"])
 def uploads_trash_view(request):
     """Trash bin for soft-deleted uploaded logs."""
+    visible_uploads = _visible_uploaded_logs_for_user(request.user)
+
     if request.method == 'POST':
         action = request.POST.get('action', '')
 
         if action == 'restore':
             upload_id = request.POST.get('upload_id', '').strip()
-            uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=False)
+            uploaded_log = get_object_or_404(visible_uploads, upload_id=upload_id, deleted_at__isnull=False)
             uploaded_log.deleted_at = None
             uploaded_log.save(update_fields=['deleted_at'])
             messages.success(request, f'Upload {upload_id} restored.')
@@ -921,20 +1038,20 @@ def uploads_trash_view(request):
 
         if action == 'delete_permanent':
             upload_id = request.POST.get('upload_id', '').strip()
-            uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=False)
+            uploaded_log = get_object_or_404(visible_uploads, upload_id=upload_id, deleted_at__isnull=False)
             uploaded_log.delete()
             messages.success(request, f'Upload {upload_id} permanently deleted.')
             return redirect('uploads_trash')
 
         if action == 'empty_trash':
-            count, _ = UploadedLog.objects.filter(deleted_at__isnull=False).delete()
+            count, _ = visible_uploads.filter(deleted_at__isnull=False).delete()
             messages.success(request, f'Trash emptied ({count} upload(s) permanently deleted).')
             return redirect('uploads_trash')
 
         messages.error(request, 'Invalid action.')
         return redirect('uploads_trash')
 
-    trashed = UploadedLog.objects.filter(deleted_at__isnull=False).order_by('-deleted_at')
+    trashed = visible_uploads.filter(deleted_at__isnull=False).order_by('-deleted_at')
     return render(request, 'uploads_trash.html', {'uploads': trashed})
 
 
@@ -942,7 +1059,11 @@ def uploads_trash_view(request):
 @require_http_methods(["GET"])
 def uploaded_log_content_api(request, upload_id):
     """Return upload content for analyzer prefill."""
-    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
+    uploaded_log = get_object_or_404(
+        _visible_uploaded_logs_for_user(request.user),
+        upload_id=upload_id,
+        deleted_at__isnull=True,
+    )
     return JsonResponse(
         {
             'upload_id': uploaded_log.upload_id,
@@ -1131,7 +1252,7 @@ def copy_to_clipboard_api(request, token):
 @require_http_methods(["GET"])
 def log_analyzer_view(request):
     """Render log analyzer tool."""
-    uploads = UploadedLog.objects.filter(deleted_at__isnull=True)[:200]
+    uploads = _visible_uploaded_logs_for_user(request.user).filter(deleted_at__isnull=True)[:200]
     requested_upload_id = (request.GET.get('upload_id') or '').strip()
     initial_upload_id = requested_upload_id if requested_upload_id else ''
     return render(
@@ -1166,7 +1287,7 @@ def analyze_log_api(request):
 
     analysis = analyze_log_text(log_text)
     if upload_id:
-        uploaded_log = UploadedLog.objects.filter(upload_id=upload_id).first()
+        uploaded_log = _visible_uploaded_logs_for_user(request.user).filter(upload_id=upload_id).first()
         if uploaded_log:
             try:
                 uploaded_log.apply_analysis_summary(analysis.get('summary', {}))

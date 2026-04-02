@@ -227,6 +227,13 @@ class UploadedLog(models.Model):
         on_delete=models.SET_NULL,
         related_name='uploaded_logs',
     )
+    recipient_user = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='received_uploaded_logs',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
