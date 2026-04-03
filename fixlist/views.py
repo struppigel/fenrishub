@@ -105,7 +105,14 @@ def _resolve_upload_recipient_username(helper_username: str):
 
 
 def _uploaded_log_action_scope_for_user(user):
-    """Uploads a helper is authorized to act on: own channel plus general channel."""
+    """Uploads shown in UI dropdowns: own channel plus general channel."""
+    return UploadedLog.objects.filter(
+        Q(recipient_user=user) | Q(recipient_user__isnull=True)
+    )
+
+
+def _uploaded_log_updatable_scope_for_user(user):
+    """Logs a user can update stats for: own channel plus general channel."""
     return UploadedLog.objects.filter(
         Q(recipient_user=user) | Q(recipient_user__isnull=True)
     )
@@ -912,7 +919,7 @@ def uploaded_logs_view(request):
     if show_all:
         pagination_params['show_all'] = '1'
     all_usernames = list_visible_uploads.filter(deleted_at__isnull=True).values_list('reddit_username', flat=True).distinct().order_by('reddit_username')
-    trash_count = action_scope_uploads.filter(deleted_at__isnull=False).count()
+    trash_count = _uploaded_log_updatable_scope_for_user(request.user).filter(deleted_at__isnull=False).count()
     page_content_hashes = {
         uploaded_log.content_hash
         for uploaded_log in page_obj.object_list
@@ -996,10 +1003,9 @@ def view_uploaded_log(request, upload_id):
 @login_required
 @require_http_methods(["GET"])
 def diff_uploaded_logs_view(request, id1, id2):
-    """Show a side-by-side diff of two uploaded logs."""
-    action_scope_uploads = _uploaded_log_action_scope_for_user(request.user)
-    log1 = get_object_or_404(action_scope_uploads, upload_id=id1, deleted_at__isnull=True)
-    log2 = get_object_or_404(action_scope_uploads, upload_id=id2, deleted_at__isnull=True)
+    """Show a side-by-side diff of two uploaded logs. All users can diff any logs."""
+    log1 = get_object_or_404(UploadedLog.objects.all(), upload_id=id1, deleted_at__isnull=True)
+    log2 = get_object_or_404(UploadedLog.objects.all(), upload_id=id2, deleted_at__isnull=True)
 
     lines1 = log1.content.splitlines()
     lines2 = log2.content.splitlines()
@@ -1069,6 +1075,9 @@ def uploads_trash_view(request):
         if action == 'restore':
             upload_id = request.POST.get('upload_id', '').strip()
             uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=False)
+            if not _user_can_delete_uploaded_log(request.user, uploaded_log):
+                messages.error(request, f'Only the assigned helper can restore {upload_id}.')
+                return redirect('uploads_trash')
             uploaded_log.deleted_at = None
             uploaded_log.save(update_fields=['deleted_at'])
             messages.success(request, f'Upload {upload_id} restored.')
@@ -1077,12 +1086,22 @@ def uploads_trash_view(request):
         if action == 'delete_permanent':
             upload_id = request.POST.get('upload_id', '').strip()
             uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=False)
+            if not _user_can_delete_uploaded_log(request.user, uploaded_log):
+                messages.error(request, f'Only the assigned helper can permanently delete {upload_id}.')
+                return redirect('uploads_trash')
             uploaded_log.delete()
             messages.success(request, f'Upload {upload_id} permanently deleted.')
             return redirect('uploads_trash')
 
         if action == 'empty_trash':
-            count, _ = action_scope_uploads.filter(deleted_at__isnull=False).delete()
+            deletable_logs = [log for log in action_scope_uploads.filter(deleted_at__isnull=False) 
+                            if _user_can_delete_uploaded_log(request.user, log)]
+            if not deletable_logs:
+                messages.error(request, 'You have no deleted uploads to clean from trash.')
+                return redirect('uploads_trash')
+            count = len(deletable_logs)
+            for log in deletable_logs:
+                log.delete()
             messages.success(request, f'Trash emptied ({count} upload(s) permanently deleted).')
             return redirect('uploads_trash')
 
@@ -1097,9 +1116,9 @@ def uploads_trash_view(request):
 @login_required
 @require_http_methods(["GET"])
 def uploaded_log_content_api(request, upload_id):
-    """Return upload content for analyzer prefill."""
+    """Return upload content for analyzer prefill. All users can fetch any log."""
     uploaded_log = get_object_or_404(
-        _uploaded_log_action_scope_for_user(request.user),
+        UploadedLog.objects.all(),
         upload_id=upload_id,
         deleted_at__isnull=True,
     )
@@ -1326,7 +1345,7 @@ def analyze_log_api(request):
 
     analysis = analyze_log_text(log_text)
     if upload_id:
-        uploaded_log = _uploaded_log_action_scope_for_user(request.user).filter(upload_id=upload_id).first()
+        uploaded_log = _uploaded_log_updatable_scope_for_user(request.user).filter(upload_id=upload_id).first()
         if uploaded_log:
             try:
                 uploaded_log.apply_analysis_summary(analysis.get('summary', {}))
