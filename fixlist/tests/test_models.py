@@ -1,7 +1,10 @@
-﻿from django.contrib.auth.models import User
+from django.contrib.auth.models import User
 from django.db import IntegrityError
+from django.db.models.base import Model
 from django.test import TestCase
 from unittest.mock import patch
+
+import mmh3
 
 from ..analyzer import FRST_END_OF_ADDITION, FRST_END_OF_LOG
 from ..models import Fixlist, UploadedLog, detect_log_type
@@ -58,7 +61,6 @@ class UploadedLogModelTests(TestCase):
             content='aaa',
         )
 
-        from django.db.models.base import Model
         original_model_save = Model.save
 
         def first_insert_collides_then_retry(self, *args, **kwargs):
@@ -199,7 +201,6 @@ class ContentHashTests(TestCase):
         self.assertNotEqual(uploaded.content_hash, original_hash)
 
     def test_compute_content_hash_matches_mmh3(self):
-        import mmh3
         content = 'test string'
         expected = format(mmh3.hash128(content.encode('utf-8'), signed=False), '032x')
         self.assertEqual(UploadedLog.compute_content_hash(content), expected)

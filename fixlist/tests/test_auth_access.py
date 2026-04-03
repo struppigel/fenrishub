@@ -1,4 +1,4 @@
-﻿from unittest.mock import patch
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.http import Http404, HttpResponse
@@ -65,7 +65,7 @@ class AuthenticationAndAccessTests(TestCase):
         request = self.factory.get(reverse("change_password"))
         request.user = self.user
 
-        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
+        with patch("fixlist.views.auth.render", return_value=HttpResponse("ok")) as mock_render:
             response = change_password_view(request)
 
         rendered_context = mock_render.call_args.args[2]
@@ -82,7 +82,7 @@ class AuthenticationAndAccessTests(TestCase):
         request = self.factory.get(reverse("dashboard"))
         request.user = self.user
 
-        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
+        with patch("fixlist.views.auth.render", return_value=HttpResponse("ok")) as mock_render:
             response = dashboard_view(request)
 
         rendered_context = mock_render.call_args.args[2]

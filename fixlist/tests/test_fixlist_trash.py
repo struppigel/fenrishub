@@ -1,7 +1,9 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser, User
-from django.http import Http404
+from django.core.management import call_command
+from django.http import Http404, HttpResponse
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -340,10 +342,7 @@ class TrashedFixlistGuestAccessTests(TestCase):
         request = self.factory.get(reverse("shared_fixlist", args=[active.share_token]))
         request.user = AnonymousUser()
 
-        from unittest.mock import patch
-        from django.http import HttpResponse
-
-        with patch("fixlist.views.render", return_value=HttpResponse("ok")) as mock_render:
+        with patch("fixlist.views.fixlists.render", return_value=HttpResponse("ok")) as mock_render:
             response = shared_fixlist_view(request, token=active.share_token)
 
         self.assertEqual(response.status_code, 200)
@@ -405,8 +404,6 @@ class FixlistPurgeOldTrashTests(TestCase):
         self.assertFalse(UploadedLog.objects.filter(pk=old_upload.pk).exists())
 
     def test_purge_command_deletes_old_fixlists(self):
-        from django.core.management import call_command
-
         old = _make_fixlist(self.user, title="Old", deleted_at=self._old_deleted_at())
 
         call_command("purge_old_trash", verbosity=0)
@@ -414,8 +411,6 @@ class FixlistPurgeOldTrashTests(TestCase):
         self.assertFalse(Fixlist.objects.filter(pk=old.pk).exists())
 
     def test_purge_command_keeps_recent_fixlists(self):
-        from django.core.management import call_command
-
         recent = _make_fixlist(
             self.user, title="Recent", deleted_at=self._recent_deleted_at()
         )
@@ -425,8 +420,6 @@ class FixlistPurgeOldTrashTests(TestCase):
         self.assertTrue(Fixlist.objects.filter(pk=recent.pk).exists())
 
     def test_purge_command_keeps_active_fixlists(self):
-        from django.core.management import call_command
-
         call_command("purge_old_trash", verbosity=0)
 
         self.assertTrue(Fixlist.objects.filter(pk=self.active.pk).exists())

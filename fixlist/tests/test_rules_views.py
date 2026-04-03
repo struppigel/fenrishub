@@ -465,7 +465,6 @@ class RulesViewTests(TestCase):
     # -- Sort --
 
     def test_default_sort_is_recently_edited(self):
-        import time
         r1 = ClassificationRule.objects.create(
             owner=self.user, status="B", match_type="exact", source_text="FIRST-CREATED",
         )
