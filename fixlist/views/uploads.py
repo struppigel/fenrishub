@@ -5,7 +5,7 @@ Handles: uploading logs, viewing, diffing, merging, trashing, restoring, and man
 """
 
 import difflib
-import traceback
+import logging
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -31,6 +31,9 @@ from .utils import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 @require_http_methods(["GET", "POST"])
 def upload_log_view(request, helper_username=None):
     """Public upload endpoint for text logs."""
@@ -41,56 +44,81 @@ def upload_log_view(request, helper_username=None):
 
     if request.method == 'POST':
         form = UploadedLogForm(request.POST, request.FILES)
-        if not request.user.is_authenticated:
-            client_ip = get_client_ip(request)
-            if not _consume_anonymous_upload_slot(client_ip):
-                minutes = max(1, (upload_window_seconds + 59) // 60)
-                form.add_error(
-                    None,
-                    (
-                        f'Anonymous upload rate limit reached: {upload_limit} upload(s) '
-                        f'per {minutes} minute(s). Please wait and try again.'
-                    ),
-                )
-                return render(
-                    request,
-                    'upload_log.html',
-                    {
-                        'form': form,
-                        'uploaded_log_id': uploaded_log_id,
-                        'uploaded_original_filename': uploaded_original_filename,
-                    },
-                )
+        try:
+            if not request.user.is_authenticated:
+                client_ip = get_client_ip(request)
+                if not _consume_anonymous_upload_slot(client_ip):
+                    minutes = max(1, (upload_window_seconds + 59) // 60)
+                    form.add_error(
+                        None,
+                        (
+                            f'Anonymous upload rate limit reached: {upload_limit} upload(s) '
+                            f'per {minutes} minute(s). Please wait and try again.'
+                        ),
+                    )
+                    return render(
+                        request,
+                        'upload_log.html',
+                        {
+                            'form': form,
+                            'uploaded_log_id': uploaded_log_id,
+                            'uploaded_original_filename': uploaded_original_filename,
+                        },
+                    )
 
-        if form.is_valid():
-            log_file = form.cleaned_data.get('log_file')
-            if log_file:
-                filename = log_file.name
-                content = getattr(log_file, 'decoded_content', '')
-            else:
-                filename = 'pasted.txt'
-                content = form.cleaned_data['log_text']
-            created_log = UploadedLog.objects.create(
-                reddit_username=form.cleaned_data['reddit_username'],
-                original_filename=filename,
-                content=content,
-                recipient_user=recipient_user,
-            )
-            created_log.recalculate_log_type()
-            try:
-                created_log.recalculate_analysis_stats()
-            except Exception as e:
-                print(f"ERROR calculating stats for {created_log.upload_id}: {e}")
-                traceback.print_exc()
-            request.session['upload_success_id'] = created_log.upload_id
-            request.session['upload_success_filename'] = created_log.original_filename
-            request.session['upload_success_channel'] = recipient_user.username if recipient_user else 'general'
-            if helper_username and invalid_helper_username:
-                messages.warning(
-                    request,
-                    f'Could not find helper "{invalid_helper_username}". Upload was saved to the general channel.',
+            if form.is_valid():
+                log_file = form.cleaned_data.get('log_file')
+                if log_file:
+                    filename = log_file.name
+                    content = getattr(log_file, 'decoded_content', '')
+                else:
+                    filename = 'pasted.txt'
+                    content = form.cleaned_data['log_text']
+                created_log = UploadedLog.objects.create(
+                    reddit_username=form.cleaned_data['reddit_username'],
+                    original_filename=filename,
+                    content=content,
+                    recipient_user=recipient_user,
                 )
-            return redirect('upload_log')
+                created_log.recalculate_log_type()
+                try:
+                    created_log.recalculate_analysis_stats()
+                except Exception:
+                    logger.exception(
+                        'Failed to recalculate upload stats (upload_id=%s, filename=%r, helper=%r, recipient=%r)',
+                        created_log.upload_id,
+                        created_log.original_filename,
+                        helper_username,
+                        recipient_user.username if recipient_user else None,
+                    )
+                request.session['upload_success_id'] = created_log.upload_id
+                request.session['upload_success_filename'] = created_log.original_filename
+                request.session['upload_success_channel'] = recipient_user.username if recipient_user else 'general'
+                if helper_username and invalid_helper_username:
+                    messages.warning(
+                        request,
+                        f'Could not find helper "{invalid_helper_username}". Upload was saved to the general channel.',
+                    )
+                return redirect('upload_log')
+        except Exception:
+            raw_file = request.FILES.get('log_file')
+            logger.exception(
+                (
+                    'Unhandled exception in upload_log_view '
+                    '(helper=%r, invalid_helper=%r, auth=%s, user_id=%r, ip=%s, '
+                    'filename=%r, content_type=%r, file_size=%r, post_keys=%s)'
+                ),
+                helper_username,
+                invalid_helper_username,
+                request.user.is_authenticated,
+                getattr(request.user, 'id', None),
+                get_client_ip(request),
+                getattr(raw_file, 'name', None),
+                getattr(raw_file, 'content_type', None),
+                getattr(raw_file, 'size', None),
+                sorted(request.POST.keys()),
+            )
+            raise
     else:
         prefill = request.GET.get('u', '')
         form = UploadedLogForm(initial={'reddit_username': prefill} if prefill else None)

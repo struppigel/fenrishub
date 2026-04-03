@@ -2,12 +2,30 @@
 from django.test import TestCase
 from django.test import override_settings
 from django.urls import reverse
+from unittest.mock import patch
 
 from ..models import UploadedLog
 from .uploaded_log_shared_setup import UploadedLogSharedSetupMixin
 
 
 class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
+
+    def test_upload_log_view_logs_context_on_unhandled_exception(self):
+        with (
+            patch('fixlist.views.uploads.UploadedLog.objects.create', side_effect=RuntimeError('boom')),
+            patch('fixlist.views.uploads.logger.exception') as mocked_logger,
+        ):
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    reverse('upload_log'),
+                    {
+                        'reddit_username': 'reddit_name',
+                        'log_file': SimpleUploadedFile('Addition.txt', b'line-a\nline-b', content_type='text/plain'),
+                    },
+                    REMOTE_ADDR='203.0.113.10',
+                )
+
+        self.assertTrue(mocked_logger.called)
 
     def test_upload_log_view_allows_anonymous_upload_and_returns_id(self):
         response = self.client.post(

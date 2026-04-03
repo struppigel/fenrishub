@@ -140,3 +140,20 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = 'dashboard'
 LOGOUT_REDIRECT_URL = 'login'
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'fixlist': {
+            'handlers': ['console'],
+            'level': os.getenv('FIXLIST_LOG_LEVEL', 'INFO'),
+            'propagate': False,
+        },
+    },
+}
