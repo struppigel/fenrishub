@@ -74,6 +74,14 @@ def upload_log_view(request, helper_username=None):
                 else:
                     filename = 'pasted.txt'
                     content = form.cleaned_data['log_text']
+                if '\x00' in content:
+                    logger.warning(
+                        'NUL bytes detected in upload content; stripping before persist (filename=%r, helper=%r, ip=%s)',
+                        filename,
+                        helper_username,
+                        get_client_ip(request),
+                    )
+                    content = content.replace('\x00', '')
                 created_log = UploadedLog.objects.create(
                     reddit_username=form.cleaned_data['reddit_username'],
                     original_filename=filename,

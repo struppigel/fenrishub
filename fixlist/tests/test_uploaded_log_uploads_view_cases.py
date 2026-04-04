@@ -4,11 +4,45 @@ from django.test import override_settings
 from django.urls import reverse
 from unittest.mock import patch
 
+from ..forms import UploadedLogForm
 from ..models import UploadedLog
 from .uploaded_log_shared_setup import UploadedLogSharedSetupMixin
 
 
 class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
+
+    def test_uploaded_log_form_uses_charset_normalizer_detection(self):
+        class _DetectedText:
+            def __str__(self):
+                return 'Detected line\nSecond line'
+
+        with patch('fixlist.forms.from_bytes') as mocked_from_bytes:
+            mocked_from_bytes.return_value.best.return_value = _DetectedText()
+            form = UploadedLogForm(
+                data={'reddit_username': 'reddit_name'},
+                files={'log_file': SimpleUploadedFile('sample.txt', b'\x81\x82\x83', content_type='text/plain')},
+            )
+
+            self.assertTrue(form.is_valid(), form.errors)
+            self.assertEqual(form.cleaned_data['log_file'].decoded_content, 'Detected line\nSecond line')
+
+    def test_uploaded_log_form_falls_back_when_detected_text_is_invalid(self):
+        class _DetectedInvalidText:
+            def __str__(self):
+                return 'bad\x00text'
+
+        # UTF-16-LE encoded text without BOM should be accepted via fallback
+        # when detector output is invalid.
+        payload = 'Addition line\nSecond line'.encode('utf-16-le')
+        with patch('fixlist.forms.from_bytes') as mocked_from_bytes:
+            mocked_from_bytes.return_value.best.return_value = _DetectedInvalidText()
+            form = UploadedLogForm(
+                data={'reddit_username': 'reddit_name'},
+                files={'log_file': SimpleUploadedFile('Addition.txt', payload, content_type='text/plain')},
+            )
+
+            self.assertTrue(form.is_valid(), form.errors)
+            self.assertEqual(form.cleaned_data['log_file'].decoded_content, 'Addition line\nSecond line')
 
     def test_upload_log_view_logs_context_on_unhandled_exception(self):
         with (
@@ -175,6 +209,34 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.url, reverse('upload_log'))
         uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
         self.assertEqual(uploaded.original_filename, 'sample.log')
+
+    def test_upload_log_view_allows_utf16le_without_bom(self):
+        utf16le_content = 'Addition sample line\nNext line'.encode('utf-16-le')
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('Addition.txt', utf16le_content, content_type='text/plain'),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        self.assertNotIn('\x00', uploaded.content)
+
+    def test_uploaded_log_form_rejects_pasted_invalid_control_characters(self):
+        form = UploadedLogForm(
+            data={
+                'reddit_username': 'reddit_name',
+                'log_text': 'line1\x01line2',
+            }
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn(
+            'Pasted log contains invalid control characters. Please remove binary/non-text characters and try again.',
+            form.errors.get('log_text', []),
+        )
 
     @override_settings(ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600)
 

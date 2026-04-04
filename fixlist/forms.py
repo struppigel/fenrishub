@@ -1,5 +1,6 @@
 import re
 
+from charset_normalizer import from_bytes
 from django import forms
 from .models import Fixlist
 
@@ -30,6 +31,7 @@ class UploadedLogForm(forms.Form):
     reddit_username = forms.CharField(max_length=20, required=True)
     log_file = forms.FileField(required=False)
     log_text = forms.CharField(required=False, widget=forms.Textarea)
+    INVALID_TEXT_CHAR_RE = re.compile(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]')
 
     def clean_reddit_username(self):
         username = (self.cleaned_data.get('reddit_username') or '').strip()
@@ -54,18 +56,34 @@ class UploadedLogForm(forms.Form):
             raise forms.ValidationError('Only .txt or .log files are allowed.')
 
         raw_bytes = uploaded_file.read()
+        if not raw_bytes:
+            raise forms.ValidationError('Uploaded file is empty.')
 
-        # FRST log files are usually UTF-8 but can be ANSI (Windows-1252) or
-        # UTF-16 depending on the system locale and FRST version.
+        # Prefer charset detection, then fall back to common FRST encodings.
         decoded_content = None
-        for encoding in ('utf-8-sig', 'utf-16', 'windows-1252'):
+        candidates = []
+        detected = from_bytes(raw_bytes).best()
+        if detected is not None:
+            detected_text = str(detected)
+            if detected_text:
+                candidates.append(detected_text)
+
+        for encoding in ('utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'windows-1252'):
             try:
-                decoded_content = raw_bytes.decode(encoding)
-                break
+                candidates.append(raw_bytes.decode(encoding))
             except (UnicodeDecodeError, UnicodeError):
                 continue
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if '\x00' in candidate or self.INVALID_TEXT_CHAR_RE.search(candidate):
+                continue
+            decoded_content = candidate
+            break
+
         if decoded_content is None:
-            raise forms.ValidationError('File must be valid text (UTF-8, UTF-16, or ANSI encoded).')
+            raise forms.ValidationError('File must be valid text and cannot contain binary control bytes.')
 
         if not decoded_content.strip():
             raise forms.ValidationError('Uploaded file is empty.')
@@ -74,10 +92,19 @@ class UploadedLogForm(forms.Form):
         uploaded_file.decoded_content = decoded_content
         return uploaded_file
 
+    def clean_log_text(self):
+        log_text = self.cleaned_data.get('log_text') or ''
+        if self.INVALID_TEXT_CHAR_RE.search(log_text):
+            raise forms.ValidationError(
+                'Pasted log contains invalid control characters. Please remove binary/non-text characters and try again.'
+            )
+        return log_text
+
     def clean(self):
         cleaned = super().clean()
         has_file = bool(cleaned.get('log_file'))
-        has_text = bool((cleaned.get('log_text') or '').strip())
+        log_text = cleaned.get('log_text') or ''
+        has_text = bool(log_text.strip())
         if not has_file and not has_text:
             raise forms.ValidationError('Provide either a .txt/.log file or paste the log content.')
         if has_file and has_text:
