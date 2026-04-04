@@ -14,7 +14,7 @@
 
     .meta-grid {
         display: grid;
-        grid-template-columns: 160px 1fr;
+        grid-template-columns: 160px 1fr 160px 1fr;
         gap: 6px 12px;
         margin-bottom: 12px;
         font-size: 12px;
@@ -30,7 +30,7 @@
     }
 
     .uploaded-content {
-        min-height: 300px;
+        min-height: 600px;
         font-family: inherit;
         white-space: pre-wrap;
         color: var(--la-text-main);
@@ -52,6 +52,12 @@
     #uploadedContent::-webkit-scrollbar-thumb:hover {
         background: var(--la-border-hover);
     }
+
+    .uploaded-log-page .delete-btn {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+        border-color: var(--la-error-border);
+    }
 </style>
 {% endblock %}
 
@@ -59,6 +65,7 @@
 <div class="uploaded-log-page">
 <div class="button-group">
     <a href="{% url 'uploaded_logs' %}"><button type="button">back to uploads</button></a>
+    <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}"><button type="button">analyze</button></a>
 </div>
 
 <div class="divider"></div>
@@ -82,16 +89,26 @@
         </form>
     </div>
     <div class="meta-key">channel</div>
-    <div>
-        {% if uploaded_log.recipient_user %}
-        helper {{ uploaded_log.recipient_user.username }}
-        {% else %}
-        <span class="channel-unassigned">general (unassigned)</span>
-        {% endif %}
+    <div style="display: flex; align-items: center; gap: 6px;">
+        <div>
+            {% if uploaded_log.recipient_user %}
+            helper {{ uploaded_log.recipient_user.username }}
+            {% else %}
+            <span class="channel-unassigned">general (unassigned)</span>
+            {% endif %}
+        </div>
+        <form method="post" style="display: inline; margin: 0;">
+            {% csrf_token %}
+            {% if not uploaded_log.recipient_user %}
+            <button type="submit" name="action" value="assign_to_me" style="padding: 2px 8px;">assign</button>
+            {% elif uploaded_log.recipient_user == user %}
+            <button type="submit" name="action" value="unassign_to_general" style="padding: 2px 8px;">unassign</button>
+            {% endif %}
+        </form>
     </div>
     <div class="meta-key">hash</div>
     <div>{{ uploaded_log.content_hash }}</div>
-    <div class="meta-key">created</div>
+    <div class="meta-key">uploaded</div>
     <div>{{ uploaded_log.created_at|date:"Y-m-d H:i" }}</div>
 </div>
 
@@ -100,16 +117,21 @@
     <textarea id="uploadedContent" class="uploaded-content" readonly>{{ uploaded_log.content }}</textarea>
 </div>
 
+<script>
+function viewRawContent() {
+    const content = document.getElementById('uploadedContent').value;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+}
+</script>
+
 <form method="post">
     {% csrf_token %}
     <div class="button-group">
-        {% if not uploaded_log.recipient_user %}
-        <button type="submit" name="action" value="assign_to_me">assign</button>
-        {% elif uploaded_log.recipient_user == user %}
-        <button type="submit" name="action" value="unassign_to_general">unassign</button>
-        {% endif %}
+        <button type="button" onclick="viewRawContent()">view raw</button>
         {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == user %}
-        <button type="submit" name="action" value="delete" onclick="return confirm('Delete this upload?');">delete</button>
+        <button type="submit" name="action" value="delete" class="delete-btn" onclick="return confirm('Delete this upload?');">delete</button>
         {% endif %}
     </div>
 </form>
