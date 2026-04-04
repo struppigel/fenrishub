@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+
+{% block title %}Confirm Username Change - Fenris{% endblock %}
+
+{% block page_context_label %}confirm username change{% endblock %}
+
+{% block content %}
+<p style="margin-bottom: 12px; font-size: 12px; color: var(--la-text-primary);">
+    Some selected items use another username. To keep one username per case, they will be changed to <strong>u/{{ infection_case.username }}</strong>.
+</p>
+
+<div class="warning-box">
+    <strong>selected items with mismatched username</strong>
+    <ul style="margin-left: 20px; margin-top: 8px; font-size: 12px; color: var(--la-text-primary);">
+        {% for log in mismatched_logs %}
+        <li>LOG {{ log.upload_id }} | u/{{ log.reddit_username }}</li>
+        {% endfor %}
+        {% for fixlist in mismatched_fixlists %}
+        <li>FIXLIST #{{ fixlist.pk }} | u/{{ fixlist.username }}</li>
+        {% endfor %}
+    </ul>
+</div>
+
+<form method="post" action="{% url 'infection_case_confirm_username_change' infection_case.case_id %}">
+    {% csrf_token %}
+    {% for upload_id in selected_upload_ids %}
+    <input type="hidden" name="selected_upload_ids" value="{{ upload_id }}">
+    {% endfor %}
+    {% for fixlist_id in selected_fixlist_ids %}
+    <input type="hidden" name="selected_fixlist_ids" value="{{ fixlist_id }}">
+    {% endfor %}
+
+    <div class="button-group">
+        <button type="submit">confirm username change and add</button>
+        <a href="{% url 'view_infection_case' infection_case.case_id %}" style="display: inline-block; margin-left: 10px; padding: 8px 10px; background-color: var(--la-bg-1); color: var(--la-text-primary); border: 1px solid var(--la-border); border-radius: 2px; text-decoration: none; font-size: 12px;">cancel</a>
+    </div>
+</form>
+{% endblock %}

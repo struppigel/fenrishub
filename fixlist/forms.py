@@ -32,6 +32,51 @@ class UploadedLogForm(forms.Form):
     log_file = forms.FileField(required=False)
     log_text = forms.CharField(required=False, widget=forms.Textarea)
     INVALID_TEXT_CHAR_RE = re.compile(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]')
+    _LOG_HINTS = (
+        'Farbar Recovery Scan Tool',
+        'Additional scan result of',
+        'Scan result of Farbar Recovery Scan Tool',
+        'Fixlog',
+        '====================',
+    )
+
+    @classmethod
+    def _text_has_invalid_controls(cls, text: str) -> bool:
+        return '\x00' in text or bool(cls.INVALID_TEXT_CHAR_RE.search(text))
+
+    @classmethod
+    def _candidate_score(cls, text: str) -> float:
+        if not text:
+            return float('-inf')
+
+        total_chars = max(len(text), 1)
+        ascii_chars = sum(1 for ch in text if ch == '\n' or ch == '\r' or ch == '\t' or 32 <= ord(ch) <= 126)
+        non_ascii_chars = sum(1 for ch in text if ord(ch) > 126)
+        log_hints = sum(1 for hint in cls._LOG_HINTS if hint in text)
+        replacement_count = text.count('\ufffd')
+        high_plane_chars = sum(1 for ch in text if ord(ch) >= 0x2E80)
+
+        ascii_ratio = ascii_chars / total_chars
+        non_ascii_ratio = non_ascii_chars / total_chars
+        high_plane_ratio = high_plane_chars / total_chars
+
+        score = 0.0
+        score += log_hints * 40.0
+        score += ascii_ratio * 30.0
+        score -= non_ascii_ratio * 10.0
+        score -= high_plane_ratio * 25.0
+        score -= replacement_count * 2.0
+        return score
+
+    @classmethod
+    def _iter_candidate_variants(cls, text: str):
+        yield text
+        try:
+            repaired = text.encode('utf-16-le').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return
+        if repaired and repaired != text:
+            yield repaired
 
     def clean_reddit_username(self):
         username = (self.cleaned_data.get('reddit_username') or '').strip()
@@ -59,8 +104,8 @@ class UploadedLogForm(forms.Form):
         if not raw_bytes:
             raise forms.ValidationError('Uploaded file is empty.')
 
-        # Prefer charset detection, then fall back to common FRST encodings.
-        decoded_content = None
+        # Build decode candidates from detector + common FRST encodings,
+        # then pick the best readable/log-like text instead of first match.
         candidates = []
         detected = from_bytes(raw_bytes).best()
         if detected is not None:
@@ -74,22 +119,31 @@ class UploadedLogForm(forms.Form):
             except (UnicodeDecodeError, UnicodeError):
                 continue
 
+        best_content = None
+        best_score = float('-inf')
+        seen_candidates = set()
         for candidate in candidates:
             if not candidate:
                 continue
-            if '\x00' in candidate or self.INVALID_TEXT_CHAR_RE.search(candidate):
-                continue
-            decoded_content = candidate
-            break
+            for candidate_variant in self._iter_candidate_variants(candidate):
+                if not candidate_variant or candidate_variant in seen_candidates:
+                    continue
+                seen_candidates.add(candidate_variant)
+                if self._text_has_invalid_controls(candidate_variant):
+                    continue
+                score = self._candidate_score(candidate_variant)
+                if score > best_score:
+                    best_score = score
+                    best_content = candidate_variant
 
-        if decoded_content is None:
+        if best_content is None:
             raise forms.ValidationError('File must be valid text and cannot contain binary control bytes.')
 
-        if not decoded_content.strip():
+        if not best_content.strip():
             raise forms.ValidationError('Uploaded file is empty.')
 
         uploaded_file.seek(0)
-        uploaded_file.decoded_content = decoded_content
+        uploaded_file.decoded_content = best_content
         return uploaded_file
 
     def clean_log_text(self):

@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+
+{% block title %}Create Infection Case - Fenris{% endblock %}
+
+{% block page_context_label %}create infection case{% endblock %}
+
+{% block content %}
+<div>
+    <form method="post" id="createInfectionCaseForm">
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="username">username</label>
+            <input type="text" id="username" name="username" list="uploadedLogUsernames" value="{{ prefill_username|default:''|escape }}" placeholder="Enter username..." required>
+            <datalist id="uploadedLogUsernames">
+                {% for username_choice in username_choices %}
+                <option value="{{ username_choice }}"></option>
+                {% endfor %}
+            </datalist>
+        </div>
+
+        <div class="form-group">
+            <label for="symptom_description">symptom description (optional)</label>
+            <textarea id="symptom_description" name="symptom_description" rows="5" placeholder="What happened, and what symptoms were observed?">{{ prefill_symptom_description|default:''|escape }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="reference_url">reference URL (optional)</label>
+            <input type="url" id="reference_url" name="reference_url" value="{{ prefill_reference_url|default:''|escape }}" placeholder="https://example.com/reference">
+        </div>
+
+        <div class="form-group">
+            <label style="display: inline-flex; align-items: center; gap: 8px; margin-bottom: 0; color: var(--la-text-primary);">
+                <input type="checkbox" name="auto_assign_new_items" value="1" {% if prefill_auto_assign_new_items %}checked{% endif %}>
+                <span>auto-assign newly uploaded logs and fixlists for this username to this case</span>
+            </label>
+        </div>
+
+        <div class="button-group">
+            <button type="submit">create case</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

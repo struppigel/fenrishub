@@ -1,0 +1,418 @@
+{% extends 'base.html' %}
+
+{% block title %}Infection Case {{ infection_case.case_id }} - Fenris{% endblock %}
+
+{% block page_context_label %}infection case{% endblock %}
+
+{% block extra_css %}
+<style>
+.case-card {
+    border: 1px solid var(--la-border);
+    background: var(--la-bg-1);
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.timeline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.timeline-type-badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border: 1px solid var(--la-border);
+    color: var(--la-text-muted);
+    margin-right: 8px;
+}
+
+.timeline-type-badge.log {
+    color: var(--la-log-type-frst);
+}
+
+.timeline-type-badge.fixlist {
+    color: var(--la-status-s);
+}
+
+.timeline-entry {
+    display: flex;
+    width: 100%;
+    margin-bottom: 8px;
+}
+
+.timeline-entry.log {
+    justify-content: flex-start;
+}
+
+.timeline-entry.fixlist {
+    justify-content: flex-end;
+}
+
+.timeline-entry.metadata {
+    justify-content: flex-end;
+}
+
+.timeline-entry .fixlist-item {
+    width: min(100%, 78%);
+}
+
+.timeline-entry.log .fixlist-item {
+    position: relative;
+}
+
+.timeline-entry.fixlist .fixlist-item {
+    position: relative;
+}
+
+.timeline-entry.fixlist .fixlist-item,
+.timeline-entry.metadata .fixlist-item {
+    border-color: color-mix(in srgb, var(--la-status-s) 30%, var(--la-border));
+    background:
+        linear-gradient(135deg, color-mix(in srgb, var(--la-status-s) 6%, var(--la-bg-0)), color-mix(in srgb, var(--la-text-primary) 4%, var(--la-bg-0)));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--la-status-s) 8%, transparent);
+}
+
+.timeline-entry.fixlist .fixlist-item {
+    text-align: right;
+}
+
+.timeline-entry.fixlist .fixlist-title {
+    padding-right: 20px;
+}
+
+.timeline-entry.metadata .fixlist-item {
+    width: min(100%, 78%);
+}
+
+.timeline-entry.metadata.is-preview .fixlist-item {
+    text-align: right;
+}
+
+.timeline-entry .button-group.inline-unlink,
+.timeline-entry.fixlist .button-group.inline-unlink,
+.timeline-entry.metadata .button-group.inline-unlink {
+    justify-content: flex-end;
+}
+
+.timeline-entry .button-group.inline-unlink button {
+    min-width: 0;
+}
+
+.timeline-entry.log .button-group.inline-unlink {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    margin-top: 0;
+    gap: 0;
+}
+
+.timeline-entry.fixlist .button-group.inline-unlink {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    margin-top: 0;
+    gap: 0;
+}
+
+.unlink-icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 30px;
+    padding: 0;
+}
+
+.unlink-icon {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+
+.unlink-x-button {
+    width: 14px;
+    height: 14px;
+    min-width: 0;
+    padding: 0;
+    font-size: 12px;
+    line-height: 12px;
+    color: var(--la-status-b);
+    border: 1px solid color-mix(in srgb, var(--la-status-b) 40%, var(--la-border));
+    background: color-mix(in srgb, var(--la-status-b) 10%, var(--la-bg-1));
+}
+
+.unlink-x-button:hover,
+.unlink-x-button:focus-visible {
+    text-decoration: underline;
+}
+
+.timeline-entry.fixlist .timeline-type-badge {
+    margin-right: 0;
+    margin-left: 8px;
+}
+
+@media (max-width: 700px) {
+    .timeline-entry .fixlist-item {
+        width: 100%;
+    }
+}
+
+.selection-columns {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+}
+
+@media (min-width: 900px) {
+    .selection-columns {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+.selection-box {
+    border: 1px solid var(--la-border);
+    background: var(--la-bg-1);
+    padding: 10px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.selection-item {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 12px;
+}
+
+.case-meta-two-col {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 220px;
+    gap: 10px;
+}
+
+@media (max-width: 760px) {
+    .case-meta-two-col {
+        grid-template-columns: 1fr;
+    }
+}
+
+.upload-stats .stat-b { color: var(--la-status-b); }
+.upload-stats .stat-p { color: var(--la-status-p); }
+.upload-stats .stat-c { color: var(--la-status-c); }
+.upload-stats .stat-w { color: var(--la-status-w); }
+.upload-stats .stat-g { color: var(--la-status-g); }
+.upload-stats .stat-s { color: var(--la-status-s); }
+.upload-stats .stat-i { color: var(--la-status-i); }
+.upload-stats .stat-j { color: var(--la-status-j); }
+.upload-stats .stat-u { color: var(--la-status-unknown); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="button-group" style="margin-bottom: 10px;">
+    <a href="{% url 'infection_cases' %}"><button type="button">back to cases</button></a>
+    {% if not show_add_picker %}
+    <a href="{% url 'view_infection_case' infection_case.case_id %}?add=1"><button type="button">add logs/fixlists</button></a>
+    {% else %}
+    <a href="{% url 'view_infection_case' infection_case.case_id %}"><button type="button">hide add panel</button></a>
+    {% endif %}
+    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="margin-left: auto;">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="seed_username_items">
+        <button type="submit">add all items for u/{{ infection_case.username }}</button>
+    </form>
+</div>
+
+<div class="case-card">
+    <div class="timeline-header">
+        <h3 style="margin: 0;">timeline</h3>
+        <span class="muted">{{ timeline_items|length }} linked item{{ timeline_items|length|pluralize }}</span>
+    </div>
+
+    {% if not show_metadata_edit %}
+    <div class="timeline-entry metadata is-preview">
+        <div class="fixlist-item">
+            <div style="flex: 1;">
+                <div class="fixlist-title">{{ infection_case.case_id }}<span class="timeline-type-badge fixlist">META</span></div>
+                <div class="fixlist-meta">u/{{ infection_case.username }} | status {{ infection_case.get_status_display|lower }} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %} | Metadata</div>
+                <div class="fixlist-meta">desc {{ infection_case.symptom_description|default:'-'|truncatechars:120 }}</div>
+                <div class="fixlist-meta">url {{ infection_case.reference_url|default:'-'|truncatechars:120 }}</div>
+                <div class="button-group" style="justify-content: flex-end;">
+                    {% if show_add_picker %}
+                    <a href="{% url 'view_infection_case' infection_case.case_id %}?add=1&edit_meta=1"><button type="button">edit metadata</button></a>
+                    {% else %}
+                    <a href="{% url 'view_infection_case' infection_case.case_id %}?edit_meta=1"><button type="button">edit metadata</button></a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="timeline-entry metadata">
+        <div class="fixlist-item">
+            <div style="flex: 1;">
+                <div class="fixlist-title">{{ infection_case.case_id }} | u/{{ infection_case.username }}<span class="timeline-type-badge fixlist">META</span></div>
+                <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="margin-top: 10px;">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="update_case">
+
+                    <div class="form-group">
+                        <label for="symptom_description">symptom description</label>
+                        <textarea id="symptom_description" name="symptom_description" rows="7" style="min-height: 220px;">{{ infection_case.symptom_description|default:''|escape }}</textarea>
+                    </div>
+
+                    <div class="case-meta-two-col">
+                        <div class="form-group">
+                            <label for="reference_url">reference URL</label>
+                            <input type="url" id="reference_url" name="reference_url" value="{{ infection_case.reference_url|default:''|escape }}" placeholder="https://example.com/reference">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="status">status</label>
+                            <select id="status" name="status">
+                                {% for status_value, status_label in case_status_choices %}
+                                <option value="{{ status_value }}" {% if infection_case.status == status_value %}selected{% endif %}>{{ status_label|lower }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label style="display: inline-flex; align-items: center; gap: 8px; margin-bottom: 0; color: var(--la-text-primary);">
+                            <input type="checkbox" name="auto_assign_new_items" value="1" {% if infection_case.auto_assign_new_items %}checked{% endif %}>
+                            <span>auto-assign newly uploaded logs and fixlists for this username to this case</span>
+                        </label>
+                    </div>
+
+                    <div class="button-group">
+                        <button type="submit">save details</button>
+                        {% if show_add_picker %}
+                        <a href="{% url 'view_infection_case' infection_case.case_id %}?add=1"><button type="button">cancel</button></a>
+                        {% else %}
+                        <a href="{% url 'view_infection_case' infection_case.case_id %}"><button type="button">cancel</button></a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if timeline_items %}
+        {% for item in timeline_items %}
+        {% if item.item_type == 'log' %}
+        {% with uploaded_log=item.uploaded_log %}
+        <div class="timeline-entry log">
+        <div class="fixlist-item">
+            <div style="flex: 1;">
+                <div class="fixlist-title"><span class="timeline-type-badge log">LOG</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a></div>
+                <div class="fixlist-meta">
+                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}
+                </div>
+                <div class="fixlist-meta upload-stats">
+                    lines {{ uploaded_log.total_line_count }}
+                    {% if uploaded_log.log_type == 'FRST' or uploaded_log.log_type == 'Addition' or uploaded_log.log_type == 'FRST&Addition' %}
+                    |
+                    <span class="stat-b">B {{ uploaded_log.count_malware }}</span>
+                    <span class="stat-p">P {{ uploaded_log.count_pup }}</span>
+                    <span class="stat-c">C {{ uploaded_log.count_clean }}</span>
+                    <span class="stat-w">! {{ uploaded_log.count_warning }}</span>
+                    <span class="stat-g">G {{ uploaded_log.count_grayware }}</span>
+                    <span class="stat-s">S {{ uploaded_log.count_security }}</span>
+                    <span class="stat-i">I {{ uploaded_log.count_info }}</span>
+                    <span class="stat-j">J {{ uploaded_log.count_junk }}</span>
+                    <span class="stat-u">? {{ uploaded_log.count_unknown }}</span>
+                    {% with matched_count=uploaded_log.count_malware|add:uploaded_log.count_pup|add:uploaded_log.count_clean|add:uploaded_log.count_warning|add:uploaded_log.count_grayware|add:uploaded_log.count_security|add:uploaded_log.count_info|add:uploaded_log.count_junk %}
+                        {% if uploaded_log.total_line_count > 0 %}
+                            <span class="stat-match">-> {% widthratio matched_count uploaded_log.total_line_count 100 %}% known</span>
+                        {% else %}
+                            <span class="stat-match">-> 0% known</span>
+                        {% endif %}
+                    {% endwith %}
+                    {% elif uploaded_log.log_type == 'Fixlog' %}
+                    | {{ uploaded_log.fixlog_total }} ops |
+                    <span class="stat-c">ok {{ uploaded_log.fixlog_success }}</span>
+                    <span class="stat-u">n/f {{ uploaded_log.fixlog_not_found }}</span>
+                    <span class="stat-b">err {{ uploaded_log.fixlog_error }}</span>
+                    {% endif %}
+                </div>
+                <div class="button-group inline-unlink">
+                    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="unlink_log">
+                        <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                        <button type="submit" class="unlink-x-button" aria-label="unlink log" title="unlink log">&times;</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        </div>
+        {% endwith %}
+        {% else %}
+        {% with fixlist=item.fixlist %}
+        <div class="timeline-entry fixlist">
+        <div class="fixlist-item">
+            <div style="flex: 1;">
+                <div class="fixlist-title"><a href="{% url 'view_fixlist' fixlist.pk %}">#{{ fixlist.pk }}</a><span class="timeline-type-badge fixlist">FIXLIST</span></div>
+                <div class="fixlist-meta">Fixlist.txt | u/{{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }} | Fixlist</div>
+                <div class="fixlist-meta">lines {{ item.line_count }}</div>
+                <div class="button-group inline-unlink">
+                    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="unlink_fixlist">
+                        <input type="hidden" name="fixlist_id" value="{{ fixlist.pk }}">
+                        <button type="submit" class="unlink-x-button" aria-label="unlink fixlist" title="unlink fixlist">&times;</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        </div>
+        {% endwith %}
+        {% endif %}
+        {% endfor %}
+    {% else %}
+        <div class="info-box">no linked logs or fixlists yet.</div>
+    {% endif %}
+</div>
+
+{% if show_add_picker %}
+<div class="case-card">
+    <h3>add selected items</h3>
+    <form method="post" action="{% url 'infection_case_add_items' infection_case.case_id %}">
+        {% csrf_token %}
+        <div class="selection-columns">
+            <div class="selection-box">
+                <h3>logs</h3>
+                {% for uploaded_log in selectable_uploads %}
+                <label class="selection-item">
+                    <input type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}">
+                    {{ uploaded_log.upload_id }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}
+                </label>
+                {% empty %}
+                <div class="muted">no selectable logs.</div>
+                {% endfor %}
+            </div>
+
+            <div class="selection-box">
+                <h3>fixlists</h3>
+                {% for fixlist in selectable_fixlists %}
+                <label class="selection-item">
+                    <input type="checkbox" name="selected_fixlist_ids" value="{{ fixlist.pk }}">
+                    #{{ fixlist.pk }} | u/{{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }}
+                </label>
+                {% empty %}
+                <div class="muted">no selectable fixlists.</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="button-group" style="margin-top: 10px;">
+            <button type="submit">add selected</button>
+        </div>
+    </form>
+</div>
+{% endif %}
+{% endblock %}

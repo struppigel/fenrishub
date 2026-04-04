@@ -49,6 +49,14 @@ from .rules import (
     test_rule_api,
 )
 
+from .infection_cases import (
+    infection_cases_view,
+    create_infection_case_view,
+    view_infection_case,
+    infection_case_add_items_view,
+    infection_case_confirm_username_change_view,
+)
+
 # Re-export utilities from utils module
 from .utils import (
     custom_404_view,
@@ -90,6 +98,11 @@ __all__ = [
     'rules_view',
     'add_rule_view',
     'test_rule_api',
+    'infection_cases_view',
+    'create_infection_case_view',
+    'view_infection_case',
+    'infection_case_add_items_view',
+    'infection_case_confirm_username_change_view',
     'logout_view',
     'custom_404_view',
 ]

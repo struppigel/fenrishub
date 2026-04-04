@@ -255,6 +255,8 @@
         input[type="text"],
         input[type="password"],
         input[type="email"],
+        input[type="url"],
+        select,
         textarea {
             width: 100%;
             padding: 8px;
@@ -268,6 +270,8 @@
         input[type="text"]:focus,
         input[type="password"]:focus,
         input[type="email"]:focus,
+        input[type="url"]:focus,
+        select:focus,
         textarea:focus {
             outline: none;
             border-color: var(--la-focus);
@@ -532,6 +536,7 @@
             <div class="nav">
                 <div class="nav-left">
                     <a href="{% url 'dashboard' %}">fixlists</a>
+                    <a href="{% url 'infection_cases' %}">cases</a>
                     <a href="{% url 'uploaded_logs' %}">uploads</a>
                     <a href="{% url 'log_analyzer' %}">analyze</a>
                     <a href="{% url 'snippets' %}">snippets</a>

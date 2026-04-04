@@ -1,11 +1,14 @@
 from django.db import IntegrityError, models
+from django.db.models.signals import post_save
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
+from django.dispatch import receiver
 import secrets
 import string
 import re
 
 import mmh3
+from django.utils import timezone
 
 
 def get_default_rule_owner_id():
@@ -98,6 +101,10 @@ def generate_memorable_upload_id():
     adjective = secrets.choice(MEMORABLE_ID_ADJECTIVES)
     noun = secrets.choice(MEMORABLE_ID_NOUNS)
     return f'{adjective}-{noun}'
+
+
+def generate_infection_case_id():
+    return f"ic-{secrets.token_hex(4)}"
 
 
 class ClassificationRule(models.Model):
@@ -412,6 +419,88 @@ class FixlistSnippet(models.Model):
         return f"{self.name} ({self.owner.username})"
 
 
+class InfectionCase(models.Model):
+    STATUS_OPEN = 'open'
+    STATUS_CLOSED = 'closed'
+    STATUS_CHOICES = [
+        (STATUS_OPEN, 'Open'),
+        (STATUS_CLOSED, 'Closed'),
+    ]
+
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='infection_cases')
+    case_id = models.CharField(max_length=24, unique=True, db_index=True, blank=True)
+    username = models.CharField(max_length=255, db_index=True)
+    symptom_description = models.TextField(blank=True)
+    reference_url = models.URLField(blank=True)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_OPEN)
+    auto_assign_new_items = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['owner', '-created_at']),
+            models.Index(fields=['username', '-created_at']),
+            models.Index(fields=['deleted_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.case_id} ({self.username})"
+
+    def clean(self):
+        self.username = (self.username or '').strip()
+        if not self.username:
+            raise ValidationError({'username': 'Username is required.'})
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        if not self.case_id:
+            self.case_id = self._generate_unique_case_id()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def _generate_unique_case_id(cls):
+        for _ in range(40):
+            candidate = generate_infection_case_id()
+            if not cls.objects.filter(case_id=candidate).exists():
+                return candidate
+        raise ValidationError('Unable to generate a unique infection case id.')
+
+
+class InfectionCaseLog(models.Model):
+    case = models.ForeignKey(InfectionCase, on_delete=models.CASCADE, related_name='log_links')
+    uploaded_log = models.ForeignKey(UploadedLog, on_delete=models.CASCADE, related_name='infection_case_links')
+    added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='added_case_logs')
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['added_at']
+        constraints = [
+            models.UniqueConstraint(fields=['case', 'uploaded_log'], name='unique_case_uploaded_log'),
+        ]
+
+    def __str__(self):
+        return f"{self.case.case_id}:{self.uploaded_log.upload_id}"
+
+
+class InfectionCaseFixlist(models.Model):
+    case = models.ForeignKey(InfectionCase, on_delete=models.CASCADE, related_name='fixlist_links')
+    fixlist = models.ForeignKey(Fixlist, on_delete=models.CASCADE, related_name='infection_case_links')
+    added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='added_case_fixlists')
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['added_at']
+        constraints = [
+            models.UniqueConstraint(fields=['case', 'fixlist'], name='unique_case_fixlist'),
+        ]
+
+    def __str__(self):
+        return f"{self.case.case_id}:{self.fixlist_id}"
+
+
 class ParsedFilepathExclusion(models.Model):
     normalized_filepath = models.TextField(unique=True)
     note = models.TextField(blank=True)
@@ -437,3 +526,65 @@ class ParsedFilepathExclusion(models.Model):
 
     def __str__(self):
         return self.normalized_filepath
+
+
+@receiver(post_save, sender=UploadedLog)
+def _auto_assign_new_uploaded_log_to_infection_cases(sender, instance, created, raw=False, **kwargs):
+    if raw or not created:
+        return
+    if instance.deleted_at is not None:
+        return
+
+    candidate_cases = InfectionCase.objects.filter(
+        username=instance.reddit_username,
+        auto_assign_new_items=True,
+        status=InfectionCase.STATUS_OPEN,
+        deleted_at__isnull=True,
+    )
+
+    if instance.recipient_user_id is None:
+        candidate_owner_ids = list(candidate_cases.values_list('owner_id', flat=True).distinct())
+        if len(candidate_owner_ids) == 1:
+            assigned_owner_id = candidate_owner_ids[0]
+            sender.objects.filter(pk=instance.pk, recipient_user__isnull=True).update(
+                recipient_user_id=assigned_owner_id,
+                updated_at=timezone.now(),
+            )
+            instance.recipient_user_id = assigned_owner_id
+        else:
+            return
+
+    if instance.recipient_user_id is not None:
+        candidate_cases = candidate_cases.filter(owner_id=instance.recipient_user_id)
+
+    InfectionCaseLog.objects.bulk_create(
+        [
+            InfectionCaseLog(case=case, uploaded_log=instance)
+            for case in candidate_cases.only('id')
+        ],
+        ignore_conflicts=True,
+    )
+
+
+@receiver(post_save, sender=Fixlist)
+def _auto_assign_new_fixlist_to_infection_cases(sender, instance, created, raw=False, **kwargs):
+    if raw or not created:
+        return
+    if instance.deleted_at is not None:
+        return
+
+    candidate_cases = InfectionCase.objects.filter(
+        owner=instance.owner,
+        username=instance.username,
+        auto_assign_new_items=True,
+        status=InfectionCase.STATUS_OPEN,
+        deleted_at__isnull=True,
+    )
+
+    InfectionCaseFixlist.objects.bulk_create(
+        [
+            InfectionCaseFixlist(case=case, fixlist=instance, added_by=instance.owner)
+            for case in candidate_cases.only('id')
+        ],
+        ignore_conflicts=True,
+    )

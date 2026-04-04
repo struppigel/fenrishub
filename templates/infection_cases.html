@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+
+{% block title %}Infection Cases - Fenris{% endblock %}
+
+{% block page_context_label %}infection cases{% endblock %}
+
+{% block extra_css %}
+<style>
+.case-status-open {
+    color: var(--la-status-c);
+}
+
+.case-status-closed {
+    color: var(--la-status-b);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div>
+    <div class="button-group">
+        <a href="{% url 'create_infection_case' %}"><button type="button">create case</button></a>
+    </div>
+
+    <div class="divider"></div>
+
+    <h3>your infection cases</h3>
+
+    {% if cases %}
+        {% for case in cases %}
+        <div class="fixlist-item">
+            <div style="flex: 1;">
+                <div class="fixlist-title">{{ case.case_id }} | u/{{ case.username }}</div>
+                <div class="fixlist-meta">
+                    items {{ case.item_count }} | created {{ case.created_at|date:"Y-m-d H:i" }} | last activity {{ case.last_activity|date:"Y-m-d H:i" }} | status <span class="{% if case.status == 'open' %}case-status-open{% else %}case-status-closed{% endif %}">{{ case.get_status_display|lower }}</span>
+                </div>
+            </div>
+            <div class="fixlist-actions">
+                <a href="{% url 'view_infection_case' case.case_id %}"><button type="button">view</button></a>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="info-box">no infection cases yet.</div>
+    {% endif %}
+</div>
+{% endblock %}

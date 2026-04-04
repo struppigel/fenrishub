@@ -44,6 +44,30 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
             self.assertTrue(form.is_valid(), form.errors)
             self.assertEqual(form.cleaned_data['log_file'].decoded_content, 'Addition line\nSecond line')
 
+    def test_uploaded_log_form_prefers_readable_candidate_over_mojibake_detector_output(self):
+        source_text = 'Additional scan result of Farbar Recovery Scan Tool\nRan by nickl'
+        detector_mojibake = source_text.encode('utf-8').decode('utf-16-le', errors='ignore')
+
+        class _DetectedMojibakeText:
+            def __str__(self):
+                return detector_mojibake
+
+        with patch('fixlist.forms.from_bytes') as mocked_from_bytes:
+            mocked_from_bytes.return_value.best.return_value = _DetectedMojibakeText()
+            form = UploadedLogForm(
+                data={'reddit_username': 'reddit_name'},
+                files={
+                    'log_file': SimpleUploadedFile(
+                        'Addition.txt',
+                        source_text.encode('utf-8'),
+                        content_type='text/plain',
+                    )
+                },
+            )
+
+            self.assertTrue(form.is_valid(), form.errors)
+            self.assertEqual(form.cleaned_data['log_file'].decoded_content, source_text)
+
     def test_upload_log_view_logs_context_on_unhandled_exception(self):
         with (
             patch('fixlist.views.uploads.UploadedLog.objects.create', side_effect=RuntimeError('boom')),
