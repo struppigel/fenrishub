@@ -501,6 +501,35 @@ class InfectionCaseFixlist(models.Model):
         return f"{self.case.case_id}:{self.fixlist_id}"
 
 
+class InfectionCaseNote(models.Model):
+    case = models.ForeignKey(InfectionCase, on_delete=models.CASCADE, related_name='note_entries')
+    anchor_log = models.ForeignKey('InfectionCaseLog', null=True, blank=True, on_delete=models.SET_NULL, related_name='pinned_notes')
+    content = models.TextField()
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='infection_case_notes')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['case', 'created_at']),
+            models.Index(fields=['deleted_at']),
+        ]
+
+    def clean(self):
+        self.content = (self.content or '').strip()
+        if not self.content:
+            raise ValidationError({'content': 'Note cannot be empty.'})
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.case.case_id}:note:{self.pk}"
+
+
 class ParsedFilepathExclusion(models.Model):
     normalized_filepath = models.TextField(unique=True)
     note = models.TextField(blank=True)

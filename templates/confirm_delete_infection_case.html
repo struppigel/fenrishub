@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+
+{% block title %}Delete Infection Case - Fenris{% endblock %}
+
+{% block page_context_label %}infection cases / delete{% endblock %}
+
+{% block content %}
+<div>
+    <h3>delete infection case</h3>
+    <p class="muted" style="margin-bottom: 10px;">
+        You are deleting {{ infection_case.case_id }} for u/{{ infection_case.username }}.
+    </p>
+
+    <div class="warning-box">
+        linked items: {{ linked_log_count }} log{{ linked_log_count|pluralize }} and {{ linked_fixlist_count }} fixlist{{ linked_fixlist_count|pluralize }}
+    </div>
+
+    <form method="post" action="{% url 'infection_case_delete' infection_case.case_id %}">
+        {% csrf_token %}
+        <div class="form-group">
+            <label style="display: inline-flex; align-items: center; gap: 8px; margin-bottom: 0; color: var(--la-text-primary);">
+                <input type="checkbox" name="move_linked_to_trash" value="1">
+                <span>also move linked logs and fixlists to trash</span>
+            </label>
+        </div>
+
+        <div class="button-group">
+            <button type="submit">delete case</button>
+            <a href="{% url 'infection_cases' %}"><button type="button">cancel</button></a>
+        </div>
+    </form>
+</div>
+{% endblock %}

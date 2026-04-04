@@ -107,7 +107,7 @@
     top: 6px;
     right: 6px;
     margin-top: 0;
-    gap: 0;
+    gap: 4px;
 }
 
 .timeline-entry.fixlist .button-group.inline-unlink {
@@ -115,7 +115,7 @@
     top: 6px;
     right: 6px;
     margin-top: 0;
-    gap: 0;
+    gap: 4px;
 }
 
 .unlink-icon-button {
@@ -153,6 +153,64 @@
 .timeline-entry.fixlist .timeline-type-badge {
     margin-right: 0;
     margin-left: 8px;
+}
+
+.add-note-button {
+    width: 14px;
+    height: 14px;
+    min-width: 0;
+    padding: 0;
+    font-size: 12px;
+    line-height: 12px;
+    color: var(--la-text-muted);
+    border: 1px solid color-mix(in srgb, var(--la-text-muted) 40%, var(--la-border));
+    background: color-mix(in srgb, var(--la-text-muted) 6%, var(--la-bg-1));
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 2px;
+}
+
+.add-note-button:hover,
+.add-note-button:focus-visible {
+    color: var(--la-text-primary);
+    border-color: color-mix(in srgb, var(--la-text-primary) 60%, var(--la-border));
+    background: color-mix(in srgb, var(--la-text-primary) 12%, var(--la-bg-1));
+}
+
+.note-form-wrapper {
+    display: none;
+}
+
+.note-form-wrapper.show {
+    display: block;
+}
+
+.note-form-wrapper textarea {
+    width: 100%;
+    font-size: 0.85rem;
+    padding: 6px;
+    min-height: 60px;
+    resize: vertical;
+    background: var(--la-bg-secondary);
+    border: 1px solid var(--la-border);
+    color: var(--la-text-primary);
+    border-radius: 3px;
+    font-family: inherit;
+}
+
+.note-form-buttons {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    justify-content: flex-end;
+}
+
+.note-form-buttons button {
+    font-size: 0.75rem;
+    padding: 4px 8px;
+    white-space: nowrap;
 }
 
 @media (max-width: 700px) {
@@ -340,11 +398,50 @@
                     {% endif %}
                 </div>
                 <div class="button-group inline-unlink">
-                    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}">
+                    <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note anchored to {{ uploaded_log.upload_id }}">+</button>
+                    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="unlink_log">
                         <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                         <button type="submit" class="unlink-x-button" aria-label="unlink log" title="unlink log">&times;</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        </div>
+        <div class="note-form-wrapper">
+            <div class="timeline-entry fixlist">
+                <div class="fixlist-item">
+                    <div style="flex: 1;">
+                        <div class="fixlist-title"><span style="color: var(--la-text-muted);">now</span><span class="timeline-type-badge fixlist">NOTE</span></div>
+                        <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="add_note">
+                            <input type="hidden" name="anchor_log_upload_id" value="{{ uploaded_log.upload_id }}">
+                            <textarea name="note_content" placeholder="write your note..."></textarea>
+                            <div class="note-form-buttons">
+                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.add-note-button'))">cancel</button>
+                                <button type="submit">save</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endwith %}
+        {% elif item.item_type == 'note' %}
+        {% with note=item.note %}
+        <div class="timeline-entry fixlist">
+        <div class="fixlist-item">
+            <div style="flex: 1;">
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">NOTE</span></div>
+                <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word;">{{ note.content }}</div>
+                <div class="button-group inline-unlink">
+                    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete_note">
+                        <input type="hidden" name="note_id" value="{{ note.pk }}">
+                        <button type="submit" class="unlink-x-button" aria-label="delete note" title="delete note">&times;</button>
                     </form>
                 </div>
             </div>
@@ -360,7 +457,8 @@
                 <div class="fixlist-meta">Fixlist.txt | u/{{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }} | Fixlist</div>
                 <div class="fixlist-meta">lines {{ item.line_count }}</div>
                 <div class="button-group inline-unlink">
-                    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}">
+                    <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note">+</button>
+                    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="unlink_fixlist">
                         <input type="hidden" name="fixlist_id" value="{{ fixlist.pk }}">
@@ -369,6 +467,24 @@
                 </div>
             </div>
         </div>
+        </div>
+        <div class="note-form-wrapper">
+            <div class="timeline-entry fixlist">
+                <div class="fixlist-item">
+                    <div style="flex: 1;">
+                        <div class="fixlist-title"><span style="color: var(--la-text-muted);">now</span><span class="timeline-type-badge fixlist">NOTE</span></div>
+                        <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="add_note">
+                            <textarea name="note_content" placeholder="write your note..."></textarea>
+                            <div class="note-form-buttons">
+                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.add-note-button'))">cancel</button>
+                                <button type="submit">save</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
         </div>
         {% endwith %}
         {% endif %}
@@ -415,4 +531,40 @@
     </form>
 </div>
 {% endif %}
+
+<script>
+function toggleNoteForm(button) {
+    const timelineEntry = button.closest('.timeline-entry');
+    const formWrapper = timelineEntry.nextElementSibling;
+    if (!formWrapper || !formWrapper.classList.contains('note-form-wrapper')) {
+        return;
+    }
+
+    const isVisible = formWrapper.classList.contains('show');
+    document.querySelectorAll('.note-form-wrapper.show').forEach(function(wrapper) {
+        if (wrapper !== formWrapper) {
+            wrapper.classList.remove('show');
+        }
+    });
+
+    formWrapper.classList.toggle('show', !isVisible);
+    if (!isVisible) {
+        const textarea = formWrapper.querySelector('textarea');
+        if (textarea) {
+            textarea.focus();
+        }
+    }
+}
+
+document.addEventListener('click', function(event) {
+    const isButton = event.target.classList && event.target.classList.contains('add-note-button');
+    const isFormChild = event.target.closest('.note-form-wrapper');
+
+    if (!isButton && !isFormChild) {
+        document.querySelectorAll('.note-form-wrapper.show').forEach(function(wrapper) {
+            wrapper.classList.remove('show');
+        });
+    }
+});
+</script>
 {% endblock %}

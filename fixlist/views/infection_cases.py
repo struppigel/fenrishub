@@ -3,6 +3,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from ..models import (
@@ -10,6 +11,7 @@ from ..models import (
     InfectionCase,
     InfectionCaseFixlist,
     InfectionCaseLog,
+    InfectionCaseNote,
     UploadedLog,
 )
 from .utils import get_action_scoped_uploads
@@ -30,17 +32,22 @@ def _available_case_usernames_for_user(user):
 
 
 def _build_case_timeline(case):
-    timeline_items = []
+    # Build a mapping from InfectionCaseLog pk to the log's upload_id for anchor lookup.
+    log_pk_to_upload_id = {}
+
+    base_items = []
 
     for link in case.log_links.select_related('uploaded_log').all():
         uploaded_log = link.uploaded_log
         if uploaded_log.deleted_at is not None:
             continue
-        timeline_items.append(
+        log_pk_to_upload_id[link.pk] = uploaded_log.upload_id
+        base_items.append(
             {
                 'item_type': 'log',
                 'created_at': uploaded_log.created_at,
                 'uploaded_log': uploaded_log,
+                '_log_link_pk': link.pk,
             }
         )
 
@@ -48,7 +55,7 @@ def _build_case_timeline(case):
         fixlist = link.fixlist
         if fixlist.deleted_at is not None:
             continue
-        timeline_items.append(
+        base_items.append(
             {
                 'item_type': 'fixlist',
                 'created_at': fixlist.created_at,
@@ -57,7 +64,38 @@ def _build_case_timeline(case):
             }
         )
 
-    timeline_items.sort(key=lambda item: item['created_at'])
+    # Separate anchored and unanchored notes.
+    anchored_notes = {}  # anchor InfectionCaseLog pk -> list of note dicts
+    unanchored_notes = []
+
+    for note in case.note_entries.select_related('anchor_log').all():
+        if note.deleted_at is not None:
+            continue
+        note_dict = {
+            'item_type': 'note',
+            'created_at': note.created_at,
+            'note': note,
+        }
+        if note.anchor_log_id is not None:
+            anchored_notes.setdefault(note.anchor_log_id, []).append(note_dict)
+        else:
+            unanchored_notes.append(note_dict)
+
+    base_items.extend(unanchored_notes)
+    base_items.sort(key=lambda item: item['created_at'])
+
+    # Splice anchored notes immediately after their anchor log entry.
+    timeline_items = []
+    for item in base_items:
+        timeline_items.append(item)
+        if item['item_type'] == 'log':
+            for pinned in anchored_notes.get(item['_log_link_pk'], []):
+                timeline_items.append(pinned)
+
+    # Strip internal helper key before returning.
+    for item in timeline_items:
+        item.pop('_log_link_pk', None)
+
     return timeline_items
 
 
@@ -113,7 +151,7 @@ def _selected_items_for_case_request(request, case):
 def infection_cases_view(request):
     cases = list(
         _case_queryset_for_user(request.user)
-        .prefetch_related('log_links__uploaded_log', 'fixlist_links__fixlist')
+        .prefetch_related('log_links__uploaded_log', 'fixlist_links__fixlist', 'note_entries')
     )
 
     for case in cases:
@@ -127,9 +165,19 @@ def infection_cases_view(request):
             for link in case.fixlist_links.all()
             if link.fixlist.deleted_at is None
         ]
-        case.item_count = len(visible_logs) + len(visible_fixlists)
+        visible_notes = [
+            note
+            for note in case.note_entries.all()
+            if note.deleted_at is None
+        ]
+        case.item_count = len(visible_logs) + len(visible_fixlists) + len(visible_notes)
         case.last_activity = max(
-            [case.created_at, *[item.created_at for item in visible_logs], *[item.created_at for item in visible_fixlists]]
+            [
+                case.created_at,
+                *[item.created_at for item in visible_logs],
+                *[item.created_at for item in visible_fixlists],
+                *[item.created_at for item in visible_notes],
+            ]
         )
 
     return render(request, 'infection_cases.html', {'cases': cases})
@@ -235,6 +283,27 @@ def view_infection_case(request, case_id):
             )
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
+        if action == 'add_note':
+            note_content = (request.POST.get('note_content') or '').strip()
+            if not note_content:
+                messages.error(request, 'Note cannot be empty.')
+                return redirect('view_infection_case', case_id=infection_case.case_id)
+            anchor_log_upload_id = (request.POST.get('anchor_log_upload_id') or '').strip()
+            anchor_log = None
+            if anchor_log_upload_id:
+                anchor_log = InfectionCaseLog.objects.filter(
+                    case=infection_case,
+                    uploaded_log__upload_id=anchor_log_upload_id,
+                ).first()
+            InfectionCaseNote.objects.create(
+                case=infection_case,
+                content=note_content,
+                anchor_log=anchor_log,
+                created_by=request.user,
+            )
+            messages.success(request, 'Note added to timeline.')
+            return redirect('view_infection_case', case_id=infection_case.case_id)
+
         if action == 'unlink_log':
             upload_id = (request.POST.get('upload_id') or '').strip()
             deleted_count, _ = InfectionCaseLog.objects.filter(
@@ -257,6 +326,21 @@ def view_infection_case(request, case_id):
                 messages.success(request, f'Fixlist #{fixlist_id} was removed from this case.')
             else:
                 messages.error(request, 'The selected fixlist is not linked to this case.')
+            return redirect('view_infection_case', case_id=infection_case.case_id)
+
+        if action == 'delete_note':
+            note_id = (request.POST.get('note_id') or '').strip()
+            try:
+                note = InfectionCaseNote.objects.get(
+                    case=infection_case,
+                    pk=note_id,
+                    deleted_at__isnull=True,
+                )
+                note.deleted_at = timezone.now()
+                note.save()
+                messages.success(request, 'Note deleted.')
+            except InfectionCaseNote.DoesNotExist:
+                messages.error(request, 'The selected note does not exist or has already been deleted.')
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
     linked_logs = list(
@@ -361,3 +445,59 @@ def infection_case_confirm_username_change_view(request, case_id):
         f'Updated selected usernames to u/{infection_case.username} and added items to the case.',
     )
     return redirect('view_infection_case', case_id=infection_case.case_id)
+
+
+@login_required
+@require_http_methods(['GET', 'POST'])
+def infection_case_delete_view(request, case_id):
+    infection_case = get_object_or_404(_case_queryset_for_user(request.user), case_id=case_id)
+
+    linked_log_ids = list(
+        UploadedLog.objects.filter(
+            infection_case_links__case=infection_case,
+            deleted_at__isnull=True,
+        )
+        .values_list('pk', flat=True)
+        .distinct()
+    )
+    linked_fixlist_ids = list(
+        Fixlist.objects.filter(
+            infection_case_links__case=infection_case,
+            deleted_at__isnull=True,
+        )
+        .values_list('pk', flat=True)
+        .distinct()
+    )
+
+    if request.method == 'POST':
+        move_linked_to_trash = (request.POST.get('move_linked_to_trash') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+        deleted_at = timezone.now()
+
+        trashed_logs = 0
+        trashed_fixlists = 0
+        with transaction.atomic():
+            if move_linked_to_trash:
+                trashed_logs = UploadedLog.objects.filter(pk__in=linked_log_ids, deleted_at__isnull=True).update(deleted_at=deleted_at)
+                trashed_fixlists = Fixlist.objects.filter(pk__in=linked_fixlist_ids, deleted_at__isnull=True).update(deleted_at=deleted_at)
+
+            infection_case.deleted_at = deleted_at
+            infection_case.save(update_fields=['deleted_at', 'updated_at'])
+
+        if move_linked_to_trash:
+            messages.success(
+                request,
+                f'Case {infection_case.case_id} deleted. Moved {trashed_logs} log(s) and {trashed_fixlists} fixlist(s) to trash.',
+            )
+        else:
+            messages.success(request, f'Case {infection_case.case_id} deleted.')
+        return redirect('infection_cases')
+
+    return render(
+        request,
+        'confirm_delete_infection_case.html',
+        {
+            'infection_case': infection_case,
+            'linked_log_count': len(linked_log_ids),
+            'linked_fixlist_count': len(linked_fixlist_ids),
+        },
+    )

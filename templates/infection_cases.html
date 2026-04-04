@@ -37,6 +37,7 @@
             </div>
             <div class="fixlist-actions">
                 <a href="{% url 'view_infection_case' case.case_id %}"><button type="button">view</button></a>
+                <a href="{% url 'infection_case_delete' case.case_id %}"><button type="button" style="color: var(--la-status-b); border-color: color-mix(in srgb, var(--la-status-b) 40%, var(--la-border)); background: color-mix(in srgb, var(--la-status-b) 10%, var(--la-bg-1));">delete</button></a>
             </div>
         </div>
         {% endfor %}

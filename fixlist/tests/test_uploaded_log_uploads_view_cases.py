@@ -335,6 +335,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
             original_filename='frst.txt',
             log_type='FRST',
             content='Scan result of Farbar Recovery Scan Tool\nline',
+            recipient_user=self.user,
         )
         self.client.login(username='alice', password='password123')
 
@@ -359,6 +360,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
                     original_filename='log.txt',
                     log_type=log_type,
                     content='content',
+                    recipient_user=self.user,
                 )
                 response = self.client.get(reverse('uploaded_logs'))
                 self.assertContains(response, expected_class)
