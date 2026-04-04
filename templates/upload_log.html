@@ -16,6 +16,18 @@
         border-color: var(--la-focus);
         color: var(--la-focus);
     }
+
+    .upload-log-page .upload-submit-btn {
+        background-color: var(--la-success-bg);
+        border-color: var(--la-success-border);
+        color: var(--la-text-primary);
+        font-weight: 600;
+    }
+
+    .upload-log-page .inline-copy-btn {
+        margin-left: 8px;
+        vertical-align: middle;
+    }
 </style>
 {% endblock %}
 
@@ -46,8 +58,8 @@
 <div class="success-box">
     uploaded {{ uploaded_original_filename }}<br>
     keyword: <strong id="uploadedLogId">{{ uploaded_log_id }}</strong>
+    <button type="button" class="inline-copy-btn" onclick="copyUploadId(this)">copy keyword</button>
     {% if uploaded_channel %}<br>channel: <strong>{{ uploaded_channel }}</strong>{% endif %}
-    <button type="button" onclick="copyUploadId(this)" style="margin-left: 10px;">copy keyword</button>
 </div>
 {% endif %}
 
@@ -63,8 +75,8 @@ function copyUploadId(button) {
 </script>
 
 <div class="button-group" style="margin-bottom: 12px;">
-    <button type="button" id="tabFile" onclick="switchTab('file')" class="tab-active">upload file</button>
-    <button type="button" id="tabPaste" onclick="switchTab('paste')">paste text</button>
+    <button type="button" id="tabFile" onclick="switchTab('file')">upload file</button>
+    <button type="button" id="tabPaste" onclick="switchTab('paste')" class="tab-active">paste text</button>
 </div>
 
 <form method="post" enctype="multipart/form-data">
@@ -73,14 +85,14 @@ function copyUploadId(button) {
         <div class="error-box">{{ form.non_field_errors|join:', ' }}</div>
     {% endif %}
     <div class="form-group">
-        <label for="id_reddit_username">reddit username</label>
+        <label for="id_reddit_username">your reddit username</label>
         <input type="text" id="id_reddit_username" name="reddit_username" maxlength="20" value="{{ form.reddit_username.value|default:'' }}" required placeholder="e.g. SomeUser (no u/ prefix)">
         {% if form.reddit_username.errors %}
             <div class="error-box">{{ form.reddit_username.errors|join:', ' }}</div>
         {% endif %}
     </div>
 
-    <div class="form-group" id="fileInputGroup">
+    <div class="form-group" id="fileInputGroup" style="display:none;">
         <label for="id_log_file">log file (.txt or .log)</label>
         <input type="file" id="id_log_file" name="log_file" accept=".txt,.log,text/plain">
         {% if form.log_file.errors %}
@@ -88,7 +100,7 @@ function copyUploadId(button) {
         {% endif %}
     </div>
 
-    <div class="form-group" id="pasteInputGroup" style="display:none;">
+    <div class="form-group" id="pasteInputGroup">
         <label for="id_log_text">paste log content</label>
         <textarea id="id_log_text" name="log_text" rows="12" style="width:100%; font-family:inherit; font-size:12px; background:var(--la-bg-1); color:var(--la-text-main); border:1px solid var(--la-border); padding:8px; box-sizing:border-box; resize:vertical;">{{ form.log_text.value|default:'' }}</textarea>
         {% if form.log_text.errors %}
@@ -97,7 +109,7 @@ function copyUploadId(button) {
     </div>
 
     <div class="button-group">
-        <button type="submit">upload</button>
+        <button type="submit" class="upload-submit-btn">save log</button>
     </div>
 </form>
 
@@ -110,7 +122,7 @@ function switchTab(tab) {
     document.getElementById('tabPaste').classList.toggle('tab-active', !isFile);
 }
 
-{% if form.log_text.value %}switchTab('paste');{% endif %}
+switchTab('paste');
 </script>
 </div>
 {% endblock %}
