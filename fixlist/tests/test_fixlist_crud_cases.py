@@ -23,13 +23,13 @@ class FixlistCrudViewTests(TestCase):
         response = self.client.post(
             reverse("create_fixlist"),
             {
-                "title": "Created Via Test",
+                "username": "Created Via Test",
                 "content": "ioc-1\nioc-2",
                 "internal_note": "internal context",
             },
         )
 
-        created = Fixlist.objects.get(title="Created Via Test")
+        created = Fixlist.objects.get(username="Created Via Test")
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
         self.assertEqual(created.owner, self.user)
@@ -49,7 +49,7 @@ class FixlistCrudViewTests(TestCase):
         response = self.client.post(
             reverse("create_fixlist"),
             {
-                "title": "Fixlist Ignores Rule Persist Payload",
+                "username": "Fixlist Ignores Rule Persist Payload",
                 "content": "line-a",
                 "internal_note": "",
                 "persist_rules": "1",
@@ -58,7 +58,7 @@ class FixlistCrudViewTests(TestCase):
             },
         )
 
-        created = Fixlist.objects.get(title="Fixlist Ignores Rule Persist Payload")
+        created = Fixlist.objects.get(username="Fixlist Ignores Rule Persist Payload")
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
         self.assertEqual(ClassificationRule.objects.count(), 0)
@@ -66,7 +66,7 @@ class FixlistCrudViewTests(TestCase):
     def test_update_fixlist_changes_content(self):
         fixlist = Fixlist.objects.create(
             owner=self.user,
-            title="Before",
+            username="Before",
             content="old-content",
             internal_note="old-note",
         )
@@ -75,7 +75,7 @@ class FixlistCrudViewTests(TestCase):
             reverse("view_fixlist", args=[fixlist.pk]),
             {
                 "action": "update",
-                "title": "After",
+                "username": "After",
                 "content": "new-content",
                 "internal_note": "new-note",
             },
@@ -84,12 +84,12 @@ class FixlistCrudViewTests(TestCase):
         fixlist.refresh_from_db()
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse("view_fixlist", args=[fixlist.pk]))
-        self.assertEqual(fixlist.title, "After")
+        self.assertEqual(fixlist.username, "After")
         self.assertEqual(fixlist.content, "new-content")
         self.assertEqual(fixlist.internal_note, "new-note")
 
     def test_delete_fixlist_moves_to_trash(self):
-        fixlist = Fixlist.objects.create(owner=self.user, title="Delete Me", content="x")
+        fixlist = Fixlist.objects.create(owner=self.user, username="Delete Me", content="x")
 
         response = self.client.post(
             reverse("view_fixlist", args=[fixlist.pk]),
@@ -105,7 +105,7 @@ class FixlistCrudViewTests(TestCase):
     def test_view_fixlist_context_includes_guest_preview_url(self):
         fixlist = Fixlist.objects.create(
             owner=self.user,
-            title="Previewable",
+            username="Previewable",
             content="payload",
         )
         request = RequestFactory().get(reverse("view_fixlist", args=[fixlist.pk]))
@@ -123,5 +123,21 @@ class FixlistCrudViewTests(TestCase):
             rendered_context["guest_preview_url"],
             f"{share_url}?preview=guest",
         )
+
+    def test_create_fixlist_prefills_username_from_last_loaded_upload_session(self):
+        upload = UploadedLog.objects.create(
+            upload_id="amber-raven",
+            reddit_username="session_user",
+            original_filename="FRST.txt",
+            content="line-1",
+        )
+
+        api_response = self.client.get(reverse("uploaded_log_content_api", args=[upload.upload_id]))
+        self.assertEqual(api_response.status_code, 200)
+
+        response = self.client.get(reverse("create_fixlist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="username"')
+        self.assertContains(response, 'value="session_user"', html=False)
 
 

@@ -10,8 +10,8 @@
         {% csrf_token %}
 
         <div class="form-group">
-            <label for="title">title</label>
-            <input type="text" id="title" name="title" placeholder="Enter fixlist title..." required>
+            <label for="username">username</label>
+            <input type="text" id="username" name="username" value="{{ prefill_username|default:''|escape }}" placeholder="Enter username..." required>
         </div>
 
         <div class="form-group">
@@ -41,14 +41,12 @@ const PREFILL_CONTENT_KEY = 'fenrishub_prefill_content';
 
 document.addEventListener('DOMContentLoaded', function() {
     const prefillContent = sessionStorage.getItem(PREFILL_CONTENT_KEY);
-    
     const contentField = document.getElementById('content');
 
     if (prefillContent && contentField && !contentField.value.trim()) {
         contentField.value = prefillContent;
     }
 
-    // Clear prefill from sessionStorage
     sessionStorage.removeItem(PREFILL_CONTENT_KEY);
     sessionStorage.removeItem('fenrishub_pending_status_changes');
 });

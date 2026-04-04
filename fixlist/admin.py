@@ -43,11 +43,11 @@ class RuleImportForm(forms.Form):
 
 @admin.register(Fixlist)
 class FixlistAdmin(admin.ModelAdmin):
-    list_display = ('title', 'owner', 'download_count', 'created_at', 'share_token')
+    list_display = ('username', 'owner', 'download_count', 'created_at', 'share_token')
     list_filter = ('created_at', 'is_public')
-    search_fields = ('title', 'owner__username')
+    search_fields = ('username', 'owner__username')
     readonly_fields = ('download_count', 'share_token', 'created_at', 'updated_at')
-    fields = ('owner', 'title', 'content', 'internal_note', 'download_count', 'share_token', 'created_at', 'updated_at', 'is_public')
+    fields = ('owner', 'username', 'content', 'internal_note', 'download_count', 'share_token', 'created_at', 'updated_at', 'is_public')
 
 
 @admin.register(AccessLog)

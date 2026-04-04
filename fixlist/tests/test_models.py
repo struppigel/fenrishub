@@ -16,7 +16,7 @@ class FixlistModelTests(TestCase):
 
         fixlist = Fixlist.objects.create(
             owner=user,
-            title="Initial",
+            username="Initial",
             content="line1",
         )
 

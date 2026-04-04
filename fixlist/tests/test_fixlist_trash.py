@@ -16,8 +16,8 @@ def _make_user(username, password="password123"):
     return User.objects.create_user(username=username, password=password)
 
 
-def _make_fixlist(owner, title="My Fixlist", content="line-1", **kwargs):
-    return Fixlist.objects.create(owner=owner, title=title, content=content, **kwargs)
+def _make_fixlist(owner, username="My Fixlist", content="line-1", **kwargs):
+    return Fixlist.objects.create(owner=owner, username=username, content=content, **kwargs)
 
 
 class FixlistSoftDeleteTests(TestCase):
@@ -46,8 +46,8 @@ class FixlistSoftDeleteTests(TestCase):
         self.assertRedirects(response, reverse("dashboard"))
 
     def test_trashed_fixlist_excluded_from_dashboard(self):
-        active = _make_fixlist(self.user, title="Active")
-        _make_fixlist(self.user, title="Trashed", deleted_at=timezone.now())
+        active = _make_fixlist(self.user, username="Active")
+        _make_fixlist(self.user, username="Trashed", deleted_at=timezone.now())
 
         response = self.client.get(reverse("dashboard"))
 
@@ -73,7 +73,7 @@ class FixlistSoftDeleteTests(TestCase):
     def test_delete_purges_old_fixlist_trash(self):
         old = _make_fixlist(
             self.user,
-            title="Old Trash",
+            username="Old Trash",
             deleted_at=timezone.now() - timedelta(days=31),
         )
 
@@ -84,7 +84,7 @@ class FixlistSoftDeleteTests(TestCase):
     def test_delete_keeps_recent_fixlist_trash(self):
         recent = _make_fixlist(
             self.user,
-            title="Recent Trash",
+            username="Recent Trash",
             deleted_at=timezone.now() - timedelta(days=1),
         )
 
@@ -98,8 +98,8 @@ class FixlistsTrashViewTests(TestCase):
         self.user = _make_user("alice")
         self.client.login(username="alice", password="password123")
 
-    def _trashed(self, title="Trashed", **kwargs):
-        return _make_fixlist(self.user, title=title, deleted_at=timezone.now(), **kwargs)
+    def _trashed(self, username="Trashed", **kwargs):
+        return _make_fixlist(self.user, username=username, deleted_at=timezone.now(), **kwargs)
 
     def test_trash_view_requires_login(self):
         self.client.logout()
@@ -108,7 +108,7 @@ class FixlistsTrashViewTests(TestCase):
         self.assertIn(reverse("login"), response.url)
 
     def test_trash_view_shows_trashed_fixlists(self):
-        self._trashed(title="In Trash")
+        self._trashed(username="In Trash")
 
         response = self.client.get(reverse("fixlists_trash"))
 
@@ -116,8 +116,8 @@ class FixlistsTrashViewTests(TestCase):
         self.assertContains(response, "In Trash")
 
     def test_trash_view_excludes_active_fixlists(self):
-        _make_fixlist(self.user, title="Active")
-        self._trashed(title="Trashed")
+        _make_fixlist(self.user, username="Active")
+        self._trashed(username="Trashed")
 
         response = self.client.get(reverse("fixlists_trash"))
 
@@ -126,7 +126,7 @@ class FixlistsTrashViewTests(TestCase):
 
     def test_trash_view_scoped_to_owner(self):
         other = _make_user("bob")
-        _make_fixlist(other, title="Bob Trash", deleted_at=timezone.now())
+        _make_fixlist(other, username="Bob Trash", deleted_at=timezone.now())
 
         response = self.client.get(reverse("fixlists_trash"))
 
@@ -143,7 +143,7 @@ class FixlistsTrashViewTests(TestCase):
         self.assertIsNone(fixlist.deleted_at)
 
     def test_restore_fixlist_appears_in_dashboard(self):
-        fixlist = self._trashed(title="Restore Me")
+        fixlist = self._trashed(username="Restore Me")
 
         self.client.post(reverse("fixlists_trash"), {"action": "restore", "pk": fixlist.pk})
 
@@ -161,7 +161,7 @@ class FixlistsTrashViewTests(TestCase):
 
     def test_restore_cannot_affect_other_users_fixlist(self):
         other = _make_user("bob")
-        fixlist = _make_fixlist(other, title="Bob Trash", deleted_at=timezone.now())
+        fixlist = _make_fixlist(other, username="Bob Trash", deleted_at=timezone.now())
 
         response = self.client.post(
             reverse("fixlists_trash"), {"action": "restore", "pk": fixlist.pk}
@@ -192,7 +192,7 @@ class FixlistsTrashViewTests(TestCase):
         self.assertRedirects(response, reverse("fixlists_trash"))
 
     def test_permanent_delete_only_works_on_trashed(self):
-        fixlist = _make_fixlist(self.user, title="Active")
+        fixlist = _make_fixlist(self.user, username="Active")
 
         response = self.client.post(
             reverse("fixlists_trash"), {"action": "delete_permanent", "pk": fixlist.pk}
@@ -215,8 +215,8 @@ class FixlistsTrashViewTests(TestCase):
     # --- empty trash ---
 
     def test_empty_trash_removes_all_user_trashed_fixlists(self):
-        self._trashed(title="One")
-        self._trashed(title="Two")
+        self._trashed(username="One")
+        self._trashed(username="Two")
 
         self.client.post(reverse("fixlists_trash"), {"action": "empty_trash"})
 
@@ -225,8 +225,8 @@ class FixlistsTrashViewTests(TestCase):
         )
 
     def test_empty_trash_does_not_affect_active_fixlists(self):
-        active = _make_fixlist(self.user, title="Active")
-        self._trashed(title="Gone")
+        active = _make_fixlist(self.user, username="Active")
+        self._trashed(username="Gone")
 
         self.client.post(reverse("fixlists_trash"), {"action": "empty_trash"})
 
@@ -338,7 +338,7 @@ class TrashedFixlistGuestAccessTests(TestCase):
     # --- active fixlists unaffected ---
 
     def test_shared_view_accessible_for_anonymous_when_not_trashed(self):
-        active = _make_fixlist(self.user, title="Public")
+        active = _make_fixlist(self.user, username="Public")
         request = self.factory.get(reverse("shared_fixlist", args=[active.share_token]))
         request.user = AnonymousUser()
 
@@ -352,7 +352,7 @@ class FixlistPurgeOldTrashTests(TestCase):
     def setUp(self):
         self.user = _make_user("alice")
         self.client.login(username="alice", password="password123")
-        self.active = _make_fixlist(self.user, title="Active")
+        self.active = _make_fixlist(self.user, username="Active")
 
     def _old_deleted_at(self):
         return timezone.now() - timedelta(days=31)
@@ -368,7 +368,7 @@ class FixlistPurgeOldTrashTests(TestCase):
         )
 
     def test_trashing_fixlist_purges_old_fixlist_trash(self):
-        old = _make_fixlist(self.user, title="Old", deleted_at=self._old_deleted_at())
+        old = _make_fixlist(self.user, username="Old", deleted_at=self._old_deleted_at())
 
         self._trash_active()
 
@@ -376,7 +376,7 @@ class FixlistPurgeOldTrashTests(TestCase):
 
     def test_trashing_fixlist_keeps_recent_fixlist_trash(self):
         recent = _make_fixlist(
-            self.user, title="Recent", deleted_at=self._recent_deleted_at()
+            self.user, username="Recent", deleted_at=self._recent_deleted_at()
         )
 
         self._trash_active()
@@ -384,7 +384,7 @@ class FixlistPurgeOldTrashTests(TestCase):
         self.assertTrue(Fixlist.objects.filter(pk=recent.pk).exists())
 
     def test_trashing_fixlist_does_not_delete_active_fixlists(self):
-        other_active = _make_fixlist(self.user, title="Other Active")
+        other_active = _make_fixlist(self.user, username="Other Active")
 
         self._trash_active()
 
@@ -404,7 +404,7 @@ class FixlistPurgeOldTrashTests(TestCase):
         self.assertFalse(UploadedLog.objects.filter(pk=old_upload.pk).exists())
 
     def test_purge_command_deletes_old_fixlists(self):
-        old = _make_fixlist(self.user, title="Old", deleted_at=self._old_deleted_at())
+        old = _make_fixlist(self.user, username="Old", deleted_at=self._old_deleted_at())
 
         call_command("purge_old_trash", verbosity=0)
 
@@ -412,7 +412,7 @@ class FixlistPurgeOldTrashTests(TestCase):
 
     def test_purge_command_keeps_recent_fixlists(self):
         recent = _make_fixlist(
-            self.user, title="Recent", deleted_at=self._recent_deleted_at()
+            self.user, username="Recent", deleted_at=self._recent_deleted_at()
         )
 
         call_command("purge_old_trash", verbosity=0)

@@ -8,11 +8,11 @@ from .models import Fixlist
 class FixlistForm(forms.ModelForm):
     class Meta:
         model = Fixlist
-        fields = ['title', 'content', 'internal_note']
+        fields = ['username', 'content', 'internal_note']
         widgets = {
-            'title': forms.TextInput(attrs={
+            'username': forms.TextInput(attrs={
                 'class': 'form-control',
-                'placeholder': 'Enter a title for your fixlist'
+                'placeholder': 'Enter a username for your fixlist'
             }),
             'content': forms.Textarea(attrs={
                 'class': 'form-control',

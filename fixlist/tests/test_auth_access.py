@@ -17,7 +17,7 @@ class AuthenticationAndAccessTests(TestCase):
 
         self.fixlist = Fixlist.objects.create(
             owner=self.user,
-            title="Owner Fixlist",
+            username="Owner Fixlist",
             content="ioc-a\nioc-b",
             internal_note="Sensitive internal note",
         )
@@ -78,7 +78,7 @@ class AuthenticationAndAccessTests(TestCase):
         self.assertNotIn("email", form.fields)
 
     def test_dashboard_only_shows_user_fixlists(self):
-        Fixlist.objects.create(owner=self.other_user, title="Other", content="secret")
+        Fixlist.objects.create(owner=self.other_user, username="Other", content="secret")
         request = self.factory.get(reverse("dashboard"))
         request.user = self.user
 
@@ -86,7 +86,7 @@ class AuthenticationAndAccessTests(TestCase):
             response = dashboard_view(request)
 
         rendered_context = mock_render.call_args.args[2]
-        titles = {item.title for item in rendered_context["fixlists"]}
+        titles = {item.username for item in rendered_context["fixlists"]}
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Owner Fixlist", titles)

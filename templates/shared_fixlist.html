@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
 
-{% block title %}{{ fixlist.title }} - Fenris{% endblock %}
+{% block title %}{{ fixlist.username }} - Fenris{% endblock %}
 
-{% block page_context_label %}shared / {{ fixlist.title }}{% endblock %}
+{% block page_context_label %}shared / {{ fixlist.username }}{% endblock %}
 
 {% block header_context %}
-<div class="page-context">shared / {{ fixlist.title }}</div>
+<div class="page-context">shared / {{ fixlist.username }}</div>
 {% endblock %}
 
 {% block extra_css %}

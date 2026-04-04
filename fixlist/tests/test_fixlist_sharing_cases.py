@@ -20,7 +20,7 @@ class SharingAndDownloadTests(TestCase):
         self.factory = RequestFactory()
         self.fixlist = Fixlist.objects.create(
             owner=self.user,
-            title="Shareable",
+            username="Shareable",
             content="ioc-a\nioc-b",
             internal_note="Internal only",
         )

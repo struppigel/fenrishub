@@ -34,7 +34,7 @@ def get_default_rule_owner_id():
 
 class Fixlist(models.Model):
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fixlists')
-    title = models.CharField(max_length=255)
+    username = models.CharField(max_length=255)
     content = models.TextField()
     internal_note = models.TextField(blank=True)
     download_count = models.PositiveIntegerField(default=0)
@@ -48,7 +48,7 @@ class Fixlist(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f"{self.title} by {self.owner.username}"
+        return f"{self.username} by {self.owner.username}"
 
     def save(self, *args, **kwargs):
         if not self.share_token:
@@ -72,7 +72,7 @@ class AccessLog(models.Model):
         ordering = ['-accessed_at']
 
     def __str__(self):
-        return f"Access to {self.fixlist.title} at {self.accessed_at}"
+        return f"Access to {self.fixlist.username} at {self.accessed_at}"
 
 
 MEMORABLE_ID_ADJECTIVES = [

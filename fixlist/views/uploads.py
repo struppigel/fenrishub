@@ -408,6 +408,10 @@ def uploaded_log_content_api(request, upload_id):
         upload_id=upload_id,
         deleted_at__isnull=True,
     )
+
+    request.session['analyzer_last_upload_id'] = uploaded_log.upload_id
+    request.session['analyzer_last_reddit_username'] = uploaded_log.reddit_username
+
     return JsonResponse(
         {
             'upload_id': uploaded_log.upload_id,

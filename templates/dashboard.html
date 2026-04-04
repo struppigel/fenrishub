@@ -54,7 +54,7 @@
         {% for fixlist in fixlists %}
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title">{{ fixlist.title }}</div>
+                <div class="fixlist-title">{{ fixlist.username }}</div>
                 <div class="fixlist-meta">
                     created {{ fixlist.created_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }}
                 </div>

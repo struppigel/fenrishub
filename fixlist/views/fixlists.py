@@ -13,7 +13,7 @@ from django.http import JsonResponse, HttpResponse, Http404
 from django.db.models import F
 from django.utils import timezone
 
-from ..models import Fixlist, AccessLog
+from ..models import Fixlist, AccessLog, UploadedLog
 from .utils import _purge_old_trash, get_client_ip
 
 
@@ -22,20 +22,33 @@ from .utils import _purge_old_trash, get_client_ip
 def create_fixlist_view(request):
     """Create a new fixlist on a dedicated page."""
     if request.method == 'POST':
-        title = request.POST.get('title', 'Untitled')
+        username = request.POST.get('username', 'Unknown')
         content = request.POST.get('content', '')
         internal_note = request.POST.get('internal_note', '')
 
         fixlist = Fixlist.objects.create(
             owner=request.user,
-            title=title,
+            username=username,
             content=content,
             internal_note=internal_note,
         )
 
         return redirect('view_fixlist', pk=fixlist.pk)
 
-    return render(request, 'create_fixlist.html')
+    prefill_username = (request.session.pop('analyzer_last_reddit_username', '') or '').strip()
+    prefill_upload_id = (request.session.pop('analyzer_last_upload_id', '') or '').strip()
+
+    if not prefill_username and prefill_upload_id:
+        prefill_upload = UploadedLog.objects.filter(
+            upload_id=prefill_upload_id,
+            deleted_at__isnull=True,
+        ).only('reddit_username').first()
+        if prefill_upload and prefill_upload.reddit_username:
+            prefill_username = prefill_upload.reddit_username
+
+    return render(request, 'create_fixlist.html', {
+        'prefill_username': prefill_username,
+    })
 
 
 @login_required
@@ -50,15 +63,15 @@ def fixlists_trash_view(request):
             fixlist = get_object_or_404(Fixlist, pk=pk, owner=request.user, deleted_at__isnull=False)
             fixlist.deleted_at = None
             fixlist.save(update_fields=['deleted_at'])
-            messages.success(request, f'Fixlist "{fixlist.title}" restored.')
+            messages.success(request, f'Fixlist "{fixlist.username}" restored.')
             return redirect('fixlists_trash')
 
         if action == 'delete_permanent':
             pk = request.POST.get('pk', '').strip()
             fixlist = get_object_or_404(Fixlist, pk=pk, owner=request.user, deleted_at__isnull=False)
-            title = fixlist.title
+            username = fixlist.username
             fixlist.delete()
-            messages.success(request, f'Fixlist "{title}" permanently deleted.')
+            messages.success(request, f'Fixlist "{username}" permanently deleted.')
             return redirect('fixlists_trash')
 
         if action == 'empty_trash':
@@ -83,7 +96,7 @@ def view_fixlist(request, pk):
         action = request.POST.get('action', '')
         
         if action == 'update':
-            fixlist.title = request.POST.get('title', fixlist.title)
+            fixlist.username = request.POST.get('username', fixlist.username)
             fixlist.content = request.POST.get('content', fixlist.content)
             fixlist.internal_note = request.POST.get('internal_note', fixlist.internal_note)
             fixlist.save()
@@ -93,7 +106,7 @@ def view_fixlist(request, pk):
             fixlist.deleted_at = timezone.now()
             fixlist.save(update_fields=['deleted_at'])
             _purge_old_trash()
-            messages.success(request, f'Fixlist "{fixlist.title}" moved to trash.')
+            messages.success(request, f'Fixlist "{fixlist.username}" moved to trash.')
             return redirect('dashboard')
     
     share_url = request.build_absolute_uri(f'/share/{fixlist.share_token}/')
