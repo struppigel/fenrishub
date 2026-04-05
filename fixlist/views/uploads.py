@@ -220,7 +220,7 @@ def uploaded_logs_view(request):
     if search_query:
         pagination_params['q'] = search_query
     all_usernames = list_visible_uploads.filter(deleted_at__isnull=True).values_list('reddit_username', flat=True).distinct().order_by('reddit_username')
-    trash_count = get_updatable_uploads(request.user).filter(deleted_at__isnull=False).count()
+    trash_count = UploadedLog.objects.filter(deleted_at__isnull=False).count()
     page_content_hashes = {
         uploaded_log.content_hash
         for uploaded_log in page_obj.object_list
@@ -422,7 +422,7 @@ def uploads_trash_view(request):
         messages.error(request, 'Invalid action.')
         return redirect('uploads_trash')
 
-    trashed = action_scope_uploads.filter(deleted_at__isnull=False).order_by('-deleted_at')
+    trashed = UploadedLog.objects.filter(deleted_at__isnull=False).select_related('recipient_user').defer('content').order_by('-deleted_at')
     page_obj = Paginator(trashed, 25).get_page(request.GET.get('page'))
     return render(request, 'uploads_trash.html', {'uploads': page_obj.object_list, 'page_obj': page_obj})
 

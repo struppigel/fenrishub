@@ -169,6 +169,7 @@
         </div>
         <div class="fixlist-actions">
             <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn">view</a>
+            {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == request.user %}
             <form method="post" action="{% url 'uploads_trash' %}">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="restore">
@@ -181,6 +182,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Permanently delete this upload?');">delete</button>
             </form>
+            {% endif %}
         </div>
     </div>
     {% endfor %}

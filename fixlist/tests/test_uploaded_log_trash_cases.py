@@ -130,7 +130,7 @@ class TrashViewTests(TestCase):
 
         self.assertContains(response, 'trash (2)')
 
-    def test_uploads_list_trash_count_does_not_change_in_show_all_mode(self):
+    def test_uploads_list_trash_count_includes_all_users(self):
         from django.utils import timezone as tz
         self._make_log('own-active')
         self._make_log('own-trashed', deleted_at=tz.now())
@@ -139,8 +139,8 @@ class TrashViewTests(TestCase):
         default_response = self.client.get(reverse('uploaded_logs'))
         show_all_response = self.client.get(reverse('uploaded_logs'), {'show_all': '1'})
 
-        self.assertContains(default_response, 'trash (1)')
-        self.assertContains(show_all_response, 'trash (1)')
+        self.assertContains(default_response, 'trash (2)')
+        self.assertContains(show_all_response, 'trash (2)')
 
     def test_uploads_list_shows_no_count_when_trash_empty(self):
         self._make_log('active-log')
