@@ -296,7 +296,7 @@
             <div style="flex: 1;">
                 <div class="fixlist-title">{{ infection_case.case_id }}<span class="timeline-type-badge fixlist">META</span></div>
                 <div class="fixlist-meta">u/{{ infection_case.username }} | status {{ infection_case.get_status_display|lower }} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %} | Metadata</div>
-                <div class="fixlist-meta">desc {{ infection_case.symptom_description|default:'-'|truncatechars:120 }}</div>
+                <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word;">desc {{ infection_case.symptom_description|default:'-' }}</div>
                 <div class="fixlist-meta">url {{ infection_case.reference_url|default:'-'|truncatechars:120 }}</div>
                 <div class="button-group" style="justify-content: flex-end;">
                     {% if show_add_picker %}

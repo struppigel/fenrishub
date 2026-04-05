@@ -535,6 +535,7 @@
             {% if user.is_authenticated %}
             <div class="nav">
                 <div class="nav-left">
+                    <a href="{% url 'infection_cases' %}">cases</a>
                     <a href="{% url 'dashboard' %}">fixlists</a>
                     <a href="{% url 'uploaded_logs' %}">uploads</a>
                     <a href="{% url 'log_analyzer' %}">analyze</a>
