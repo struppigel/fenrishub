@@ -5,7 +5,18 @@ from django.template.response import TemplateResponse
 from django.urls import path, reverse
 
 from .analyzer import import_rules_from_lines
-from .models import AccessLog, ClassificationRule, Fixlist, FixlistSnippet, ParsedFilepathExclusion
+from .models import (
+    AccessLog,
+    ClassificationRule,
+    Fixlist,
+    FixlistSnippet,
+    InfectionCase,
+    InfectionCaseFixlist,
+    InfectionCaseLog,
+    InfectionCaseNote,
+    ParsedFilepathExclusion,
+    UploadedLog,
+)
 
 
 class RuleImportForm(forms.Form):
@@ -183,6 +194,96 @@ class FixlistSnippetAdmin(admin.ModelAdmin):
     search_fields = ('name', 'content')
     readonly_fields = ('created_at', 'updated_at')
     fields = ('owner', 'name', 'content', 'created_at', 'updated_at')
+
+
+@admin.register(UploadedLog)
+class UploadedLogAdmin(admin.ModelAdmin):
+    list_display = ('upload_id', 'reddit_username', 'log_type', 'is_incomplete', 'created_by', 'recipient_user', 'created_at')
+    list_filter = ('log_type', 'is_incomplete', 'created_at')
+    search_fields = ('upload_id', 'reddit_username', 'original_filename')
+    readonly_fields = ('upload_id', 'content_hash', 'created_at', 'updated_at')
+    fieldsets = (
+        (None, {
+            'fields': ('upload_id', 'reddit_username', 'original_filename', 'log_type', 'is_incomplete', 'created_by', 'recipient_user'),
+        }),
+        ('Content', {
+            'fields': ('content', 'content_hash'),
+            'classes': ('collapse',),
+        }),
+        ('Analysis Stats', {
+            'fields': (
+                'total_line_count',
+                'count_malware', 'count_pup', 'count_clean', 'count_warning',
+                'count_grayware', 'count_security', 'count_info', 'count_junk', 'count_unknown',
+                'fixlog_total', 'fixlog_success', 'fixlog_not_found', 'fixlog_error',
+            ),
+            'classes': ('collapse',),
+        }),
+        ('Timestamps', {'fields': ('created_at', 'updated_at', 'deleted_at')}),
+    )
+
+
+class InfectionCaseLogInline(admin.TabularInline):
+    model = InfectionCaseLog
+    extra = 0
+    raw_id_fields = ('uploaded_log', 'added_by')
+    readonly_fields = ('added_at',)
+
+
+class InfectionCaseFixlistInline(admin.TabularInline):
+    model = InfectionCaseFixlist
+    extra = 0
+    raw_id_fields = ('fixlist', 'added_by')
+    readonly_fields = ('added_at',)
+
+
+class InfectionCaseNoteInline(admin.TabularInline):
+    model = InfectionCaseNote
+    extra = 0
+    raw_id_fields = ('created_by', 'anchor_log', 'anchor_note')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(InfectionCase)
+class InfectionCaseAdmin(admin.ModelAdmin):
+    list_display = ('case_id', 'username', 'owner', 'status', 'auto_assign_new_items', 'created_at')
+    list_filter = ('status', 'auto_assign_new_items', 'created_at')
+    search_fields = ('case_id', 'username', 'symptom_description', 'owner__username')
+    readonly_fields = ('case_id', 'created_at', 'updated_at')
+    fields = ('case_id', 'owner', 'username', 'symptom_description', 'reference_url', 'status', 'auto_assign_new_items', 'created_at', 'updated_at', 'deleted_at')
+    inlines = [InfectionCaseLogInline, InfectionCaseFixlistInline, InfectionCaseNoteInline]
+
+
+@admin.register(InfectionCaseLog)
+class InfectionCaseLogAdmin(admin.ModelAdmin):
+    list_display = ('case', 'uploaded_log', 'added_by', 'added_at')
+    list_filter = ('added_at',)
+    search_fields = ('case__case_id', 'uploaded_log__upload_id')
+    raw_id_fields = ('case', 'uploaded_log', 'added_by')
+    readonly_fields = ('added_at',)
+
+
+@admin.register(InfectionCaseFixlist)
+class InfectionCaseFixlistAdmin(admin.ModelAdmin):
+    list_display = ('case', 'fixlist', 'added_by', 'added_at')
+    list_filter = ('added_at',)
+    search_fields = ('case__case_id',)
+    raw_id_fields = ('case', 'fixlist', 'added_by')
+    readonly_fields = ('added_at',)
+
+
+@admin.register(InfectionCaseNote)
+class InfectionCaseNoteAdmin(admin.ModelAdmin):
+    list_display = ('case', 'short_content', 'created_by', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('case__case_id', 'content')
+    raw_id_fields = ('case', 'created_by', 'anchor_log', 'anchor_note')
+    readonly_fields = ('created_at', 'updated_at')
+    fields = ('case', 'anchor_log', 'anchor_note', 'content', 'created_by', 'created_at', 'updated_at', 'deleted_at')
+
+    def short_content(self, obj):
+        return obj.content[:80] + '...' if len(obj.content) > 80 else obj.content
+    short_content.short_description = 'Content'
 
 
 @admin.register(ParsedFilepathExclusion)

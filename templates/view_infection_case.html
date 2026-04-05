@@ -2,7 +2,7 @@
 
 {% block title %}Infection Case {{ infection_case.case_id }} - Fenris{% endblock %}
 
-{% block page_context_label %}infection case{% endblock %}
+{% block page_context_label %}case{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -68,6 +68,10 @@
     position: relative;
 }
 
+.timeline-entry.metadata .fixlist-item {
+    position: relative;
+}
+
 .timeline-entry.fixlist .fixlist-item,
 .timeline-entry.metadata .fixlist-item {
     border-color: color-mix(in srgb, var(--la-status-s) 30%, var(--la-border));
@@ -76,20 +80,9 @@
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--la-status-s) 8%, transparent);
 }
 
-.timeline-entry.fixlist .fixlist-item {
-    text-align: right;
-}
-
-.timeline-entry.fixlist .fixlist-title {
-    padding-right: 20px;
-}
 
 .timeline-entry.metadata .fixlist-item {
     width: min(100%, 78%);
-}
-
-.timeline-entry.metadata.is-preview .fixlist-item {
-    text-align: right;
 }
 
 .timeline-entry .button-group.inline-unlink,
@@ -110,7 +103,8 @@
     gap: 4px;
 }
 
-.timeline-entry.fixlist .button-group.inline-unlink {
+.timeline-entry.fixlist .button-group.inline-unlink,
+.timeline-entry.metadata .button-group.inline-unlink {
     position: absolute;
     top: 6px;
     right: 6px;
@@ -150,10 +144,6 @@
     text-decoration: underline;
 }
 
-.timeline-entry.fixlist .timeline-type-badge {
-    margin-right: 0;
-    margin-left: 8px;
-}
 
 .add-note-button {
     width: 14px;
@@ -219,30 +209,80 @@
     }
 }
 
-.selection-columns {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 10px;
+.add-items-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
 }
 
-@media (min-width: 900px) {
-    .selection-columns {
-        grid-template-columns: 1fr 1fr;
-    }
+.add-items-backdrop.show {
+    display: flex;
 }
 
-.selection-box {
+.add-items-modal {
+    background-color: var(--la-bg-4);
+    border: 1px solid var(--la-border-strong);
+    max-width: 700px;
+    width: 90%;
+    height: 80vh;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+}
+
+.add-items-search {
+    width: 100%;
+    padding: 6px 8px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    background: var(--la-bg-secondary);
+    border: 1px solid var(--la-border);
+    color: var(--la-text-primary);
+    font-family: inherit;
+    flex-shrink: 0;
+}
+
+.add-items-list {
+    flex: 1;
+    overflow-y: auto;
     border: 1px solid var(--la-border);
     background: var(--la-bg-1);
-    padding: 10px;
-    max-height: 300px;
-    overflow-y: auto;
 }
 
-.selection-item {
-    display: block;
-    margin-bottom: 8px;
+.add-items-row {
+    display: flex;
+    align-items: center;
+    padding: 6px 10px;
     font-size: 12px;
+    border-bottom: 1px solid var(--la-border);
+    gap: 8px;
+}
+
+.add-items-row:last-child {
+    border-bottom: none;
+}
+
+.add-items-row .timeline-type-badge {
+    flex-shrink: 0;
+}
+
+.add-items-row-details {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.add-items-count {
+    font-size: 12px;
+    color: var(--la-text-muted);
+    margin-bottom: 8px;
+    min-height: 18px;
 }
 
 .case-meta-two-col {
@@ -272,11 +312,7 @@
 {% block content %}
 <div class="button-group" style="margin-bottom: 10px;">
     <a href="{% url 'infection_cases' %}"><button type="button">back to cases</button></a>
-    {% if not show_add_picker %}
-    <a href="{% url 'view_infection_case' infection_case.case_id %}?add=1"><button type="button">add logs/fixlists</button></a>
-    {% else %}
-    <a href="{% url 'view_infection_case' infection_case.case_id %}"><button type="button">hide add panel</button></a>
-    {% endif %}
+    <button type="button" onclick="document.getElementById('addItemsModal').classList.add('show')">add items</button>
     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="margin-left: auto;">
         {% csrf_token %}
         <input type="hidden" name="action" value="seed_username_items">
@@ -294,16 +330,12 @@
     <div class="timeline-entry metadata is-preview">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title">{{ infection_case.case_id }}<span class="timeline-type-badge fixlist">META</span></div>
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">META</span>{{ infection_case.case_id }}</div>
                 <div class="fixlist-meta">u/{{ infection_case.username }} | status {{ infection_case.get_status_display|lower }} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %} | Metadata</div>
-                <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word;">desc {{ infection_case.symptom_description|default:'-' }}</div>
-                <div class="fixlist-meta">url {{ infection_case.reference_url|default:'-'|truncatechars:120 }}</div>
-                <div class="button-group" style="justify-content: flex-end;">
-                    {% if show_add_picker %}
-                    <a href="{% url 'view_infection_case' infection_case.case_id %}?add=1&edit_meta=1"><button type="button">edit metadata</button></a>
-                    {% else %}
-                    <a href="{% url 'view_infection_case' infection_case.case_id %}?edit_meta=1"><button type="button">edit metadata</button></a>
-                    {% endif %}
+                <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word; color: var(--la-text-muted);">{{ infection_case.symptom_description|default:'-' }}</div>
+                <div class="fixlist-meta">{% if infection_case.reference_url %}<a href="{{ infection_case.reference_url }}" target="_blank" rel="noopener noreferrer">{{ infection_case.reference_url|truncatechars:120 }}</a>{% else %}-{% endif %}</div>
+                <div class="button-group inline-unlink">
+                    <a href="{% url 'view_infection_case' infection_case.case_id %}?edit_meta=1"><button type="button" class="add-note-button" title="edit">&#9998;</button></a>
                 </div>
             </div>
         </div>
@@ -312,7 +344,7 @@
     <div class="timeline-entry metadata">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title">{{ infection_case.case_id }} | u/{{ infection_case.username }}<span class="timeline-type-badge fixlist">META</span></div>
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">META</span>{{ infection_case.case_id }} | u/{{ infection_case.username }}</div>
                 <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="margin-top: 10px;">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="update_case">
@@ -347,11 +379,7 @@
 
                     <div class="button-group">
                         <button type="submit">save details</button>
-                        {% if show_add_picker %}
-                        <a href="{% url 'view_infection_case' infection_case.case_id %}?add=1"><button type="button">cancel</button></a>
-                        {% else %}
                         <a href="{% url 'view_infection_case' infection_case.case_id %}"><button type="button">cancel</button></a>
-                        {% endif %}
                     </div>
                 </form>
             </div>
@@ -413,7 +441,7 @@
             <div class="timeline-entry fixlist">
                 <div class="fixlist-item">
                     <div style="flex: 1;">
-                        <div class="fixlist-title"><span style="color: var(--la-text-muted);">now</span><span class="timeline-type-badge fixlist">NOTE</span></div>
+                        <div class="fixlist-title"><span class="timeline-type-badge fixlist">NOTE</span><span style="color: var(--la-text-muted);">now</span></div>
                         <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                             {% csrf_token %}
                             <input type="hidden" name="action" value="add_note">
@@ -435,17 +463,52 @@
         <div class="fixlist-item">
             <div style="flex: 1;">
                 <div class="fixlist-title"><span class="timeline-type-badge fixlist">NOTE</span></div>
-                <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word;">{{ note.content }}</div>
+                <div class="note-display-{{ note.pk }}">
+                    <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word;">{{ note.content }}</div>
+                </div>
+                <div class="note-edit-{{ note.pk }}" style="display: none;">
+                    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="edit_note">
+                        <input type="hidden" name="note_id" value="{{ note.pk }}">
+                        <textarea name="note_content" style="width: 100%; font-size: 0.85rem; padding: 6px; min-height: 60px; resize: vertical; background: var(--la-bg-secondary); border: 1px solid var(--la-border); color: var(--la-text-primary); border-radius: 3px; font-family: inherit;">{{ note.content }}</textarea>
+                        <div class="note-form-buttons">
+                            <button type="button" onclick="toggleEditNote('{{ note.pk }}')">cancel</button>
+                            <button type="submit">save</button>
+                        </div>
+                    </form>
+                </div>
                 <div class="button-group inline-unlink">
+                    <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note">+</button>
+                    <button type="button" class="add-note-button" onclick="toggleEditNote('{{ note.pk }}')" title="edit note">&#9998;</button>
                     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="delete_note">
                         <input type="hidden" name="note_id" value="{{ note.pk }}">
-                        <button type="submit" class="unlink-x-button" aria-label="delete note" title="delete note">&times;</button>
+                        <button type="submit" class="unlink-x-button" aria-label="delete note" title="delete note" onclick="return confirm('Delete this note?')">&times;</button>
                     </form>
                 </div>
             </div>
         </div>
+        </div>
+        <div class="note-form-wrapper">
+            <div class="timeline-entry fixlist">
+                <div class="fixlist-item">
+                    <div style="flex: 1;">
+                        <div class="fixlist-title"><span class="timeline-type-badge fixlist">NOTE</span><span style="color: var(--la-text-muted);">now</span></div>
+                        <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="add_note">
+                            <input type="hidden" name="anchor_note_id" value="{{ note.pk }}">
+                            <textarea name="note_content" placeholder="write your note..."></textarea>
+                            <div class="note-form-buttons">
+                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.add-note-button'))">cancel</button>
+                                <button type="submit">save</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
         </div>
         {% endwith %}
         {% else %}
@@ -453,7 +516,7 @@
         <div class="timeline-entry fixlist">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title"><a href="{% url 'view_fixlist' fixlist.pk %}">#{{ fixlist.pk }}</a><span class="timeline-type-badge fixlist">FIXLIST</span></div>
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">FIXLIST</span><a href="{% url 'view_fixlist' fixlist.pk %}">{{ fixlist.share_token }}</a></div>
                 <div class="fixlist-meta">Fixlist.txt | u/{{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }} | Fixlist</div>
                 <div class="fixlist-meta">lines {{ item.line_count }}</div>
                 <div class="button-group inline-unlink">
@@ -472,7 +535,7 @@
             <div class="timeline-entry fixlist">
                 <div class="fixlist-item">
                     <div style="flex: 1;">
-                        <div class="fixlist-title"><span style="color: var(--la-text-muted);">now</span><span class="timeline-type-badge fixlist">NOTE</span></div>
+                        <div class="fixlist-title"><span class="timeline-type-badge fixlist">NOTE</span><span style="color: var(--la-text-muted);">now</span></div>
                         <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                             {% csrf_token %}
                             <input type="hidden" name="action" value="add_note">
@@ -494,43 +557,36 @@
     {% endif %}
 </div>
 
-{% if show_add_picker %}
-<div class="case-card">
-    <h3>add selected items</h3>
-    <form method="post" action="{% url 'infection_case_add_items' infection_case.case_id %}">
-        {% csrf_token %}
-        <div class="selection-columns">
-            <div class="selection-box">
-                <h3>logs</h3>
+<div id="addItemsModal" class="add-items-backdrop" role="dialog" aria-modal="true" aria-label="Add items">
+    <div class="add-items-modal">
+        <h3>add items to case</h3>
+        <input type="text" class="add-items-search" id="addItemsSearch" placeholder="search by id, username, type..." autocomplete="off">
+        <div class="add-items-count" id="addItemsCount"></div>
+        <form method="post" action="{% url 'infection_case_add_items' infection_case.case_id %}" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+            {% csrf_token %}
+            <div class="add-items-list" id="addItemsList">
                 {% for uploaded_log in selectable_uploads %}
-                <label class="selection-item">
+                <label class="add-items-row" data-search="{{ uploaded_log.upload_id }} {{ uploaded_log.reddit_username }} {{ uploaded_log.log_type }} {{ uploaded_log.original_filename }}">
                     <input type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}">
-                    {{ uploaded_log.upload_id }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}
+                    <span class="timeline-type-badge log">{{ uploaded_log.log_type }}</span>
+                    <span class="add-items-row-details">{{ uploaded_log.upload_id }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}</span>
                 </label>
-                {% empty %}
-                <div class="muted">no selectable logs.</div>
                 {% endfor %}
-            </div>
-
-            <div class="selection-box">
-                <h3>fixlists</h3>
                 {% for fixlist in selectable_fixlists %}
-                <label class="selection-item">
+                <label class="add-items-row" data-search="{{ fixlist.share_token }} {{ fixlist.username }} fixlist">
                     <input type="checkbox" name="selected_fixlist_ids" value="{{ fixlist.pk }}">
-                    #{{ fixlist.pk }} | u/{{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }}
+                    <span class="timeline-type-badge fixlist">FIXLIST</span>
+                    <span class="add-items-row-details">{{ fixlist.share_token }} | u/{{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }}</span>
                 </label>
-                {% empty %}
-                <div class="muted">no selectable fixlists.</div>
                 {% endfor %}
             </div>
-        </div>
-
-        <div class="button-group" style="margin-top: 10px;">
-            <button type="submit">add selected</button>
-        </div>
-    </form>
+            <div class="button-group" style="margin-top: 10px;">
+                <button type="submit">add selected</button>
+                <button type="button" onclick="document.getElementById('addItemsModal').classList.remove('show')">cancel</button>
+            </div>
+        </form>
+    </div>
 </div>
-{% endif %}
 
 <script>
 function toggleNoteForm(button) {
@@ -556,6 +612,20 @@ function toggleNoteForm(button) {
     }
 }
 
+function toggleEditNote(noteId) {
+    var display = document.querySelector('.note-display-' + noteId);
+    var edit = document.querySelector('.note-edit-' + noteId);
+    if (edit.style.display === 'none') {
+        display.style.display = 'none';
+        edit.style.display = 'block';
+        var textarea = edit.querySelector('textarea');
+        if (textarea) textarea.focus();
+    } else {
+        display.style.display = '';
+        edit.style.display = 'none';
+    }
+}
+
 document.addEventListener('click', function(event) {
     const isButton = event.target.classList && event.target.classList.contains('add-note-button');
     const isFormChild = event.target.closest('.note-form-wrapper');
@@ -566,5 +636,40 @@ document.addEventListener('click', function(event) {
         });
     }
 });
+
+document.getElementById('addItemsModal').addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('show');
+});
+
+(function() {
+    var search = document.getElementById('addItemsSearch');
+    var rows = document.querySelectorAll('.add-items-row');
+    var countEl = document.getElementById('addItemsCount');
+
+    function updateCount() {
+        var visible = 0;
+        var checked = 0;
+        rows.forEach(function(row) {
+            if (row.style.display !== 'none') visible++;
+            if (row.querySelector('input[type=checkbox]').checked) checked++;
+        });
+        countEl.textContent = visible + ' item' + (visible !== 1 ? 's' : '') + (checked ? ' (' + checked + ' selected)' : '');
+    }
+
+    search.addEventListener('input', function() {
+        var query = this.value.toLowerCase();
+        rows.forEach(function(row) {
+            var text = (row.getAttribute('data-search') || '').toLowerCase();
+            row.style.display = text.indexOf(query) !== -1 ? '' : 'none';
+        });
+        updateCount();
+    });
+
+    rows.forEach(function(row) {
+        row.querySelector('input[type=checkbox]').addEventListener('change', updateCount);
+    });
+
+    updateCount();
+})();
 </script>
 {% endblock %}

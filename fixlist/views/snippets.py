@@ -65,15 +65,26 @@ def snippets_view(request):
             messages.success(request, f'Snippet "{name}" deleted.')
             return redirect('snippets')
 
-    filter_mode = request.GET.get('filter', 'own')
-    if filter_mode == 'shared':
-        snippets = FixlistSnippet.objects.filter(is_shared=True).select_related('owner')
-    elif filter_mode == 'all':
+    show_all = request.GET.get('show_all', '').strip() in {'1', 'true', 'on', 'yes'}
+    search_query = request.GET.get('q', '').strip()
+
+    if show_all:
         snippets = FixlistSnippet.objects.filter(Q(owner=request.user) | Q(is_shared=True)).select_related('owner')
     else:
-        filter_mode = 'own'
-        snippets = FixlistSnippet.objects.filter(owner=request.user)
-    return render(request, 'snippets.html', {'snippets': snippets, 'filter_mode': filter_mode})
+        snippets = FixlistSnippet.objects.filter(owner=request.user).select_related('owner')
+
+    if search_query:
+        snippets = snippets.filter(
+            Q(name__icontains=search_query)
+            | Q(content__icontains=search_query)
+            | Q(owner__username__icontains=search_query)
+        )
+
+    return render(request, 'snippets.html', {
+        'snippets': snippets,
+        'show_all': show_all,
+        'search_query': search_query,
+    })
 
 
 @login_required

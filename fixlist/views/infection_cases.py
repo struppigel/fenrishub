@@ -65,10 +65,11 @@ def _build_case_timeline(case):
         )
 
     # Separate anchored and unanchored notes.
-    anchored_notes = {}  # anchor InfectionCaseLog pk -> list of note dicts
+    log_anchored_notes = {}  # anchor InfectionCaseLog pk -> list of note dicts
+    note_anchored_notes = {}  # anchor InfectionCaseNote pk -> list of note dicts
     unanchored_notes = []
 
-    for note in case.note_entries.select_related('anchor_log').all():
+    for note in case.note_entries.select_related('anchor_log', 'anchor_note').all():
         if note.deleted_at is not None:
             continue
         note_dict = {
@@ -77,20 +78,33 @@ def _build_case_timeline(case):
             'note': note,
         }
         if note.anchor_log_id is not None:
-            anchored_notes.setdefault(note.anchor_log_id, []).append(note_dict)
+            log_anchored_notes.setdefault(note.anchor_log_id, []).append(note_dict)
+        elif note.anchor_note_id is not None:
+            note_anchored_notes.setdefault(note.anchor_note_id, []).append(note_dict)
         else:
             unanchored_notes.append(note_dict)
 
     base_items.extend(unanchored_notes)
     base_items.sort(key=lambda item: item['created_at'])
 
-    # Splice anchored notes immediately after their anchor log entry.
+    # Recursively collect notes anchored to a given note.
+    def _collect_note_children(note_pk):
+        children = []
+        for pinned in note_anchored_notes.get(note_pk, []):
+            children.append(pinned)
+            children.extend(_collect_note_children(pinned['note'].pk))
+        return children
+
+    # Splice anchored notes immediately after their anchor entry.
     timeline_items = []
     for item in base_items:
         timeline_items.append(item)
         if item['item_type'] == 'log':
-            for pinned in anchored_notes.get(item['_log_link_pk'], []):
+            for pinned in log_anchored_notes.get(item['_log_link_pk'], []):
                 timeline_items.append(pinned)
+                timeline_items.extend(_collect_note_children(pinned['note'].pk))
+        if item['item_type'] == 'note':
+            timeline_items.extend(_collect_note_children(item['note'].pk))
 
     # Strip internal helper key before returning.
     for item in timeline_items:
@@ -114,6 +128,9 @@ def _link_case_items(case, logs, fixlists, added_by):
         ],
         ignore_conflicts=True,
     )
+    unassigned_log_pks = [log.pk for log in logs if log.recipient_user_id is None]
+    if unassigned_log_pks:
+        UploadedLog.objects.filter(pk__in=unassigned_log_pks).update(recipient_user=case.owner)
 
 
 def _selected_items_for_case_request(request, case):
@@ -238,7 +255,6 @@ def create_infection_case_view(request):
 @require_http_methods(['GET', 'POST'])
 def view_infection_case(request, case_id):
     infection_case = get_object_or_404(_case_queryset_for_user(request.user), case_id=case_id)
-    show_add_picker = (request.GET.get('add') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
     show_metadata_edit = (request.GET.get('edit_meta') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
 
     if request.method == 'POST':
@@ -289,16 +305,25 @@ def view_infection_case(request, case_id):
                 messages.error(request, 'Note cannot be empty.')
                 return redirect('view_infection_case', case_id=infection_case.case_id)
             anchor_log_upload_id = (request.POST.get('anchor_log_upload_id') or '').strip()
+            anchor_note_id = (request.POST.get('anchor_note_id') or '').strip()
             anchor_log = None
+            anchor_note = None
             if anchor_log_upload_id:
                 anchor_log = InfectionCaseLog.objects.filter(
                     case=infection_case,
                     uploaded_log__upload_id=anchor_log_upload_id,
                 ).first()
+            elif anchor_note_id:
+                anchor_note = InfectionCaseNote.objects.filter(
+                    case=infection_case,
+                    pk=anchor_note_id,
+                    deleted_at__isnull=True,
+                ).first()
             InfectionCaseNote.objects.create(
                 case=infection_case,
                 content=note_content,
                 anchor_log=anchor_log,
+                anchor_note=anchor_note,
                 created_by=request.user,
             )
             messages.success(request, 'Note added to timeline.')
@@ -326,6 +351,25 @@ def view_infection_case(request, case_id):
                 messages.success(request, f'Fixlist #{fixlist_id} was removed from this case.')
             else:
                 messages.error(request, 'The selected fixlist is not linked to this case.')
+            return redirect('view_infection_case', case_id=infection_case.case_id)
+
+        if action == 'edit_note':
+            note_id = (request.POST.get('note_id') or '').strip()
+            note_content = (request.POST.get('note_content') or '').strip()
+            if not note_content:
+                messages.error(request, 'Note cannot be empty.')
+                return redirect('view_infection_case', case_id=infection_case.case_id)
+            try:
+                note = InfectionCaseNote.objects.get(
+                    case=infection_case,
+                    pk=note_id,
+                    deleted_at__isnull=True,
+                )
+                note.content = note_content
+                note.save()
+                messages.success(request, 'Note updated.')
+            except InfectionCaseNote.DoesNotExist:
+                messages.error(request, 'The selected note does not exist or has already been deleted.')
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
         if action == 'delete_note':
@@ -362,17 +406,14 @@ def view_infection_case(request, case_id):
 
     timeline_items = _build_case_timeline(infection_case)
 
-    selectable_uploads = []
-    selectable_fixlists = []
-    if show_add_picker:
-        available_uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True)
-        available_fixlists = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True)
+    available_uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True)
+    available_fixlists = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True)
 
-        linked_upload_ids = {uploaded_log.upload_id for uploaded_log in linked_logs}
-        linked_fixlist_ids = {fixlist.pk for fixlist in linked_fixlists}
+    linked_upload_ids = {uploaded_log.upload_id for uploaded_log in linked_logs}
+    linked_fixlist_ids = {fixlist.pk for fixlist in linked_fixlists}
 
-        selectable_uploads = available_uploads.exclude(upload_id__in=linked_upload_ids)
-        selectable_fixlists = available_fixlists.exclude(pk__in=linked_fixlist_ids)
+    selectable_uploads = available_uploads.exclude(upload_id__in=linked_upload_ids)
+    selectable_fixlists = available_fixlists.exclude(pk__in=linked_fixlist_ids)
 
     return render(
         request,
@@ -383,7 +424,6 @@ def view_infection_case(request, case_id):
             'selectable_uploads': selectable_uploads,
             'selectable_fixlists': selectable_fixlists,
             'case_status_choices': InfectionCase.STATUS_CHOICES,
-            'show_add_picker': show_add_picker,
             'show_metadata_edit': show_metadata_edit,
         },
     )

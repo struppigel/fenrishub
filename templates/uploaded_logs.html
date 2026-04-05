@@ -155,7 +155,8 @@
 </form>
 
 <form method="get" action="{% url 'uploaded_logs' %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">
-    <select name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 180px;">
+    <input type="text" name="q" value="{{ search_query }}" placeholder="search by user, upload id, assignee" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
+    <select id="uploaderSelect" name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 180px;">
         <option value="">all users</option>
         {% for username in all_usernames %}
         <option value="{{ username }}" {% if username == username_filter %}selected{% endif %}>u/{{ username }}</option>
@@ -298,6 +299,7 @@
 {% block extra_js %}
 <script>
 const uploadsListCache = {};
+const uploadsSelectCache = {};
 const uploadsPrefetchPromises = {};
 
 function uploadsModeKey(showAll) {
@@ -336,6 +338,10 @@ async function ensureUploadsModeCached(showAll) {
                 throw new Error('uploads list container missing in response');
             }
             uploadsListCache[key] = remoteContainer.innerHTML;
+            const remoteSelect = doc.getElementById('uploaderSelect');
+            if (remoteSelect) {
+                uploadsSelectCache[key] = remoteSelect.innerHTML;
+            }
         })
         .finally(() => {
             delete uploadsPrefetchPromises[key];
@@ -363,6 +369,10 @@ async function handleAllChannelsToggle(checkbox) {
     try {
         await ensureUploadsModeCached(showAll);
         uploadsListContainer.innerHTML = uploadsListCache[targetKey];
+        const uploaderSelect = document.getElementById('uploaderSelect');
+        if (uploaderSelect && uploadsSelectCache[targetKey]) {
+            uploaderSelect.innerHTML = uploadsSelectCache[targetKey];
+        }
         updateUploadsModeInUrl(showAll);
         ensureUploadsModeCached(!showAll).catch(() => {});
     } catch (error) {
@@ -380,6 +390,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     uploadsListCache[uploadsModeKey(currentShowAll)] = uploadsListContainer.innerHTML;
+    const uploaderSelect = document.getElementById('uploaderSelect');
+    if (uploaderSelect) {
+        uploadsSelectCache[uploadsModeKey(currentShowAll)] = uploaderSelect.innerHTML;
+    }
     ensureUploadsModeCached(!currentShowAll).catch(() => {});
 
     toggle.addEventListener('change', function() {

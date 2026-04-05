@@ -190,6 +190,7 @@ def uploaded_logs_view(request):
 
     username_filter = request.GET.get('u', '').strip()
     show_all = request.GET.get('show_all', '').strip() in {'1', 'true', 'on', 'yes'}
+    search_query = request.GET.get('q', '').strip()
 
     list_visible_uploads = (
         UploadedLog.objects.all()
@@ -200,12 +201,21 @@ def uploaded_logs_view(request):
     uploads = list_visible_uploads.filter(deleted_at__isnull=True).select_related('recipient_user').defer('content')
     if username_filter:
         uploads = uploads.filter(reddit_username=username_filter)
+    if search_query:
+        from django.db.models import Q
+        uploads = uploads.filter(
+            Q(upload_id__icontains=search_query)
+            | Q(reddit_username__icontains=search_query)
+            | Q(recipient_user__username__icontains=search_query)
+        )
     page_obj = Paginator(uploads, 25).get_page(request.GET.get('page'))
     pagination_params = {}
     if username_filter:
         pagination_params['u'] = username_filter
     if show_all:
         pagination_params['show_all'] = '1'
+    if search_query:
+        pagination_params['q'] = search_query
     all_usernames = list_visible_uploads.filter(deleted_at__isnull=True).values_list('reddit_username', flat=True).distinct().order_by('reddit_username')
     trash_count = get_updatable_uploads(request.user).filter(deleted_at__isnull=False).count()
     page_content_hashes = {
@@ -232,6 +242,7 @@ def uploaded_logs_view(request):
         'duplicate_hashes': duplicate_hashes,
         'helper_upload_url': helper_upload_url,
         'show_all': show_all,
+        'search_query': search_query,
         'pagination_query': urlencode(pagination_params),
     })
 

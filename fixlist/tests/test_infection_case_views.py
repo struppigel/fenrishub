@@ -190,6 +190,51 @@ class InfectionCaseViewTests(TestCase):
         self.assertEqual(InfectionCaseLog.objects.filter(case=case).count(), 2)
         self.assertEqual(InfectionCaseFixlist.objects.filter(case=case).count(), 1)
 
+    def test_seed_case_assigns_unassigned_logs_to_case_owner(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        general_log = UploadedLog.objects.create(
+            upload_id='seed-general-assign',
+            reddit_username='target_user',
+            original_filename='general.txt',
+            content='content',
+            recipient_user=None,
+        )
+
+        self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'seed_username_items'},
+        )
+
+        general_log.refresh_from_db()
+        self.assertEqual(general_log.recipient_user, self.user)
+
+    def test_linking_unassigned_log_to_case_assigns_to_case_owner(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        unassigned_log = UploadedLog.objects.create(
+            upload_id='unassigned-log',
+            reddit_username='target_user',
+            original_filename='log.txt',
+            content='content',
+            recipient_user=None,
+        )
+        assigned_log = UploadedLog.objects.create(
+            upload_id='assigned-log',
+            reddit_username='target_user',
+            original_filename='log2.txt',
+            content='content',
+            recipient_user=self.user,
+        )
+
+        self.client.post(
+            reverse('infection_case_add_items', args=[case.case_id]),
+            {'selected_upload_ids': [unassigned_log.upload_id, assigned_log.upload_id]},
+        )
+
+        unassigned_log.refresh_from_db()
+        assigned_log.refresh_from_db()
+        self.assertEqual(unassigned_log.recipient_user, self.user)
+        self.assertEqual(assigned_log.recipient_user, self.user)
+
     def test_add_items_requires_confirmation_for_mismatched_username(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         mismatched_log = UploadedLog.objects.create(
@@ -242,7 +287,8 @@ class InfectionCaseViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode('utf-8')
-        self.assertLess(html.find('timeline-log'), html.find(f'#{fixlist.pk}'))
+        fixlist.refresh_from_db()
+        self.assertLess(html.find('timeline-log'), html.find(fixlist.share_token))
 
     def test_add_note_creates_right_side_timeline_item(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
@@ -582,6 +628,45 @@ class InfectionCaseViewTests(TestCase):
         mismatched_fixlist.refresh_from_db()
         self.assertEqual(mismatched_fixlist.username, 'target_user')
         self.assertTrue(InfectionCaseFixlist.objects.filter(case=case, fixlist=mismatched_fixlist).exists())
+
+    def test_edit_note_updates_content(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        note = InfectionCaseNote.objects.create(case=case, content='original text', created_by=self.user)
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'edit_note', 'note_id': str(note.pk), 'note_content': 'updated text'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        note.refresh_from_db()
+        self.assertEqual(note.content, 'updated text')
+
+    def test_edit_note_rejects_empty_content(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        note = InfectionCaseNote.objects.create(case=case, content='original text', created_by=self.user)
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'edit_note', 'note_id': str(note.pk), 'note_content': '   '},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        note.refresh_from_db()
+        self.assertEqual(note.content, 'original text')
+
+    def test_delete_note_soft_deletes(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        note = InfectionCaseNote.objects.create(case=case, content='to be deleted', created_by=self.user)
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'delete_note', 'note_id': str(note.pk)},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        note.refresh_from_db()
+        self.assertIsNotNone(note.deleted_at)
 
     def test_other_user_cannot_view_or_delete_case_they_do_not_own(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)

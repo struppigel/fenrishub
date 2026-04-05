@@ -485,3 +485,51 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertIn('alice_user', list(response.context['all_usernames']))
         self.assertIn('bob_user', list(response.context['all_usernames']))
 
+    def test_search_filters_by_upload_id(self):
+        UploadedLog.objects.create(
+            upload_id='amber-wolf', reddit_username='user1',
+            original_filename='a.txt', content='aaa', recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='azure-bear', reddit_username='user2',
+            original_filename='b.txt', content='bbb', recipient_user=self.user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'q': 'amber'})
+
+        self.assertContains(response, 'amber-wolf')
+        self.assertNotContains(response, 'azure-bear')
+
+    def test_search_filters_by_reddit_username(self):
+        UploadedLog.objects.create(
+            upload_id='amber-wolf', reddit_username='alice_user',
+            original_filename='a.txt', content='aaa', recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='azure-bear', reddit_username='bob_user',
+            original_filename='b.txt', content='bbb', recipient_user=self.user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'q': 'bob_user'})
+
+        self.assertContains(response, 'azure-bear')
+        self.assertNotContains(response, 'amber-wolf')
+
+    def test_search_filters_by_assignee_username(self):
+        UploadedLog.objects.create(
+            upload_id='amber-wolf', reddit_username='user1',
+            original_filename='a.txt', content='aaa', recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='azure-bear', reddit_username='user2',
+            original_filename='b.txt', content='bbb', recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'q': 'bob', 'show_all': '1'})
+
+        self.assertContains(response, 'azure-bear')
+        self.assertNotContains(response, 'amber-wolf')
+

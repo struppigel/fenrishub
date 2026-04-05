@@ -504,6 +504,7 @@ class InfectionCaseFixlist(models.Model):
 class InfectionCaseNote(models.Model):
     case = models.ForeignKey(InfectionCase, on_delete=models.CASCADE, related_name='note_entries')
     anchor_log = models.ForeignKey('InfectionCaseLog', null=True, blank=True, on_delete=models.SET_NULL, related_name='pinned_notes')
+    anchor_note = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='pinned_notes')
     content = models.TextField()
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='infection_case_notes')
     created_at = models.DateTimeField(auto_now_add=True)

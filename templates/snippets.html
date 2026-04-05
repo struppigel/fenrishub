@@ -104,33 +104,55 @@
         cursor: pointer;
     }
 
-    .filter-tabs {
+    .snippets-toolbar {
         display: flex;
-        gap: 4px;
+        gap: 8px;
         margin-bottom: 10px;
         align-items: center;
     }
 
-    .filter-tabs .spacer {
-        flex: 1;
+    .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 34px;
+        height: 18px;
     }
 
-    .filter-tabs a {
-        padding: 4px 10px;
-        font-size: 12px;
-        color: var(--la-text-muted);
-        text-decoration: none;
+    .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+
+    .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background: var(--la-bg-2);
         border: 1px solid var(--la-border);
-        background-color: var(--la-bg-1);
+        transition: 0.2s;
+        border-radius: 999px;
     }
 
-    .filter-tabs a:hover {
-        color: var(--la-text-primary);
+    .toggle-slider:before {
+        position: absolute;
+        content: "";
+        width: 12px;
+        height: 12px;
+        left: 2px;
+        top: 2px;
+        background: var(--la-text-primary);
+        transition: 0.2s;
+        border-radius: 50%;
     }
 
-    .filter-tabs a.active {
-        color: var(--la-text-primary);
-        border-color: var(--la-text-primary);
+    .toggle-switch input:checked + .toggle-slider {
+        background: color-mix(in srgb, var(--la-status-c) 20%, var(--la-bg-2));
+        border-color: var(--la-status-c);
+    }
+
+    .toggle-switch input:checked + .toggle-slider:before {
+        transform: translateX(16px);
     }
 
     .snippet-owner {
@@ -238,19 +260,24 @@
 
     <div class="divider"></div>
 
-    <div class="filter-tabs">
-        <a href="?filter=own" {% if filter_mode == 'own' %}class="active"{% endif %}>own</a>
-        <a href="?filter=shared" {% if filter_mode == 'shared' %}class="active"{% endif %}>shared</a>
-        <a href="?filter=all" {% if filter_mode == 'all' %}class="active"{% endif %}>all</a>
-        <span class="spacer"></span>
+    <form method="get" action="{% url 'snippets' %}" class="snippets-toolbar">
+        <input type="text" name="q" value="{{ search_query }}" placeholder="search by name, content, owner" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
+        <label style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 0; color: var(--la-text-primary); font-size: 12px;">
+            <span>all snippets</span>
+            <span class="toggle-switch">
+                <input type="checkbox" name="show_all" value="1" {% if show_all %}checked{% endif %} onchange="this.form.submit()">
+                <span class="toggle-slider"></span>
+            </span>
+        </label>
+        <span style="flex: 1;"></span>
         <button type="button" onclick="showCreate()">add snippet</button>
-    </div>
+    </form>
 
     {% if snippets %}
         {% for snippet in snippets %}
         <div class="snippet-item">
             <div class="snippet-header">
-                <span class="snippet-name">{{ snippet.name }}{% if snippet.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if filter_mode != 'own' %} <span class="snippet-owner">by {{ snippet.owner.username }}</span>{% endif %}</span>
+                <span class="snippet-name">{{ snippet.name }}{% if snippet.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if show_all %} <span class="snippet-owner">by {{ snippet.owner.username }}</span>{% endif %}</span>
                 <div class="snippet-actions">
                     <button type="button" class="action-btn view-btn" data-name="{{ snippet.name|escapejs }}" data-content-id="snippet-content-{{ snippet.pk }}">view</button>
                     {% if snippet.owner_id == request.user.id %}
