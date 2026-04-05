@@ -150,7 +150,11 @@ class InfectionCaseViewTests(TestCase):
         self.assertContains(response, 'id="uploadedLogUsernames"')
         self.assertContains(response, 'value="own_user"')
         self.assertContains(response, 'value="general_user"')
-        self.assertNotContains(response, 'value="other_helper_user"')
+        # other_helper_user excluded from scoped datalist but included in all-usernames datalist
+        scoped_choices = response.context['username_choices']
+        all_choices = response.context['all_username_choices']
+        self.assertNotIn('other_helper_user', scoped_choices)
+        self.assertIn('other_helper_user', all_choices)
 
     def test_seed_case_adds_all_scoped_items_for_case_username(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
@@ -857,7 +861,7 @@ class InfectionCaseTrainingModeTests(TestCase):
 
         response = self.client.get(reverse('infection_cases'))
 
-        self.assertContains(response, 'training')
+        self.assertContains(response, 'observe')
 
     def test_training_shown_in_case_detail(self):
         case = InfectionCase.objects.create(
@@ -868,4 +872,4 @@ class InfectionCaseTrainingModeTests(TestCase):
 
         response = self.client.get(reverse('view_infection_case', args=[case.case_id]))
 
-        self.assertContains(response, 'training')
+        self.assertContains(response, 'observe')

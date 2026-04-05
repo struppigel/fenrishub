@@ -211,6 +211,12 @@ def infection_cases_view(request):
 @require_http_methods(['GET', 'POST'])
 def create_infection_case_view(request):
     username_choices = _available_case_usernames_for_user(request.user)
+    all_username_choices = list(
+        UploadedLog.objects.filter(deleted_at__isnull=True)
+        .values_list('reddit_username', flat=True)
+        .distinct()
+        .order_by('reddit_username')
+    )
 
     if request.method == 'POST':
         username = (request.POST.get('username') or '').strip()
@@ -244,6 +250,7 @@ def create_infection_case_view(request):
                     'prefill_auto_assign_new_items': auto_assign_new_items,
                     'prefill_is_training': is_training,
                     'username_choices': username_choices,
+                    'all_username_choices': all_username_choices,
                 },
             )
 
@@ -256,6 +263,7 @@ def create_infection_case_view(request):
         'create_infection_case.html',
         {
             'username_choices': username_choices,
+            'all_username_choices': all_username_choices,
             'prefill_auto_assign_new_items': True,
             'prefill_is_training': True,
         },

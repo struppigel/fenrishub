@@ -332,7 +332,7 @@
         <div class="fixlist-item">
             <div style="flex: 1;">
                 <div class="fixlist-title"><span class="timeline-type-badge fixlist">META</span>{{ infection_case.case_id }}</div>
-                <div class="fixlist-meta">u/{{ infection_case.username }} | status {{ infection_case.get_status_display|lower }}{% if infection_case.is_training %} | <span style="color: var(--la-status-w);">training</span>{% else %} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %}{% endif %} | Metadata</div>
+                <div class="fixlist-meta">u/{{ infection_case.username }} | status {{ infection_case.get_status_display|lower }}{% if infection_case.is_training %} | <span style="color: var(--la-status-i);">observe</span>{% else %} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %}{% endif %} | Metadata</div>
                 <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word; color: var(--la-text-muted);">{{ infection_case.symptom_description|default:'-' }}</div>
                 <div class="fixlist-meta">{% if infection_case.reference_url %}<a href="{{ infection_case.reference_url }}" target="_blank" rel="noopener noreferrer">{{ infection_case.reference_url|truncatechars:120 }}</a>{% else %}-{% endif %}</div>
                 <div class="button-group inline-unlink">

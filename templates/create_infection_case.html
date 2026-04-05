@@ -25,9 +25,14 @@
 
         <div class="form-group">
             <label for="username">username</label>
-            <input type="text" id="username" name="username" list="uploadedLogUsernames" value="{{ prefill_username|default:''|escape }}" placeholder="Enter username..." required>
+            <input type="text" id="username" name="username" list="uploadedLogUsernames" value="{{ prefill_username|default:''|escape }}" placeholder="Enter username..." autocomplete="off" required>
             <datalist id="uploadedLogUsernames">
                 {% for username_choice in username_choices %}
+                <option value="{{ username_choice }}"></option>
+                {% endfor %}
+            </datalist>
+            <datalist id="allUploadedLogUsernames">
+                {% for username_choice in all_username_choices %}
                 <option value="{{ username_choice }}"></option>
                 {% endfor %}
             </datalist>
@@ -58,15 +63,18 @@
             var radios = document.querySelectorAll('input[name="is_training"]');
             var autoGroup = document.getElementById('autoAssignGroup');
             var autoCheckbox = document.getElementById('autoAssignCheckbox');
+            var usernameInput = document.getElementById('username');
             function sync() {
                 var isTraining = document.querySelector('input[name="is_training"][value="1"]').checked;
                 if (isTraining) {
                     autoCheckbox.checked = false;
                     autoCheckbox.disabled = true;
                     autoGroup.style.opacity = '0.4';
+                    usernameInput.setAttribute('list', 'allUploadedLogUsernames');
                 } else {
                     autoCheckbox.disabled = false;
                     autoGroup.style.opacity = '1';
+                    usernameInput.setAttribute('list', 'uploadedLogUsernames');
                 }
             }
             for (var i = 0; i < radios.length; i++) { radios[i].addEventListener('change', sync); }
