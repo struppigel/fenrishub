@@ -4,30 +4,7 @@
 
 {% block page_context_label %}edit / {{ fixlist.username }}{% endblock %}
 
-{% block extra_css %}
-<style>
-    #content::-webkit-scrollbar,
-    #internal_note::-webkit-scrollbar {
-        width: 8px;
-    }
-
-    #content::-webkit-scrollbar-track,
-    #internal_note::-webkit-scrollbar-track {
-        background: var(--la-bg-hover);
-    }
-
-    #content::-webkit-scrollbar-thumb,
-    #internal_note::-webkit-scrollbar-thumb {
-        background: var(--la-border-strong);
-        border-radius: 4px;
-    }
-
-    #content::-webkit-scrollbar-thumb:hover,
-    #internal_note::-webkit-scrollbar-thumb:hover {
-        background: var(--la-border-hover);
-    }
-</style>
-{% endblock %}
+{% block extra_css %}{% endblock %}
 
 {% block content %}
 <div>

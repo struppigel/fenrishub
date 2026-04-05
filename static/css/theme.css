@@ -76,6 +76,24 @@
     --la-log-type-unknown: #7a7a7a;
 }
 
+/* Global scrollbar styling */
+*::-webkit-scrollbar {
+    width: 8px;
+}
+
+*::-webkit-scrollbar-track {
+    background: var(--la-bg-hover);
+}
+
+*::-webkit-scrollbar-thumb {
+    background: var(--la-border-strong);
+    border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: var(--la-border-hover);
+}
+
 /* Status color utility classes */
 .status-b { color: var(--la-status-b); }
 .status-p { color: var(--la-status-p); }
