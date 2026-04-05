@@ -129,12 +129,14 @@ class UploadedLogForm(forms.Form):
                 if not candidate_variant or candidate_variant in seen_candidates:
                     continue
                 seen_candidates.add(candidate_variant)
-                if self._text_has_invalid_controls(candidate_variant):
+                cleaned = candidate_variant.replace('\x00', '')
+                cleaned = self.INVALID_TEXT_CHAR_RE.sub('', cleaned)
+                if not cleaned:
                     continue
-                score = self._candidate_score(candidate_variant)
+                score = self._candidate_score(cleaned)
                 if score > best_score:
                     best_score = score
-                    best_content = candidate_variant
+                    best_content = cleaned
 
         if best_content is None:
             raise forms.ValidationError('File must be valid text and cannot contain binary control bytes.')

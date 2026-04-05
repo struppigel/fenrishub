@@ -29,7 +29,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_uploaded_log_form_falls_back_when_detected_text_is_invalid(self):
         class _DetectedInvalidText:
             def __str__(self):
-                return 'bad\x00text'
+                return '\ufffd\ufffd\x00\ufffd\ufffd'
 
         # UTF-16-LE encoded text without BOM should be accepted via fallback
         # when detector output is invalid.
@@ -67,6 +67,23 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
 
             self.assertTrue(form.is_valid(), form.errors)
             self.assertEqual(form.cleaned_data['log_file'].decoded_content, source_text)
+
+    def test_uploaded_log_form_ascii_with_form_feed_not_decoded_as_utf16le(self):
+        source_text = 'Additional scan result of Farbar Recovery Scan Tool\n\x0cRan by nickl'
+        payload = source_text.encode('utf-8')
+        form = UploadedLogForm(
+            data={'reddit_username': 'reddit_name'},
+            files={
+                'log_file': SimpleUploadedFile(
+                    'Addition.txt', payload, content_type='text/plain',
+                )
+            },
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        decoded = form.cleaned_data['log_file'].decoded_content
+        self.assertIn('Farbar Recovery Scan Tool', decoded)
+        self.assertNotIn('\x0c', decoded)
 
     def test_upload_log_view_logs_context_on_unhandled_exception(self):
         with (
