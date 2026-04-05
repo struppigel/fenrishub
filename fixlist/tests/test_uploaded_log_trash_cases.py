@@ -60,13 +60,14 @@ class TrashViewTests(TestCase):
         self.assertContains(response, 'active-log')
         self.assertNotContains(response, 'trashed-log')
 
-    def test_soft_deleted_log_returns_404_on_detail_view(self):
+    def test_soft_deleted_log_is_viewable_on_detail_view(self):
         from django.utils import timezone as tz
         log = self._make_log('gone-log', deleted_at=tz.now())
 
         response = self.client.get(reverse('view_uploaded_log', args=[log.upload_id]))
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, log.upload_id)
 
     def test_soft_deleted_log_returns_404_on_content_api(self):
         from django.utils import timezone as tz
@@ -286,7 +287,10 @@ class TrashViewTests(TestCase):
             source_text='MAL-LINE',
         )
 
-        self.client.post(reverse('uploaded_logs'), {'action': 'rescan_stats_all'})
+        self.client.post(reverse('uploaded_logs'), {
+            'action': 'rescan_selected',
+            'selected_upload_ids': ['active-frst', 'trashed-frst'],
+        })
 
         active.refresh_from_db()
         trashed.refresh_from_db()

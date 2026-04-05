@@ -149,11 +149,6 @@
     {% csrf_token %}
 </form>
 
-<form id="rescanUploadsStatsForm" method="post" action="{% url 'uploaded_logs' %}">
-    {% csrf_token %}
-    <input type="hidden" name="action" value="rescan_stats_all">
-</form>
-
 <form method="get" action="{% url 'uploaded_logs' %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">
     <input type="text" name="q" value="{{ search_query }}" placeholder="search by user, upload id, assignee" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
     <select id="uploaderSelect" name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 180px;">
@@ -181,7 +176,7 @@
         <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();">merge</button>
         <button type="button" onclick="confirmDiff();">diff</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();">delete</button>
-        <button type="submit" form="rescanUploadsStatsForm" {% if not uploads %}disabled{% endif %}>rescan</button>
+        <button type="submit" form="mergeUploadsForm" name="action" value="rescan_selected" onclick="return confirmRescan();">rescan</button>
     </div>
     <div style="display: flex; gap: 8px;">
         <a href="{% url 'upload_log_for_helper' request.user.username %}"><button type="button">upload</button></a>
@@ -426,6 +421,15 @@ function confirmDeleteSelected() {
         return false;
     }
     return confirm('Move ' + selected.length + ' selected upload(s) to trash?');
+}
+
+function confirmRescan() {
+    const selected = document.querySelectorAll('input[name="selected_upload_ids"]:checked');
+    if (selected.length === 0) {
+        alert('Select at least one upload to rescan.');
+        return false;
+    }
+    return true;
 }
 
 function confirmDiff() {

@@ -23,7 +23,7 @@ from ..upload_utils import soft_delete_uploaded_log, restore_uploaded_log, execu
 from .upload_actions import (
     handle_delete_action, handle_assign_to_me_action, handle_unassign_to_general_action,
     handle_delete_selected_action, handle_merge_action, handle_confirm_merge_action,
-    handle_rescan_stats_all_action,
+    handle_rescan_stats_selected_action,
 )
 from .utils import (
     _anonymous_upload_limit, _consume_anonymous_upload_slot, _resolve_upload_recipient_username,
@@ -108,6 +108,8 @@ def upload_log_view(request, helper_username=None):
                         request,
                         f'Could not find helper "{invalid_helper_username}". Upload was saved to the general channel.',
                     )
+                if helper_username:
+                    return redirect('upload_log_for_helper', helper_username=helper_username)
                 return redirect('upload_log')
         except Exception:
             raw_file = request.FILES.get('log_file')
@@ -183,8 +185,8 @@ def uploaded_logs_view(request):
             return handle_merge_action(request, selected_ids, action_scope_uploads)
         elif action == 'confirm_merge':
             return handle_confirm_merge_action(request, selected_ids, action_scope_uploads)
-        elif action == 'rescan_stats_all':
-            return handle_rescan_stats_all_action(request, action_scope_uploads)
+        elif action == 'rescan_selected':
+            return handle_rescan_stats_selected_action(request, selected_ids, action_scope_uploads)
         else:
             messages.error(request, 'Invalid action.')
             return redirect('uploaded_logs')
@@ -252,12 +254,15 @@ def uploaded_logs_view(request):
 @require_http_methods(["GET", "POST"])
 def view_uploaded_log(request, upload_id):
     """View a single uploaded log by memorable ID."""
-    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
+    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
 
     if request.method == 'POST':
         action = request.POST.get('action', '')
 
         if action == 'delete':
+            if uploaded_log.deleted_at is not None:
+                messages.error(request, f'Upload {upload_id} is already in trash.')
+                return redirect('view_uploaded_log', upload_id=upload_id)
             if not user_can_delete_uploaded_log(request.user, uploaded_log):
                 messages.error(request, f'Only the assigned helper can delete {upload_id}.')
                 return redirect('view_uploaded_log', upload_id=upload_id)
@@ -265,6 +270,17 @@ def view_uploaded_log(request, upload_id):
             _purge_old_trash()
             messages.success(request, f'Upload {upload_id} moved to trash.')
             return redirect('uploaded_logs')
+
+        if action == 'restore':
+            if uploaded_log.deleted_at is None:
+                messages.error(request, f'Upload {upload_id} is not in trash.')
+                return redirect('view_uploaded_log', upload_id=upload_id)
+            if not user_can_delete_uploaded_log(request.user, uploaded_log):
+                messages.error(request, f'Only the assigned helper can restore {upload_id}.')
+                return redirect('view_uploaded_log', upload_id=upload_id)
+            restore_uploaded_log(uploaded_log)
+            messages.success(request, f'Upload {upload_id} restored.')
+            return redirect('view_uploaded_log', upload_id=upload_id)
 
         if action == 'rename_reddit':
             new_username = request.POST.get('reddit_username', '').strip()

@@ -377,7 +377,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertIsNone(own.deleted_at)
         self.assertIsNone(other.deleted_at)
 
-    def test_bulk_rescan_recalculates_stats_for_all_uploads(self):
+    def test_bulk_rescan_recalculates_stats_for_selected_uploads(self):
         first = UploadedLog.objects.create(
             upload_id='silent-river',
             reddit_username='reddit_name',
@@ -402,7 +402,10 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.client.login(username='alice', password='password123')
         response = self.client.post(
             reverse('uploaded_logs'),
-            {'action': 'rescan_stats_all'},
+            {
+                'action': 'rescan_selected',
+                'selected_upload_ids': ['silent-river', 'rapid-harbor'],
+            },
         )
 
         first.refresh_from_db()
@@ -416,6 +419,43 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(second.total_line_count, 2)
         self.assertEqual(second.count_malware, 1)
         self.assertEqual(second.count_unknown, 1)
+
+    def test_bulk_rescan_only_rescans_selected_uploads(self):
+        first = UploadedLog.objects.create(
+            upload_id='silent-river',
+            reddit_username='reddit_name',
+            original_filename='first.txt',
+            log_type='FRST',
+            content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE\nOTHER-LINE',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='rapid-harbor',
+            reddit_username='reddit_name',
+            original_filename='second.txt',
+            log_type='FRST',
+            content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE',
+        )
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text='MAL-LINE',
+        )
+
+        self.client.login(username='alice', password='password123')
+        self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'rescan_selected',
+                'selected_upload_ids': ['silent-river'],
+            },
+        )
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+
+        self.assertEqual(first.count_malware, 1)
+        self.assertEqual(second.count_malware, 0)
 
     def test_username_filter_shows_only_matching_uploads(self):
         UploadedLog.objects.create(

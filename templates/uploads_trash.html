@@ -127,7 +127,7 @@
         <div style="display: flex; align-items: flex-start; gap: 10px; flex: 1;">
             <div>
                 <div class="fixlist-title">
-                    <span class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}">{{ uploaded_log.upload_id }}</span>
+                    <a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>
                     {% if uploaded_log.recipient_user %}
                     <span>({{ uploaded_log.recipient_user.username }})</span>
                     {% else %}
@@ -168,6 +168,7 @@
             </div>
         </div>
         <div class="fixlist-actions">
+            <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn">view</a>
             <form method="post" action="{% url 'uploads_trash' %}">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="restore">

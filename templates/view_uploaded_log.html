@@ -64,8 +64,12 @@
 {% block content %}
 <div class="uploaded-log-page">
 <div class="button-group">
+    {% if uploaded_log.deleted_at %}
+    <a href="{% url 'uploads_trash' %}"><button type="button">back to trash</button></a>
+    {% else %}
     <a href="{% url 'uploaded_logs' %}"><button type="button">back to uploads</button></a>
     <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}"><button type="button">analyze</button></a>
+    {% endif %}
 </div>
 
 <div class="divider"></div>
@@ -79,6 +83,7 @@
     <div class="meta-key">reddit</div>
     <div style="display: flex; align-items: center; gap: 6px;">
         <span id="redditDisplay">u/{{ uploaded_log.reddit_username }}</span>
+        {% if not uploaded_log.deleted_at %}
         <button type="button" id="redditEditButton" style="padding: 2px 8px;" onclick="document.getElementById('redditDisplay').hidden=true;this.hidden=true;document.getElementById('redditEditForm').style.display='flex';document.getElementById('redditInput').focus();">edit</button>
         <form method="post" id="redditEditForm" style="display: none; align-items: center; gap: 6px; margin: 0;">
             {% csrf_token %}
@@ -87,6 +92,7 @@
             <button type="submit" style="padding: 2px 8px;">save</button>
             <button type="button" style="padding: 2px 8px;" onclick="document.getElementById('redditEditForm').style.display='none';document.getElementById('redditDisplay').hidden=false;document.getElementById('redditEditButton').hidden=false;">cancel</button>
         </form>
+        {% endif %}
     </div>
     <div class="meta-key">channel</div>
     <div style="display: flex; align-items: center; gap: 6px;">
@@ -97,6 +103,7 @@
             <span class="channel-unassigned">general (unassigned)</span>
             {% endif %}
         </div>
+        {% if not uploaded_log.deleted_at %}
         <form method="post" style="display: inline; margin: 0;">
             {% csrf_token %}
             {% if not uploaded_log.recipient_user %}
@@ -105,11 +112,16 @@
             <button type="submit" name="action" value="unassign_to_general" style="padding: 2px 8px;">unassign</button>
             {% endif %}
         </form>
+        {% endif %}
     </div>
     <div class="meta-key">hash</div>
     <div>{{ uploaded_log.content_hash }}</div>
     <div class="meta-key">uploaded</div>
     <div>{{ uploaded_log.created_at|date:"Y-m-d H:i" }}</div>
+    {% if uploaded_log.deleted_at %}
+    <div class="meta-key">deleted</div>
+    <div style="color: var(--la-error-text);">{{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}</div>
+    {% endif %}
 </div>
 
 <div class="form-group">
@@ -130,8 +142,14 @@ function viewRawContent() {
     {% csrf_token %}
     <div class="button-group">
         <button type="button" onclick="viewRawContent()">view raw</button>
+        {% if uploaded_log.deleted_at %}
+        {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == user %}
+        <button type="submit" name="action" value="restore">restore</button>
+        {% endif %}
+        {% else %}
         {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == user %}
         <button type="submit" name="action" value="delete" class="delete-btn" onclick="return confirm('Delete this upload?');">delete</button>
+        {% endif %}
         {% endif %}
     </div>
 </form>
