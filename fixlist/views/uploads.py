@@ -89,6 +89,7 @@ def upload_log_view(request, helper_username=None):
                     recipient_user=recipient_user,
                 )
                 created_log.recalculate_log_type()
+                created_log.recalculate_scan_date()
                 try:
                     created_log.recalculate_analysis_stats()
                 except Exception:

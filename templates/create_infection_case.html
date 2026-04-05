@@ -10,6 +10,20 @@
         {% csrf_token %}
 
         <div class="form-group">
+            <label>what kind of case is this?</label>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label style="display: inline-flex; align-items: center; gap: 8px; margin-bottom: 0; color: var(--la-text-primary);">
+                    <input type="radio" name="is_training" value="1" {% if prefill_is_training %}checked{% endif %}>
+                    <span>training / observer (no reassignment, no username changes, can add logs from other helpers)</span>
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 8px; margin-bottom: 0; color: var(--la-text-primary);">
+                    <input type="radio" name="is_training" value="0" {% if not prefill_is_training %}checked{% endif %}>
+                    <span>actual case (logs will be reassigned to you, enforces same username for all logs)</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="form-group">
             <label for="username">username</label>
             <input type="text" id="username" name="username" list="uploadedLogUsernames" value="{{ prefill_username|default:''|escape }}" placeholder="Enter username..." required>
             <datalist id="uploadedLogUsernames">
@@ -29,9 +43,9 @@
             <input type="url" id="reference_url" name="reference_url" value="{{ prefill_reference_url|default:''|escape }}" placeholder="https://example.com/reference">
         </div>
 
-        <div class="form-group">
+        <div class="form-group" id="autoAssignGroup">
             <label style="display: inline-flex; align-items: center; gap: 8px; margin-bottom: 0; color: var(--la-text-primary);">
-                <input type="checkbox" name="auto_assign_new_items" value="1" {% if prefill_auto_assign_new_items %}checked{% endif %}>
+                <input type="checkbox" name="auto_assign_new_items" value="1" id="autoAssignCheckbox" {% if prefill_auto_assign_new_items %}checked{% endif %}>
                 <span>auto-assign newly uploaded logs and fixlists for this username to this case</span>
             </label>
         </div>
@@ -39,6 +53,26 @@
         <div class="button-group">
             <button type="submit">create case</button>
         </div>
+        <script>
+        (function() {
+            var radios = document.querySelectorAll('input[name="is_training"]');
+            var autoGroup = document.getElementById('autoAssignGroup');
+            var autoCheckbox = document.getElementById('autoAssignCheckbox');
+            function sync() {
+                var isTraining = document.querySelector('input[name="is_training"][value="1"]').checked;
+                if (isTraining) {
+                    autoCheckbox.checked = false;
+                    autoCheckbox.disabled = true;
+                    autoGroup.style.opacity = '0.4';
+                } else {
+                    autoCheckbox.disabled = false;
+                    autoGroup.style.opacity = '1';
+                }
+            }
+            for (var i = 0; i < radios.length; i++) { radios[i].addEventListener('change', sync); }
+            sync();
+        })();
+        </script>
     </form>
 </div>
 {% endblock %}

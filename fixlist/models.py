@@ -211,6 +211,24 @@ def detect_log_type(content: str) -> str:
     return 'Unknown'
 
 
+_SCAN_DATE_RE = re.compile(r'Ran by .+\((\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})\)')
+
+
+def extract_scan_date(content: str):
+    """Extract the scan datetime from a FRST/Addition/Fixlog header.
+
+    Returns a datetime object or None.
+    """
+    from datetime import datetime as dt
+    m = _SCAN_DATE_RE.search(content)
+    if m:
+        try:
+            return dt.strptime(m.group(1), '%d-%m-%Y %H:%M:%S')
+        except ValueError:
+            return None
+    return None
+
+
 class UploadedLog(models.Model):
     LOG_TYPE_CHOICES = [
         ('FRST', 'FRST'),
@@ -243,6 +261,7 @@ class UploadedLog(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    scan_date = models.DateTimeField(null=True, blank=True, default=None)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
     total_line_count = models.PositiveIntegerField(default=0)
     count_malware = models.PositiveIntegerField(default=0)
@@ -385,6 +404,10 @@ class UploadedLog(models.Model):
         self.log_type = detect_log_type(self.content or '')
         self.save(update_fields=['log_type', 'updated_at'])
 
+    def recalculate_scan_date(self):
+        self.scan_date = extract_scan_date(self.content or '')
+        self.save(update_fields=['scan_date', 'updated_at'])
+
     @classmethod
     def _generate_unique_upload_id(cls):
         # Prefer exactly two-word IDs. Only append a suffix if a collision occurs.
@@ -434,6 +457,7 @@ class InfectionCase(models.Model):
     reference_url = models.URLField(blank=True)
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_OPEN)
     auto_assign_new_items = models.BooleanField(default=True)
+    is_training = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
@@ -456,6 +480,8 @@ class InfectionCase(models.Model):
 
     def save(self, *args, **kwargs):
         self.clean()
+        if self.is_training:
+            self.auto_assign_new_items = False
         if not self.case_id:
             self.case_id = self._generate_unique_case_id()
         super().save(*args, **kwargs)
@@ -568,6 +594,7 @@ def _auto_assign_new_uploaded_log_to_infection_cases(sender, instance, created, 
     candidate_cases = InfectionCase.objects.filter(
         username=instance.reddit_username,
         auto_assign_new_items=True,
+        is_training=False,
         status=InfectionCase.STATUS_OPEN,
         deleted_at__isnull=True,
     )
@@ -607,6 +634,7 @@ def _auto_assign_new_fixlist_to_infection_cases(sender, instance, created, raw=F
         owner=instance.owner,
         username=instance.username,
         auto_assign_new_items=True,
+        is_training=False,
         status=InfectionCase.STATUS_OPEN,
         deleted_at__isnull=True,
     )

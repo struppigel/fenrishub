@@ -172,6 +172,7 @@ def handle_rescan_stats_all_action(request, action_scope_uploads) -> HttpRespons
         try:
             uploaded_log.recalculate_analysis_stats()
             uploaded_log.recalculate_log_type()
+            uploaded_log.recalculate_scan_date()
             rescanned_count += 1
         except Exception:
             failed_upload_ids.append(uploaded_log.upload_id)

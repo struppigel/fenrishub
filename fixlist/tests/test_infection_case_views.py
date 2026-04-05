@@ -678,3 +678,194 @@ class InfectionCaseViewTests(TestCase):
 
         self.assertEqual(view_response.status_code, 404)
         self.assertEqual(delete_response.status_code, 404)
+
+
+class InfectionCaseTrainingModeTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='alice', password='password123')
+        self.other_user = User.objects.create_user(username='bob', password='password123')
+        self.client.login(username='alice', password='password123')
+
+    def test_create_training_case_sets_is_training_flag(self):
+        response = self.client.post(
+            reverse('create_infection_case'),
+            {
+                'username': 'target_user',
+                'is_training': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        created = InfectionCase.objects.get(owner=self.user)
+        self.assertTrue(created.is_training)
+
+    def test_training_case_forces_auto_assign_off(self):
+        case = InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            auto_assign_new_items=True,
+            is_training=True,
+        )
+
+        case.refresh_from_db()
+        self.assertFalse(case.auto_assign_new_items)
+
+    def test_auto_assign_signal_skips_training_cases_for_logs(self):
+        InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            is_training=True,
+        )
+
+        created_log = UploadedLog.objects.create(
+            upload_id='training-signal-log',
+            reddit_username='target_user',
+            original_filename='signal.txt',
+            content='content',
+            recipient_user=None,
+        )
+
+        created_log.refresh_from_db()
+        self.assertIsNone(created_log.recipient_user)
+        self.assertFalse(InfectionCaseLog.objects.filter(uploaded_log=created_log).exists())
+
+    def test_auto_assign_signal_skips_training_cases_for_fixlists(self):
+        InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            is_training=True,
+        )
+
+        created_fixlist = Fixlist.objects.create(owner=self.user, username='target_user', content='x')
+
+        self.assertFalse(InfectionCaseFixlist.objects.filter(fixlist=created_fixlist).exists())
+
+    def test_link_case_items_does_not_reassign_recipient_for_training_case(self):
+        case = InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            is_training=True,
+        )
+        unassigned_log = UploadedLog.objects.create(
+            upload_id='training-unassigned',
+            reddit_username='target_user',
+            original_filename='log.txt',
+            content='content',
+            recipient_user=None,
+        )
+
+        self.client.post(
+            reverse('infection_case_add_items', args=[case.case_id]),
+            {'selected_upload_ids': [unassigned_log.upload_id]},
+        )
+
+        unassigned_log.refresh_from_db()
+        self.assertIsNone(unassigned_log.recipient_user)
+        self.assertTrue(InfectionCaseLog.objects.filter(case=case, uploaded_log=unassigned_log).exists())
+
+    def test_add_items_skips_username_mismatch_confirmation_for_training_case(self):
+        case = InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            is_training=True,
+        )
+        mismatched_log = UploadedLog.objects.create(
+            upload_id='training-mismatch',
+            reddit_username='other_name',
+            original_filename='x.txt',
+            content='content',
+            recipient_user=self.user,
+        )
+
+        response = self.client.post(
+            reverse('infection_case_add_items', args=[case.case_id]),
+            {'selected_upload_ids': [mismatched_log.upload_id]},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        mismatched_log.refresh_from_db()
+        self.assertEqual(mismatched_log.reddit_username, 'other_name')
+        self.assertTrue(InfectionCaseLog.objects.filter(case=case, uploaded_log=mismatched_log).exists())
+
+    def test_training_case_seed_includes_other_helper_logs(self):
+        case = InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            is_training=True,
+        )
+        other_helper_log = UploadedLog.objects.create(
+            upload_id='training-other-helper',
+            reddit_username='target_user',
+            original_filename='other.txt',
+            content='content',
+            recipient_user=self.other_user,
+        )
+
+        self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'seed_username_items'},
+        )
+
+        self.assertTrue(InfectionCaseLog.objects.filter(case=case, uploaded_log=other_helper_log).exists())
+        other_helper_log.refresh_from_db()
+        self.assertEqual(other_helper_log.recipient_user, self.other_user)
+
+    def test_training_case_selectable_uploads_includes_other_helper_logs(self):
+        case = InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            is_training=True,
+        )
+        other_helper_log = UploadedLog.objects.create(
+            upload_id='training-selectable-other',
+            reddit_username='target_user',
+            original_filename='other.txt',
+            content='content',
+            recipient_user=self.other_user,
+        )
+
+        response = self.client.get(reverse('view_infection_case', args=[case.case_id]))
+
+        selectable_ids = set(response.context['selectable_uploads'].values_list('upload_id', flat=True))
+        self.assertIn('training-selectable-other', selectable_ids)
+
+    def test_non_training_case_selectable_uploads_excludes_other_helper_logs(self):
+        case = InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            auto_assign_new_items=False,
+        )
+        UploadedLog.objects.create(
+            upload_id='normal-other-helper',
+            reddit_username='target_user',
+            original_filename='other.txt',
+            content='content',
+            recipient_user=self.other_user,
+        )
+
+        response = self.client.get(reverse('view_infection_case', args=[case.case_id]))
+
+        selectable_ids = set(response.context['selectable_uploads'].values_list('upload_id', flat=True))
+        self.assertNotIn('normal-other-helper', selectable_ids)
+
+    def test_training_shown_in_case_list(self):
+        InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            is_training=True,
+        )
+
+        response = self.client.get(reverse('infection_cases'))
+
+        self.assertContains(response, 'training')
+
+    def test_training_shown_in_case_detail(self):
+        case = InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            is_training=True,
+        )
+
+        response = self.client.get(reverse('view_infection_case', args=[case.case_id]))
+
+        self.assertContains(response, 'training')

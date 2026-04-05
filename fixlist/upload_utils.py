@@ -73,6 +73,7 @@ def execute_merge(
     # Recalculate analysis stats
     try:
         merged_log.recalculate_log_type()
+        merged_log.recalculate_scan_date()
         merged_log.recalculate_analysis_stats()
     except Exception as e:
         import traceback

@@ -19,6 +19,7 @@
     color: var(--la-error-text);
     border-color: var(--la-error-border);
 }
+
 </style>
 {% endblock %}
 
@@ -38,7 +39,7 @@
             <div style="flex: 1;">
                 <div class="fixlist-title">{{ case.case_id }} | u/{{ case.username }}</div>
                 <div class="fixlist-meta">
-                    items {{ case.item_count }} | created {{ case.created_at|date:"Y-m-d H:i" }} | last activity {{ case.last_activity|date:"Y-m-d H:i" }} | status <span class="{% if case.status == 'open' %}case-status-open{% else %}case-status-closed{% endif %}">{{ case.get_status_display|lower }}</span>
+                    items {{ case.item_count }} | created {{ case.created_at|date:"Y-m-d H:i" }} | last activity {{ case.last_activity|date:"Y-m-d H:i" }} | status <span class="{% if case.status == 'open' %}case-status-open{% else %}case-status-closed{% endif %}">{{ case.get_status_display|lower }}</span>{% if case.is_training %} | <span style="color: var(--la-status-w);">training</span>{% endif %}
                 </div>
             </div>
             <div class="fixlist-actions">

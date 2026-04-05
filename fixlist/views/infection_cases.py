@@ -128,19 +128,26 @@ def _link_case_items(case, logs, fixlists, added_by):
         ],
         ignore_conflicts=True,
     )
-    unassigned_log_pks = [log.pk for log in logs if log.recipient_user_id is None]
-    if unassigned_log_pks:
-        UploadedLog.objects.filter(pk__in=unassigned_log_pks).update(recipient_user=case.owner)
+    if not case.is_training:
+        unassigned_log_pks = [log.pk for log in logs if log.recipient_user_id is None]
+        if unassigned_log_pks:
+            UploadedLog.objects.filter(pk__in=unassigned_log_pks).update(recipient_user=case.owner)
 
 
 def _selected_items_for_case_request(request, case):
     selected_upload_ids = [value.strip() for value in request.POST.getlist('selected_upload_ids') if value.strip()]
     selected_fixlist_ids = [value.strip() for value in request.POST.getlist('selected_fixlist_ids') if value.strip()]
 
-    scoped_uploads = get_action_scoped_uploads(request.user).filter(
-        deleted_at__isnull=True,
-        upload_id__in=selected_upload_ids,
-    )
+    if case.is_training:
+        scoped_uploads = UploadedLog.objects.filter(
+            deleted_at__isnull=True,
+            upload_id__in=selected_upload_ids,
+        )
+    else:
+        scoped_uploads = get_action_scoped_uploads(request.user).filter(
+            deleted_at__isnull=True,
+            upload_id__in=selected_upload_ids,
+        )
     scoped_fixlists = Fixlist.objects.filter(
         owner=request.user,
         deleted_at__isnull=True,
@@ -210,6 +217,7 @@ def create_infection_case_view(request):
         symptom_description = (request.POST.get('symptom_description') or '').strip()
         reference_url = (request.POST.get('reference_url') or '').strip()
         auto_assign_new_items = (request.POST.get('auto_assign_new_items') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+        is_training = (request.POST.get('is_training') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
 
         infection_case = InfectionCase(
             owner=request.user,
@@ -217,6 +225,7 @@ def create_infection_case_view(request):
             symptom_description=symptom_description,
             reference_url=reference_url,
             auto_assign_new_items=auto_assign_new_items,
+            is_training=is_training,
         )
 
         try:
@@ -233,6 +242,7 @@ def create_infection_case_view(request):
                     'prefill_symptom_description': symptom_description,
                     'prefill_reference_url': reference_url,
                     'prefill_auto_assign_new_items': auto_assign_new_items,
+                    'prefill_is_training': is_training,
                     'username_choices': username_choices,
                 },
             )
@@ -247,6 +257,7 @@ def create_infection_case_view(request):
         {
             'username_choices': username_choices,
             'prefill_auto_assign_new_items': True,
+            'prefill_is_training': True,
         },
     )
 
@@ -279,12 +290,20 @@ def view_infection_case(request, case_id):
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
         if action == 'seed_username_items':
-            scoped_logs = list(
-                get_action_scoped_uploads(request.user).filter(
-                    deleted_at__isnull=True,
-                    reddit_username=infection_case.username,
+            if infection_case.is_training:
+                scoped_logs = list(
+                    UploadedLog.objects.filter(
+                        deleted_at__isnull=True,
+                        reddit_username=infection_case.username,
+                    )
                 )
-            )
+            else:
+                scoped_logs = list(
+                    get_action_scoped_uploads(request.user).filter(
+                        deleted_at__isnull=True,
+                        reddit_username=infection_case.username,
+                    )
+                )
             owned_fixlists = list(
                 Fixlist.objects.filter(
                     owner=request.user,
@@ -406,7 +425,10 @@ def view_infection_case(request, case_id):
 
     timeline_items = _build_case_timeline(infection_case)
 
-    available_uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True)
+    if infection_case.is_training:
+        available_uploads = UploadedLog.objects.filter(deleted_at__isnull=True)
+    else:
+        available_uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True)
     available_fixlists = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True)
 
     linked_upload_ids = {uploaded_log.upload_id for uploaded_log in linked_logs}
@@ -439,7 +461,7 @@ def infection_case_add_items_view(request, case_id):
         messages.error(request, 'Select at least one item to add.')
         return redirect('view_infection_case', case_id=infection_case.case_id)
 
-    if selection['mismatched_logs'] or selection['mismatched_fixlists']:
+    if not infection_case.is_training and (selection['mismatched_logs'] or selection['mismatched_fixlists']):
         return render(
             request,
             'confirm_case_username_change.html',
