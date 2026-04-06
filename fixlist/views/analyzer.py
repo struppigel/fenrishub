@@ -4,17 +4,21 @@ Log analyzer views and APIs.
 Handles: analyzing logs, inspecting lines, previewing rules, persisting rule changes, and status updates.
 """
 
+import json
+
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 from django.http import JsonResponse
 from django.shortcuts import render
+from django.db.models import Q
+from django.utils.safestring import mark_safe
 
 from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
-    VALID_STATUSES,
+    VALID_STATUSES, invalidate_rule_buckets_cache,
 )
-from ..models import ClassificationRule, UploadedLog
+from ..models import ClassificationRule, FixlistSnippet, UploadedLog
 from ..validators import PayloadValidator, BadJsonError
 from ..rule_utils import (
     _normalize_pending_changes, _build_pending_rule_preview,
@@ -27,9 +31,20 @@ from .utils import get_action_scoped_uploads, get_updatable_uploads
 @require_http_methods(["GET"])
 def log_analyzer_view(request):
     """Render log analyzer tool."""
-    uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True)[:200]
+    uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True).defer('content')[:200]
     requested_upload_id = (request.GET.get('upload_id') or '').strip()
     initial_upload_id = requested_upload_id if requested_upload_id else ''
+    snippets_qs = FixlistSnippet.objects.filter(
+        Q(owner=request.user) | Q(is_shared=True)
+    ).select_related('owner').order_by('name')
+    snippets_json = mark_safe(json.dumps([
+        {
+            'id': s.id,
+            'name': s.name if s.owner_id == request.user.id else f"{s.name} ({s.owner.username})",
+            'content': s.content,
+        }
+        for s in snippets_qs
+    ]))
     return render(
         request,
         'log_analyzer.html',
@@ -37,6 +52,7 @@ def log_analyzer_view(request):
             'uploaded_logs': uploads,
             'initial_upload_id': initial_upload_id,
             'is_superuser': request.user.is_superuser,
+            'snippets_json': snippets_json,
         },
     )
 
@@ -162,6 +178,8 @@ def persist_pending_rule_changes_api(request):
         source_prefix='analyzer-persist',
         owner=request.user,
     )
+
+    invalidate_rule_buckets_cache()
 
     return JsonResponse({'ok': True, **result})
 

@@ -46,6 +46,7 @@ class Fixlist(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     is_public = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+    line_count = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ['-created_at']
@@ -56,6 +57,7 @@ class Fixlist(models.Model):
     def save(self, *args, **kwargs):
         if not self.share_token:
             self.share_token = self.generate_share_token()
+        self.line_count = len([l for l in (self.content or '').splitlines() if l.strip()])
         super().save(*args, **kwargs)
 
     @staticmethod

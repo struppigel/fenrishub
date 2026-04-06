@@ -2,6 +2,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
@@ -37,7 +38,7 @@ def _build_case_timeline(case):
 
     base_items = []
 
-    for link in case.log_links.select_related('uploaded_log').all():
+    for link in case.log_links.select_related('uploaded_log').defer('uploaded_log__content').all():
         uploaded_log = link.uploaded_log
         if uploaded_log.deleted_at is not None:
             continue
@@ -51,7 +52,7 @@ def _build_case_timeline(case):
             }
         )
 
-    for link in case.fixlist_links.select_related('fixlist').all():
+    for link in case.fixlist_links.select_related('fixlist').defer('fixlist__content').all():
         fixlist = link.fixlist
         if fixlist.deleted_at is not None:
             continue
@@ -60,7 +61,7 @@ def _build_case_timeline(case):
                 'item_type': 'fixlist',
                 'created_at': fixlist.created_at,
                 'fixlist': fixlist,
-                'line_count': len([line for line in (fixlist.content or '').splitlines() if line.strip()]),
+                'line_count': fixlist.line_count,
             }
         )
 
@@ -142,17 +143,17 @@ def _selected_items_for_case_request(request, case):
         scoped_uploads = UploadedLog.objects.filter(
             deleted_at__isnull=True,
             upload_id__in=selected_upload_ids,
-        )
+        ).defer('content')
     else:
         scoped_uploads = get_action_scoped_uploads(request.user).filter(
             deleted_at__isnull=True,
             upload_id__in=selected_upload_ids,
-        )
+        ).defer('content')
     scoped_fixlists = Fixlist.objects.filter(
         owner=request.user,
         deleted_at__isnull=True,
         pk__in=selected_fixlist_ids,
-    )
+    ).defer('content')
 
     logs = list(scoped_uploads)
     fixlists = list(scoped_fixlists)
@@ -175,7 +176,11 @@ def _selected_items_for_case_request(request, case):
 def infection_cases_view(request):
     cases = list(
         _case_queryset_for_user(request.user)
-        .prefetch_related('log_links__uploaded_log', 'fixlist_links__fixlist', 'note_entries')
+        .prefetch_related(
+            Prefetch('log_links__uploaded_log', queryset=UploadedLog.objects.defer('content')),
+            Prefetch('fixlist_links__fixlist', queryset=Fixlist.objects.defer('content')),
+            'note_entries',
+        )
     )
 
     for case in cases:
@@ -303,14 +308,14 @@ def view_infection_case(request, case_id):
                     UploadedLog.objects.filter(
                         deleted_at__isnull=True,
                         reddit_username=infection_case.username,
-                    )
+                    ).defer('content')
                 )
             else:
                 scoped_logs = list(
                     get_action_scoped_uploads(request.user).filter(
                         deleted_at__isnull=True,
                         reddit_username=infection_case.username,
-                    )
+                    ).defer('content')
                 )
             owned_fixlists = list(
                 Fixlist.objects.filter(
@@ -419,6 +424,7 @@ def view_infection_case(request, case_id):
             infection_case_links__case=infection_case,
             deleted_at__isnull=True,
         )
+        .defer('content')
         .distinct()
         .order_by('-created_at')
     )
@@ -427,6 +433,7 @@ def view_infection_case(request, case_id):
             infection_case_links__case=infection_case,
             deleted_at__isnull=True,
         )
+        .defer('content')
         .distinct()
         .order_by('-created_at')
     )
@@ -434,10 +441,10 @@ def view_infection_case(request, case_id):
     timeline_items = _build_case_timeline(infection_case)
 
     if infection_case.is_training:
-        available_uploads = UploadedLog.objects.filter(deleted_at__isnull=True)
+        available_uploads = UploadedLog.objects.filter(deleted_at__isnull=True).defer('content')
     else:
-        available_uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True)
-    available_fixlists = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True)
+        available_uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True).defer('content')
+    available_fixlists = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True).defer('content')
 
     linked_upload_ids = {uploaded_log.upload_id for uploaded_log in linked_logs}
     linked_fixlist_ids = {fixlist.pk for fixlist in linked_fixlists}

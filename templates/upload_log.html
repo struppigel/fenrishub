@@ -125,6 +125,11 @@ function switchTab(tab) {
 }
 
 switchTab('paste');
+
+document.querySelector('form').addEventListener('submit', function() {
+    var btn = this.querySelector('.upload-submit-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'uploading\u2026'; }
+});
 </script>
 </div>
 {% endblock %}

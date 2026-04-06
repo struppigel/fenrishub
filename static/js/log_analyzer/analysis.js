@@ -21,7 +21,15 @@ async function requestLogAnalysis(logText, uploadId = '') {
     return response.json();
 }
 
+const _lineDetailsCache = new Map();
+
 async function requestLineDetails(line, status) {
+    const cacheKey = line + '\0' + status;
+    const cached = _lineDetailsCache.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
     const response = await fetch(LINE_DETAILS_URL, {
         method: 'POST',
         headers: {
@@ -36,7 +44,9 @@ async function requestLineDetails(line, status) {
         throw new Error(errorData.error || 'Failed to inspect line details.');
     }
 
-    return response.json();
+    const result = await response.json();
+    _lineDetailsCache.set(cacheKey, result);
+    return result;
 }
 
 let questionCursorModeActive = false;
@@ -353,6 +363,7 @@ async function parseLogs() {
         if (selectedUploadId) {
             console.log('Parsing with upload_id:', selectedUploadId);
         }
+        _lineDetailsCache.clear();
         const payload = await requestLogAnalysis(logInput, selectedUploadId);
         applyAnalysisPayload(payload, { resetCopied: true, preservePendingChanges: true });
 

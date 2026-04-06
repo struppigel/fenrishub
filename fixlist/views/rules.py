@@ -15,6 +15,7 @@ from django.db.models import Q, Case, When
 
 from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
+    invalidate_rule_buckets_cache,
 )
 from ..models import ClassificationRule
 from ..rule_test_service import build_rule_test_results
@@ -85,6 +86,7 @@ def rules_view(request):
                     rule.save(update_fields=[
                         'status', 'match_type', 'source_text', 'description', 'is_enabled', 'updated_at',
                     ])
+                    invalidate_rule_buckets_cache()
                     messages.success(request, 'Rule updated.')
             return redirect('rules')
 
@@ -92,6 +94,7 @@ def rules_view(request):
             pk = request.POST.get('pk', '').strip()
             rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
             rule.delete()
+            invalidate_rule_buckets_cache()
             messages.success(request, 'Rule deleted.')
             return redirect('rules')
 
@@ -100,6 +103,7 @@ def rules_view(request):
             rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
             rule.is_enabled = not rule.is_enabled
             rule.save(update_fields=['is_enabled', 'updated_at'])
+            invalidate_rule_buckets_cache()
             label = 'enabled' if rule.is_enabled else 'disabled'
             messages.success(request, f'Rule {label}.')
             return redirect('rules')
@@ -210,6 +214,7 @@ def add_rule_view(request):
                 messages.error(request, 'A rule with this status, match type, and source text already exists.')
             else:
                 ClassificationRule.objects.create(**create_kwargs)
+                invalidate_rule_buckets_cache()
                 messages.success(request, 'Rule created.')
                 return redirect('rules')
 

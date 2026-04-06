@@ -57,7 +57,7 @@ def handle_delete_selected_action(request, selected_ids: list, action_scope_uplo
         messages.error(request, 'Select at least one upload to delete.')
         return redirect('uploaded_logs')
 
-    selected_logs = list(UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
+    selected_logs = list(UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=True).defer('content'))
     found_ids = {entry.upload_id for entry in selected_logs}
     missing_ids = [upload_id for upload_id in selected_ids if upload_id not in found_ids]
     if missing_ids:
@@ -76,9 +76,7 @@ def handle_delete_selected_action(request, selected_ids: list, action_scope_uplo
         return _uploads_redirect_with_state(request)
 
     now = timezone.now()
-    for log in selected_logs:
-        log.deleted_at = now
-        log.save(update_fields=['deleted_at'])
+    UploadedLog.objects.filter(upload_id__in=[log.upload_id for log in selected_logs]).update(deleted_at=now)
 
     _purge_old_trash()
     messages.success(request, f'Moved {len(selected_logs)} selected upload(s) to trash.')

@@ -10,6 +10,8 @@ function bindAnalyzerButton(elementId, handler) {
     });
 }
 
+const _uploadContentCache = new Map();
+
 function buildUploadedLogContentUrl(uploadId) {
     const template = (window.logAnalyzerConfig && window.logAnalyzerConfig.uploadedLogContentUrlTemplate) || '';
     if (!template || !uploadId) {
@@ -43,6 +45,20 @@ async function loadSelectedUploadForAnalyzer() {
 
     statusElement.textContent = 'loading...';
 
+    const cached = _uploadContentCache.get(uploadId);
+    if (cached) {
+        if (typeof resetToInput === 'function') {
+            resetToInput();
+        }
+        logInputElement.value = cached.content || '';
+        statusElement.textContent = `loaded ${cached.upload_id}`;
+        const url = new URL(window.location);
+        url.searchParams.set('upload_id', uploadId);
+        window.history.replaceState(null, '', url);
+        logInputElement.focus();
+        return;
+    }
+
     try {
         const response = await fetch(requestUrl, {
             method: 'GET',
@@ -56,6 +72,7 @@ async function loadSelectedUploadForAnalyzer() {
         }
 
         const payload = await response.json();
+        _uploadContentCache.set(uploadId, payload);
         if (typeof resetToInput === 'function') {
             resetToInput();
         }

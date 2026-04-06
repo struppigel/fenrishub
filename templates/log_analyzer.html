@@ -261,15 +261,16 @@ window.logAnalyzerConfig = {
     uploadedLogContentUrlTemplate: "{% url 'uploaded_log_content_api' '__UPLOAD_ID__' %}",
     initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
     snippetsApiUrl: "{% url 'snippets_api' %}",
+    snippets: {{ snippets_json }},
     isSuperuser: {{ is_superuser|yesno:"true,false" }},
     currentUsername: "{{ request.user.username|escapejs }}",
 };
 </script>
-<script src="{% static 'js/log_analyzer/shared.js' %}"></script>
-<script src="{% static 'js/log_analyzer/analysis.js' %}"></script>
-<script src="{% static 'js/log_analyzer/conflict_wizard.js' %}"></script>
-<script src="{% static 'js/log_analyzer/rule_preview.js' %}"></script>
-<script src="{% static 'js/log_analyzer/bootstrap.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/shared.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/analysis.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/conflict_wizard.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/rule_preview.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/bootstrap.js' %}"></script>
 <script>
 (function() {
     const snippetSelect = document.getElementById('snippetSelect');
@@ -286,26 +287,15 @@ window.logAnalyzerConfig = {
         }
     });
 
-    async function loadSnippets() {
-        const url = (window.logAnalyzerConfig || {}).snippetsApiUrl;
-        if (!url) return;
-        try {
-            const resp = await fetch(url, {
-                headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            });
-            if (!resp.ok) return;
-            const data = await resp.json();
-            snippetsData = data.snippets || [];
-            snippetSelect.innerHTML = '<option value="">snippets</option>';
-            snippetsData.forEach(function(s) {
-                const opt = document.createElement('option');
-                opt.value = s.id;
-                opt.textContent = s.name;
-                snippetSelect.appendChild(opt);
-            });
-        } catch (e) {
-            // silent
-        }
+    function loadSnippets() {
+        snippetsData = (window.logAnalyzerConfig || {}).snippets || [];
+        snippetSelect.innerHTML = '<option value="">snippets</option>';
+        snippetsData.forEach(function(s) {
+            var opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = s.name;
+            snippetSelect.appendChild(opt);
+        });
     }
 
     snippetSelect.addEventListener('change', function() {

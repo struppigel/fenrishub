@@ -37,6 +37,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'django.middleware.gzip.GZipMiddleware',
     'django.middleware.security.SecurityMiddleware',
     *([] if TESTING else ['whitenoise.middleware.WhiteNoiseMiddleware']),
     'django.contrib.sessions.middleware.SessionMiddleware',

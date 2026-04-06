@@ -1,4 +1,5 @@
 import re
+import time
 from typing import Iterable
 
 from . import frst_extractors as ex
@@ -416,6 +417,27 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
     }
 
 
+_rule_buckets_cache = None
+_rule_buckets_cache_time = None
+_RULE_BUCKETS_CACHE_TTL = 60
+
+
+def invalidate_rule_buckets_cache():
+    global _rule_buckets_cache, _rule_buckets_cache_time
+    _rule_buckets_cache = None
+    _rule_buckets_cache_time = None
+
+
+def _get_cached_rule_buckets():
+    global _rule_buckets_cache, _rule_buckets_cache_time
+    now = time.monotonic()
+    if _rule_buckets_cache is not None and (now - _rule_buckets_cache_time) < _RULE_BUCKETS_CACHE_TTL:
+        return _rule_buckets_cache
+    _rule_buckets_cache = _load_rule_buckets()
+    _rule_buckets_cache_time = now
+    return _rule_buckets_cache
+
+
 def _load_rule_buckets():
     rules = ClassificationRule.objects.filter(is_enabled=True).select_related('owner')
     parsed_filepath_exclusions = {
@@ -730,7 +752,7 @@ def inspect_line_matches(line: str, buckets=None) -> dict:
             "matches": [],
         }
 
-    active_buckets = buckets or _load_rule_buckets()
+    active_buckets = buckets or _get_cached_rule_buckets()
     effective_matches, shadowed_matches, effective_matcher = _collect_effective_and_shadowed_matches_for_line(
         line_value,
         active_buckets,
@@ -754,7 +776,7 @@ def inspect_line_matches(line: str, buckets=None) -> dict:
 
 
 def analyze_log_text(raw_log_text: str) -> dict:
-    buckets = _load_rule_buckets()
+    buckets = _get_cached_rule_buckets()
     analyzed_lines = []
     warnings = _build_log_warnings(raw_log_text or "")
 

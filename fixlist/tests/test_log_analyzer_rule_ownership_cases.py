@@ -10,7 +10,7 @@ from unittest.mock import patch
 from django.http import HttpResponse
 from django.test import RequestFactory
 
-from ..analyzer import inspect_line_matches
+from ..analyzer import inspect_line_matches, invalidate_rule_buckets_cache
 from ..models import ClassificationRule, ParsedFilepathExclusion, UploadedLog
 from ..views import log_analyzer_view
 
@@ -19,6 +19,7 @@ class RuleOwnershipTests(TestCase):
     """Tests for rule ownership enforcement in preview and persist APIs."""
 
     def setUp(self):
+        invalidate_rule_buckets_cache()
         self.alice = User.objects.create_user(username="alice", password="password123")
         self.bob = User.objects.create_user(username="bob", password="password123")
 
