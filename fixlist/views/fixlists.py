@@ -151,6 +151,7 @@ def shared_fixlist_view(request, token):
         'fixlist': fixlist,
         'is_owner': is_owner,
         'preview_as_guest': preview_as_guest,
+        'hide_authenticated_chrome': preview_as_guest,
     }
     return render(request, 'shared_fixlist.html', context)
 

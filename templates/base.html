@@ -511,7 +511,7 @@
                 <div class="header-branding">
                     <h1>Malware Log Analysis</h1>
                 </div>
-                {% if user.is_authenticated %}
+                {% if user.is_authenticated and not hide_authenticated_chrome %}
                 <div class="page-context">
                     <div>
                         <span class="page-context-label">{% block page_context_label %}{% endblock %}</span>
@@ -532,7 +532,7 @@
                 {% block header_context %}{% endblock %}
                 {% endif %}
             </div>
-            {% if user.is_authenticated %}
+            {% if user.is_authenticated and not hide_authenticated_chrome %}
             <div class="nav">
                 <div class="nav-left">
                     <a href="{% url 'infection_cases' %}">cases</a>
