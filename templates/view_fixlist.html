@@ -4,14 +4,21 @@
 
 {% block page_context_label %}edit / {{ fixlist.username }}{% endblock %}
 
-{% block extra_css %}{% endblock %}
+{% block extra_css %}
+<style>
+    .visibility-toggle-btn {
+        width: 78px;
+    }
+</style>
+{% endblock %}
 
 {% block content %}
 <div>
     <div class="info-box">
         token {{ fixlist.share_token }}<br>
         created {{ fixlist.created_at|date:"Y-m-d H:i" }}<br>
-        updated {{ fixlist.updated_at|date:"Y-m-d H:i" }}
+        updated {{ fixlist.updated_at|date:"Y-m-d H:i" }}<br>
+        {% if fixlist.is_public %}public{% else %}hidden{% endif %}
     </div>
 
     <div class="success-box">
@@ -46,6 +53,11 @@
 
         <div class="button-group">
             <button type="submit" name="action" value="update">save</button>
+            {% if fixlist.is_public %}
+            <button type="submit" name="action" value="disable_public" class="visibility-toggle-btn" onclick="return confirm('Disable public sharing for this fixlist?');">hide</button>
+            {% else %}
+            <button type="submit" name="action" value="enable_public" class="visibility-toggle-btn">publish</button>
+            {% endif %}
             <button type="submit" name="action" value="delete" onclick="return confirm('Delete this fixlist?');" style="background-color: var(--la-error-bg); color: var(--la-error-text); border-color: var(--la-error-border);">delete</button>
         </div>
     </form>

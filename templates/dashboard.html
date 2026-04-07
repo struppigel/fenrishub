@@ -36,6 +36,10 @@
         color: var(--la-error-text);
         border-color: var(--la-error-border);
     }
+
+    .fixlist-actions .visibility-toggle-btn {
+        width: 78px;
+    }
 </style>
 {% endblock %}
 
@@ -56,12 +60,23 @@
             <div style="flex: 1;">
                 <div class="fixlist-title">{{ fixlist.username }}</div>
                 <div class="fixlist-meta">
-                    created {{ fixlist.created_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }}
+                    created {{ fixlist.created_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }} | {% if fixlist.is_public %}public{% else %}hidden{% endif %}
                 </div>
             </div>
             <div class="fixlist-actions">
                 <button type="button" class="action-btn" onclick="copyShareLink('{% url 'shared_fixlist' fixlist.share_token %}', this)">copy link</button>
                 <a href="{% url 'view_fixlist' fixlist.pk %}" class="action-btn">edit</a>
+                <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="dashboard">
+                    {% if fixlist.is_public %}
+                    <input type="hidden" name="action" value="disable_public">
+                    <button type="submit" class="action-btn visibility-toggle-btn" onclick="return confirm('Disable public sharing for this fixlist?');">hide</button>
+                    {% else %}
+                    <input type="hidden" name="action" value="enable_public">
+                    <button type="submit" class="action-btn visibility-toggle-btn">publish</button>
+                    {% endif %}
+                </form>
                 <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="delete">

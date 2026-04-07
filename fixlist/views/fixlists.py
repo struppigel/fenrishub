@@ -17,6 +17,17 @@ from ..models import Fixlist, AccessLog, UploadedLog
 from .utils import _purge_old_trash, get_client_ip
 
 
+def _is_fixlist_owner(user, fixlist):
+    return user.is_authenticated and user == fixlist.owner
+
+
+def _assert_can_access_shared_fixlist(request, fixlist):
+    if fixlist.deleted_at is not None and not _is_fixlist_owner(request.user, fixlist):
+        raise Http404
+    if not fixlist.is_public and not request.user.is_authenticated:
+        raise Http404
+
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def create_fixlist_view(request):
@@ -31,6 +42,7 @@ def create_fixlist_view(request):
             username=username,
             content=content,
             internal_note=internal_note,
+            is_public=True,
         )
 
         return redirect('view_fixlist', pk=fixlist.pk)
@@ -108,6 +120,22 @@ def view_fixlist(request, pk):
             _purge_old_trash()
             messages.success(request, f'Fixlist "{fixlist.username}" moved to trash.')
             return redirect('dashboard')
+
+        elif action == 'disable_public':
+            fixlist.is_public = False
+            fixlist.save(update_fields=['is_public'])
+            messages.success(request, f'Fixlist "{fixlist.username}" is now hidden from guests.')
+            if request.POST.get('next') == 'dashboard':
+                return redirect('dashboard')
+            return redirect('view_fixlist', pk=fixlist.pk)
+
+        elif action == 'enable_public':
+            fixlist.is_public = True
+            fixlist.save(update_fields=['is_public'])
+            messages.success(request, f'Fixlist "{fixlist.username}" is now public.')
+            if request.POST.get('next') == 'dashboard':
+                return redirect('dashboard')
+            return redirect('view_fixlist', pk=fixlist.pk)
     
     share_url = request.build_absolute_uri(f'/share/{fixlist.share_token}/')
 
@@ -123,12 +151,7 @@ def view_fixlist(request, pk):
 def shared_fixlist_view(request, token):
     """View a shared fixlist (non-authenticated access)."""
     fixlist = get_object_or_404(Fixlist, share_token=token)
-
-    # Trashed fixlists are not accessible by guests.
-    if fixlist.deleted_at is not None and not (
-        request.user.is_authenticated and request.user == fixlist.owner
-    ):
-        raise Http404
+    _assert_can_access_shared_fixlist(request, fixlist)
 
     # Log access
     AccessLog.objects.create(
@@ -145,7 +168,7 @@ def shared_fixlist_view(request, token):
     )
 
     # Check if user should be treated as owner for UI behavior.
-    is_owner = request.user.is_authenticated and request.user == fixlist.owner and not preview_as_guest
+    is_owner = _is_fixlist_owner(request.user, fixlist) and not preview_as_guest
     
     context = {
         'fixlist': fixlist,
@@ -160,10 +183,7 @@ def shared_fixlist_view(request, token):
 def download_fixlist(request, token):
     """Download a fixlist as a text file."""
     fixlist = get_object_or_404(Fixlist, share_token=token)
-    if fixlist.deleted_at is not None and not (
-        request.user.is_authenticated and request.user == fixlist.owner
-    ):
-        raise Http404
+    _assert_can_access_shared_fixlist(request, fixlist)
     Fixlist.objects.filter(pk=fixlist.pk).update(download_count=F('download_count') + 1)
     
     # Log access
@@ -183,10 +203,7 @@ def download_fixlist(request, token):
 def copy_to_clipboard_api(request, token):
     """API endpoint for copying fixlist content."""
     fixlist = get_object_or_404(Fixlist, share_token=token)
-    if fixlist.deleted_at is not None and not (
-        request.user.is_authenticated and request.user == fixlist.owner
-    ):
-        raise Http404
+    _assert_can_access_shared_fixlist(request, fixlist)
 
     AccessLog.objects.create(
         fixlist=fixlist,

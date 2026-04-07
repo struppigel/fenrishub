@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser, User
 from django.core.cache import cache
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import RequestFactory, TestCase
 from django.test import override_settings
@@ -85,5 +85,59 @@ class SharingAndDownloadTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(rendered_context["preview_as_guest"])
         self.assertFalse(rendered_context["is_owner"])
+
+    def test_shared_view_returns_404_for_anonymous_when_fixlist_disabled(self):
+        self.fixlist.is_public = False
+        self.fixlist.save(update_fields=["is_public"])
+
+        request = self.factory.get(reverse("shared_fixlist", args=[self.fixlist.share_token]))
+        request.user = AnonymousUser()
+
+        with self.assertRaises(Http404):
+            shared_fixlist_view(request, token=self.fixlist.share_token)
+
+    def test_download_returns_404_for_anonymous_when_fixlist_disabled(self):
+        self.fixlist.is_public = False
+        self.fixlist.save(update_fields=["is_public"])
+
+        response = self.client.get(reverse("download_fixlist", args=[self.fixlist.share_token]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_copy_api_returns_404_for_anonymous_when_fixlist_disabled(self):
+        self.fixlist.is_public = False
+        self.fixlist.save(update_fields=["is_public"])
+
+        response = self.client.post(reverse("copy_api", args=[self.fixlist.share_token]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_shared_view_allows_other_logged_in_user_when_fixlist_disabled(self):
+        self.fixlist.is_public = False
+        self.fixlist.save(update_fields=["is_public"])
+        User.objects.create_user(username="bob", password="password123")
+        self.client.login(username="bob", password="password123")
+
+        response = self.client.get(reverse("shared_fixlist", args=[self.fixlist.share_token]))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_download_allows_other_logged_in_user_when_fixlist_disabled(self):
+        self.fixlist.is_public = False
+        self.fixlist.save(update_fields=["is_public"])
+        User.objects.create_user(username="bob", password="password123")
+        self.client.login(username="bob", password="password123")
+
+        response = self.client.get(reverse("download_fixlist", args=[self.fixlist.share_token]))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_copy_api_allows_other_logged_in_user_when_fixlist_disabled(self):
+        self.fixlist.is_public = False
+        self.fixlist.save(update_fields=["is_public"])
+        User.objects.create_user(username="bob", password="password123")
+        self.client.login(username="bob", password="password123")
+
+        response = self.client.post(reverse("copy_api", args=[self.fixlist.share_token]))
+
+        self.assertEqual(response.status_code, 200)
 
 

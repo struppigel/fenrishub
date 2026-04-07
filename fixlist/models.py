@@ -44,7 +44,7 @@ class Fixlist(models.Model):
     share_token = models.CharField(max_length=32, unique=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    is_public = models.BooleanField(default=False)
+    is_public = models.BooleanField(default=True)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
     line_count = models.PositiveIntegerField(default=0)
 

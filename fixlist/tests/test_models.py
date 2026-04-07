@@ -23,6 +23,17 @@ class FixlistModelTests(TestCase):
         self.assertEqual(len(fixlist.share_token), 32)
         self.assertTrue(fixlist.share_token.isalnum())
 
+    def test_fixlist_is_public_by_default(self):
+        user = User.objects.create_user(username="bob", password="password123")
+
+        fixlist = Fixlist.objects.create(
+            owner=user,
+            username="Default Public",
+            content="line1",
+        )
+
+        self.assertTrue(fixlist.is_public)
+
 
 class UploadedLogModelTests(TestCase):
     def test_upload_id_defaults_to_two_words(self):

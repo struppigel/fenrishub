@@ -22,6 +22,8 @@ class TemplateMarkupTests(TestCase):
 
         self.assertIn("preview guest view", content)
         self.assertIn('href="{{ guest_preview_url }}"', content)
+        self.assertIn('value="disable_public"', content)
+        self.assertIn('value="enable_public"', content)
 
     def test_shared_fixlist_template_contains_modal_warning_flow(self):
         content = self._read_template("shared_fixlist.html")
@@ -38,6 +40,8 @@ class TemplateMarkupTests(TestCase):
 
         self.assertIn('class="action-btn" onclick="copyShareLink', content)
         self.assertIn('class="action-btn">edit</a>', content)
+        self.assertIn('name="action" value="disable_public"', content)
+        self.assertIn('name="action" value="enable_public"', content)
 
     def test_dashboard_template_delete_button_text(self):
         content = self._read_template("dashboard.html")

@@ -102,6 +102,51 @@ class FixlistCrudViewTests(TestCase):
         self.assertIsNotNone(fixlist.deleted_at)
         self.assertTrue(Fixlist.objects.filter(pk=fixlist.pk).exists())
 
+    def test_disable_public_keeps_fixlist_active(self):
+        fixlist = Fixlist.objects.create(owner=self.user, username="Disable Me", content="x")
+
+        response = self.client.post(
+            reverse("view_fixlist", args=[fixlist.pk]),
+            {"action": "disable_public"},
+        )
+
+        fixlist.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("view_fixlist", args=[fixlist.pk]))
+        self.assertFalse(fixlist.is_public)
+        self.assertIsNone(fixlist.deleted_at)
+
+    def test_enable_public_reopens_sharing(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Enable Me",
+            content="x",
+            is_public=False,
+        )
+
+        response = self.client.post(
+            reverse("view_fixlist", args=[fixlist.pk]),
+            {"action": "enable_public"},
+        )
+
+        fixlist.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("view_fixlist", args=[fixlist.pk]))
+        self.assertTrue(fixlist.is_public)
+
+    def test_disable_public_from_dashboard_redirects_to_dashboard(self):
+        fixlist = Fixlist.objects.create(owner=self.user, username="Disable Dashboard", content="x")
+
+        response = self.client.post(
+            reverse("view_fixlist", args=[fixlist.pk]),
+            {"action": "disable_public", "next": "dashboard"},
+        )
+
+        fixlist.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("dashboard"))
+        self.assertFalse(fixlist.is_public)
+
     def test_view_fixlist_context_includes_guest_preview_url(self):
         fixlist = Fixlist.objects.create(
             owner=self.user,
