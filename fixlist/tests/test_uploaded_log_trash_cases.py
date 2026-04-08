@@ -101,7 +101,7 @@ class TrashViewTests(TestCase):
     def test_trash_view_is_paginated(self):
         from django.utils import timezone as tz
 
-        for index in range(26):
+        for index in range(9):
             self._make_log(
                 f'trashed-page-{index}',
                 deleted_at=tz.now() + timedelta(seconds=index),
@@ -112,7 +112,7 @@ class TrashViewTests(TestCase):
 
         self.assertEqual(first_page.status_code, 200)
         self.assertEqual(first_page.context['page_obj'].paginator.num_pages, 2)
-        self.assertEqual(len(first_page.context['page_obj'].object_list), 25)
+        self.assertEqual(len(first_page.context['page_obj'].object_list), 8)
         self.assertContains(first_page, 'page 1 of 2')
         self.assertContains(first_page, '?page=2')
 

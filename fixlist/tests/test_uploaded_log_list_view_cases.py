@@ -95,7 +95,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertTrue(response.context.get('show_all'))
 
     def test_uploaded_logs_list_is_paginated(self):
-        for index in range(26):
+        for index in range(9):
             UploadedLog.objects.create(
                 upload_id=f'page-log-{index}',
                 reddit_username='paged_user',
@@ -109,9 +109,9 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context['page_obj'].paginator.num_pages, 2)
-        self.assertEqual(len(response.context['page_obj'].object_list), 25)
+        self.assertEqual(len(response.context['page_obj'].object_list), 8)
         self.assertContains(response, 'page 1 of 2')
-        self.assertContains(response, 'page-log-25')
+        self.assertContains(response, 'page-log-8')
         self.assertNotContains(response, 'page-log-0')
 
         second_page = self.client.get(reverse('uploaded_logs'), {'page': '2'})
@@ -119,10 +119,10 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(second_page.status_code, 200)
         self.assertEqual(second_page.context['page_obj'].number, 2)
         self.assertContains(second_page, 'page-log-0')
-        self.assertNotContains(second_page, 'page-log-25')
+        self.assertNotContains(second_page, 'page-log-8')
 
     def test_uploaded_logs_pagination_preserves_filter_and_channel_state(self):
-        for index in range(26):
+        for index in range(9):
             UploadedLog.objects.create(
                 upload_id=f'alice-page-log-{index}',
                 reddit_username='alice_user',
