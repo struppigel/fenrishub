@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass
 
 DESCRIPTION_SEP = "|||Description:"
+FIREFOX_PROFILE_RE = re.compile(r"(?i)(\\mozilla\\firefox\\profiles\\)[^\\]+")
 
 
 @dataclass
@@ -62,7 +63,8 @@ def normalize_path(path):
     default_username = "username"
     if len(path) >= 2 and path[1] == ":" and not path.startswith("C:"):
         path = "C:" + path[2:]
-    return re.sub(r"(?i)(C:\\Users\\)[^\\]+", r"\1" + default_username, path)
+    path = re.sub(r"(?i)(C:\\Users\\)[^\\]+", r"\1" + default_username, path)
+    return FIREFOX_PROFILE_RE.sub(r"\1profile", path)
 
 
 def extract_frst_entry(line, regexp, group_map, entry_type=""):

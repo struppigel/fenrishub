@@ -1,6 +1,6 @@
 from django.test import TestCase
 
-from ..frst_extractors import extract_firewall_rule, get_frst_entry
+from ..frst_extractors import extract_firewall_rule, get_frst_entry, normalize_path
 
 
 class ExtractFirewallRuleTests(TestCase):
@@ -134,6 +134,21 @@ class ExtractFirewallRuleTests(TestCase):
         self.assertIsNotNone(entry)
         self.assertIn("username", entry.filepath)
         self.assertNotIn("RBpon", entry.filepath)
+
+    def test_firefox_profile_segment_normalized(self):
+        path = (
+            r"C:\Users\blake\AppData\Roaming\Mozilla\Firefox\Profiles"
+            r"\kpxj5wcs.default-release-1694654727183\Extensions"
+            r"\mozilla_cc3@internetdownloadmanager.com.xpi"
+        )
+
+        normalized = normalize_path(path)
+
+        self.assertEqual(
+            normalized,
+            r"C:\Users\username\AppData\Roaming\Mozilla\Firefox\Profiles"
+            r"\profile\Extensions\mozilla_cc3@internetdownloadmanager.com.xpi",
+        )
 
     # -- Integration with get_frst_entry --
 
