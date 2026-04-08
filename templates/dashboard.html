@@ -107,6 +107,18 @@
             no fixlists yet.
         </div>
     {% endif %}
+
+    {% if page_obj.paginator.num_pages > 1 %}
+    <div class="button-group" style="margin-top: 12px;">
+        {% if page_obj.has_previous %}
+        <a href="?page={{ page_obj.previous_page_number }}"><button type="button">previous</button></a>
+        {% endif %}
+        <span style="padding: 8px 4px; font-size: 12px; color: var(--la-text-muted);">page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+        {% if page_obj.has_next %}
+        <a href="?page={{ page_obj.next_page_number }}"><button type="button">next</button></a>
+        {% endif %}
+    </div>
+    {% endif %}
 </div>
 
 <script>

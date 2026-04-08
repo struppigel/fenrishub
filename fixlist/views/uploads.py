@@ -211,7 +211,7 @@ def uploaded_logs_view(request):
             | Q(reddit_username__icontains=search_query)
             | Q(recipient_user__username__icontains=search_query)
         )
-    page_obj = Paginator(uploads, 25).get_page(request.GET.get('page'))
+    page_obj = Paginator(uploads, 8).get_page(request.GET.get('page'))
     pagination_params = {}
     if username_filter:
         pagination_params['u'] = username_filter
@@ -423,7 +423,7 @@ def uploads_trash_view(request):
         return redirect('uploads_trash')
 
     trashed = UploadedLog.objects.filter(deleted_at__isnull=False).select_related('recipient_user').defer('content').order_by('-deleted_at')
-    page_obj = Paginator(trashed, 25).get_page(request.GET.get('page'))
+    page_obj = Paginator(trashed, 8).get_page(request.GET.get('page'))
     return render(request, 'uploads_trash.html', {'uploads': page_obj.object_list, 'page_obj': page_obj})
 
 
