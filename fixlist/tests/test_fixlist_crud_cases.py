@@ -10,7 +10,8 @@ from django.test import RequestFactory, TestCase
 from django.test import override_settings
 from django.urls import reverse
 
-from ..models import AccessLog, ClassificationRule, Fixlist, UploadedLog
+from ..models import AccessLog, ClassificationRule, Fixlist, UploadedLog, UserProfile
+from ..views.auth import DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
 from ..views import log_analyzer_view, shared_fixlist_view, view_fixlist
 
 
@@ -34,6 +35,43 @@ class FixlistCrudViewTests(TestCase):
         self.assertEqual(response.url, reverse("view_fixlist", args=[created.pk]))
         self.assertEqual(created.owner, self.user)
         self.assertEqual(created.internal_note, "internal context")
+
+    def test_create_fixlist_links_source_upload_when_present(self):
+        upload = UploadedLog.objects.create(
+            upload_id="linked-log",
+            reddit_username="linked_user",
+            original_filename="FRST.txt",
+            content="line-1",
+        )
+
+        response = self.client.post(
+            reverse("create_fixlist"),
+            {
+                "username": "Created With Source",
+                "content": "ioc-1\nioc-2",
+                "internal_note": "",
+                "source_upload_id": upload.upload_id,
+            },
+        )
+
+        created = Fixlist.objects.get(username="Created With Source")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(created.source_uploaded_log_id, upload.id)
+
+    def test_create_fixlist_ignores_unknown_source_upload_id(self):
+        response = self.client.post(
+            reverse("create_fixlist"),
+            {
+                "username": "Created Without Source",
+                "content": "ioc-1\nioc-2",
+                "internal_note": "",
+                "source_upload_id": "does-not-exist",
+            },
+        )
+
+        created = Fixlist.objects.get(username="Created Without Source")
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNone(created.source_uploaded_log_id)
 
     def test_create_fixlist_ignores_rule_persistence_payload(self):
         pending_changes = [
@@ -148,8 +186,15 @@ class FixlistCrudViewTests(TestCase):
         self.assertFalse(fixlist.is_public)
 
     def test_view_fixlist_context_includes_guest_preview_url(self):
+        upload = UploadedLog.objects.create(
+            upload_id="preview-source",
+            reddit_username="preview_user",
+            original_filename="FRST.txt",
+            content="Running from C:\\Users\\George\\Desktop\\FRST64.exe\nline-1",
+        )
         fixlist = Fixlist.objects.create(
             owner=self.user,
+            source_uploaded_log=upload,
             username="Previewable",
             content="payload",
         )
@@ -168,6 +213,68 @@ class FixlistCrudViewTests(TestCase):
             rendered_context["guest_preview_url"],
             f"{share_url}?preview=guest",
         )
+        self.assertEqual(rendered_context["source_uploaded_log"].upload_id, "preview-source")
+        self.assertEqual(rendered_context["frst_run_path"], "C:\\Users\\George\\Desktop")
+
+    def test_view_fixlist_context_uses_empty_frst_run_path_when_header_missing(self):
+        upload = UploadedLog.objects.create(
+            upload_id="preview-no-path",
+            reddit_username="preview_user",
+            original_filename="FRST.txt",
+            content="line-1",
+        )
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            source_uploaded_log=upload,
+            username="Previewable",
+            content="payload",
+        )
+        request = RequestFactory().get(reverse("view_fixlist", args=[fixlist.pk]))
+        request.user = self.user
+
+        with patch("fixlist.views.fixlists.render", return_value=HttpResponse("ok")) as mock_render:
+            view_fixlist(request, pk=fixlist.pk)
+
+        rendered_context = mock_render.call_args.args[2]
+        self.assertEqual(rendered_context["frst_run_path"], "")
+
+    def test_view_fixlist_context_uses_default_frst_fix_message_when_unset(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Previewable",
+            content="payload",
+        )
+        request = RequestFactory().get(reverse("view_fixlist", args=[fixlist.pk]))
+        request.user = self.user
+
+        with patch("fixlist.views.fixlists.render", return_value=HttpResponse("ok")) as mock_render:
+            response = view_fixlist(request, pk=fixlist.pk)
+
+        rendered_context = mock_render.call_args.args[2]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            rendered_context["frst_fix_message_template"],
+            DEFAULT_FRST_FIX_MESSAGE_TEMPLATE,
+        )
+
+    def test_view_fixlist_context_uses_custom_profile_frst_fix_message(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Previewable",
+            content="payload",
+        )
+        UserProfile.objects.create(user=self.user, frst_fix_message="custom {FIXLISTLINK}")
+        request = RequestFactory().get(reverse("view_fixlist", args=[fixlist.pk]))
+        request.user = self.user
+
+        with patch("fixlist.views.fixlists.render", return_value=HttpResponse("ok")) as mock_render:
+            response = view_fixlist(request, pk=fixlist.pk)
+
+        rendered_context = mock_render.call_args.args[2]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(rendered_context["frst_fix_message_template"], "custom {FIXLISTLINK}")
 
     def test_create_fixlist_prefills_username_from_last_loaded_upload_session(self):
         upload = UploadedLog.objects.create(

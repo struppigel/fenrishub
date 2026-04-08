@@ -8,6 +8,7 @@
 <div>
     <form method="post" id="createFixlistForm">
         {% csrf_token %}
+        <input type="hidden" name="source_upload_id" value="{{ prefill_upload_id|default:''|escape }}">
 
         <div class="form-group">
             <label for="username">username</label>

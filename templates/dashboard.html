@@ -40,6 +40,18 @@
     .fixlist-actions .visibility-toggle-btn {
         width: 78px;
     }
+
+    .visibility-state {
+        font-weight: 600;
+    }
+
+    .visibility-state-public {
+        color: var(--la-info);
+    }
+
+    .visibility-state-hidden {
+        color: var(--la-warning-text);
+    }
 </style>
 {% endblock %}
 
@@ -60,18 +72,23 @@
             <div style="flex: 1;">
                 <div class="fixlist-title">{{ fixlist.username }}</div>
                 <div class="fixlist-meta">
-                    created {{ fixlist.created_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }} | {% if fixlist.is_public %}public{% else %}hidden{% endif %}
+                    created {{ fixlist.created_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }} |
+                    {% if fixlist.is_public %}
+                    <span class="visibility-state visibility-state-public">public</span>
+                    {% else %}
+                    <span class="visibility-state visibility-state-hidden">hidden</span>
+                    {% endif %}
                 </div>
             </div>
             <div class="fixlist-actions">
                 <button type="button" class="action-btn" onclick="copyShareLink('{% url 'shared_fixlist' fixlist.share_token %}', this)">copy link</button>
-                <a href="{% url 'view_fixlist' fixlist.pk %}" class="action-btn">edit</a>
+                <a href="{% url 'view_fixlist' fixlist.pk %}" class="action-btn">view</a>
                 <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
                     {% csrf_token %}
                     <input type="hidden" name="next" value="dashboard">
                     {% if fixlist.is_public %}
                     <input type="hidden" name="action" value="disable_public">
-                    <button type="submit" class="action-btn visibility-toggle-btn" onclick="return confirm('Disable public sharing for this fixlist?');">hide</button>
+                    <button type="submit" class="action-btn visibility-toggle-btn">hide</button>
                     {% else %}
                     <input type="hidden" name="action" value="enable_public">
                     <button type="submit" class="action-btn visibility-toggle-btn">publish</button>

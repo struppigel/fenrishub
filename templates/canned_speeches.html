@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+
+{% block title %}Canned Speech Settings - FenrisHub{% endblock %}
+
+{% block page_context_label %}canned speech settings{% endblock %}
+
+{% block content %}
+<div style="max-width: 820px; margin: 0 auto; padding: 8px 0;">
+    <h2>canned speech settings</h2>
+
+    <div class="info-box">
+        Configure your FRST fix message template. Placeholders supported: <code>{USERNAME}</code>, <code>{HELPERNAME}</code>, <code>{FIXLISTLINK}</code>, <code>{FRSTPATH}</code>.
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="frst_fix_message">frst fix message</label>
+            <textarea id="frst_fix_message" name="frst_fix_message" rows="14">{{ frst_fix_message }}</textarea>
+        </div>
+
+        <div class="button-group">
+            <button type="submit">save profile</button>
+            <button type="button" onclick="setDefaultMessage()">use default</button>
+            <a href="{% url 'dashboard' %}"><button type="button">back</button></a>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const defaultFrstFixMessage = "{{ default_frst_fix_message|escapejs }}";
+
+function setDefaultMessage() {
+    const input = document.getElementById('frst_fix_message');
+    input.value = defaultFrstFixMessage;
+}
+</script>
+{% endblock %}

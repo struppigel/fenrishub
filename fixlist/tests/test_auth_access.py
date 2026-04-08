@@ -5,8 +5,9 @@ from django.http import Http404, HttpResponse
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
-from ..models import Fixlist
-from ..views import change_password_view, dashboard_view, view_fixlist
+from ..models import Fixlist, UserProfile
+from ..views import change_password_view, dashboard_view, profile_view, view_fixlist
+from ..views.auth import DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
 
 
 class AuthenticationAndAccessTests(TestCase):
@@ -36,6 +37,12 @@ class AuthenticationAndAccessTests(TestCase):
 
     def test_change_password_requires_login(self):
         response = self.client.get(reverse("change_password"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+
+    def test_profile_requires_login(self):
+        response = self.client.get(reverse("profile"))
 
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response.url)
@@ -91,6 +98,34 @@ class AuthenticationAndAccessTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Owner Fixlist", titles)
         self.assertNotIn("Other", titles)
+
+    def test_profile_view_context_contains_default_template(self):
+        request = self.factory.get(reverse("profile"))
+        request.user = self.user
+
+        with patch("fixlist.views.auth.render", return_value=HttpResponse("ok")) as mock_render:
+            response = profile_view(request)
+
+        rendered_context = mock_render.call_args.args[2]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("default_frst_fix_message", rendered_context)
+        self.assertEqual(rendered_context["frst_fix_message"], DEFAULT_FRST_FIX_MESSAGE_TEMPLATE)
+
+    def test_profile_post_updates_frst_fix_message(self):
+        self.assertTrue(self.client.login(username="alice", password="password123"))
+
+        response = self.client.post(
+            reverse("profile"),
+            {
+                "frst_fix_message": "custom line with {USERNAME}",
+            },
+        )
+
+        profile = UserProfile.objects.get(user=self.user)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("profile"))
+        self.assertEqual(profile.frst_fix_message, "custom line with {USERNAME}")
 
     def test_user_cannot_access_other_users_fixlist_edit_page(self):
         request = self.factory.get(reverse("view_fixlist", args=[self.fixlist.pk]))

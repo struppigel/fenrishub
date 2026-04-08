@@ -37,6 +37,7 @@ def get_default_rule_owner_id():
 
 class Fixlist(models.Model):
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fixlists')
+    source_uploaded_log = models.ForeignKey('UploadedLog', on_delete=models.SET_NULL, null=True, blank=True, related_name='fixlists')
     username = models.CharField(max_length=255)
     content = models.TextField()
     internal_note = models.TextField(blank=True)
@@ -65,6 +66,14 @@ class Fixlist(models.Model):
         """Generate a random secure share token."""
         alphabet = string.ascii_letters + string.digits
         return ''.join(secrets.choice(alphabet) for _ in range(32))
+
+
+class UserProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='fenris_profile')
+    frst_fix_message = models.TextField(blank=True, default='')
+
+    def __str__(self):
+        return f'Profile for {self.user.username}'
 
 
 class AccessLog(models.Model):

@@ -7,6 +7,7 @@ from django.shortcuts import render
 from .auth import (
     login_view,
     change_password_view,
+    profile_view,
     dashboard_view,
     logout_view,
 )
@@ -74,6 +75,7 @@ __all__ = [
     'render',  # For backward compatibility with test patches
     'login_view',
     'change_password_view',
+    'profile_view',
     'dashboard_view',
     'upload_log_view',
     'uploaded_logs_view',

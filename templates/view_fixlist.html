@@ -9,11 +9,33 @@
     .visibility-toggle-btn {
         width: 78px;
     }
+
+    .inline-action-link {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 8px 12px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-primary);
+        border: 1px solid var(--la-border);
+        font-size: 12px;
+        text-decoration: none;
+        line-height: 1.2;
+    }
+
+    .inline-action-link:hover {
+        text-decoration: underline;
+    }
 </style>
 {% endblock %}
 
 {% block content %}
 <div>
+    {% if not fixlist.is_public %}
+    <div class="warning-box">
+        this fixlist is currently hidden from guests.
+    </div>
+    {% endif %}
+
     <div class="info-box">
         token {{ fixlist.share_token }}<br>
         created {{ fixlist.created_at|date:"Y-m-d H:i" }}<br>
@@ -25,9 +47,11 @@
         share link<br>
         <code>{{ share_url }}</code><br>
         <button type="button" onclick="copyShareLink('{{ share_url }}', this)" style="margin-top: 8px;">copy link</button>
-        <a href="{{ guest_preview_url }}" target="_blank" rel="noopener" style="margin-left: 8px;">
-            <button type="button" style="margin-top: 8px;">preview guest view</button>
-        </a>
+        <button type="button" onclick="copyFrstFixMessage(this)" style="margin-top: 8px; margin-left: 8px;">copy fix message</button>
+        {% if source_uploaded_log %}
+        <a href="{% url 'view_uploaded_log' source_uploaded_log.upload_id %}" class="inline-action-link" style="margin-left: 8px;">view source log</a>
+        {% endif %}
+        <a href="{{ guest_preview_url }}" target="_blank" rel="noopener" class="inline-action-link" style="margin-left: 8px;">preview guest view</a>
     </div>
 
     <h3>content</h3>
@@ -54,7 +78,7 @@
         <div class="button-group">
             <button type="submit" name="action" value="update">save</button>
             {% if fixlist.is_public %}
-            <button type="submit" name="action" value="disable_public" class="visibility-toggle-btn" onclick="return confirm('Disable public sharing for this fixlist?');">hide</button>
+            <button type="submit" name="action" value="disable_public" class="visibility-toggle-btn">hide</button>
             {% else %}
             <button type="submit" name="action" value="enable_public" class="visibility-toggle-btn">publish</button>
             {% endif %}
@@ -69,6 +93,29 @@
 function copyShareLink(text, button) {
     const originalText = button.textContent;
     navigator.clipboard.writeText(text).then(function() {
+        button.textContent = 'copied';
+        setTimeout(() => {
+            button.textContent = originalText;
+        }, 1200);
+    });
+}
+
+function copyFrstFixMessage(button) {
+    const template = "{{ frst_fix_message_template|escapejs }}";
+    const replacements = {
+        '{USERNAME}': "{{ fixlist.username|escapejs }}",
+        '{HELPERNAME}': "{{ user.username|escapejs }}",
+        '{FIXLISTLINK}': "{{ share_url|escapejs }}",
+        '{FRSTPATH}': "{{ frst_run_path|escapejs }}"
+    };
+
+    let message = template;
+    Object.keys(replacements).forEach(function(key) {
+        message = message.split(key).join(replacements[key]);
+    });
+
+    const originalText = button.textContent;
+    navigator.clipboard.writeText(message).then(function() {
         button.textContent = 'copied';
         setTimeout(() => {
             button.textContent = originalText;

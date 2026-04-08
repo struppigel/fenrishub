@@ -519,6 +519,7 @@
                         <div class="profile-dropdown" tabindex="0">
                             <button class="profile-btn page-context-profile" type="button" aria-haspopup="true">{{ user.username }} &#9660;</button>
                             <div class="profile-menu">
+                                <a href="{% url 'profile' %}">canned speech settings</a>
                                 <a href="{% url 'change_password' %}">change password</a>
                                 <form method="post" action="{% url 'logout' %}">
                                     {% csrf_token %}

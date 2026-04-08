@@ -11,7 +11,15 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
 from django.views.decorators.http import require_http_methods
 
-from ..models import Fixlist
+from ..models import Fixlist, UserProfile
+
+
+DEFAULT_FRST_FIX_MESSAGE_TEMPLATE = """FRST  Fix
+
+* Open the following link and press on the **Copy contents** button to copy the entire text: [fixlist]({FIXLISTLINK})
+* Run **FRST64.exe** and click on **Fix**. Note: FRST reads the fixlist directly from your clipboard, so you don't need to paste or save it anywhere.
+* A log (Fixlog.txt) will open on your desktop.
+* Copy & paste the contents of the Fixlog.txt to [https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}](https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}) and press **\"save log\"**. Reply back with the keyword"""
 
 
 @require_http_methods(["GET", "POST"])
@@ -59,6 +67,29 @@ def dashboard_view(request):
     fixlists = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True)
     fixlist_trash_count = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=False).count()
     return render(request, 'dashboard.html', {'fixlists': fixlists, 'fixlist_trash_count': fixlist_trash_count})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def profile_view(request):
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
+    if request.method == 'POST':
+        profile.frst_fix_message = request.POST.get('frst_fix_message', '')
+        profile.save(update_fields=['frst_fix_message'])
+        messages.success(request, 'Canned speech settings updated successfully.')
+        return redirect('profile')
+
+    effective_frst_fix_message = (profile.frst_fix_message or '').strip() or DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
+
+    return render(
+        request,
+        'canned_speeches.html',
+        {
+            'frst_fix_message': effective_frst_fix_message,
+            'default_frst_fix_message': DEFAULT_FRST_FIX_MESSAGE_TEMPLATE,
+        },
+    )
 
 
 @require_http_methods(["POST"])

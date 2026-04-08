@@ -7,7 +7,7 @@ from .views.analyzer import (
     preview_pending_rule_changes_api,
     update_analyzed_line_status_api,
 )
-from .views.auth import change_password_view, dashboard_view, login_view, logout_view
+from .views.auth import change_password_view, dashboard_view, login_view, logout_view, profile_view
 from .views.fixlists import (
     copy_to_clipboard_api,
     create_fixlist_view,
@@ -40,6 +40,7 @@ urlpatterns = [
     path('upload/<str:helper_username>/', upload_log_view, name='upload_log_for_helper'),
     path('upload/', upload_log_view, name='upload_log'),
     path('account/password/', change_password_view, name='change_password'),
+    path('account/profile/', profile_view, name='profile'),
     path('dashboard/', dashboard_view, name='dashboard'),
     path('uploads/', uploaded_logs_view, name='uploaded_logs'),
     path('uploads/trash/', uploads_trash_view, name='uploads_trash'),

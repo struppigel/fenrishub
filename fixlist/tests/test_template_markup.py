@@ -21,6 +21,12 @@ class TemplateMarkupTests(TestCase):
         content = self._read_template("view_fixlist.html")
 
         self.assertIn("preview guest view", content)
+        self.assertIn("view source log", content)
+        self.assertIn("copy fix message", content)
+        self.assertIn("{USERNAME}", content)
+        self.assertIn("{HELPERNAME}", content)
+        self.assertIn("{FIXLISTLINK}", content)
+        self.assertIn("{FRSTPATH}", content)
         self.assertIn('href="{{ guest_preview_url }}"', content)
         self.assertIn('value="disable_public"', content)
         self.assertIn('value="enable_public"', content)
@@ -39,7 +45,7 @@ class TemplateMarkupTests(TestCase):
         content = self._read_template("dashboard.html")
 
         self.assertIn('class="action-btn" onclick="copyShareLink', content)
-        self.assertIn('class="action-btn">edit</a>', content)
+        self.assertIn('class="action-btn">view</a>', content)
         self.assertIn('name="action" value="disable_public"', content)
         self.assertIn('name="action" value="enable_public"', content)
 
@@ -54,6 +60,7 @@ class TemplateMarkupTests(TestCase):
         content = self._read_template("base.html")
 
         self.assertIn('{% url \'uploaded_logs\' %}', content)
+        self.assertIn('{% url \'profile\' %}', content)
         self.assertNotIn('>upload</a>', content)
 
     def test_upload_templates_include_upload_toolbar_and_copy_id_ui(self):
@@ -216,6 +223,7 @@ class TemplateMarkupTests(TestCase):
         content = self._read_template("create_fixlist.html")
 
         self.assertIn("fenrishub_prefill_content", content)
+        self.assertIn('name="source_upload_id"', content)
         self.assertNotIn('id="persistRulesInput"', content)
         self.assertNotIn('id="pendingRuleChangesInput"', content)
         self.assertNotIn('id="selectedRuleIdsInput"', content)
@@ -224,5 +232,9 @@ class TemplateMarkupTests(TestCase):
         self.assertNotIn("fenrishub_pending_rule_changes", content)
         self.assertNotIn("fenrishub_selected_rule_ids", content)
         self.assertNotIn("fenrishub_conflict_resolutions", content)
+
+    def test_canned_speeches_template_mentions_frstpath_placeholder(self):
+        content = self._read_template("canned_speeches.html")
+        self.assertIn("{FRSTPATH}", content)
 
 
