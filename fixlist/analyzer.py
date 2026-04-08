@@ -206,7 +206,7 @@ def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
 
     threshold_usage_percent = 80
     threshold_total_ram_gb = 4
-    threshold_free_space_gb = 100
+    threshold_free_space_gb = 50
     total_gb = total_mb / 1024 if total_mb is not None else None
     reasons = []
     details = []

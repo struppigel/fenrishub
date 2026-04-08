@@ -51,6 +51,49 @@ class LogAnalyzerApiWarningTests(LogAnalyzerApiBaseTestCase):
         self.assertIn("low_memory", warnings_by_code)
         self.assertIn("RAM usage above 80%", warnings_by_code["low_memory"]["message"])
 
+    def test_analyze_api_does_not_warn_for_disk_space_at_50_gb_when_other_memory_signals_are_healthy(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Percentage of memory in use: 48%\n"
+                    "Total physical RAM: 16384 MB\n"
+                    "Drive C: (Windows) (Free:50 GB)\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("low_memory", warnings_by_code)
+
+    def test_analyze_api_warns_for_disk_space_below_50_gb_when_other_memory_signals_are_healthy(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Percentage of memory in use: 48%\n"
+                    "Total physical RAM: 16384 MB\n"
+                    "Drive C: (Windows) (Free:49 GB)\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("low_memory", warnings_by_code)
+        self.assertIn("below 50 GB", warnings_by_code["low_memory"]["message"])
+
     def test_analyze_api_returns_alert_warning_from_matched_alert_rule_description(self):
         self.client.login(username="analyzer", password="password123")
         ClassificationRule.objects.create(

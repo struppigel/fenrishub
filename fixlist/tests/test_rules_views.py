@@ -189,6 +189,24 @@ class RulesViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertFalse(ClassificationRule.objects.filter(pk=rule.pk).exists())
 
+    def test_delete_own_rule_preserves_filter_and_search_query(self):
+        rule = ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="DELETE-WITH-QUERY",
+        )
+        query = "filter=own&status=B&match=exact&q=abc&search_mode=text&sort=recent&page=2"
+
+        response = self.client.post(
+            reverse("rules"),
+            {"action": "delete", "pk": rule.pk, "return_q": query},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, f"{reverse('rules')}?{query}")
+        self.assertFalse(ClassificationRule.objects.filter(pk=rule.pk).exists())
+
     def test_cannot_delete_other_users_rule(self):
         rule = ClassificationRule.objects.create(
             owner=self.other,

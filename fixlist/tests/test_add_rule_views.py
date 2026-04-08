@@ -45,7 +45,10 @@ class AddRuleViewTests(TestCase):
                 "description": "test rule",
             },
         )
-        self.assertRedirects(response, reverse("rules"))
+        self.assertRedirects(
+            response,
+            f"{reverse('add_rule')}?status={ClassificationRule.STATUS_MALWARE}&match_type={ClassificationRule.MATCH_EXACT}",
+        )
         rule = ClassificationRule.objects.get(source_text="MALICIOUS-LINE")
         self.assertEqual(rule.owner, self.user)
         self.assertEqual(rule.status, ClassificationRule.STATUS_MALWARE)
@@ -64,9 +67,31 @@ class AddRuleViewTests(TestCase):
             },
         )
 
-        self.assertRedirects(response, reverse("rules"))
+        self.assertRedirects(
+            response,
+            f"{reverse('add_rule')}?status={ClassificationRule.STATUS_ALERT}&match_type={ClassificationRule.MATCH_EXACT}",
+        )
         rule = ClassificationRule.objects.get(source_text="ALERT-ONLY-LINE")
         self.assertEqual(rule.status, ClassificationRule.STATUS_ALERT)
+
+    def test_create_rule_stays_on_add_page_with_settings_preserved_and_text_fields_cleared(self):
+        response = self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_PUP,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "TEMP-SOURCE",
+                "description": "TEMP-DESC",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.request["PATH_INFO"], reverse("add_rule"))
+        self.assertEqual(response.context["form_status"], ClassificationRule.STATUS_PUP)
+        self.assertEqual(response.context["form_match_type"], ClassificationRule.MATCH_SUBSTRING)
+        self.assertEqual(response.context["form_source_text"], "")
+        self.assertEqual(response.context["form_description"], "")
 
     def test_create_rule_requires_source_text(self):
         response = self.client.post(

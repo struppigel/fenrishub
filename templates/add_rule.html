@@ -227,7 +227,7 @@
                 <label for="ruleStatus">status</label>
                 <select id="ruleStatus" name="status" required>
                     {% for code, label in status_choices %}
-                    <option value="{{ code }}">{{ code }} - {{ label }}</option>
+                    <option value="{{ code }}" {% if form_status == code %}selected{% endif %}>{{ code }} - {{ label }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -235,17 +235,17 @@
                 <label for="ruleMatchType">match type</label>
                 <select id="ruleMatchType" name="match_type" required>
                     {% for code, label in match_type_choices %}
-                    <option value="{{ code }}">{{ label }}</option>
+                    <option value="{{ code }}" {% if form_match_type == code %}selected{% endif %}>{{ label }}</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="form-group">
                 <label for="ruleSourceText">source text</label>
-                <textarea id="ruleSourceText" name="source_text" placeholder="Rule matching pattern..." required></textarea>
+                <textarea id="ruleSourceText" name="source_text" placeholder="Rule matching pattern..." required>{{ form_source_text }}</textarea>
             </div>
             <div class="form-group">
                 <label for="ruleDescription">description (optional)</label>
-                <input type="text" id="ruleDescription" name="description" placeholder="What this rule matches...">
+                <input type="text" id="ruleDescription" name="description" value="{{ form_description }}" placeholder="What this rule matches...">
             </div>
             <div class="button-group">
                 <button type="submit">create</button>

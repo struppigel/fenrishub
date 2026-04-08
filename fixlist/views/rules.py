@@ -5,11 +5,13 @@ Handles: creating, editing, deleting, testing, and viewing classification rules.
 """
 
 import json
+from urllib.parse import parse_qsl, urlencode
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 from django.http import JsonResponse
+from django.urls import reverse
 from django.core.paginator import Paginator
 from django.db.models import Q, Case, When
 
@@ -96,6 +98,11 @@ def rules_view(request):
             rule.delete()
             invalidate_rule_buckets_cache()
             messages.success(request, 'Rule deleted.')
+            return_q = request.POST.get('return_q', '').strip()
+            if return_q:
+                safe_query = urlencode(parse_qsl(return_q, keep_blank_values=True), doseq=True)
+                if safe_query:
+                    return redirect(f"{reverse('rules')}?{safe_query}")
             return redirect('rules')
 
         if action == 'toggle':
@@ -167,6 +174,7 @@ def rules_view(request):
         'search_q': search_q,
         'search_mode': search_mode,
         'sort': sort,
+        'current_query_string': request.GET.urlencode(),
         'status_choices': ClassificationRule.STATUS_CHOICES,
         'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
         'status_map': STATUS_MAP,
@@ -179,11 +187,25 @@ def rules_view(request):
 @require_http_methods(["GET", "POST"])
 def add_rule_view(request):
     """Dedicated page for adding a new classification rule with log preview."""
+    form_status = request.GET.get('status', '').strip()
+    form_match_type = request.GET.get('match_type', '').strip()
+    form_source_text = ''
+    form_description = ''
+
+    if form_status not in dict(ClassificationRule.STATUS_CHOICES):
+        form_status = ClassificationRule.STATUS_UNKNOWN
+    if form_match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
+        form_match_type = ClassificationRule.MATCH_EXACT
+
     if request.method == 'POST':
         status = request.POST.get('status', '').strip()
         match_type = request.POST.get('match_type', '').strip()
         source_text = request.POST.get('source_text', '').strip()
         description = request.POST.get('description', '').strip()
+        form_status = status
+        form_match_type = match_type
+        form_source_text = source_text
+        form_description = description
         if not source_text:
             messages.error(request, 'Rule source text is required.')
         elif status not in dict(ClassificationRule.STATUS_CHOICES):
@@ -216,11 +238,16 @@ def add_rule_view(request):
                 ClassificationRule.objects.create(**create_kwargs)
                 invalidate_rule_buckets_cache()
                 messages.success(request, 'Rule created.')
-                return redirect('rules')
+                keep_qs = urlencode({'status': status, 'match_type': match_type})
+                return redirect(f"{reverse('add_rule')}?{keep_qs}")
 
     context = {
         'status_choices': ClassificationRule.STATUS_CHOICES,
         'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
+        'form_status': form_status,
+        'form_match_type': form_match_type,
+        'form_source_text': form_source_text,
+        'form_description': form_description,
     }
     return render(request, 'add_rule.html', context)
 
