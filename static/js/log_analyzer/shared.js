@@ -178,7 +178,25 @@ function updateSummary(summary, fallbackTotal = 0) {
     if (legendEl) {
         legendEl.hidden = false;
     }
+    updateLegendCounts();
     updateSaveChangesButtonState();
+}
+
+function updateLegendCounts() {
+    const counts = Object.create(null);
+    analyzedLines.forEach((line) => {
+        const cls = line.css_class || STATUS_CLASS_MAP[line.dominant_status] || 'status-unknown';
+        counts[cls] = (counts[cls] || 0) + 1;
+    });
+    document.querySelectorAll('.legend-item[data-status-class]').forEach((item) => {
+        const countEl = item.querySelector('.legend-count');
+        if (!countEl) {
+            return;
+        }
+        const cls = item.dataset.statusClass;
+        const count = counts[cls] || 0;
+        countEl.textContent = `(${count})`;
+    });
 }
 
 function summarizeEffectiveStatuses(lines) {

@@ -1,4 +1,6 @@
 import json
+from unittest.mock import patch
+from datetime import datetime, timedelta
 
 from django.urls import reverse
 
@@ -283,3 +285,136 @@ class LogAnalyzerApiWarningTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("low_memory", warnings_by_code)
         self.assertIn("Memory information incomplete", warnings_by_code["low_memory"]["message"])
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_warns_for_recent_restore_operation_within_last_week(self, mock_datetime):
+        """Test that a restore operation within the last 7 days triggers a warning."""
+        # Mock 'now' to April 9, 2026, 14:30:00
+        mock_now = datetime(2026, 4, 9, 14, 30, 0)
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        # April 8, 2026 at 10:00:00 (1 day ago)
+        restore_date = "08-04-2026 10:00:00"
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "==================== Restore Points =========================\n"
+                    f"{restore_date} Restore Operation\n"
+                    "=====================================================\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("recent_restore_operation", warnings_by_code)
+        warning = warnings_by_code["recent_restore_operation"]
+        self.assertIn("yesterday", warning["message"])
+        self.assertIn("2026-04-08", warning["details"][0])
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_does_not_warn_for_restore_operation_older_than_7_days(self, mock_datetime):
+        """Test that a restore operation older than 7 days does not trigger a warning."""
+        # Mock 'now' to April 9, 2026, 14:30:00
+        mock_now = datetime(2026, 4, 9, 14, 30, 0)
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        # April 1, 2026 at 10:00:00 (8 days ago)
+        old_restore_date = "01-04-2026 10:00:00"
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "==================== Restore Points =========================\n"
+                    f"{old_restore_date} Restore Operation\n"
+                    "=====================================================\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warning_codes = {warning["code"] for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("recent_restore_operation", warning_codes)
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_uses_most_recent_restore_operation_for_warning(self, mock_datetime):
+        """Test that the most recent restore operation is used when multiple exist."""
+        # Mock 'now' to April 9, 2026, 14:30:00
+        mock_now = datetime(2026, 4, 9, 14, 30, 0)
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        # Two restore operations: 5 days ago and 2 days ago
+        old_restore = "04-04-2026 10:00:00"
+        recent_restore = "07-04-2026 13:21:33"
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "==================== Restore Points =========================\n"
+                    f"{old_restore} Restore Operation\n"
+                    f"{recent_restore} Restore Operation\n"
+                    "=====================================================\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("recent_restore_operation", warnings_by_code)
+        warning = warnings_by_code["recent_restore_operation"]
+        # Should reference the more recent date (April 7), not April 4
+        self.assertIn("2 days ago", warning["message"])
+        self.assertIn("2026-04-07", warning["details"][0])
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_restore_operation_warning_contains_correct_timestamp(self, mock_datetime):
+        """Test that the warning message contains the exact date and time of the restore operation."""
+        # Mock 'now' to April 9, 2026, 14:30:00
+        mock_now = datetime(2026, 4, 9, 14, 30, 0)
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        restore_date = "05-04-2026 19:25:34"
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "==================== Restore Points =========================\n"
+                    f"{restore_date} Restore Operation\n"
+                    "=====================================================\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("recent_restore_operation", warnings_by_code)
+        warning = warnings_by_code["recent_restore_operation"]
+        # Check that the warning message contains both the relative time and exact timestamp
+        self.assertIn("2026-04-05 19:25:34", warning["details"][0])
+        # Check that details include the full information
+        self.assertEqual(len(warning["details"]), 3)

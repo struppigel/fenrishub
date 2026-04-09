@@ -184,6 +184,11 @@ body.clean-cursor-mode .line-text {
     text-decoration: line-through;
 }
 
+.legend-item .legend-count {
+    color: inherit;
+    font-variant-numeric: tabular-nums;
+}
+
 .legend-toggle-all {
     border: none;
     background: transparent;
@@ -665,7 +670,7 @@ body.clean-cursor-mode .line-text {
     line-height: 1.25;
 }
 
-.legend-item {
+.rule-legend .legend-item {
     display: grid;
     grid-template-columns: 16px minmax(0, 1fr);
     align-items: center;

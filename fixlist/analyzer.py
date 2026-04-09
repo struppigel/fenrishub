@@ -1,5 +1,6 @@
 import re
 import time
+from datetime import datetime
 from typing import Iterable
 
 from . import frst_extractors as ex
@@ -267,12 +268,77 @@ def _detect_multiple_enabled_av_warning(raw_log_text: str) -> dict | None:
     )
 
 
+def _detect_recent_restore_operation_warning(raw_log_text: str) -> dict | None:
+    """Detect if a system restore operation occurred in the last 7 days."""
+    restore_operations = []
+    
+    for raw_line in (raw_log_text or "").splitlines():
+        line = raw_line.strip()
+        # Look for lines containing "Restore Operation"
+        if "Restore Operation" not in line:
+            continue
+        
+        # Try to parse datetime from the beginning of the line
+        # Expected format: DD-MM-YYYY HH:MM:SS Restore Operation
+        match = re.match(r"(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\s+.*Restore Operation", line)
+        if not match:
+            continue
+        
+        try:
+            day, month, year, hour, minute, second = map(int, match.groups())
+            restore_dt = datetime(year, month, day, hour, minute, second)
+            restore_operations.append(restore_dt)
+        except (ValueError, TypeError):
+            # Invalid date values, skip
+            continue
+    
+    if not restore_operations:
+        return None
+    
+    # Get the most recent restore operation
+    latest_restore = max(restore_operations)
+    now = datetime.now()
+    time_diff = now - latest_restore
+    days_ago = time_diff.days
+    
+    # Show warning if within the last 7 days
+    if days_ago > 7:
+        return None
+    
+    # Calculate fractional days for more precise messaging
+    total_hours = time_diff.total_seconds() / 3600
+    formatted_time = latest_restore.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Build warning message
+    if days_ago == 0:
+        time_str = f"today at {latest_restore.strftime('%H:%M:%S')}"
+    elif days_ago == 1:
+        time_str = f"yesterday at {latest_restore.strftime('%H:%M:%S')}"
+    else:
+        time_str = f"{days_ago} days ago on {formatted_time}"
+    
+    message = f"System restore operation detected {time_str}. This could indicate malware removal attempts."
+    details = [
+        f"Restore date/time: {formatted_time}",
+        f"Days ago: {days_ago}",
+        f"Total restore operations detected: {len(restore_operations)}",
+    ]
+    
+    return _build_warning(
+        "recent_restore_operation",
+        "Recent system restore operation detected",
+        message,
+        details,
+    )
+
+
 def _build_log_warnings(raw_log_text: str) -> list[dict]:
     warnings = []
     for warning in (
         _detect_incomplete_log_warning(raw_log_text),
         _detect_low_memory_warning(raw_log_text),
         _detect_multiple_enabled_av_warning(raw_log_text),
+        _detect_recent_restore_operation_warning(raw_log_text),
     ):
         if warning:
             warnings.append(warning)
