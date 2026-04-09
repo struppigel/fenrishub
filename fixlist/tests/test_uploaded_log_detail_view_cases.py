@@ -20,6 +20,34 @@ class UploadedLogDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'payload')
 
+    def test_detail_view_shows_detected_encoding_when_set(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='encoded-river',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+            detected_encoding='utf-16-le',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '>encoding<')
+        self.assertContains(response, 'utf-16-le')
+
+    def test_detail_view_omits_encoding_row_when_unset(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='plain-river',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, '>encoding<')
+
     def test_authenticated_user_can_delete_upload(self):
         uploaded = UploadedLog.objects.create(
             upload_id='quiet-forest',

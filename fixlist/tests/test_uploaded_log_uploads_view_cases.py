@@ -85,6 +85,53 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertIn('Farbar Recovery Scan Tool', decoded)
         self.assertNotIn('\x0c', decoded)
 
+    def test_uploaded_log_form_records_detected_encoding_for_utf16le(self):
+        source_text = 'Scan result of Farbar Recovery Scan Tool\nRan by nickl'
+        # FRST commonly emits UTF-16-LE without a BOM.
+        payload = source_text.encode('utf-16-le')
+
+        form = UploadedLogForm(
+            data={'reddit_username': 'reddit_name'},
+            files={'log_file': SimpleUploadedFile('Sample.txt', payload, content_type='text/plain')},
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        log_file = form.cleaned_data['log_file']
+        self.assertEqual(log_file.decoded_content, source_text)
+        # Normalization collapses charset_normalizer's "utf_16_le" and the
+        # fallback list's "utf-16-le" into a single canonical form.
+        self.assertEqual(log_file.detected_encoding, 'utf-16-le')
+
+    def test_upload_log_view_persists_detected_encoding_on_uploaded_log(self):
+        source_text = 'Scan result of Farbar Recovery Scan Tool\nRan by nickl'
+        payload = source_text.encode('utf-16-le')
+
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_file': SimpleUploadedFile('Sample.txt', payload, content_type='text/plain'),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        self.assertEqual(uploaded.detected_encoding, 'utf-16-le')
+        self.assertEqual(uploaded.content, source_text)
+
+    def test_upload_log_view_persists_empty_encoding_for_pasted_text(self):
+        response = self.client.post(
+            reverse('upload_log'),
+            {
+                'reddit_username': 'reddit_name',
+                'log_text': 'Scan result of Farbar Recovery Scan Tool\nRan by nickl',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        self.assertEqual(uploaded.detected_encoding, '')
+
     def test_upload_log_view_logs_context_on_unhandled_exception(self):
         with (
             patch('fixlist.views.uploads.UploadedLog.objects.create', side_effect=RuntimeError('boom')),

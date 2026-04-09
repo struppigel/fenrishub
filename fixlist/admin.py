@@ -201,13 +201,13 @@ class UploadedLogAdmin(admin.ModelAdmin):
     list_display = ('upload_id', 'reddit_username', 'log_type', 'is_incomplete', 'created_by', 'recipient_user', 'created_at')
     list_filter = ('log_type', 'is_incomplete', 'created_at')
     search_fields = ('upload_id', 'reddit_username', 'original_filename')
-    readonly_fields = ('upload_id', 'content_hash', 'created_at', 'updated_at')
+    readonly_fields = ('upload_id', 'content_hash', 'detected_encoding', 'created_at', 'updated_at')
     fieldsets = (
         (None, {
             'fields': ('upload_id', 'reddit_username', 'original_filename', 'log_type', 'is_incomplete', 'created_by', 'recipient_user'),
         }),
         ('Content', {
-            'fields': ('content', 'content_hash'),
+            'fields': ('content', 'content_hash', 'detected_encoding'),
             'classes': ('collapse',),
         }),
         ('Analysis Stats', {

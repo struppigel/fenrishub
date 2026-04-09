@@ -69,14 +69,29 @@ class UploadedLogForm(forms.Form):
         return score
 
     @classmethod
-    def _iter_candidate_variants(cls, text: str):
-        yield text
+    def _iter_candidate_variants(cls, text: str, label: str):
+        yield text, label
         try:
             repaired = text.encode('utf-16-le').decode('utf-8')
         except (UnicodeEncodeError, UnicodeDecodeError):
             return
         if repaired and repaired != text:
-            yield repaired
+            yield repaired, f'{label}+repair'
+
+    @staticmethod
+    def _normalize_encoding_label(label: str) -> str:
+        """
+        Canonicalize encoding labels so the same codec produces the same string
+        regardless of which detection path won. charset_normalizer reports
+        Python's underscored form (e.g. 'utf_16_le'); the fallback list uses
+        hyphens (e.g. 'utf-16-le'). Normalize to lowercase + hyphens, while
+        preserving any '+repair' suffix added by _iter_candidate_variants.
+        """
+        if not label:
+            return ''
+        base, sep, suffix = label.partition('+')
+        base = base.strip().lower().replace('_', '-')
+        return f'{base}{sep}{suffix}' if sep else base
 
     def clean_reddit_username(self):
         username = (self.cleaned_data.get('reddit_username') or '').strip()
@@ -106,30 +121,33 @@ class UploadedLogForm(forms.Form):
 
         # Build decode candidates from detector + common FRST encodings,
         # then pick the best readable/log-like text instead of first match.
-        candidates = []
+        # Each entry is (text, encoding_label) so the winner can be reported.
+        candidates: list[tuple[str, str]] = []
         detected = from_bytes(raw_bytes).best()
         if detected is not None:
             detected_text = str(detected)
             if detected_text:
-                candidates.append(detected_text)
+                detected_label = getattr(detected, 'encoding', None) or 'detected'
+                candidates.append((detected_text, detected_label))
 
         for encoding in ('utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'windows-1252'):
             try:
-                candidates.append(raw_bytes.decode(encoding))
+                candidates.append((raw_bytes.decode(encoding), encoding))
             except (UnicodeDecodeError, UnicodeError):
                 continue
 
         best_content = None
+        best_label = ''
         best_score = float('-inf')
         seen_candidates = set()
-        for candidate in candidates:
+        for candidate, candidate_label in candidates:
             if not candidate:
                 continue
-            for candidate_variant in self._iter_candidate_variants(candidate):
-                if not candidate_variant or candidate_variant in seen_candidates:
+            for variant_text, variant_label in self._iter_candidate_variants(candidate, candidate_label):
+                if not variant_text or variant_text in seen_candidates:
                     continue
-                seen_candidates.add(candidate_variant)
-                cleaned = candidate_variant.replace('\x00', '')
+                seen_candidates.add(variant_text)
+                cleaned = variant_text.replace('\x00', '')
                 cleaned = self.INVALID_TEXT_CHAR_RE.sub('', cleaned)
                 if not cleaned:
                     continue
@@ -137,6 +155,7 @@ class UploadedLogForm(forms.Form):
                 if score > best_score:
                     best_score = score
                     best_content = cleaned
+                    best_label = variant_label
 
         if best_content is None:
             raise forms.ValidationError('File must be valid text and cannot contain binary control bytes.')
@@ -146,6 +165,7 @@ class UploadedLogForm(forms.Form):
 
         uploaded_file.seek(0)
         uploaded_file.decoded_content = best_content
+        uploaded_file.detected_encoding = self._normalize_encoding_label(best_label)
         return uploaded_file
 
     def clean_log_text(self):

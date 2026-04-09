@@ -81,7 +81,7 @@
     <div style="display: flex; align-items: center; gap: 6px;">
         <div>
             {% if uploaded_log.recipient_user %}
-            helper {{ uploaded_log.recipient_user.username }}
+            {{ uploaded_log.recipient_user.username }}
             {% else %}
             <span class="channel-unassigned">general (unassigned)</span>
             {% endif %}
@@ -101,6 +101,10 @@
     <div>{{ uploaded_log.content_hash }}</div>
     <div class="meta-key">uploaded</div>
     <div>{{ uploaded_log.created_at|date:"Y-m-d H:i" }}</div>
+    {% if uploaded_log.detected_encoding %}
+    <div class="meta-key">encoding</div>
+    <div>{{ uploaded_log.detected_encoding }}</div>
+    {% endif %}
     {% if uploaded_log.deleted_at %}
     <div class="meta-key">deleted</div>
     <div style="color: var(--la-error-text);">{{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}</div>

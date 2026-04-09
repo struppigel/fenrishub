@@ -256,6 +256,7 @@ class UploadedLog(models.Model):
     is_incomplete = models.BooleanField(default=False)
     content = models.TextField()
     content_hash = models.CharField(max_length=32, blank=True, db_index=True)
+    detected_encoding = models.CharField(max_length=32, blank=True, default='')
     created_by = models.ForeignKey(
         User,
         null=True,

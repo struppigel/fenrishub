@@ -261,6 +261,34 @@ class TrashViewTests(TestCase):
         self.assertContains(response, 'amber-meadow-trsh')
         self.assertContains(response, 'azure-harbor-trsh')
 
+    def test_merge_appends_counter_when_trash_id_already_exists(self):
+        """Regression: merging must not 500 when {id}-trsh already exists in trash."""
+        from django.utils import timezone as tz
+        # Pre-existing trashed record from a prior merge that retained 'amber-meadow'.
+        self._make_log('amber-meadow-trsh', deleted_at=tz.now())
+
+        first = self._make_log('amber-meadow')
+        second = self._make_log('azure-harbor')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'merge', 'selected_upload_ids': [first.upload_id, second.upload_id]},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        # Pre-existing trash record is untouched.
+        self.assertTrue(UploadedLog.objects.filter(upload_id='amber-meadow-trsh').exists())
+        # New trash record gets a counter suffix to avoid colliding.
+        self.assertTrue(UploadedLog.objects.filter(upload_id='amber-meadow-trsh-2').exists())
+        self.assertTrue(UploadedLog.objects.filter(upload_id='azure-harbor-trsh').exists())
+        # Merged log keeps the retained id and is active.
+        self.assertTrue(
+            UploadedLog.objects.filter(
+                upload_id='amber-meadow', deleted_at__isnull=True
+            ).exists()
+        )
+
     # --- rescan excludes trashed logs ---
 
     def test_rescan_does_not_process_trashed_logs(self):

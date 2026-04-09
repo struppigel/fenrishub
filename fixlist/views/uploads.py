@@ -71,9 +71,11 @@ def upload_log_view(request, helper_username=None):
                 if log_file:
                     filename = log_file.name
                     content = getattr(log_file, 'decoded_content', '')
+                    detected_encoding = getattr(log_file, 'detected_encoding', '')
                 else:
                     filename = 'pasted.txt'
                     content = form.cleaned_data['log_text']
+                    detected_encoding = ''
                 if '\x00' in content:
                     logger.warning(
                         'NUL bytes detected in upload content; stripping before persist (filename=%r, helper=%r, ip=%s)',
@@ -87,6 +89,7 @@ def upload_log_view(request, helper_username=None):
                     original_filename=filename,
                     content=content,
                     recipient_user=recipient_user,
+                    detected_encoding=detected_encoding,
                 )
                 created_log.recalculate_log_type()
                 created_log.recalculate_scan_date()
