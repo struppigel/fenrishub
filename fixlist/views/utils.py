@@ -19,10 +19,14 @@ from ..models import UploadedLog, Fixlist
 
 
 def _purge_old_trash():
-    """Delete soft-deleted records older than 30 days."""
-    cutoff = timezone.now() - timedelta(days=30)
-    UploadedLog.objects.filter(deleted_at__isnull=False, deleted_at__lt=cutoff).delete()
-    Fixlist.objects.filter(deleted_at__isnull=False, deleted_at__lt=cutoff).delete()
+    """Delete soft-deleted records older than 7 days and all records older than 30 days."""
+    now = timezone.now()
+    trash_cutoff = now - timedelta(days=7)
+    hard_cutoff = now - timedelta(days=30)
+    UploadedLog.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff).delete()
+    Fixlist.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff).delete()
+    UploadedLog.objects.filter(created_at__lt=hard_cutoff).delete()
+    Fixlist.objects.filter(created_at__lt=hard_cutoff).delete()
 
 
 def _anonymous_upload_limit() -> tuple[int, int]:

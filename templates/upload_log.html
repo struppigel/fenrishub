@@ -42,7 +42,10 @@
 
 {% if target_helper %}
 <div class="info-box" style="margin: 12px 0; padding: 12px;">
-    this upload is assigned to helper <strong>{{ target_helper.username }}</strong>.
+    This upload is assigned to helper <strong>{{ target_helper.username }}</strong>.
+    {% if not user.is_authenticated %}
+    <br>No helper yet? <a href="{% url 'upload_log' %}" style="text-decoration: underline; font-weight: 600;">Upload to the general channel instead</a>
+    {% endif %}
 </div>
 {% elif invalid_helper_username %}
 <div class="warning-box" style="margin: 12px 0; padding: 12px;">

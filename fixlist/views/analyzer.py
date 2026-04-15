@@ -11,7 +11,6 @@ from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 from django.http import JsonResponse
 from django.shortcuts import render
-from django.db.models import Q
 from django.utils.safestring import mark_safe
 
 from ..analyzer import (
@@ -35,12 +34,13 @@ def log_analyzer_view(request):
     requested_upload_id = (request.GET.get('upload_id') or '').strip()
     initial_upload_id = requested_upload_id if requested_upload_id else ''
     snippets_qs = FixlistSnippet.objects.filter(
-        Q(owner=request.user) | Q(is_shared=True)
-    ).select_related('owner').order_by('name')
+        analyzer_users=request.user,
+    ).select_related('owner').order_by('category', 'name')
     snippets_json = mark_safe(json.dumps([
         {
             'id': s.id,
             'name': s.name if s.owner_id == request.user.id else f"{s.name} ({s.owner.username})",
+            'category': s.category,
             'content': s.content,
         }
         for s in snippets_qs

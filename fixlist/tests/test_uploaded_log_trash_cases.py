@@ -342,7 +342,7 @@ class PurgeOldTrashTests(TestCase):
 
     def _old_deleted_at(self):
         from django.utils import timezone as tz
-        return tz.now() - timedelta(days=31)
+        return tz.now() - timedelta(days=8)
 
     def _recent_deleted_at(self):
         from django.utils import timezone as tz

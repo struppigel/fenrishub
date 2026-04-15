@@ -1,23 +1,11 @@
 from django.core.management.base import BaseCommand
-from django.utils import timezone
-from datetime import timedelta
 
-from fixlist.models import Fixlist, UploadedLog
+from fixlist.views.utils import _purge_old_trash
 
 
 class Command(BaseCommand):
-    help = 'Permanently delete trashed uploads and fixlists older than 30 days.'
+    help = 'Purge trashed records older than 7 days and all records older than 30 days.'
 
     def handle(self, *args, **options):
-        cutoff = timezone.now() - timedelta(days=30)
-        uploads_count, _ = UploadedLog.objects.filter(
-            deleted_at__isnull=False,
-            deleted_at__lt=cutoff,
-        ).delete()
-        fixlists_count, _ = Fixlist.objects.filter(
-            deleted_at__isnull=False,
-            deleted_at__lt=cutoff,
-        ).delete()
-        self.stdout.write(
-            f'Purged {uploads_count} trashed upload(s) and {fixlists_count} trashed fixlist(s) older than 30 days.'
-        )
+        _purge_old_trash()
+        self.stdout.write('Purge complete.')

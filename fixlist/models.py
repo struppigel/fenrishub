@@ -487,10 +487,14 @@ class UploadedLog(models.Model):
 
 
 class FixlistSnippet(models.Model):
+    DEFAULT_CATEGORY = 'generic'
+
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fixlist_snippets')
     name = models.CharField(max_length=255)
     content = models.TextField()
+    category = models.CharField(max_length=255, default=DEFAULT_CATEGORY)
     is_shared = models.BooleanField(default=False)
+    analyzer_users = models.ManyToManyField(User, related_name='analyzer_snippets', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

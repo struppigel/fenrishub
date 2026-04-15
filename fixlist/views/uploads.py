@@ -22,8 +22,8 @@ from ..permissions import user_can_delete_uploaded_log
 from ..upload_utils import soft_delete_uploaded_log, restore_uploaded_log, execute_merge
 from .upload_actions import (
     handle_delete_action, handle_assign_to_me_action, handle_unassign_to_general_action,
-    handle_delete_selected_action, handle_merge_action, handle_confirm_merge_action,
-    handle_rescan_stats_selected_action,
+    handle_copy_to_me_action, handle_delete_selected_action, handle_merge_action,
+    handle_confirm_merge_action, handle_rescan_stats_selected_action,
 )
 from .utils import (
     _anonymous_upload_limit, _consume_anonymous_upload_slot, _resolve_upload_recipient_username,
@@ -182,6 +182,8 @@ def uploaded_logs_view(request):
             return handle_assign_to_me_action(request, upload_id, action_scope_uploads)
         elif action == 'unassign_to_general':
             return handle_unassign_to_general_action(request, upload_id, action_scope_uploads)
+        elif action == 'copy_to_me':
+            return handle_copy_to_me_action(request, upload_id, action_scope_uploads)
         elif action == 'delete_selected':
             return handle_delete_selected_action(request, selected_ids, action_scope_uploads)
         elif action == 'merge':

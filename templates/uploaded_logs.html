@@ -251,6 +251,15 @@
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 <button type="submit" class="action-btn">unassign</button>
             </form>
+            {% else %}
+            <form method="post" action="{% url 'uploaded_logs' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="copy_to_me">
+                <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                <button type="submit" class="action-btn">copy</button>
+            </form>
             {% endif %}
             <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn">view</a>
             <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}" class="action-btn">analyze</a>

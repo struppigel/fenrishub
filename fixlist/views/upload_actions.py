@@ -161,6 +161,29 @@ def handle_confirm_merge_action(request, selected_ids: list, action_scope_upload
     return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
 
 
+def handle_copy_to_me_action(request, upload_id: str, action_scope_uploads) -> HttpResponse:
+    """Handle copying an upload assigned to another user to the current user."""
+    uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=True)
+    if uploaded_log.recipient_user_id is None:
+        messages.error(request, f'Upload {upload_id} is not assigned — use assign instead.')
+        return _uploads_redirect_with_state(request)
+    if uploaded_log.recipient_user_id == request.user.id:
+        messages.error(request, f'Upload {upload_id} is already assigned to you.')
+        return _uploads_redirect_with_state(request)
+
+    copy = UploadedLog(
+        reddit_username=uploaded_log.reddit_username,
+        original_filename=uploaded_log.original_filename,
+        content=uploaded_log.content,
+        detected_encoding=uploaded_log.detected_encoding,
+        created_by=uploaded_log.created_by,
+        recipient_user=request.user,
+    )
+    copy.save()
+    messages.success(request, f'Copied {upload_id} as {copy.upload_id} assigned to {request.user.username}.')
+    return _uploads_redirect_with_state(request)
+
+
 def handle_rescan_stats_selected_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:
     """Handle rescan analysis stats for selected uploads."""
     if not selected_ids:

@@ -74,7 +74,7 @@ class FixlistSoftDeleteTests(TestCase):
         old = _make_fixlist(
             self.user,
             username="Old Trash",
-            deleted_at=timezone.now() - timedelta(days=31),
+            deleted_at=timezone.now() - timedelta(days=8),
         )
 
         self._delete()
@@ -355,7 +355,7 @@ class FixlistPurgeOldTrashTests(TestCase):
         self.active = _make_fixlist(self.user, username="Active")
 
     def _old_deleted_at(self):
-        return timezone.now() - timedelta(days=31)
+        return timezone.now() - timedelta(days=8)
 
     def _recent_deleted_at(self):
         return timezone.now() - timedelta(days=1)
@@ -423,3 +423,38 @@ class FixlistPurgeOldTrashTests(TestCase):
         call_command("purge_old_trash", verbosity=0)
 
         self.assertTrue(Fixlist.objects.filter(pk=self.active.pk).exists())
+
+    def test_purge_command_hard_deletes_fixlists_older_than_30_days(self):
+        old = _make_fixlist(self.user, username="Ancient")
+        Fixlist.objects.filter(pk=old.pk).update(
+            created_at=timezone.now() - timedelta(days=31),
+        )
+
+        call_command("purge_old_trash", verbosity=0)
+
+        self.assertFalse(Fixlist.objects.filter(pk=old.pk).exists())
+
+    def test_purge_command_keeps_fixlists_under_30_days(self):
+        recent = _make_fixlist(self.user, username="Recent")
+        Fixlist.objects.filter(pk=recent.pk).update(
+            created_at=timezone.now() - timedelta(days=15),
+        )
+
+        call_command("purge_old_trash", verbosity=0)
+
+        self.assertTrue(Fixlist.objects.filter(pk=recent.pk).exists())
+
+    def test_purge_command_hard_deletes_uploads_older_than_30_days(self):
+        old_upload = UploadedLog.objects.create(
+            upload_id="ancient-upload",
+            reddit_username="test_user",
+            original_filename="x.txt",
+            content="payload",
+        )
+        UploadedLog.objects.filter(pk=old_upload.pk).update(
+            created_at=timezone.now() - timedelta(days=31),
+        )
+
+        call_command("purge_old_trash", verbosity=0)
+
+        self.assertFalse(UploadedLog.objects.filter(pk=old_upload.pk).exists())

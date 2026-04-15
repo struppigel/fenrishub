@@ -35,7 +35,12 @@ def snippets_view(request):
                 messages.error(request, f'A snippet named "{name}" already exists.')
             else:
                 is_shared = request.POST.get('is_shared') == 'on'
-                FixlistSnippet.objects.create(owner=request.user, name=name, content=content, is_shared=is_shared)
+                category = request.POST.get('category', '').strip() or FixlistSnippet.DEFAULT_CATEGORY
+                snippet = FixlistSnippet.objects.create(
+                    owner=request.user, name=name, content=content,
+                    is_shared=is_shared, category=category,
+                )
+                snippet.analyzer_users.add(request.user)
                 messages.success(request, f'Snippet "{name}" created.')
             return redirect('snippets')
 
@@ -56,7 +61,8 @@ def snippets_view(request):
                     snippet.name = name
                     snippet.content = content
                     snippet.is_shared = request.POST.get('is_shared') == 'on'
-                    snippet.save(update_fields=['name', 'content', 'is_shared', 'updated_at'])
+                    snippet.category = request.POST.get('category', '').strip() or FixlistSnippet.DEFAULT_CATEGORY
+                    snippet.save(update_fields=['name', 'content', 'is_shared', 'category', 'updated_at'])
                     messages.success(request, f'Snippet "{name}" updated.')
             return redirect('snippets')
 
@@ -68,13 +74,33 @@ def snippets_view(request):
             messages.success(request, f'Snippet "{name}" deleted.')
             return redirect('snippets')
 
+        if action == 'toggle_analyzer':
+            pk = request.POST.get('pk', '').strip()
+            snippet = get_object_or_404(
+                FixlistSnippet,
+                Q(owner=request.user) | Q(is_shared=True),
+                pk=pk,
+            )
+            if snippet.analyzer_users.filter(pk=request.user.pk).exists():
+                snippet.analyzer_users.remove(request.user)
+            else:
+                snippet.analyzer_users.add(request.user)
+            return redirect(request.get_full_path())
+
     show_all = request.GET.get('show_all', '').strip() in {'1', 'true', 'on', 'yes'}
     search_query = request.GET.get('q', '').strip()
+    category_filter = request.GET.get('category', '').strip()
 
     if show_all:
-        snippets = FixlistSnippet.objects.filter(Q(owner=request.user) | Q(is_shared=True)).select_related('owner')
+        snippets = FixlistSnippet.objects.filter(Q(owner=request.user) | Q(is_shared=True)).select_related('owner').distinct()
     else:
         snippets = FixlistSnippet.objects.filter(owner=request.user).select_related('owner')
+
+    # collect categories before text search so all categories remain visible in the dropdown
+    categories = sorted(set(snippets.values_list('category', flat=True)))
+
+    if category_filter:
+        snippets = snippets.filter(category=category_filter)
 
     if search_query:
         snippets = snippets.filter(
@@ -91,27 +117,37 @@ def snippets_view(request):
         pagination_params['q'] = search_query
     if show_all:
         pagination_params['show_all'] = '1'
+    if category_filter:
+        pagination_params['category'] = category_filter
+
+    analyzer_snippet_ids = set(
+        request.user.analyzer_snippets.values_list('pk', flat=True)
+    )
 
     return render(request, 'snippets.html', {
         'snippets': page_obj,
         'page_obj': page_obj,
         'show_all': show_all,
         'search_query': search_query,
+        'category_filter': category_filter,
+        'categories': categories,
         'pagination_query': urlencode(pagination_params),
+        'analyzer_snippet_ids': analyzer_snippet_ids,
     })
 
 
 @login_required
 @require_http_methods(["GET"])
 def snippets_api(request):
-    """Return own snippets plus shared snippets from other users."""
+    """Return snippets selected for the log analyzer by the current user."""
     qs = FixlistSnippet.objects.filter(
-        Q(owner=request.user) | Q(is_shared=True)
-    ).select_related('owner').order_by('name')
+        analyzer_users=request.user,
+    ).select_related('owner').order_by('category', 'name')
     snippets = [
         {
             'id': s.id,
             'name': s.name if s.owner_id == request.user.id else f"{s.name} ({s.owner.username})",
+            'category': s.category,
             'content': s.content,
         }
         for s in qs

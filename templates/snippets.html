@@ -74,6 +74,18 @@
         border-color: var(--la-error-border);
     }
 
+    .snippet-actions .analyzer-btn {
+        font-size: 11px;
+        width: 72px;
+        text-align: center;
+    }
+
+    .snippet-actions .analyzer-btn.active {
+        background-color: color-mix(in srgb, var(--la-status-c) 15%, var(--la-bg-1));
+        border-color: var(--la-status-c);
+        color: var(--la-status-c);
+    }
+
     .snippet-form-section {
         margin-bottom: 16px;
         padding: 10px;
@@ -89,7 +101,7 @@
         display: none;
     }
 
-    .shared-badge {
+    .shared-badge, .category-badge {
         font-size: 10px;
         color: var(--la-text-muted);
         font-weight: normal;
@@ -222,6 +234,10 @@
                 <input type="text" id="createName" name="name" placeholder="Snippet name..." required>
             </div>
             <div class="form-group">
+                <label for="createCategory">category</label>
+                <input type="text" id="createCategory" name="category" value="generic" list="categoryList" placeholder="Category...">
+            </div>
+            <div class="form-group">
                 <label for="createContent">content</label>
                 <textarea id="createContent" name="content" placeholder="Snippet content to paste into fixlist..." required></textarea>
             </div>
@@ -245,6 +261,10 @@
                 <input type="text" id="editName" name="name" required>
             </div>
             <div class="form-group">
+                <label for="editCategory">category</label>
+                <input type="text" id="editCategory" name="category" list="categoryList" placeholder="Category...">
+            </div>
+            <div class="form-group">
                 <label for="editContent">content</label>
                 <textarea id="editContent" name="content" required></textarea>
             </div>
@@ -260,7 +280,19 @@
 
     <div class="divider"></div>
 
+    <datalist id="categoryList">
+        {% for cat in categories %}
+        <option value="{{ cat }}">
+        {% endfor %}
+    </datalist>
+
     <form method="get" action="{% url 'snippets' %}" class="snippets-toolbar">
+        <select name="category" onchange="this.form.submit()" style="width: auto; padding: 4px 8px;">
+            <option value="">all categories</option>
+            {% for cat in categories %}
+            <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }}</option>
+            {% endfor %}
+        </select>
         <input type="text" name="q" value="{{ search_query }}" placeholder="search by name, content, owner" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
         <label style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 0; color: var(--la-text-primary); font-size: 12px;">
             <span>all snippets</span>
@@ -277,11 +309,17 @@
         {% for snippet in snippets %}
         <div class="snippet-item">
             <div class="snippet-header">
-                <span class="snippet-name">{{ snippet.name }}{% if snippet.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if show_all %} <span class="snippet-owner">by {{ snippet.owner.username }}</span>{% endif %}</span>
+                <span class="snippet-name">{{ snippet.name }} <span class="category-badge">[{{ snippet.category }}]</span>{% if snippet.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if show_all %} <span class="snippet-owner">by {{ snippet.owner.username }}</span>{% endif %}</span>
                 <div class="snippet-actions">
+                    <form method="post" style="display: inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="toggle_analyzer">
+                        <input type="hidden" name="pk" value="{{ snippet.pk }}">
+                        <button type="submit" class="action-btn analyzer-btn{% if snippet.pk in analyzer_snippet_ids %} active{% endif %}" title="{% if snippet.pk in analyzer_snippet_ids %}deselect snippet from log analyzer{% else %}select snippet to be available in log analyzer{% endif %}">{% if snippet.pk in analyzer_snippet_ids %}selected{% else %}select{% endif %}</button>
+                    </form>
                     <button type="button" class="action-btn view-btn" data-name="{{ snippet.name|escapejs }}" data-content-id="snippet-content-{{ snippet.pk }}">view</button>
                     {% if snippet.owner_id == request.user.id %}
-                    <button type="button" class="action-btn edit-btn" data-pk="{{ snippet.pk }}" data-name="{{ snippet.name|escapejs }}" data-content-id="snippet-content-{{ snippet.pk }}" data-is-shared="{% if snippet.is_shared %}1{% else %}0{% endif %}">edit</button>
+                    <button type="button" class="action-btn edit-btn" data-pk="{{ snippet.pk }}" data-name="{{ snippet.name|escapejs }}" data-category="{{ snippet.category|escapejs }}" data-content-id="snippet-content-{{ snippet.pk }}" data-is-shared="{% if snippet.is_shared %}1{% else %}0{% endif %}">edit</button>
                     <form method="post" style="display: inline;">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="delete">
@@ -327,9 +365,10 @@
 </div>
 
 <script>
-function startEdit(pk, name, content, isShared) {
+function startEdit(pk, name, category, content, isShared) {
     document.getElementById('editPk').value = pk;
     document.getElementById('editName').value = name;
+    document.getElementById('editCategory').value = category;
     document.getElementById('editContent').value = content;
     document.getElementById('editIsShared').checked = isShared;
     document.getElementById('editSection').style.display = 'block';
@@ -337,9 +376,9 @@ function startEdit(pk, name, content, isShared) {
     document.getElementById('editName').focus();
 }
 
-function startEditById(pk, name, contentElementId, isShared) {
+function startEditById(pk, name, category, contentElementId, isShared) {
     const contentElement = document.getElementById(contentElementId);
-    startEdit(pk, name, contentElement ? contentElement.textContent : '', isShared);
+    startEdit(pk, name, category, contentElement ? contentElement.textContent : '', isShared);
 }
 
 function showCreate() {
@@ -388,6 +427,7 @@ document.querySelectorAll('.edit-btn').forEach(function(button) {
         startEditById(
             Number(button.dataset.pk || 0),
             button.dataset.name || '',
+            button.dataset.category || '',
             button.dataset.contentId || '',
             button.dataset.isShared === '1'
         );
