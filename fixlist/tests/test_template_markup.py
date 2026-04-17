@@ -233,8 +233,8 @@ class TemplateMarkupTests(TestCase):
         self.assertNotIn("fenrishub_selected_rule_ids", content)
         self.assertNotIn("fenrishub_conflict_resolutions", content)
 
-    def test_canned_speeches_template_mentions_frstpath_placeholder(self):
-        content = self._read_template("canned_speeches.html")
+    def test_profile_template_mentions_frstpath_placeholder(self):
+        content = self._read_template("profile.html")
         self.assertIn("{FRSTPATH}", content)
 
 

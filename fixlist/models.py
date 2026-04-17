@@ -71,6 +71,7 @@ class Fixlist(models.Model):
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='fenris_profile')
     frst_fix_message = models.TextField(blank=True, default='')
+    word_wrap = models.BooleanField(default=False)
 
     def __str__(self):
         return f'Profile for {self.user.username}'

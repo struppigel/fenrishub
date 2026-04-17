@@ -103,6 +103,10 @@ def _uploads_redirect_with_state(request):
     if username_filter:
         query_params['u'] = username_filter
 
+    search_query = (request.POST.get('q') or request.GET.get('q') or '').strip()
+    if search_query:
+        query_params['q'] = search_query
+
     if query_params:
         return redirect(f"{reverse('uploaded_logs')}?{urlencode(query_params)}")
 

@@ -56,6 +56,9 @@ async function loadSelectedUploadForAnalyzer() {
         url.searchParams.set('upload_id', uploadId);
         window.history.replaceState(null, '', url);
         logInputElement.focus();
+        if (typeof parseLogs === 'function' && logInputElement.value.trim()) {
+            await parseLogs();
+        }
         return;
     }
 
@@ -82,6 +85,9 @@ async function loadSelectedUploadForAnalyzer() {
         url.searchParams.set('upload_id', uploadId);
         window.history.replaceState(null, '', url);
         logInputElement.focus();
+        if (typeof parseLogs === 'function' && logInputElement.value.trim()) {
+            await parseLogs();
+        }
     } catch (error) {
         statusElement.textContent = 'failed to load upload';
     }
@@ -389,6 +395,7 @@ function bindAnalyzerControls() {
     bindAnalyzerButton('toggleLoadUploadButton', () => toggleUploadSourceRow());
     bindAnalyzerButton('copyFrstPathButton', () => copyFrstPathFromLog());
     bindAnalyzerButton('addRemainingCleanButton', () => addRemainingAsClean());
+    bindAnalyzerButton('toggleFixlistPanelButton', () => toggleFixlistPanel());
     
     const uploadSourceSelect = document.getElementById('uploadSourceSelect');
     if (uploadSourceSelect) {
@@ -476,6 +483,7 @@ function exposeLegacyAnalyzerGlobals() {
         submitWithRulePersist,
         toggleQuestionCursorMode,
         toggleCleanCursorMode,
+        toggleFixlistPanel,
     });
 }
 
@@ -490,6 +498,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (typeof applyCleanCursorModeState === 'function') {
         applyCleanCursorModeState();
+    }
+    if (typeof initFixlistPanelState === 'function') {
+        initFixlistPanelState();
     }
     bindAnalyzerControls();
     bindAnalyzerModalDismissals();

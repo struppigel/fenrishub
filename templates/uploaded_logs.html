@@ -172,11 +172,15 @@
 
 <div id="uploadsListContainer">
 <div class="merge-controls button-group">
-    <div style="display: flex; gap: 8px;">
+    <div style="display: flex; gap: 8px; align-items: center;">
         <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();">merge</button>
         <button type="button" onclick="confirmDiff();">diff</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();">delete</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="rescan_selected" onclick="return confirmRescan();">rescan</button>
+        <span id="selectionIndicator" class="muted" hidden style="font-size: 12px;">
+            <span id="selectionCount">0</span> selected
+            <a href="#" id="clearSelectionLink" style="margin-left: 6px;">clear</a>
+        </span>
     </div>
     <div style="display: flex; gap: 8px;">
         <a href="{% url 'upload_log_for_helper' request.user.username %}"><button type="button">upload</button></a>
@@ -240,6 +244,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 <button type="submit" class="action-btn">assign</button>
             </form>
             {% elif uploaded_log.recipient_user == request.user %}
@@ -249,6 +254,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 <button type="submit" class="action-btn">unassign</button>
             </form>
             {% else %}
@@ -258,6 +264,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 <button type="submit" class="action-btn">copy</button>
             </form>
             {% endif %}
@@ -270,6 +277,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this upload to trash?');">delete</button>
             </form>
             {% endif %}
@@ -379,20 +387,191 @@ async function handleAllChannelsToggle(checkbox) {
         }
         updateUploadsModeInUrl(showAll);
         ensureUploadsModeCached(!showAll).catch(() => {});
+        syncStoredSelectionsToForm();
+        bindUploadCheckboxes();
+        bindUploadActionForms();
     } catch (error) {
         checkbox.form.submit();
     }
 }
 
+const AJAX_UPLOAD_ACTIONS = new Set(['assign_to_me', 'unassign_to_general', 'copy_to_me']);
+
+async function refreshUploadsList() {
+    try {
+        const response = await fetch(window.location.href, {
+            credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        if (!response.ok) return false;
+        const html = await response.text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const newContainer = doc.getElementById('uploadsListContainer');
+        const currentContainer = document.getElementById('uploadsListContainer');
+        if (!newContainer || !currentContainer) return false;
+        currentContainer.innerHTML = newContainer.innerHTML;
+        Object.keys(uploadsListCache).forEach(k => delete uploadsListCache[k]);
+        Object.keys(uploadsSelectCache).forEach(k => delete uploadsSelectCache[k]);
+        const toggle = document.getElementById('allChannelsToggle');
+        const currentShowAll = toggle && toggle.checked;
+        uploadsListCache[uploadsModeKey(currentShowAll)] = currentContainer.innerHTML;
+        bindUploadCheckboxes();
+        syncStoredSelectionsToForm();
+        bindUploadActionForms();
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+async function submitUploadAction(form) {
+    const csrfInput = form.querySelector('input[name="csrfmiddlewaretoken"]');
+    const csrfToken = csrfInput ? csrfInput.value : '';
+    const submitButton = form.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+        const response = await fetch(form.action || window.location.href, {
+            method: 'POST',
+            body: new FormData(form),
+            credentials: 'same-origin',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRFToken': csrfToken,
+            },
+        });
+        if (!response.ok) {
+            form.submit();
+            return;
+        }
+        const refreshed = await refreshUploadsList();
+        if (!refreshed) {
+            form.submit();
+        }
+    } catch (e) {
+        form.submit();
+    } finally {
+        if (submitButton) submitButton.disabled = false;
+    }
+}
+
+function bindUploadActionForms() {
+    document.querySelectorAll('.fixlist-actions form').forEach((form) => {
+        if (form.dataset.ajaxBound === '1') return;
+        const actionInput = form.querySelector('input[name="action"]');
+        if (!actionInput || !AJAX_UPLOAD_ACTIONS.has(actionInput.value)) return;
+        form.dataset.ajaxBound = '1';
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            submitUploadAction(form);
+        });
+    });
+}
+
+const SELECTED_UPLOAD_IDS_KEY = 'fenrishub_selected_upload_ids';
+
+function getStoredSelectedUploadIds() {
+    try {
+        const stored = sessionStorage.getItem(SELECTED_UPLOAD_IDS_KEY);
+        if (!stored) return new Set();
+        return new Set(JSON.parse(stored));
+    } catch (e) {
+        return new Set();
+    }
+}
+
+function setStoredSelectedUploadIds(set) {
+    try {
+        sessionStorage.setItem(SELECTED_UPLOAD_IDS_KEY, JSON.stringify([...set]));
+    } catch (e) {}
+}
+
+function clearStoredSelectedUploadIds() {
+    try {
+        sessionStorage.removeItem(SELECTED_UPLOAD_IDS_KEY);
+    } catch (e) {}
+}
+
+function syncStoredSelectionsToForm() {
+    const form = document.getElementById('mergeUploadsForm');
+    if (!form) return;
+
+    form.querySelectorAll('input[type="hidden"][name="selected_upload_ids"]').forEach(el => el.remove());
+
+    const stored = getStoredSelectedUploadIds();
+    const visibleIds = new Set();
+
+    document.querySelectorAll('input.upload-select[name="selected_upload_ids"]').forEach(cb => {
+        visibleIds.add(cb.value);
+        cb.checked = stored.has(cb.value);
+    });
+
+    stored.forEach(id => {
+        if (!visibleIds.has(id)) {
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'selected_upload_ids';
+            hidden.value = id;
+            form.appendChild(hidden);
+        }
+    });
+
+    updateSelectionIndicator(stored.size);
+}
+
+function updateSelectionIndicator(count) {
+    const indicator = document.getElementById('selectionIndicator');
+    const countEl = document.getElementById('selectionCount');
+    if (!indicator || !countEl) return;
+    countEl.textContent = count;
+    indicator.hidden = count === 0;
+}
+
+function bindUploadCheckboxes() {
+    document.querySelectorAll('input.upload-select[name="selected_upload_ids"]').forEach(cb => {
+        if (cb.dataset.selectionBound === '1') return;
+        cb.dataset.selectionBound = '1';
+        cb.addEventListener('change', () => {
+            const stored = getStoredSelectedUploadIds();
+            if (cb.checked) {
+                stored.add(cb.value);
+            } else {
+                stored.delete(cb.value);
+            }
+            setStoredSelectedUploadIds(stored);
+            syncStoredSelectionsToForm();
+        });
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     const toggle = document.getElementById('allChannelsToggle');
     const uploadsListContainer = document.getElementById('uploadsListContainer');
-    const currentShowAll = toggle && toggle.checked;
+
+    syncStoredSelectionsToForm();
+    bindUploadCheckboxes();
+    bindUploadActionForms();
+
+    const mergeForm = document.getElementById('mergeUploadsForm');
+    if (mergeForm) {
+        mergeForm.addEventListener('submit', () => {
+            clearStoredSelectedUploadIds();
+        });
+    }
+
+    const clearLink = document.getElementById('clearSelectionLink');
+    if (clearLink) {
+        clearLink.addEventListener('click', (event) => {
+            event.preventDefault();
+            clearStoredSelectedUploadIds();
+            syncStoredSelectionsToForm();
+        });
+    }
 
     if (!toggle || !uploadsListContainer) {
         return;
     }
 
+    const currentShowAll = toggle.checked;
     uploadsListCache[uploadsModeKey(currentShowAll)] = uploadsListContainer.innerHTML;
     const uploaderSelect = document.getElementById('uploaderSelect');
     if (uploaderSelect) {
@@ -415,26 +594,26 @@ function copyHelperUploadUrl(button) {
 }
 
 function confirmMerge() {
-    const selected = document.querySelectorAll('input[name="selected_upload_ids"]:checked');
-    if (selected.length === 0) {
+    const count = getStoredSelectedUploadIds().size;
+    if (count === 0) {
         alert('Select at least one upload to merge.');
         return false;
     }
-    return confirm('Merge ' + selected.length + ' selected upload(s)?');
+    return confirm('Merge ' + count + ' selected upload(s)?');
 }
 
 function confirmDeleteSelected() {
-    const selected = document.querySelectorAll('input[name="selected_upload_ids"]:checked');
-    if (selected.length === 0) {
+    const count = getStoredSelectedUploadIds().size;
+    if (count === 0) {
         alert('Select at least one upload to delete.');
         return false;
     }
-    return confirm('Move ' + selected.length + ' selected upload(s) to trash?');
+    return confirm('Move ' + count + ' selected upload(s) to trash?');
 }
 
 function confirmRescan() {
-    const selected = document.querySelectorAll('input[name="selected_upload_ids"]:checked');
-    if (selected.length === 0) {
+    const count = getStoredSelectedUploadIds().size;
+    if (count === 0) {
         alert('Select at least one upload to rescan.');
         return false;
     }
@@ -442,11 +621,12 @@ function confirmRescan() {
 }
 
 function confirmDiff() {
-    const selected = [...document.querySelectorAll('input[name="selected_upload_ids"]:checked')].map(el => el.value);
+    const selected = [...getStoredSelectedUploadIds()];
     if (selected.length !== 2) {
         alert('Select exactly two uploads to diff.');
         return;
     }
+    clearStoredSelectedUploadIds();
     const urlTemplate = "{% url 'diff_uploaded_logs' '__ID1__' '__ID2__' %}";
     window.location.href = urlTemplate.replace('__ID1__', selected[0]).replace('__ID2__', selected[1]);
 }

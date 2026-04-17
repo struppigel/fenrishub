@@ -20,12 +20,12 @@ class SnippetViewTests(TestCase):
         self.assertContains(response, 'my snippet')
         self.assertNotContains(response, 'bob snippet')
 
-    def test_show_all_includes_shared_snippets(self):
+    def test_shared_by_includes_shared_snippets(self):
         own = FixlistSnippet.objects.create(owner=self.user, name='my snippet', content='own content')
         other_shared = FixlistSnippet.objects.create(owner=self.other_user, name='bob snippet', content='shared', is_shared=True)
         other_private = FixlistSnippet.objects.create(owner=self.other_user, name='bob private', content='private', is_shared=False)
 
-        response = self.client.get(reverse('snippets'), {'show_all': '1'})
+        response = self.client.get(reverse('snippets'), {'shared_by': 'bob'})
 
         self.assertContains(response, 'my snippet')
         self.assertContains(response, 'bob snippet')
@@ -49,11 +49,11 @@ class SnippetViewTests(TestCase):
         self.assertContains(response, 'snippet a')
         self.assertNotContains(response, 'snippet b')
 
-    def test_search_filters_by_owner_in_show_all(self):
+    def test_search_filters_by_owner_with_shared_by(self):
         FixlistSnippet.objects.create(owner=self.user, name='alice snippet', content='x')
         FixlistSnippet.objects.create(owner=self.other_user, name='bob snippet', content='y', is_shared=True)
 
-        response = self.client.get(reverse('snippets'), {'q': 'bob', 'show_all': '1'})
+        response = self.client.get(reverse('snippets'), {'q': 'bob', 'shared_by': 'bob'})
 
         self.assertContains(response, 'bob snippet')
         self.assertNotContains(response, 'alice snippet')
@@ -62,29 +62,35 @@ class SnippetViewTests(TestCase):
         snippet = FixlistSnippet.objects.create(owner=self.user, name='my snippet', content='c')
         self.assertFalse(snippet.analyzer_users.filter(pk=self.user.pk).exists())
 
-        self.client.post(reverse('snippets'), {'action': 'toggle_analyzer', 'pk': snippet.pk})
+        response = self.client.post(reverse('snippets_toggle_analyzer_api'), {'pk': snippet.pk})
 
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['selected'])
         self.assertTrue(snippet.analyzer_users.filter(pk=self.user.pk).exists())
 
     def test_toggle_analyzer_removes_own_snippet(self):
         snippet = FixlistSnippet.objects.create(owner=self.user, name='my snippet', content='c')
         snippet.analyzer_users.add(self.user)
 
-        self.client.post(reverse('snippets'), {'action': 'toggle_analyzer', 'pk': snippet.pk})
+        response = self.client.post(reverse('snippets_toggle_analyzer_api'), {'pk': snippet.pk})
 
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['selected'])
         self.assertFalse(snippet.analyzer_users.filter(pk=self.user.pk).exists())
 
     def test_toggle_analyzer_adds_shared_snippet_from_other_user(self):
         snippet = FixlistSnippet.objects.create(owner=self.other_user, name='bob shared', content='c', is_shared=True)
 
-        self.client.post(reverse('snippets'), {'action': 'toggle_analyzer', 'pk': snippet.pk})
+        response = self.client.post(reverse('snippets_toggle_analyzer_api'), {'pk': snippet.pk})
 
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['selected'])
         self.assertTrue(snippet.analyzer_users.filter(pk=self.user.pk).exists())
 
     def test_toggle_analyzer_rejects_private_snippet_from_other_user(self):
         snippet = FixlistSnippet.objects.create(owner=self.other_user, name='bob private', content='c', is_shared=False)
 
-        response = self.client.post(reverse('snippets'), {'action': 'toggle_analyzer', 'pk': snippet.pk})
+        response = self.client.post(reverse('snippets_toggle_analyzer_api'), {'pk': snippet.pk})
 
         self.assertEqual(response.status_code, 404)
         self.assertFalse(snippet.analyzer_users.filter(pk=self.user.pk).exists())

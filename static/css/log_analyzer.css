@@ -268,6 +268,14 @@ body.clean-cursor-mode .line-text {
     padding: 12px;
 }
 
+.textareas-box.fixlist-hidden {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.textareas-box.fixlist-hidden #selectedLines {
+    display: none;
+}
+
 .left-panel {
     min-width: 0;
     min-height: 0;

@@ -14,6 +14,8 @@ from django.views.decorators.http import require_http_methods
 from django.http import JsonResponse
 from django.db.models import Q
 
+from django.contrib.auth.models import User
+
 from ..models import FixlistSnippet
 
 
@@ -74,25 +76,23 @@ def snippets_view(request):
             messages.success(request, f'Snippet "{name}" deleted.')
             return redirect('snippets')
 
-        if action == 'toggle_analyzer':
-            pk = request.POST.get('pk', '').strip()
-            snippet = get_object_or_404(
-                FixlistSnippet,
-                Q(owner=request.user) | Q(is_shared=True),
-                pk=pk,
-            )
-            if snippet.analyzer_users.filter(pk=request.user.pk).exists():
-                snippet.analyzer_users.remove(request.user)
-            else:
-                snippet.analyzer_users.add(request.user)
-            return redirect(request.get_full_path())
 
-    show_all = request.GET.get('show_all', '').strip() in {'1', 'true', 'on', 'yes'}
+    shared_by = request.GET.get('shared_by', '').strip()
     search_query = request.GET.get('q', '').strip()
     category_filter = request.GET.get('category', '').strip()
 
-    if show_all:
-        snippets = FixlistSnippet.objects.filter(Q(owner=request.user) | Q(is_shared=True)).select_related('owner').distinct()
+    # users who share snippets (excluding current user)
+    sharing_users = (
+        User.objects.filter(fixlist_snippets__is_shared=True)
+        .exclude(pk=request.user.pk)
+        .distinct()
+        .order_by('username')
+    )
+
+    if shared_by:
+        snippets = FixlistSnippet.objects.filter(
+            Q(owner=request.user) | Q(owner__username=shared_by, is_shared=True)
+        ).select_related('owner').distinct()
     else:
         snippets = FixlistSnippet.objects.filter(owner=request.user).select_related('owner')
 
@@ -115,8 +115,8 @@ def snippets_view(request):
     pagination_params = {}
     if search_query:
         pagination_params['q'] = search_query
-    if show_all:
-        pagination_params['show_all'] = '1'
+    if shared_by:
+        pagination_params['shared_by'] = shared_by
     if category_filter:
         pagination_params['category'] = category_filter
 
@@ -127,13 +127,33 @@ def snippets_view(request):
     return render(request, 'snippets.html', {
         'snippets': page_obj,
         'page_obj': page_obj,
-        'show_all': show_all,
+        'shared_by': shared_by,
+        'sharing_users': sharing_users,
         'search_query': search_query,
         'category_filter': category_filter,
         'categories': categories,
         'pagination_query': urlencode(pagination_params),
         'analyzer_snippet_ids': analyzer_snippet_ids,
     })
+
+
+@login_required
+@require_http_methods(["POST"])
+def snippets_toggle_analyzer_api(request):
+    """Toggle whether a snippet is selected for the log analyzer."""
+    pk = request.POST.get('pk', '').strip()
+    snippet = get_object_or_404(
+        FixlistSnippet,
+        Q(owner=request.user) | Q(is_shared=True),
+        pk=pk,
+    )
+    if snippet.analyzer_users.filter(pk=request.user.pk).exists():
+        snippet.analyzer_users.remove(request.user)
+        selected = False
+    else:
+        snippet.analyzer_users.add(request.user)
+        selected = True
+    return JsonResponse({'selected': selected})
 
 
 @login_required

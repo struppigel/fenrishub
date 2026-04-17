@@ -119,6 +119,7 @@ class AuthenticationAndAccessTests(TestCase):
             reverse("profile"),
             {
                 "frst_fix_message": "custom line with {USERNAME}",
+                "word_wrap": "on",
             },
         )
 
@@ -126,6 +127,54 @@ class AuthenticationAndAccessTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse("profile"))
         self.assertEqual(profile.frst_fix_message, "custom line with {USERNAME}")
+
+    def test_profile_default_word_wrap_is_false(self):
+        profile = UserProfile.objects.create(user=self.other_user)
+        self.assertFalse(profile.word_wrap)
+
+    def test_profile_post_saves_word_wrap_true(self):
+        self.assertTrue(self.client.login(username="alice", password="password123"))
+
+        response = self.client.post(
+            reverse("profile"),
+            {
+                "frst_fix_message": "",
+                "word_wrap": "on",
+            },
+        )
+
+        profile = UserProfile.objects.get(user=self.user)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(profile.word_wrap)
+
+    def test_profile_post_saves_word_wrap_false_when_unchecked(self):
+        self.assertTrue(self.client.login(username="alice", password="password123"))
+
+        response = self.client.post(
+            reverse("profile"),
+            {
+                "frst_fix_message": "",
+            },
+        )
+
+        profile = UserProfile.objects.get(user=self.user)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(profile.word_wrap)
+
+    def test_word_wrap_context_default_false_for_anonymous(self):
+        response = self.client.get(reverse("login"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context["word_wrap"])
+
+    def test_word_wrap_context_reflects_profile_setting(self):
+        UserProfile.objects.create(user=self.user, word_wrap=False)
+        self.assertTrue(self.client.login(username="alice", password="password123"))
+
+        response = self.client.get(reverse("dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context["word_wrap"])
 
     def test_user_cannot_access_other_users_fixlist_edit_page(self):
         request = self.factory.get(reverse("view_fixlist", args=[self.fixlist.pk]))

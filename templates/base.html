@@ -379,6 +379,40 @@
             color: var(--la-text-primary);
         }
 
+        body.no-word-wrap .code-block,
+        body.no-word-wrap .uploaded-content,
+        body.no-word-wrap #logInput,
+        body.no-word-wrap #selectedLines,
+        body.no-word-wrap textarea#content {
+            white-space: pre;
+            word-break: normal;
+            overflow-wrap: normal;
+            word-wrap: normal;
+            overflow-x: auto;
+        }
+
+        body.no-word-wrap #logLines {
+            overflow-x: auto;
+        }
+
+        body.no-word-wrap #logLines .log-line {
+            width: max-content;
+            min-width: 100%;
+            white-space: pre;
+            word-break: normal;
+            overflow-wrap: normal;
+            word-wrap: normal;
+        }
+
+        body.no-word-wrap #logLines .line-text {
+            min-width: auto;
+            flex: 0 0 auto;
+            white-space: pre;
+            word-break: normal;
+            overflow-wrap: normal;
+            word-wrap: normal;
+        }
+
         h2 {
             font-size: 16px;
             color: var(--la-text-main);
@@ -504,7 +538,7 @@
     </style>
     {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body{% if not word_wrap %} class="no-word-wrap"{% endif %}>
     <div class="container">
         <div class="header">
             <div class="header-top">
@@ -519,7 +553,7 @@
                         <div class="profile-dropdown" tabindex="0">
                             <button class="profile-btn page-context-profile" type="button" aria-haspopup="true">{{ user.username }} &#9660;</button>
                             <div class="profile-menu">
-                                <a href="{% url 'profile' %}">canned speech settings</a>
+                                <a href="{% url 'profile' %}">profile settings</a>
                                 <a href="{% url 'change_password' %}">change password</a>
                                 <form method="post" action="{% url 'logout' %}">
                                     {% csrf_token %}

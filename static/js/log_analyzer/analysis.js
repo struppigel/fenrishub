@@ -53,6 +53,39 @@ let questionCursorModeActive = false;
 let cleanCursorModeActive = false;
 let lineInspectorInFlight = false;
 
+const FIXLIST_PANEL_HIDDEN_KEY = 'fenrishub_fixlist_panel_hidden';
+let fixlistPanelHidden = false;
+
+function applyFixlistPanelState() {
+    const box = document.querySelector('.textareas-box');
+    if (box) {
+        box.classList.toggle('fixlist-hidden', fixlistPanelHidden);
+    }
+    const button = document.getElementById('toggleFixlistPanelButton');
+    if (button) {
+        button.setAttribute('aria-pressed', fixlistPanelHidden ? 'true' : 'false');
+        button.classList.toggle('is-active', fixlistPanelHidden);
+        button.textContent = fixlistPanelHidden ? 'show fix' : 'hide fix';
+    }
+}
+
+function initFixlistPanelState() {
+    try {
+        fixlistPanelHidden = localStorage.getItem(FIXLIST_PANEL_HIDDEN_KEY) === '1';
+    } catch (e) {
+        fixlistPanelHidden = false;
+    }
+    applyFixlistPanelState();
+}
+
+function toggleFixlistPanel() {
+    fixlistPanelHidden = !fixlistPanelHidden;
+    try {
+        localStorage.setItem(FIXLIST_PANEL_HIDDEN_KEY, fixlistPanelHidden ? '1' : '0');
+    } catch (e) {}
+    applyFixlistPanelState();
+}
+
 function closeLineInspectorModal(options = {}) {
     const modal = document.getElementById('lineInspectorModal');
     if (modal) {

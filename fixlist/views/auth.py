@@ -78,18 +78,20 @@ def profile_view(request):
 
     if request.method == 'POST':
         profile.frst_fix_message = request.POST.get('frst_fix_message', '')
-        profile.save(update_fields=['frst_fix_message'])
-        messages.success(request, 'Canned speech settings updated successfully.')
+        profile.word_wrap = 'word_wrap' in request.POST
+        profile.save(update_fields=['frst_fix_message', 'word_wrap'])
+        messages.success(request, 'Profile settings updated successfully.')
         return redirect('profile')
 
     effective_frst_fix_message = (profile.frst_fix_message or '').strip() or DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
 
     return render(
         request,
-        'canned_speeches.html',
+        'profile.html',
         {
             'frst_fix_message': effective_frst_fix_message,
             'default_frst_fix_message': DEFAULT_FRST_FIX_MESSAGE_TEMPLATE,
+            'profile_word_wrap': profile.word_wrap,
         },
     )
 

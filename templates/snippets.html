@@ -123,50 +123,6 @@
         align-items: center;
     }
 
-    .toggle-switch {
-        position: relative;
-        display: inline-block;
-        width: 34px;
-        height: 18px;
-    }
-
-    .toggle-switch input {
-        opacity: 0;
-        width: 0;
-        height: 0;
-    }
-
-    .toggle-slider {
-        position: absolute;
-        cursor: pointer;
-        inset: 0;
-        background: var(--la-bg-2);
-        border: 1px solid var(--la-border);
-        transition: 0.2s;
-        border-radius: 999px;
-    }
-
-    .toggle-slider:before {
-        position: absolute;
-        content: "";
-        width: 12px;
-        height: 12px;
-        left: 2px;
-        top: 2px;
-        background: var(--la-text-primary);
-        transition: 0.2s;
-        border-radius: 50%;
-    }
-
-    .toggle-switch input:checked + .toggle-slider {
-        background: color-mix(in srgb, var(--la-status-c) 20%, var(--la-bg-2));
-        border-color: var(--la-status-c);
-    }
-
-    .toggle-switch input:checked + .toggle-slider:before {
-        transform: translateX(16px);
-    }
-
     .snippet-owner {
         font-size: 11px;
         color: var(--la-text-muted);
@@ -293,14 +249,15 @@
             <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }}</option>
             {% endfor %}
         </select>
-        <input type="text" name="q" value="{{ search_query }}" placeholder="search by name, content, owner" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
-        <label style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 0; color: var(--la-text-primary); font-size: 12px;">
-            <span>all snippets</span>
-            <span class="toggle-switch">
-                <input type="checkbox" name="show_all" value="1" {% if show_all %}checked{% endif %} onchange="this.form.submit()">
-                <span class="toggle-slider"></span>
-            </span>
-        </label>
+        <input type="text" name="q" value="{{ search_query }}" placeholder="search by name, content" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
+        {% if sharing_users %}
+        <select name="shared_by" onchange="this.form.submit()" style="width: auto; padding: 4px 8px;">
+            <option value="">my snippets</option>
+            {% for u in sharing_users %}
+            <option value="{{ u.username }}" {% if shared_by == u.username %}selected{% endif %}>+ {{ u.username }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
         <span style="flex: 1;"></span>
         <button type="button" onclick="showCreate()">add snippet</button>
     </form>
@@ -309,14 +266,9 @@
         {% for snippet in snippets %}
         <div class="snippet-item">
             <div class="snippet-header">
-                <span class="snippet-name">{{ snippet.name }} <span class="category-badge">[{{ snippet.category }}]</span>{% if snippet.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if show_all %} <span class="snippet-owner">by {{ snippet.owner.username }}</span>{% endif %}</span>
+                <span class="snippet-name">{{ snippet.name }} <span class="category-badge">[{{ snippet.category }}]</span>{% if snippet.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if shared_by %} <span class="snippet-owner">by {{ snippet.owner.username }}</span>{% endif %}</span>
                 <div class="snippet-actions">
-                    <form method="post" style="display: inline;">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="toggle_analyzer">
-                        <input type="hidden" name="pk" value="{{ snippet.pk }}">
-                        <button type="submit" class="action-btn analyzer-btn{% if snippet.pk in analyzer_snippet_ids %} active{% endif %}" title="{% if snippet.pk in analyzer_snippet_ids %}deselect snippet from log analyzer{% else %}select snippet to be available in log analyzer{% endif %}">{% if snippet.pk in analyzer_snippet_ids %}selected{% else %}select{% endif %}</button>
-                    </form>
+                    <button type="button" class="action-btn analyzer-btn{% if snippet.pk in analyzer_snippet_ids %} active{% endif %}" data-toggle-pk="{{ snippet.pk }}" title="{% if snippet.pk in analyzer_snippet_ids %}deselect snippet from log analyzer{% else %}select snippet to be available in log analyzer{% endif %}">{% if snippet.pk in analyzer_snippet_ids %}selected{% else %}select{% endif %}</button>
                     <button type="button" class="action-btn view-btn" data-name="{{ snippet.name|escapejs }}" data-content-id="snippet-content-{{ snippet.pk }}">view</button>
                     {% if snippet.owner_id == request.user.id %}
                     <button type="button" class="action-btn edit-btn" data-pk="{{ snippet.pk }}" data-name="{{ snippet.name|escapejs }}" data-category="{{ snippet.category|escapejs }}" data-content-id="snippet-content-{{ snippet.pk }}" data-is-shared="{% if snippet.is_shared %}1{% else %}0{% endif %}">edit</button>
@@ -431,6 +383,31 @@ document.querySelectorAll('.edit-btn').forEach(function(button) {
             button.dataset.contentId || '',
             button.dataset.isShared === '1'
         );
+    });
+});
+
+document.querySelectorAll('[data-toggle-pk]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var pk = btn.dataset.togglePk;
+        var formData = new FormData();
+        formData.append('pk', pk);
+        fetch('{% url "snippets_toggle_analyzer_api" %}', {
+            method: 'POST',
+            headers: {'X-CSRFToken': '{{ csrf_token }}'},
+            body: formData,
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.selected) {
+                btn.classList.add('active');
+                btn.textContent = 'selected';
+                btn.title = 'deselect snippet from log analyzer';
+            } else {
+                btn.classList.remove('active');
+                btn.textContent = 'select';
+                btn.title = 'select snippet to be available in log analyzer';
+            }
+        });
     });
 });
 </script>
