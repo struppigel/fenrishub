@@ -42,6 +42,19 @@
         overflow: hidden;
     }
 
+    body.snippets-compact .snippet-content-preview {
+        display: none;
+    }
+
+    body.snippets-compact .snippet-item {
+        padding: 4px 10px;
+        margin-bottom: 4px;
+    }
+
+    body.snippets-compact .snippet-header {
+        margin-bottom: 0;
+    }
+
     .snippet-actions {
         display: flex;
         gap: 8px;
@@ -259,6 +272,7 @@
         </select>
         {% endif %}
         <span style="flex: 1;"></span>
+        <button type="button" id="togglePreviewButton" aria-pressed="false">hide previews</button>
         <button type="button" onclick="showCreate()">add snippet</button>
     </form>
 
@@ -385,6 +399,45 @@ document.querySelectorAll('.edit-btn').forEach(function(button) {
         );
     });
 });
+
+const SNIPPETS_COMPACT_KEY = 'fenrishub_snippets_compact';
+
+function applySnippetsCompactState(compact) {
+    document.body.classList.toggle('snippets-compact', compact);
+    const button = document.getElementById('togglePreviewButton');
+    if (button) {
+        button.setAttribute('aria-pressed', compact ? 'true' : 'false');
+        button.textContent = compact ? 'show previews' : 'hide previews';
+    }
+}
+
+function setSnippetsCompactCookie(compact) {
+    const maxAge = 60 * 60 * 24 * 365;
+    document.cookie = 'fenrishub_snippets_compact=' + (compact ? '1' : '0') +
+        '; path=/; max-age=' + maxAge + '; SameSite=Lax';
+}
+
+(function initSnippetsCompact() {
+    let compact = false;
+    try {
+        compact = localStorage.getItem(SNIPPETS_COMPACT_KEY) === '1';
+    } catch (e) {}
+    applySnippetsCompactState(compact);
+    setSnippetsCompactCookie(compact);
+    const button = document.getElementById('togglePreviewButton');
+    if (button) {
+        button.addEventListener('click', function() {
+            const next = !document.body.classList.contains('snippets-compact');
+            try {
+                localStorage.setItem(SNIPPETS_COMPACT_KEY, next ? '1' : '0');
+            } catch (e) {}
+            setSnippetsCompactCookie(next);
+            const url = new URL(window.location.href);
+            url.searchParams.delete('page');
+            window.location.href = url.toString();
+        });
+    }
+})();
 
 document.querySelectorAll('[data-toggle-pk]').forEach(function(btn) {
     btn.addEventListener('click', function() {

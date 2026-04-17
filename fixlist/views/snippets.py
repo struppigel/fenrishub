@@ -110,7 +110,9 @@ def snippets_view(request):
         )
 
     snippets = snippets.order_by('name')
-    page_obj = Paginator(snippets, 8).get_page(request.GET.get('page'))
+    compact_view = request.COOKIES.get('fenrishub_snippets_compact') == '1'
+    per_page = 14 if compact_view else 7
+    page_obj = Paginator(snippets, per_page).get_page(request.GET.get('page'))
 
     pagination_params = {}
     if search_query:
