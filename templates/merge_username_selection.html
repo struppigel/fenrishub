@@ -16,7 +16,7 @@
 
 <form method="post" action="{% url 'uploaded_logs' %}">
     {% csrf_token %}
-    <input type="hidden" name="action" value="confirm_merge">
+    <input type="hidden" name="action" value="{{ confirm_action|default:'confirm_merge' }}">
     {% for upload_id in selected_upload_ids %}
     <input type="hidden" name="selected_upload_ids" value="{{ upload_id }}">
     {% endfor %}

@@ -2,6 +2,7 @@
 from django.http import HttpResponse
 from django.shortcuts import redirect, get_object_or_404, render
 from django.contrib import messages
+from django.urls import reverse
 from django.utils import timezone
 
 from ..models import UploadedLog
@@ -83,8 +84,13 @@ def handle_delete_selected_action(request, selected_ids: list, action_scope_uplo
     return _uploads_redirect_with_state(request)
 
 
-def handle_merge_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:
-    """Handle merge selected uploads (single-username case)."""
+def _redirect_after_merge(merged_upload: UploadedLog, to_analyzer: bool) -> HttpResponse:
+    if to_analyzer:
+        return redirect(f"{reverse('log_analyzer')}?upload_id={merged_upload.upload_id}")
+    return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
+
+
+def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer: bool) -> HttpResponse:
     if len(selected_ids) < 2:
         messages.error(request, 'Select at least two uploads to merge.')
         return redirect('uploaded_logs')
@@ -97,59 +103,54 @@ def handle_merge_action(request, selected_ids: list, action_scope_uploads) -> Ht
         return redirect('uploaded_logs')
 
     ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
-    
-    # Collect unique usernames from selected logs
     usernames = list(set(log.reddit_username for log in ordered_logs))
-    
-    # If usernames differ, show selection page
+
     if len(usernames) > 1:
+        confirm_action = 'confirm_mergealyze' if to_analyzer else 'confirm_merge'
         context = {
             'selected_logs': ordered_logs,
             'selected_upload_ids': selected_ids,
             'usernames': sorted(usernames),
+            'confirm_action': confirm_action,
         }
         return render(request, 'merge_username_selection.html', context)
-    
-    # All usernames are the same, proceed with merge using that username
-    selected_username = usernames[0]
+
     merged_upload = execute_merge(
         ordered_logs=ordered_logs,
-        reddit_username=selected_username,
+        reddit_username=usernames[0],
         recipient_user=request.user,
         created_by=request.user,
     )
     _purge_old_trash()
     messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
-    return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
+    return _redirect_after_merge(merged_upload, to_analyzer)
 
 
-def handle_confirm_merge_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:
-    """Handle merge with user-selected username (multi-username case)."""
+def _confirm_merge(request, selected_ids: list, action_scope_uploads, to_analyzer: bool) -> HttpResponse:
     selected_username = request.POST.get('selected_username', '').strip()
-    
+
     if len(selected_ids) < 2:
         messages.error(request, 'Select at least two uploads to merge.')
         return redirect('uploaded_logs')
-    
+
     if not selected_username:
         messages.error(request, 'Please select a username.')
         return redirect('uploaded_logs')
-    
+
     selected_logs = list(action_scope_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
     logs_by_id = {entry.upload_id: entry for entry in selected_logs}
     missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
     if missing_ids:
         messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
         return redirect('uploaded_logs')
-    
+
     ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
-    
-    # Validate selected username exists in the logs
+
     available_usernames = set(log.reddit_username for log in ordered_logs)
     if selected_username not in available_usernames:
         messages.error(request, 'Invalid username selection.')
         return redirect('uploaded_logs')
-    
+
     merged_upload = execute_merge(
         ordered_logs=ordered_logs,
         reddit_username=selected_username,
@@ -158,7 +159,27 @@ def handle_confirm_merge_action(request, selected_ids: list, action_scope_upload
     )
     _purge_old_trash()
     messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
-    return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
+    return _redirect_after_merge(merged_upload, to_analyzer)
+
+
+def handle_merge_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:
+    """Handle merge selected uploads (single-username case)."""
+    return _start_merge(request, selected_ids, action_scope_uploads, to_analyzer=False)
+
+
+def handle_confirm_merge_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:
+    """Handle merge with user-selected username (multi-username case)."""
+    return _confirm_merge(request, selected_ids, action_scope_uploads, to_analyzer=False)
+
+
+def handle_mergealyze_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:
+    """Merge selected uploads and open the result in the log analyzer."""
+    return _start_merge(request, selected_ids, action_scope_uploads, to_analyzer=True)
+
+
+def handle_confirm_mergealyze_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:
+    """Mergealyze with user-selected username (multi-username case)."""
+    return _confirm_merge(request, selected_ids, action_scope_uploads, to_analyzer=True)
 
 
 def handle_copy_to_me_action(request, upload_id: str, action_scope_uploads) -> HttpResponse:

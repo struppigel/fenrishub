@@ -54,6 +54,7 @@ let cleanCursorModeActive = false;
 let lineInspectorInFlight = false;
 
 const FIXLIST_PANEL_HIDDEN_KEY = 'fenrishub_fixlist_panel_hidden';
+const IGNORE_FIREWALL_RULES_KEY = 'fenrishub_ignore_firewall_rules';
 let fixlistPanelHidden = false;
 
 function applyFixlistPanelState() {
@@ -84,6 +85,22 @@ function toggleFixlistPanel() {
         localStorage.setItem(FIXLIST_PANEL_HIDDEN_KEY, fixlistPanelHidden ? '1' : '0');
     } catch (e) {}
     applyFixlistPanelState();
+}
+
+function initIgnoreFirewallRulesState() {
+    const checkbox = document.getElementById('bulkIgnoreFirewallRules');
+    if (!checkbox) return;
+    try {
+        const stored = localStorage.getItem(IGNORE_FIREWALL_RULES_KEY);
+        if (stored !== null) {
+            checkbox.checked = stored === '1';
+        }
+    } catch (e) {}
+    checkbox.addEventListener('change', () => {
+        try {
+            localStorage.setItem(IGNORE_FIREWALL_RULES_KEY, checkbox.checked ? '1' : '0');
+        } catch (e) {}
+    });
 }
 
 function closeLineInspectorModal(options = {}) {

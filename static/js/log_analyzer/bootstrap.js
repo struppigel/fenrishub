@@ -502,6 +502,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof initFixlistPanelState === 'function') {
         initFixlistPanelState();
     }
+    if (typeof initIgnoreFirewallRulesState === 'function') {
+        initIgnoreFirewallRulesState();
+    }
     bindAnalyzerControls();
     bindAnalyzerModalDismissals();
     loadInitialUploadForAnalyzer();

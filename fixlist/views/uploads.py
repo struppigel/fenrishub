@@ -23,7 +23,8 @@ from ..upload_utils import soft_delete_uploaded_log, restore_uploaded_log, execu
 from .upload_actions import (
     handle_delete_action, handle_assign_to_me_action, handle_unassign_to_general_action,
     handle_copy_to_me_action, handle_delete_selected_action, handle_merge_action,
-    handle_confirm_merge_action, handle_rescan_stats_selected_action,
+    handle_confirm_merge_action, handle_mergealyze_action, handle_confirm_mergealyze_action,
+    handle_rescan_stats_selected_action,
 )
 from .utils import (
     _anonymous_upload_limit, _consume_anonymous_upload_slot, _resolve_upload_recipient_username,
@@ -190,6 +191,10 @@ def uploaded_logs_view(request):
             return handle_merge_action(request, selected_ids, action_scope_uploads)
         elif action == 'confirm_merge':
             return handle_confirm_merge_action(request, selected_ids, action_scope_uploads)
+        elif action == 'mergealyze':
+            return handle_mergealyze_action(request, selected_ids, action_scope_uploads)
+        elif action == 'confirm_mergealyze':
+            return handle_confirm_mergealyze_action(request, selected_ids, action_scope_uploads)
         elif action == 'rescan_selected':
             return handle_rescan_stats_selected_action(request, selected_ids, action_scope_uploads)
         else:

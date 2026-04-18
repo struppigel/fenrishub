@@ -51,6 +51,10 @@
         width: 100%;
     }
 
+    .merge-controls button {
+        min-width: 0;
+    }
+
     .upload-stats .stat-b { color: var(--la-status-b); }
     .upload-stats .stat-p { color: var(--la-status-p); }
     .upload-stats .stat-c { color: var(--la-status-c); }
@@ -174,6 +178,7 @@
 <div class="merge-controls button-group">
     <div style="display: flex; gap: 8px; align-items: center;">
         <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();">merge</button>
+        <button type="submit" form="mergeUploadsForm" name="action" value="mergealyze" onclick="return confirmMergealyze();">mergealyze</button>
         <button type="button" onclick="confirmDiff();">diff</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();">delete</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="rescan_selected" onclick="return confirmRescan();">rescan</button>
@@ -600,6 +605,15 @@ function confirmMerge() {
         return false;
     }
     return confirm('Merge ' + count + ' selected upload(s)?');
+}
+
+function confirmMergealyze() {
+    const count = getStoredSelectedUploadIds().size;
+    if (count === 0) {
+        alert('Select at least one upload to mergealyze.');
+        return false;
+    }
+    return confirm('Merge ' + count + ' selected upload(s) and open in analyzer?');
 }
 
 function confirmDeleteSelected() {
