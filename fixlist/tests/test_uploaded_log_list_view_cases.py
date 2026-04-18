@@ -284,6 +284,180 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.url, reverse('uploaded_logs'))
         self.assertEqual(UploadedLog.objects.count(), 1)
 
+    def test_merge_with_different_usernames_renders_selection_page(self):
+        first = UploadedLog.objects.create(
+            upload_id='opal-ridge',
+            reddit_username='user_one',
+            original_filename='first.txt',
+            content='aaa',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='onyx-basin',
+            reddit_username='user_two',
+            original_filename='second.txt',
+            content='bbb',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'merge',
+                'selected_upload_ids': [first.upload_id, second.upload_id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'merge_username_selection.html')
+        self.assertContains(response, 'value="confirm_merge"')
+        self.assertNotContains(response, 'value="confirm_mergealyze"')
+        self.assertEqual(UploadedLog.objects.filter(deleted_at__isnull=True).count(), 2)
+
+    def test_confirm_merge_with_selected_username_merges_and_redirects_to_list(self):
+        first = UploadedLog.objects.create(
+            upload_id='opal-ridge',
+            reddit_username='user_one',
+            original_filename='first.txt',
+            content='aaa',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='onyx-basin',
+            reddit_username='user_two',
+            original_filename='second.txt',
+            content='bbb',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'confirm_merge',
+                'selected_upload_ids': [first.upload_id, second.upload_id],
+                'selected_username': 'user_two',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('uploaded_logs'))
+        merged = UploadedLog.objects.get(upload_id='opal-ridge')
+        self.assertEqual(merged.reddit_username, 'user_two')
+        self.assertEqual(merged.content, 'aaa\nbbb')
+
+    def test_mergealyze_merges_and_redirects_to_analyzer(self):
+        first = UploadedLog.objects.create(
+            upload_id='amber-meadow',
+            reddit_username='reddit_name',
+            original_filename='first.txt',
+            content='aaa',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='azure-harbor',
+            reddit_username='reddit_name',
+            original_filename='second.txt',
+            content='bbb',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'mergealyze',
+                'selected_upload_ids': [first.upload_id, second.upload_id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.url,
+            f"{reverse('log_analyzer')}?upload_id=amber-meadow",
+        )
+        merged = UploadedLog.objects.get(upload_id='amber-meadow')
+        self.assertEqual(merged.content, 'aaa\nbbb')
+        self.assertEqual(merged.recipient_user, self.user)
+
+    def test_mergealyze_requires_at_least_two_uploads(self):
+        only = UploadedLog.objects.create(
+            upload_id='mellow-garden',
+            reddit_username='reddit_name',
+            original_filename='single.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'mergealyze',
+                'selected_upload_ids': [only.upload_id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('uploaded_logs'))
+        self.assertEqual(UploadedLog.objects.count(), 1)
+
+    def test_mergealyze_with_different_usernames_renders_selection_page_with_confirm_mergealyze(self):
+        first = UploadedLog.objects.create(
+            upload_id='opal-ridge',
+            reddit_username='user_one',
+            original_filename='first.txt',
+            content='aaa',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='onyx-basin',
+            reddit_username='user_two',
+            original_filename='second.txt',
+            content='bbb',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'mergealyze',
+                'selected_upload_ids': [first.upload_id, second.upload_id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'merge_username_selection.html')
+        self.assertContains(response, 'value="confirm_mergealyze"')
+        self.assertEqual(UploadedLog.objects.filter(deleted_at__isnull=True).count(), 2)
+
+    def test_confirm_mergealyze_with_selected_username_merges_and_redirects_to_analyzer(self):
+        first = UploadedLog.objects.create(
+            upload_id='opal-ridge',
+            reddit_username='user_one',
+            original_filename='first.txt',
+            content='aaa',
+        )
+        second = UploadedLog.objects.create(
+            upload_id='onyx-basin',
+            reddit_username='user_two',
+            original_filename='second.txt',
+            content='bbb',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.post(
+            reverse('uploaded_logs'),
+            {
+                'action': 'confirm_mergealyze',
+                'selected_upload_ids': [first.upload_id, second.upload_id],
+                'selected_username': 'user_two',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.url,
+            f"{reverse('log_analyzer')}?upload_id=opal-ridge",
+        )
+        merged = UploadedLog.objects.get(upload_id='opal-ridge')
+        self.assertEqual(merged.reddit_username, 'user_two')
+        self.assertEqual(merged.content, 'aaa\nbbb')
+        self.assertEqual(merged.recipient_user, self.user)
+
     def test_delete_selected_uploads_moves_selected_to_trash(self):
         first = UploadedLog.objects.create(
             upload_id='drift-spark',

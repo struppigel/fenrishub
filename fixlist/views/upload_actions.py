@@ -87,7 +87,7 @@ def handle_delete_selected_action(request, selected_ids: list, action_scope_uplo
 def _redirect_after_merge(merged_upload: UploadedLog, to_analyzer: bool) -> HttpResponse:
     if to_analyzer:
         return redirect(f"{reverse('log_analyzer')}?upload_id={merged_upload.upload_id}")
-    return redirect('view_uploaded_log', upload_id=merged_upload.upload_id)
+    return redirect('uploaded_logs')
 
 
 def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer: bool) -> HttpResponse:

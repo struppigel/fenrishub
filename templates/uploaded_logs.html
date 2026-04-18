@@ -177,19 +177,19 @@
 <div id="uploadsListContainer">
 <div class="merge-controls button-group">
     <div style="display: flex; gap: 8px; align-items: center;">
-        <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();">merge</button>
-        <button type="submit" form="mergeUploadsForm" name="action" value="mergealyze" onclick="return confirmMergealyze();">mergealyze</button>
-        <button type="button" onclick="confirmDiff();">diff</button>
-        <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();">delete</button>
-        <button type="submit" form="mergeUploadsForm" name="action" value="rescan_selected" onclick="return confirmRescan();">rescan</button>
+        <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();" title="merge selected uploads into one log assigned to you">merge</button>
+        <button type="submit" form="mergeUploadsForm" name="action" value="mergealyze" onclick="return confirmMergealyze();" title="merge selected uploads, assign to you, and open in log analyzer">mergealyze</button>
+        <button type="button" onclick="confirmDiff();" title="show a side-by-side diff of exactly two selected uploads">diff</button>
+        <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();" title="move the selected uploads to trash">delete</button>
+        <button type="submit" form="mergeUploadsForm" name="action" value="rescan_selected" onclick="return confirmRescan();" title="re-run the analyzer on the selected uploads to refresh stats">rescan</button>
         <span id="selectionIndicator" class="muted" hidden style="font-size: 12px;">
             <span id="selectionCount">0</span> selected
             <a href="#" id="clearSelectionLink" style="margin-left: 6px;">clear</a>
         </span>
     </div>
     <div style="display: flex; gap: 8px;">
-        <a href="{% url 'upload_log_for_helper' request.user.username %}"><button type="button">upload</button></a>
-        <a href="{% url 'uploads_trash' %}"><button type="button"{% if trash_count %} style="color: var(--la-warning-text);"{% endif %}>trash{% if trash_count %} ({{ trash_count }}){% endif %}</button></a>
+        <a href="{% url 'upload_log_for_helper' request.user.username %}"><button type="button" title="upload a new FRST log into your channel">upload</button></a>
+        <a href="{% url 'uploads_trash' %}"><button type="button"{% if trash_count %} style="color: var(--la-warning-text);"{% endif %} title="view deleted uploads (trash bin)">trash{% if trash_count %} ({{ trash_count }}){% endif %}</button></a>
     </div>
 </div>
 
@@ -250,7 +250,7 @@
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                <button type="submit" class="action-btn">assign</button>
+                <button type="submit" class="action-btn" title="assign this upload to you (take over)">assign</button>
             </form>
             {% elif uploaded_log.recipient_user == request.user %}
             <form method="post" action="{% url 'uploaded_logs' %}">
@@ -260,7 +260,7 @@
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                <button type="submit" class="action-btn">unassign</button>
+                <button type="submit" class="action-btn" title="release this upload back to the general channel">unassign</button>
             </form>
             {% else %}
             <form method="post" action="{% url 'uploaded_logs' %}">
@@ -270,11 +270,11 @@
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                <button type="submit" class="action-btn">copy</button>
+                <button type="submit" class="action-btn" title="copy this upload into your channel (original stays with the other helper)">copy</button>
             </form>
             {% endif %}
-            <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn">view</a>
-            <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}" class="action-btn">analyze</a>
+            <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn" title="open this upload's detail page">view</a>
+            <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}" class="action-btn" title="open this upload in the log analyzer">analyze</a>
             {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == request.user %}
             <form method="post" action="{% url 'uploaded_logs' %}">
                 {% csrf_token %}
@@ -283,7 +283,7 @@
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this upload to trash?');">delete</button>
+                <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this upload to trash?');" title="move this upload to trash">delete</button>
             </form>
             {% endif %}
         </div>
