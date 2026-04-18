@@ -158,6 +158,12 @@ def extract_frst_scheduled_task(line):
     return extract_frst_entry(line, regexp, group_map, entry_type="scheduled_task")
 
 
+def extract_frst_startup(line):
+    regexp = r"Startup: (.+?)(?: \[([^\]]*)\])?\s*$"
+    group_map = {"filepath": 1, "date": 2}
+    return extract_frst_entry(line, regexp, group_map, entry_type="startup")
+
+
 def extract_installed_software(line):
     regexp = r"(.*?)( - [\s\.\d\(\)x]*)?\(HK(LM|U)(-x32)?\\.*\((Version:.* - (.*))\)( Hidden)?"
     group_map = {"name": 1, "company": 6}
@@ -239,6 +245,7 @@ def get_frst_entry(line):
         extract_frst_activesetup,
         extract_frst_shortcut,
         extract_frst_scheduled_task,
+        extract_frst_startup,
         extract_firewall_rule,
         extract_onemonth,
         extract_process,
@@ -271,6 +278,7 @@ def extract_any_frst_path(line):
         extract_frst_activesetup,
         extract_frst_shortcut,
         extract_frst_scheduled_task,
+        extract_frst_startup,
         extract_firewall_rule,
         extract_onemonth,
         extract_process,
