@@ -23,6 +23,14 @@ DEFAULT_FRST_FIX_MESSAGE_TEMPLATE = """FRST  Fix
 * Copy & paste the contents of the Fixlog.txt to [https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}](https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}) and press **\"save log\"**. Reply back with the keyword"""
 
 
+DEFAULT_ANALYZER_FIXLIST_TEMPLATE = """Start::
+CreateRestorePoint:
+CloseProcesses:
+
+EmptyTemp:
+End::"""
+
+
 @require_http_methods(["GET", "POST"])
 def login_view(request):
     """User login view."""
@@ -79,11 +87,13 @@ def profile_view(request):
     if request.method == 'POST':
         profile.frst_fix_message = request.POST.get('frst_fix_message', '')
         profile.word_wrap = 'word_wrap' in request.POST
-        profile.save(update_fields=['frst_fix_message', 'word_wrap'])
+        profile.analyzer_fixlist_template = request.POST.get('analyzer_fixlist_template', '')
+        profile.save(update_fields=['frst_fix_message', 'word_wrap', 'analyzer_fixlist_template'])
         messages.success(request, 'Profile settings updated successfully.')
         return redirect('profile')
 
     effective_frst_fix_message = (profile.frst_fix_message or '').strip() or DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
+    effective_analyzer_fixlist_template = (profile.analyzer_fixlist_template or '').strip() or DEFAULT_ANALYZER_FIXLIST_TEMPLATE
 
     return render(
         request,
@@ -91,6 +101,8 @@ def profile_view(request):
         {
             'frst_fix_message': effective_frst_fix_message,
             'default_frst_fix_message': DEFAULT_FRST_FIX_MESSAGE_TEMPLATE,
+            'analyzer_fixlist_template': effective_analyzer_fixlist_template,
+            'default_analyzer_fixlist_template': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
             'profile_word_wrap': profile.word_wrap,
         },
     )

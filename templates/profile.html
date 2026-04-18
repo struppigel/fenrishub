@@ -5,32 +5,55 @@
 {% block page_context_label %}profile settings{% endblock %}
 
 {% block content %}
+<style>
+    .profile-form .form-group > label[for],
+    .profile-form .section-title {
+        display: block;
+        font-size: 14px;
+        font-weight: bold;
+        color: var(--la-text-main);
+        margin-bottom: 6px;
+    }
+    .profile-form .checkbox-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 0;
+    }
+    .profile-form .checkbox-label input[type="checkbox"] {
+        margin: 0;
+    }
+</style>
 <div style="max-width: 820px; margin: 0 auto; padding: 8px 0;">
     <h2>profile settings</h2>
 
-    <div class="info-box">
-        Configure your FRST fix message template. Placeholders supported: <code>{USERNAME}</code>, <code>{HELPERNAME}</code>, <code>{FIXLISTLINK}</code>, <code>{FRSTPATH}</code>.
-    </div>
-
-    <form method="post">
+    <form method="post" class="profile-form">
         {% csrf_token %}
 
         <div class="form-group">
             <label for="frst_fix_message">frst fix message</label>
-            <textarea id="frst_fix_message" name="frst_fix_message" rows="14">{{ frst_fix_message }}</textarea>
+            <textarea id="frst_fix_message" name="frst_fix_message" rows="14" style="color: var(--la-text-neutral);">{{ frst_fix_message }}</textarea>
+            <div class="muted" style="font-size: 12px; margin-top: 4px;">Template posted as a reply when sharing a fixlist. Placeholders: <code>{USERNAME}</code>, <code>{HELPERNAME}</code>, <code>{FIXLISTLINK}</code>, <code>{FRSTPATH}</code>.</div>
         </div>
 
         <div class="form-group">
-            <label>
+            <label for="analyzer_fixlist_template">log analyzer fixlist starter</label>
+            <textarea id="analyzer_fixlist_template" name="analyzer_fixlist_template" rows="8" style="color: var(--la-text-neutral);">{{ analyzer_fixlist_template }}</textarea>
+            <div class="muted" style="font-size: 12px; margin-top: 4px;">Default text prefilled into the fixlist panel on the right side of the log analyzer.</div>
+        </div>
+
+        <div class="form-group">
+            <div class="section-title">general settings</div>
+            <label class="checkbox-label">
                 <input type="checkbox" name="word_wrap" {% if profile_word_wrap %}checked{% endif %}>
-                word wrap logs and fixlists
+                <span>word wrap logs and fixlists</span>
             </label>
             <div class="muted" style="font-size: 12px; margin-top: 4px;">When off, long lines in the log analyzer, log viewer, and fixlist viewer/editor scroll horizontally instead of wrapping.</div>
         </div>
 
         <div class="button-group">
             <button type="submit">save profile</button>
-            <button type="button" onclick="setDefaultMessage()">use default</button>
+            <button type="button" onclick="resetToDefaults()">reset to defaults</button>
             <a href="{% url 'dashboard' %}"><button type="button">back</button></a>
         </div>
     </form>
@@ -40,10 +63,15 @@
 {% block extra_js %}
 <script>
 const defaultFrstFixMessage = "{{ default_frst_fix_message|escapejs }}";
+const defaultAnalyzerFixlistTemplate = "{{ default_analyzer_fixlist_template|escapejs }}";
 
-function setDefaultMessage() {
-    const input = document.getElementById('frst_fix_message');
-    input.value = defaultFrstFixMessage;
+function resetToDefaults() {
+    if (!confirm('Reset all profile settings to their defaults? Unsaved changes will be lost.')) {
+        return;
+    }
+    document.getElementById('frst_fix_message').value = defaultFrstFixMessage;
+    document.getElementById('analyzer_fixlist_template').value = defaultAnalyzerFixlistTemplate;
+    document.querySelector('input[name="word_wrap"]').checked = false;
 }
 </script>
 {% endblock %}

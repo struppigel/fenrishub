@@ -23,6 +23,7 @@ from ..rule_utils import (
     _normalize_pending_changes, _build_pending_rule_preview,
     _persist_selected_pending_rules,
 )
+from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE
 from .utils import get_action_scoped_uploads, get_updatable_uploads
 
 
@@ -45,6 +46,11 @@ def log_analyzer_view(request):
         }
         for s in snippets_qs
     ]))
+    profile = getattr(request.user, 'fenris_profile', None)
+    fixlist_template = (
+        (profile.analyzer_fixlist_template if profile else '').strip()
+        or DEFAULT_ANALYZER_FIXLIST_TEMPLATE
+    )
     return render(
         request,
         'log_analyzer.html',
@@ -53,6 +59,7 @@ def log_analyzer_view(request):
             'initial_upload_id': initial_upload_id,
             'is_superuser': request.user.is_superuser,
             'snippets_json': snippets_json,
+            'fixlist_template': fixlist_template,
         },
     )
 

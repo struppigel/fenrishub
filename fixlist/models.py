@@ -72,6 +72,7 @@ class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='fenris_profile')
     frst_fix_message = models.TextField(blank=True, default='')
     word_wrap = models.BooleanField(default=False)
+    analyzer_fixlist_template = models.TextField(blank=True, default='')
 
     def __str__(self):
         return f'Profile for {self.user.username}'
