@@ -91,8 +91,8 @@ def snippets_view(request):
 
     if shared_by:
         snippets = FixlistSnippet.objects.filter(
-            Q(owner=request.user) | Q(owner__username=shared_by, is_shared=True)
-        ).select_related('owner').distinct()
+            owner__username=shared_by, is_shared=True,
+        ).select_related('owner')
     else:
         snippets = FixlistSnippet.objects.filter(owner=request.user).select_related('owner')
 
