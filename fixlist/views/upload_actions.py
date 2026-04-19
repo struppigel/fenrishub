@@ -184,7 +184,7 @@ def handle_confirm_mergealyze_action(request, selected_ids: list, action_scope_u
 
 def handle_copy_to_me_action(request, upload_id: str, action_scope_uploads) -> HttpResponse:
     """Handle copying an upload assigned to another user to the current user."""
-    uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=True)
+    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
     if uploaded_log.recipient_user_id is None:
         messages.error(request, f'Upload {upload_id} is not assigned — use assign instead.')
         return _uploads_redirect_with_state(request)
