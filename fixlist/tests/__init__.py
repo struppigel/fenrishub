@@ -8,11 +8,11 @@ from .test_log_analyzer_api_core_cases import LogAnalyzerApiCoreTests
 from .test_log_analyzer_api_precedence_cases import LogAnalyzerApiPrecedenceTests
 from .test_log_analyzer_api_rule_changes_cases import LogAnalyzerApiRuleChangeTests
 from .test_log_analyzer_api_warning_cases import LogAnalyzerApiWarningTests
-from .test_log_analyzer_clean_cases import LogAnalyzerCleanSaveTests
 from .test_log_analyzer_rule_ownership_cases import RuleOwnershipTests
+from .test_log_analyzer_view import LogAnalyzerViewTests
 from .test_models import FixlistModelTests
+from .test_rule_preview_api import RulePreviewApiTests
 from .test_template_markup import TemplateMarkupTests
-from .test_uploaded_log_analyzer_view_cases import UploadedLogAnalyzerViewTests
 from .test_uploaded_log_detail_view_cases import UploadedLogDetailViewTests
 from .test_uploaded_log_diff_view_cases import UploadedLogDiffViewTests
 from .test_uploaded_log_list_view_cases import UploadedLogListViewTests
@@ -28,16 +28,15 @@ __all__ = [
     "UploadedLogListViewTests",
     "UploadedLogDetailViewTests",
     "UploadedLogDiffViewTests",
-    "UploadedLogAnalyzerViewTests",
+    "LogAnalyzerViewTests",
     "TrashViewTests",
     "PurgeOldTrashTests",
     "TemplateMarkupTests",
-    "LogAnalyzerCleanSaveTests",
     "LogAnalyzerApiCoreTests",
     "LogAnalyzerApiRuleChangeTests",
     "LogAnalyzerApiWarningTests",
     "LogAnalyzerApiPrecedenceTests",
     "UploadedLogAccessTests",
     "RuleOwnershipTests",
+    "RulePreviewApiTests",
 ]
-

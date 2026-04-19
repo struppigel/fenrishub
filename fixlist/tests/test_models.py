@@ -218,79 +218,42 @@ class ContentHashTests(TestCase):
 
 
 class IncompleteLogFlagTests(TestCase):
-    def _make_log(self, log_type, content):
+    def _make_log(self, upload_id, log_type, content):
         return UploadedLog.objects.create(
-            upload_id=f'test-{log_type.lower().replace("&", "")}',
+            upload_id=upload_id,
             reddit_username='test_user',
             original_filename='log.txt',
             log_type=log_type,
             content=content,
         )
 
-    def test_frst_without_end_markers_is_incomplete(self):
-        log = self._make_log('FRST', _FRST_CONTENT)
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertTrue(log.is_incomplete)
-
-    def test_frst_with_end_markers_is_not_incomplete(self):
-        log = self._make_log('FRST', _FRST_COMPLETE)
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertFalse(log.is_incomplete)
-
-    def test_unknown_type_is_never_incomplete(self):
-        log = self._make_log('Unknown', _FRST_CONTENT)
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertFalse(log.is_incomplete)
-
-    def test_addition_without_end_markers_is_incomplete(self):
-        log = self._make_log('Addition', _ADDITION_CONTENT)
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertTrue(log.is_incomplete)
-
-    def test_frst_with_only_frst_ending_is_not_incomplete(self):
-        log = self._make_log('FRST', f'{_FRST_CONTENT}\n{FRST_END_OF_LOG}')
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertFalse(log.is_incomplete)
-
-    def test_addition_with_only_addition_ending_is_not_incomplete(self):
-        log = self._make_log('Addition', f'{_ADDITION_CONTENT}\n{FRST_END_OF_ADDITION}')
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertFalse(log.is_incomplete)
-
-    def test_frst_and_addition_without_end_markers_is_incomplete(self):
-        log = self._make_log('FRST&Addition', _FRST_CONTENT)
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertTrue(log.is_incomplete)
-
-    def test_frst_and_addition_with_end_markers_is_not_incomplete(self):
-        log = self._make_log('FRST&Addition', _FRST_COMPLETE)
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertFalse(log.is_incomplete)
-
-    def test_frst_and_addition_with_only_one_ending_is_incomplete(self):
-        content = (
+    def test_is_incomplete_flag(self):
+        _frst_and_addition_only_frst_ending = (
             'Scan result of Farbar Recovery Scan Tool\nfrst content\n'
             'Additional scan result of Farbar Recovery Scan Tool\naddition content\n'
             f'{FRST_END_OF_LOG}'
         )
-        log = self._make_log('FRST&Addition', content)
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertTrue(log.is_incomplete)
-
-    def test_fixlog_type_is_never_incomplete(self):
-        log = self._make_log('Fixlog', 'Fix result of Farbar Recovery Scan Tool\nsome fix')
-        log.recalculate_analysis_stats()
-        log.refresh_from_db()
-        self.assertFalse(log.is_incomplete)
+        cases = [
+            ('frst_without_end_markers', 'FRST', _FRST_CONTENT, True),
+            ('frst_with_end_markers', 'FRST', _FRST_COMPLETE, False),
+            ('frst_with_only_frst_ending', 'FRST', f'{_FRST_CONTENT}\n{FRST_END_OF_LOG}', False),
+            ('unknown_type_never_incomplete', 'Unknown', _FRST_CONTENT, False),
+            ('addition_without_end_markers', 'Addition', _ADDITION_CONTENT, True),
+            ('addition_with_only_addition_ending', 'Addition',
+             f'{_ADDITION_CONTENT}\n{FRST_END_OF_ADDITION}', False),
+            ('frst_and_addition_without_end_markers', 'FRST&Addition', _FRST_CONTENT, True),
+            ('frst_and_addition_with_end_markers', 'FRST&Addition', _FRST_COMPLETE, False),
+            ('frst_and_addition_only_one_ending', 'FRST&Addition',
+             _frst_and_addition_only_frst_ending, True),
+            ('fixlog_type_never_incomplete', 'Fixlog',
+             'Fix result of Farbar Recovery Scan Tool\nsome fix', False),
+        ]
+        for label, log_type, content, expected in cases:
+            with self.subTest(label=label):
+                log = self._make_log(f'test-{label}', log_type, content)
+                log.recalculate_analysis_stats()
+                log.refresh_from_db()
+                self.assertEqual(log.is_incomplete, expected)
 
 
 class FixlogStatsTests(TestCase):
@@ -330,44 +293,24 @@ class FixlogStatsTests(TestCase):
 
 
 class DetectLogTypeTests(TestCase):
-    def test_frst(self):
-        self.assertEqual(
-            detect_log_type('Scan result of Farbar Recovery Scan Tool\nline2'),
-            'FRST',
-        )
-
-    def test_addition(self):
-        self.assertEqual(
-            detect_log_type('Additional scan result of Farbar Recovery Scan Tool\nline2'),
-            'Addition',
-        )
-
-    def test_fixlog(self):
-        self.assertEqual(
-            detect_log_type('Fix result of Farbar Recovery Scan Tool\nline2'),
-            'Fixlog',
-        )
-
-    def test_frst_and_addition_when_both_present(self):
-        content = (
+    def test_detect_log_type(self):
+        frst_and_addition_content = (
             'Scan result of Farbar Recovery Scan Tool\nfrst content\n'
             'Additional scan result of Farbar Recovery Scan Tool\naddition content'
         )
-        self.assertEqual(detect_log_type(content), 'FRST&Addition')
-
-    def test_unknown(self):
-        self.assertEqual(detect_log_type('some random log content'), 'Unknown')
-
-    def test_empty(self):
-        self.assertEqual(detect_log_type(''), 'Unknown')
-
-    def test_addition_does_not_match_frst_marker(self):
-        # "Additional scan result" must not trigger FRST detection
-        content = 'Additional scan result of Farbar Recovery Scan Tool\nline2'
-        self.assertEqual(detect_log_type(content), 'Addition')
-
-    def test_leading_whitespace_ignored_for_fixlog(self):
-        self.assertEqual(
-            detect_log_type('\n\nFix result of Farbar Recovery Scan Tool\nline2'),
-            'Fixlog',
-        )
+        cases = [
+            ('frst', 'Scan result of Farbar Recovery Scan Tool\nline2', 'FRST'),
+            ('addition', 'Additional scan result of Farbar Recovery Scan Tool\nline2', 'Addition'),
+            ('fixlog', 'Fix result of Farbar Recovery Scan Tool\nline2', 'Fixlog'),
+            ('frst_and_addition_when_both_present', frst_and_addition_content, 'FRST&Addition'),
+            ('unknown', 'some random log content', 'Unknown'),
+            ('empty', '', 'Unknown'),
+            # "Additional scan result" must not trigger FRST detection
+            ('addition_does_not_match_frst_marker',
+             'Additional scan result of Farbar Recovery Scan Tool\nline2', 'Addition'),
+            ('leading_whitespace_ignored_for_fixlog',
+             '\n\nFix result of Farbar Recovery Scan Tool\nline2', 'Fixlog'),
+        ]
+        for label, content, expected in cases:
+            with self.subTest(label=label):
+                self.assertEqual(detect_log_type(content), expected)

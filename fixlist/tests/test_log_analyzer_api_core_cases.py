@@ -8,28 +8,30 @@ from .log_analyzer_api_shared import LogAnalyzerApiBaseTestCase
 
 class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
 
-    def test_analyze_api_requires_login(self):
-        response = self.client.post(
-            reverse("analyze_log_api"),
-            data='{"log":"line"}',
-            content_type="application/json",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("login"), response.url)
-
-    def test_uploaded_log_content_api_requires_login(self):
+    def test_endpoints_require_login(self):
         uploaded = UploadedLog.objects.create(
             upload_id='rapid-trail',
             reddit_username='reddit_name',
             original_filename='content.txt',
             content='line-1',
         )
-
-        response = self.client.get(reverse('uploaded_log_content_api', args=[uploaded.upload_id]))
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse('login'), response.url)
+        cases = [
+            ('analyze_log_api', 'post',
+             reverse('analyze_log_api'), '{"log":"line"}'),
+            ('uploaded_log_content_api', 'get',
+             reverse('uploaded_log_content_api', args=[uploaded.upload_id]), None),
+            ('analyze_line_details_api', 'post',
+             reverse('analyze_line_details_api'),
+             json.dumps({"line": "example", "status": "?"})),
+        ]
+        for label, method, url, body in cases:
+            with self.subTest(endpoint=label):
+                if method == 'post':
+                    response = self.client.post(url, data=body, content_type='application/json')
+                else:
+                    response = self.client.get(url)
+                self.assertEqual(response.status_code, 302)
+                self.assertIn(reverse('login'), response.url)
 
     def test_uploaded_log_content_api_returns_json_payload(self):
         self.client.login(username='analyzer', password='password123')
@@ -66,16 +68,6 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload['upload_id'], 'private-rapid-trail')
         self.assertEqual(payload['content'], 'line-1\nline-2')
-
-    def test_analyze_line_details_api_requires_login(self):
-        response = self.client.post(
-            reverse("analyze_line_details_api"),
-            data=json.dumps({"line": "example", "status": "?"}),
-            content_type="application/json",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("login"), response.url)
 
     def test_analyze_line_details_api_returns_parsed_components(self):
         self.client.login(username="analyzer", password="password123")

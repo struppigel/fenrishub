@@ -199,7 +199,12 @@ def handle_copy_to_me_action(request, upload_id: str, action_scope_uploads) -> H
         detected_encoding=uploaded_log.detected_encoding,
         created_by=uploaded_log.created_by,
         recipient_user=request.user,
+        log_type=uploaded_log.log_type,
+        is_incomplete=uploaded_log.is_incomplete,
+        scan_date=uploaded_log.scan_date,
     )
+    for field_name in UploadedLog.analysis_stat_fields():
+        setattr(copy, field_name, getattr(uploaded_log, field_name))
     copy.save()
     messages.success(request, f'Copied {upload_id} as {copy.upload_id} assigned to {request.user.username}.')
     return _uploads_redirect_with_state(request)

@@ -8,8 +8,8 @@ from .log_analyzer_api_shared import LogAnalyzerApiBaseTestCase
 
 class LogAnalyzerApiRuleChangeTests(LogAnalyzerApiBaseTestCase):
 
-    def test_persist_pending_rule_changes_api_requires_login(self):
-        payload = {
+    def test_endpoints_require_login(self):
+        persist_payload = {
             "pending_changes": [
                 {
                     "id": "1",
@@ -22,15 +22,22 @@ class LogAnalyzerApiRuleChangeTests(LogAnalyzerApiBaseTestCase):
             "selected_rule_change_ids": ["1"],
             "conflict_resolutions": [],
         }
-
-        response = self.client.post(
-            reverse("persist_pending_rule_changes_api"),
-            data=json.dumps(payload),
-            content_type="application/json",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("login"), response.url)
+        cases = [
+            ('persist_pending_rule_changes_api',
+             reverse("persist_pending_rule_changes_api"),
+             json.dumps(persist_payload)),
+            ('update_analyzed_line_status_api',
+             reverse("update_analyzed_line_status_api"),
+             json.dumps({"line": "example", "status": "B", "current_status": "?"})),
+            ('preview_pending_rule_changes_api',
+             reverse("preview_pending_rule_changes_api"),
+             json.dumps({"pending_changes": []})),
+        ]
+        for label, url, body in cases:
+            with self.subTest(endpoint=label):
+                response = self.client.post(url, data=body, content_type='application/json')
+                self.assertEqual(response.status_code, 302)
+                self.assertIn(reverse('login'), response.url)
 
     def test_persist_pending_rule_changes_api_affects_next_analysis(self):
         self.client.login(username="analyzer", password="password123")
@@ -155,16 +162,6 @@ class LogAnalyzerApiRuleChangeTests(LogAnalyzerApiBaseTestCase):
             1,
         )
 
-    def test_update_status_api_requires_login(self):
-        response = self.client.post(
-            reverse("update_analyzed_line_status_api"),
-            data=json.dumps({"line": "example", "status": "B", "current_status": "?"}),
-            content_type="application/json",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("login"), response.url)
-
     def test_update_status_api_rejects_invalid_status(self):
         self.client.login(username="analyzer", password="password123")
 
@@ -258,16 +255,6 @@ class LogAnalyzerApiRuleChangeTests(LogAnalyzerApiBaseTestCase):
         self.assertFalse(payload["persisted"])
         self.assertEqual(payload["match_type"], ClassificationRule.MATCH_PARSED_ENTRY)
         self.assertEqual(ClassificationRule.objects.count(), 0)
-
-    def test_preview_pending_rule_changes_api_requires_login(self):
-        response = self.client.post(
-            reverse("preview_pending_rule_changes_api"),
-            data=json.dumps({"pending_changes": []}),
-            content_type="application/json",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("login"), response.url)
 
     def test_preview_pending_rule_changes_api_rejects_non_list_payload(self):
         self.client.login(username="analyzer", password="password123")
