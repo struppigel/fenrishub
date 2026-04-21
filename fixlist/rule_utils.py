@@ -304,7 +304,11 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
             for match in inspection['matches']
             if match['status'] == dominant_existing and match['status'] != new_status
         ]
-        overlapping_matches = [match for match in inspection['matches'] if match['status'] != new_status]
+        overlapping_matches = [
+            match
+            for match in inspection['matches']
+            if match['status'] != new_status and match['status'] != dominant_existing
+        ]
 
         if dominant_existing not in ('?', new_status):
             override_conflicts.append(

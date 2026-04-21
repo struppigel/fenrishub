@@ -193,6 +193,13 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
         ClassificationRule.objects.create(
             owner=self.user,
             status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_EXACT,
+            source_text="CONFLICT-LINE",
+            description="existing clean exact",
+        )
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_CLEAN,
             match_type=ClassificationRule.MATCH_SUBSTRING,
             source_text="CONFLICT",
             description="existing clean substring",

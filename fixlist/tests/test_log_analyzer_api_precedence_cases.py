@@ -315,9 +315,7 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
         )
 
         overlap_conflicts = payload["contradictions"]["overlaps_other_status_rules"]
-        self.assertEqual(len(overlap_conflicts), 1)
-        self.assertEqual(overlap_conflicts[0]["overlap_statuses"], [ClassificationRule.STATUS_CLEAN])
-        self.assertNotIn(ClassificationRule.STATUS_MALWARE, overlap_conflicts[0]["overlap_statuses"])
+        self.assertEqual(overlap_conflicts, [])
 
     def test_match_type_precedence_parsed_over_substring(self):
         """Parsed entry match takes precedence over a substring match on the same line."""

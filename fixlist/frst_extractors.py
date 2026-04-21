@@ -293,6 +293,6 @@ def extract_any_frst_path(line):
     ]
     for extractor in extractors:
         entry = extractor(line)
-        if entry and entry.filepath:
+        if entry and entry.filepath and "(No File)" not in line:
             return entry.filepath
     return None
