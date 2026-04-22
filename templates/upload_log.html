@@ -44,7 +44,7 @@
 <div class="info-box" style="margin: 12px 0; padding: 12px;">
     This upload is assigned to helper <strong>{{ target_helper.username }}</strong>.
     {% if not user.is_authenticated %}
-    <br>No helper yet? <a href="{% url 'upload_log' %}" style="text-decoration: underline; font-weight: 600;">Upload to the general channel instead</a>
+    <br>No helper yet? <a href="{% url 'upload_log' %}" style="text-decoration: underline; font-weight: 600;">Upload to the general channel instead.</a> It may significantly increase response time.
     {% endif %}
 </div>
 {% elif invalid_helper_username %}
