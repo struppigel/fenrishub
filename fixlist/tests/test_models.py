@@ -75,7 +75,7 @@ class UploadedLogModelTests(TestCase):
         original_model_save = Model.save
 
         def first_insert_collides_then_retry(self, *args, **kwargs):
-            if self._state.adding and self.upload_id == 'amber-otter':
+            if self._state.adding and getattr(self, 'upload_id', None) == 'amber-otter':
                 raise IntegrityError('UNIQUE constraint failed: fixlist_uploadedlog.upload_id')
             return original_model_save(self, *args, **kwargs)
 

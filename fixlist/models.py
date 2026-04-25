@@ -650,6 +650,91 @@ class ParsedFilepathExclusion(models.Model):
         return self.normalized_filepath
 
 
+class UploadedLogStat(models.Model):
+    source_id = models.PositiveIntegerField(unique=True, db_index=True)
+    owner_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    owner_username = models.CharField(max_length=150, blank=True, default='', db_index=True)
+    recipient_username = models.CharField(max_length=150, blank=True, default='')
+    log_type = models.CharField(max_length=16, choices=UploadedLog.LOG_TYPE_CHOICES, default='Unknown', db_index=True)
+    created_at = models.DateTimeField(db_index=True)
+    total_line_count = models.PositiveIntegerField(default=0)
+    count_malware = models.PositiveIntegerField(default=0)
+    count_pup = models.PositiveIntegerField(default=0)
+    count_clean = models.PositiveIntegerField(default=0)
+    count_warning = models.PositiveIntegerField(default=0)
+    count_grayware = models.PositiveIntegerField(default=0)
+    count_security = models.PositiveIntegerField(default=0)
+    count_info = models.PositiveIntegerField(default=0)
+    count_junk = models.PositiveIntegerField(default=0)
+    count_unknown = models.PositiveIntegerField(default=0)
+    fixlog_total = models.PositiveIntegerField(default=0)
+    fixlog_success = models.PositiveIntegerField(default=0)
+    fixlog_not_found = models.PositiveIntegerField(default=0)
+    fixlog_error = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'UploadedLogStat(source_id={self.source_id})'
+
+
+class FixlistStat(models.Model):
+    source_id = models.PositiveIntegerField(unique=True, db_index=True)
+    owner_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    owner_username = models.CharField(max_length=150, blank=True, default='', db_index=True)
+    created_at = models.DateTimeField(db_index=True)
+    line_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'FixlistStat(source_id={self.source_id})'
+
+
+def _uploaded_log_stat_defaults(instance):
+    defaults = {
+        'owner_id': instance.created_by_id,
+        'owner_username': instance.created_by.username if instance.created_by_id else '',
+        'recipient_username': instance.recipient_user.username if instance.recipient_user_id else '',
+        'log_type': instance.log_type,
+        'created_at': instance.created_at,
+    }
+    for field_name in UploadedLog.analysis_stat_fields():
+        defaults[field_name] = getattr(instance, field_name)
+    return defaults
+
+
+def _fixlist_stat_defaults(instance):
+    return {
+        'owner_id': instance.owner_id,
+        'owner_username': instance.owner.username if instance.owner_id else '',
+        'created_at': instance.created_at,
+        'line_count': instance.line_count,
+    }
+
+
+@receiver(post_save, sender=UploadedLog)
+def _snapshot_uploaded_log_stats(sender, instance, raw=False, **kwargs):
+    if raw or instance.created_at is None:
+        return
+    UploadedLogStat.objects.update_or_create(
+        source_id=instance.pk,
+        defaults=_uploaded_log_stat_defaults(instance),
+    )
+
+
+@receiver(post_save, sender='fixlist.Fixlist')
+def _snapshot_fixlist_stats(sender, instance, raw=False, **kwargs):
+    if raw or instance.created_at is None:
+        return
+    FixlistStat.objects.update_or_create(
+        source_id=instance.pk,
+        defaults=_fixlist_stat_defaults(instance),
+    )
+
+
 @receiver(post_save, sender=UploadedLog)
 def _auto_assign_new_uploaded_log_to_infection_cases(sender, instance, created, raw=False, **kwargs):
     if raw or not created:
@@ -674,6 +759,10 @@ def _auto_assign_new_uploaded_log_to_infection_cases(sender, instance, created, 
                 updated_at=timezone.now(),
             )
             instance.recipient_user_id = assigned_owner_id
+            assigned_user = User.objects.filter(pk=assigned_owner_id).first()
+            UploadedLogStat.objects.filter(source_id=instance.pk).update(
+                recipient_username=assigned_user.username if assigned_user else '',
+            )
         else:
             return
 

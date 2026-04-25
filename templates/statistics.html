@@ -1,0 +1,445 @@
+{% extends 'base.html' %}
+
+{% block title %}Statistics - Fenris{% endblock %}
+
+{% block page_context_label %}stats{% endblock %}
+
+{% block extra_css %}
+<style>
+    .stats-section {
+        margin-top: 24px;
+    }
+
+    .stats-section h3 {
+        margin-bottom: 8px;
+    }
+
+    .stats-range-form {
+        display: flex;
+        align-items: end;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+    }
+
+    .stats-range-form label {
+        display: flex;
+        flex-direction: column;
+        font-size: 12px;
+        color: var(--la-text-muted);
+        gap: 4px;
+    }
+
+    .stats-range-form input[type="date"] {
+        background: var(--la-bg-2);
+        color: var(--la-text-main);
+        border: 1px solid var(--la-border);
+        padding: 4px 6px;
+        font-family: inherit;
+        font-size: 13px;
+        color-scheme: dark;
+    }
+
+    .stats-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+    }
+
+    .stats-card {
+        background: var(--la-bg-2);
+        border: 1px solid var(--la-border);
+        padding: 12px 14px;
+    }
+
+    .stats-card-label {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        text-transform: lowercase;
+        letter-spacing: 0.04em;
+    }
+
+    .stats-card-value {
+        font-size: 22px;
+        font-weight: 600;
+        color: var(--la-text-primary);
+        margin-top: 4px;
+    }
+
+    .stats-card.malware .stats-card-value { color: var(--la-error-text); }
+    .stats-card.pup .stats-card-value { color: var(--la-warning-text); }
+    .stats-card.warning .stats-card-value { color: var(--la-warning-text); }
+
+    .stats-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+
+    .stats-table th, .stats-table td {
+        text-align: left;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--la-border-muted);
+    }
+
+    .stats-table th {
+        color: var(--la-text-muted);
+        font-weight: 500;
+    }
+
+    .stats-table td.num, .stats-table th.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .stats-grid-two {
+        display: grid;
+        grid-template-columns: minmax(260px, 1fr) minmax(260px, 2fr);
+        gap: 16px;
+        align-items: start;
+    }
+
+    .stats-chart-wrap {
+        position: relative;
+        background: var(--la-bg-2);
+        border: 1px solid var(--la-border);
+        padding: 12px;
+        height: 280px;
+    }
+
+    .stats-chart-wrap canvas {
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    @media (max-width: 720px) {
+        .stats-grid-two { grid-template-columns: 1fr; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div>
+    <form method="get" class="stats-range-form">
+        <label>start date<input type="date" name="start" value="{{ start_date }}"></label>
+        <label>end date<input type="date" name="end" value="{{ end_date }}"></label>
+        <button type="submit">apply</button>
+        <a href="{% url 'statistics' %}"><button type="button">reset</button></a>
+        <span style="font-size: 12px; color: var(--la-text-muted);">showing {{ start_date }} &rarr; {{ end_date }}</span>
+    </form>
+
+    <div class="divider"></div>
+
+    <div class="stats-cards">
+        <div class="stats-card">
+            <div class="stats-card-label">total logs</div>
+            <div class="stats-card-value">{{ headline.total_logs }}</div>
+        </div>
+        <div class="stats-card malware">
+            <div class="stats-card-label">malware lines (B)</div>
+            <div class="stats-card-value">{{ headline.malware_lines }}</div>
+        </div>
+        <div class="stats-card pup">
+            <div class="stats-card-label">pup lines (P)</div>
+            <div class="stats-card-value">{{ headline.pup_lines }}</div>
+        </div>
+        <div class="stats-card warning">
+            <div class="stats-card-label">warning lines (!)</div>
+            <div class="stats-card-value">{{ headline.warning_lines }}</div>
+        </div>
+    </div>
+
+    <div class="stats-section">
+        <h3>uploads per day</h3>
+        <div class="stats-chart-wrap">
+            <canvas id="uploadsPerDayChart" height="120"></canvas>
+        </div>
+    </div>
+
+    <div class="stats-section">
+        <h3>% of logs containing malware (by log type)</h3>
+        <div class="stats-grid-two">
+            <table class="stats-table">
+                <thead>
+                    <tr>
+                        <th>log type</th>
+                        <th class="num">% with B lines</th>
+                        <th class="num">infected / total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in malware_by_log_type %}
+                    <tr>
+                        <td>{{ row.log_type }}</td>
+                        <td class="num">{{ row.percent }}%</td>
+                        <td class="num">{{ row.infected }} / {{ row.total }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <div class="stats-chart-wrap">
+                <canvas id="malwareByTypeChart" height="180"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-section">
+        <h3>mean known vs unknown lines (analyzed logs)</h3>
+        <div class="stats-grid-two">
+            <table class="stats-table">
+                <tbody>
+                    <tr><td>analyzed logs in range</td><td class="num">{{ known_unknown.analyzed_log_count }}</td></tr>
+                    <tr><td>mean % known</td><td class="num">{{ known_unknown.mean_known_pct }}%</td></tr>
+                    <tr><td>mean % unknown</td><td class="num">{{ known_unknown.mean_unknown_pct }}%</td></tr>
+                </tbody>
+            </table>
+            <div class="stats-chart-wrap">
+                <canvas id="knownUnknownChart" height="180"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-section">
+        <h3>fixlog cleanup</h3>
+        <div class="stats-grid-two">
+            <table class="stats-table">
+                <tbody>
+                    <tr><td>fixlogs uploaded</td><td class="num">{{ fixlog_summary.count }}</td></tr>
+                    <tr><td>lines cleaned successfully</td><td class="num">{{ fixlog_summary.success }}</td></tr>
+                    <tr><td>lines not found</td><td class="num">{{ fixlog_summary.not_found }}</td></tr>
+                    <tr><td>errors</td><td class="num">{{ fixlog_summary.error }}</td></tr>
+                    <tr><td>total fix actions</td><td class="num">{{ fixlog_summary.total }}</td></tr>
+                </tbody>
+            </table>
+            <div class="stats-chart-wrap">
+                <canvas id="fixlogChart" height="180"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-section">
+        <h3>logs assigned per helper</h3>
+        {% if logs_per_helper %}
+        <div class="stats-chart-wrap">
+            <canvas id="logsPerHelperChart"></canvas>
+        </div>
+        <table class="stats-table" style="margin-top: 12px;">
+            <thead>
+                <tr><th>helper</th><th class="num">logs in range</th></tr>
+            </thead>
+            <tbody>
+                {% for row in logs_per_helper %}
+                <tr><td>{{ row.username }}</td><td class="num">{{ row.count }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="info-box">no uploads in the selected range.</div>
+        {% endif %}
+    </div>
+
+    <div class="stats-section">
+        <h3>fixlists per helper</h3>
+        {% if fixlists_per_helper %}
+        <div class="stats-grid-two">
+            <table class="stats-table">
+                <thead>
+                    <tr><th>helper</th><th class="num">fixlists</th></tr>
+                </thead>
+                <tbody>
+                    {% for row in fixlists_per_helper %}
+                    <tr><td>{{ row.username }}</td><td class="num">{{ row.count }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <div class="stats-chart-wrap">
+                <canvas id="fixlistsPerHelperChart" height="240"></canvas>
+            </div>
+        </div>
+        {% else %}
+        <div class="info-box">no fixlists created in the selected range.</div>
+        {% endif %}
+    </div>
+</div>
+
+{{ uploads_per_day|json_script:"data-uploads-per-day" }}
+{{ malware_by_log_type|json_script:"data-malware-by-type" }}
+{{ known_unknown|json_script:"data-known-unknown" }}
+{{ fixlog_summary|json_script:"data-fixlog-summary" }}
+{{ logs_per_helper_series|json_script:"data-logs-per-helper-series" }}
+{{ fixlists_per_helper_top|json_script:"data-fixlists-per-helper" }}
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    function readJson(id) {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        try { return JSON.parse(el.textContent); } catch (e) { return null; }
+    }
+
+    const styles = getComputedStyle(document.documentElement);
+    const colors = {
+        primary: (styles.getPropertyValue('--la-text-primary') || '#9fcf82').trim(),
+        info: (styles.getPropertyValue('--la-info') || '#8eb6d8').trim(),
+        warning: (styles.getPropertyValue('--la-warning-text') || '#f0d28f').trim(),
+        error: (styles.getPropertyValue('--la-error-text') || '#d28e8e').trim(),
+        muted: (styles.getPropertyValue('--la-text-muted') || '#7da466').trim(),
+        border: (styles.getPropertyValue('--la-border') || '#2f2f2f').trim(),
+    };
+
+    const baseOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: colors.muted } } },
+        scales: {
+            x: { ticks: { color: colors.muted }, grid: { color: colors.border } },
+            y: { ticks: { color: colors.muted }, grid: { color: colors.border }, beginAtZero: true }
+        }
+    };
+
+    function barChart(canvasId, labels, data, color, label) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || !labels.length) return;
+        new Chart(canvas, {
+            type: 'bar',
+            data: { labels: labels, datasets: [{ label: label, data: data, backgroundColor: color, borderColor: color }] },
+            options: baseOptions,
+        });
+    }
+
+    function horizontalBar(canvasId, labels, data, color, label) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || !labels.length) return;
+        new Chart(canvas, {
+            type: 'bar',
+            data: { labels: labels, datasets: [{ label: label, data: data, backgroundColor: color, borderColor: color }] },
+            options: Object.assign({}, baseOptions, { indexAxis: 'y' }),
+        });
+    }
+
+    const uploadsPerDay = readJson('data-uploads-per-day') || [];
+    const uploadsCanvas = document.getElementById('uploadsPerDayChart');
+    if (uploadsCanvas && uploadsPerDay.length) {
+        new Chart(uploadsCanvas, {
+            type: 'line',
+            data: {
+                labels: uploadsPerDay.map(r => r.day),
+                datasets: [{
+                    label: 'uploads',
+                    data: uploadsPerDay.map(r => r.count),
+                    borderColor: colors.primary,
+                    backgroundColor: colors.primary,
+                    tension: 0.2,
+                    pointRadius: 2,
+                    fill: false,
+                }],
+            },
+            options: baseOptions,
+        });
+    }
+
+    const malwareByType = readJson('data-malware-by-type') || [];
+    const malwareCanvas = document.getElementById('malwareByTypeChart');
+    if (malwareCanvas && malwareByType.length) {
+        new Chart(malwareCanvas, {
+            type: 'bar',
+            data: {
+                labels: malwareByType.map(r => r.log_type),
+                datasets: [{
+                    label: '% logs with malware',
+                    data: malwareByType.map(r => r.percent),
+                    backgroundColor: colors.error,
+                    borderColor: colors.error,
+                }],
+            },
+            options: Object.assign({}, baseOptions, {
+                scales: Object.assign({}, baseOptions.scales, {
+                    y: Object.assign({}, baseOptions.scales.y, {
+                        max: 100,
+                        ticks: Object.assign({}, baseOptions.scales.y.ticks, {
+                            callback: (v) => v + '%',
+                        }),
+                    }),
+                }),
+                plugins: Object.assign({}, baseOptions.plugins, {
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => {
+                                const row = malwareByType[ctx.dataIndex];
+                                return `${row.percent}% (${row.infected} of ${row.total})`;
+                            },
+                        },
+                    },
+                }),
+            }),
+        });
+    }
+
+    const knownUnknown = readJson('data-known-unknown') || {};
+    const knownUnknownCanvas = document.getElementById('knownUnknownChart');
+    if (knownUnknownCanvas && knownUnknown.analyzed_log_count) {
+        new Chart(knownUnknownCanvas, {
+            type: 'doughnut',
+            data: {
+                labels: ['known', 'unknown'],
+                datasets: [{
+                    data: [knownUnknown.mean_known_pct, knownUnknown.mean_unknown_pct],
+                    backgroundColor: [colors.primary, colors.warning],
+                    borderColor: colors.border,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: colors.muted } },
+                    tooltip: {
+                        callbacks: { label: (ctx) => `${ctx.label}: ${ctx.parsed}%` },
+                    },
+                },
+            },
+        });
+    }
+
+    const fixlog = readJson('data-fixlog-summary') || {};
+    barChart('fixlogChart',
+        ['successful', 'not found', 'errors'],
+        [fixlog.success || 0, fixlog.not_found || 0, fixlog.error || 0],
+        colors.info, 'fix actions');
+
+    const seriesPalette = [
+        colors.primary, colors.info, colors.warning, colors.error,
+        '#b48ead', '#a3be8c', '#d08770', '#88c0d0', '#bf616a', '#ebcb8b',
+    ];
+    const logsPerHelperSeries = readJson('data-logs-per-helper-series') || { days: [], series: [] };
+    const helperCanvas = document.getElementById('logsPerHelperChart');
+    if (helperCanvas && logsPerHelperSeries.series.length) {
+        new Chart(helperCanvas, {
+            type: 'line',
+            data: {
+                labels: logsPerHelperSeries.days,
+                datasets: logsPerHelperSeries.series.map((s, i) => ({
+                    label: s.username,
+                    data: s.data,
+                    borderColor: seriesPalette[i % seriesPalette.length],
+                    backgroundColor: seriesPalette[i % seriesPalette.length],
+                    tension: 0.2,
+                    pointRadius: 2,
+                    fill: false,
+                })),
+            },
+            options: baseOptions,
+        });
+    }
+
+    const fixlistsPerHelper = readJson('data-fixlists-per-helper') || [];
+    horizontalBar('fixlistsPerHelperChart',
+        fixlistsPerHelper.map(r => r.username),
+        fixlistsPerHelper.map(r => r.count),
+        colors.warning, 'fixlists created');
+})();
+</script>
+{% endblock %}

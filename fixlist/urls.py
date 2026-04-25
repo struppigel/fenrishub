@@ -26,6 +26,7 @@ from .views.infection_cases import (
 )
 from .views.rules import add_rule_view, rules_view, test_rule_api
 from .views.snippets import snippets_api, snippets_toggle_analyzer_api, snippets_view
+from .views.statistics import statistics_view
 from .views.uploads import (
     diff_uploaded_logs_view,
     upload_log_view,
@@ -71,5 +72,6 @@ urlpatterns = [
     path('share/<str:token>/', shared_fixlist_view, name='shared_fixlist'),
     path('download/<str:token>/', download_fixlist, name='download_fixlist'),
     path('api/copy/<str:token>/', copy_to_clipboard_api, name='copy_api'),
+    path('stats/', statistics_view, name='statistics'),
     path('logout/', logout_view, name='logout'),
 ]
