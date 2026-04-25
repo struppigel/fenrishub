@@ -84,23 +84,23 @@ def handle_delete_selected_action(request, selected_ids: list, action_scope_uplo
     return _uploads_redirect_with_state(request)
 
 
-def _redirect_after_merge(merged_upload: UploadedLog, to_analyzer: bool) -> HttpResponse:
+def _redirect_after_merge(request, merged_upload: UploadedLog, to_analyzer: bool) -> HttpResponse:
     if to_analyzer:
         return redirect(f"{reverse('log_analyzer')}?upload_id={merged_upload.upload_id}")
-    return redirect('uploaded_logs')
+    return _uploads_redirect_with_state(request)
 
 
 def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer: bool) -> HttpResponse:
     if len(selected_ids) < 2:
         messages.error(request, 'Select at least two uploads to merge.')
-        return redirect('uploaded_logs')
+        return _uploads_redirect_with_state(request)
 
     selected_logs = list(action_scope_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
     logs_by_id = {entry.upload_id: entry for entry in selected_logs}
     missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
     if missing_ids:
         messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
-        return redirect('uploaded_logs')
+        return _uploads_redirect_with_state(request)
 
     ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
     usernames = list(set(log.reddit_username for log in ordered_logs))
@@ -112,6 +112,9 @@ def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer:
             'selected_upload_ids': selected_ids,
             'usernames': sorted(usernames),
             'confirm_action': confirm_action,
+            'show_all': (request.POST.get('show_all') or '').strip().lower() in {'1', 'true', 'on', 'yes'},
+            'username_filter': (request.POST.get('u') or '').strip(),
+            'search_query': (request.POST.get('q') or '').strip(),
         }
         return render(request, 'merge_username_selection.html', context)
 
@@ -123,7 +126,7 @@ def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer:
     )
     _purge_old_trash()
     messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
-    return _redirect_after_merge(merged_upload, to_analyzer)
+    return _redirect_after_merge(request, merged_upload, to_analyzer)
 
 
 def _confirm_merge(request, selected_ids: list, action_scope_uploads, to_analyzer: bool) -> HttpResponse:
@@ -131,25 +134,25 @@ def _confirm_merge(request, selected_ids: list, action_scope_uploads, to_analyze
 
     if len(selected_ids) < 2:
         messages.error(request, 'Select at least two uploads to merge.')
-        return redirect('uploaded_logs')
+        return _uploads_redirect_with_state(request)
 
     if not selected_username:
         messages.error(request, 'Please select a username.')
-        return redirect('uploaded_logs')
+        return _uploads_redirect_with_state(request)
 
     selected_logs = list(action_scope_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
     logs_by_id = {entry.upload_id: entry for entry in selected_logs}
     missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
     if missing_ids:
         messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
-        return redirect('uploaded_logs')
+        return _uploads_redirect_with_state(request)
 
     ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
 
     available_usernames = set(log.reddit_username for log in ordered_logs)
     if selected_username not in available_usernames:
         messages.error(request, 'Invalid username selection.')
-        return redirect('uploaded_logs')
+        return _uploads_redirect_with_state(request)
 
     merged_upload = execute_merge(
         ordered_logs=ordered_logs,
@@ -159,7 +162,7 @@ def _confirm_merge(request, selected_ids: list, action_scope_uploads, to_analyze
     )
     _purge_old_trash()
     messages.success(request, f'Merged upload created with id {merged_upload.upload_id}.')
-    return _redirect_after_merge(merged_upload, to_analyzer)
+    return _redirect_after_merge(request, merged_upload, to_analyzer)
 
 
 def handle_merge_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:

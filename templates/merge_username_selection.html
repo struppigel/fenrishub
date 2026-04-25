@@ -20,6 +20,9 @@
     {% for upload_id in selected_upload_ids %}
     <input type="hidden" name="selected_upload_ids" value="{{ upload_id }}">
     {% endfor %}
+    {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+    {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+    {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
     
     <div class="form-group">
         <label>choose a username:</label>

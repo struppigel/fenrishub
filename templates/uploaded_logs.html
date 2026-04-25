@@ -151,6 +151,9 @@
 
 <form id="mergeUploadsForm" method="post" action="{% url 'uploaded_logs' %}">
     {% csrf_token %}
+    {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+    {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+    {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
 </form>
 
 <form method="get" action="{% url 'uploaded_logs' %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">

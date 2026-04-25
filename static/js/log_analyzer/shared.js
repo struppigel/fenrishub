@@ -112,10 +112,9 @@ function recomputeDateClusters() {
         for (const raw of dates) {
             const parsed = parseFrstDate(raw);
             if (!parsed) continue;
+            if (parsed.epochMs === null) continue;
             next[bucketKey].days.add(parsed.ymd);
-            if (parsed.epochMs !== null) {
-                next[bucketKey].stamps.push({ ymd: parsed.ymd, epochMs: parsed.epochMs });
-            }
+            next[bucketKey].stamps.push({ ymd: parsed.ymd, epochMs: parsed.epochMs });
         }
     }
     dateClusters = next;
