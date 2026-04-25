@@ -66,6 +66,80 @@ let conflictWizardState = {
     discardedRuleIds: new Set(),
 };
 
+const DATE_CLUSTER_TOLERANCE_MS = 5 * 60 * 1000;
+const DATE_CLUSTER_STATUS_TO_BUCKET = { B: 'b', P: 'p', '!': 'w' };
+let dateClusters = {
+    b: { days: new Set(), stamps: [] },
+    p: { days: new Set(), stamps: [] },
+    w: { days: new Set(), stamps: [] },
+};
+
+function parseFrstDate(str) {
+    if (typeof str !== 'string') {
+        return null;
+    }
+    const trimmed = str.trim();
+    const match = /^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(trimmed);
+    if (!match) {
+        return null;
+    }
+    const [, y, mo, d, h, mi, s] = match;
+    const ymd = `${y}-${mo}-${d}`;
+    if (h === undefined) {
+        return { ymd, epochMs: null };
+    }
+    const epochMs = Date.UTC(
+        Number(y),
+        Number(mo) - 1,
+        Number(d),
+        Number(h),
+        Number(mi),
+        s !== undefined ? Number(s) : 0,
+    );
+    return { ymd, epochMs };
+}
+
+function recomputeDateClusters() {
+    const next = {
+        b: { days: new Set(), stamps: [] },
+        p: { days: new Set(), stamps: [] },
+        w: { days: new Set(), stamps: [] },
+    };
+    for (const entry of analyzedLines) {
+        const bucketKey = DATE_CLUSTER_STATUS_TO_BUCKET[entry.dominant_status];
+        if (!bucketKey) continue;
+        const dates = Array.isArray(entry.dates) ? entry.dates : [];
+        for (const raw of dates) {
+            const parsed = parseFrstDate(raw);
+            if (!parsed) continue;
+            next[bucketKey].days.add(parsed.ymd);
+            if (parsed.epochMs !== null) {
+                next[bucketKey].stamps.push({ ymd: parsed.ymd, epochMs: parsed.epochMs });
+            }
+        }
+    }
+    dateClusters = next;
+}
+
+function classifyDateAgainstClusters(parsed) {
+    if (!parsed) return null;
+    for (const bucketKey of ['b', 'p', 'w']) {
+        const bucket = dateClusters[bucketKey];
+        if (parsed.epochMs !== null) {
+            for (const seed of bucket.stamps) {
+                if (seed.ymd === parsed.ymd
+                    && Math.abs(seed.epochMs - parsed.epochMs) <= DATE_CLUSTER_TOLERANCE_MS) {
+                    return bucketKey;
+                }
+            }
+        }
+        if (bucket.days.has(parsed.ymd)) {
+            return bucketKey;
+        }
+    }
+    return null;
+}
+
 function getCookie(name) {
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
@@ -281,6 +355,7 @@ function applyPendingOverrides() {
             matched: overrideStatus !== '?',
         };
     });
+    recomputeDateClusters();
 }
 
 function getPendingStatusChangesPayload() {

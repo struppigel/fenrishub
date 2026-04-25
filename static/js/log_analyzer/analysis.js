@@ -668,6 +668,36 @@ async function saveStatusSelection(index, newStatus) {
     }
 }
 
+const DATE_HIGHLIGHT_RE = /\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?/g;
+
+function appendLineTextWithDateHighlight(textEl, line) {
+    DATE_HIGHLIGHT_RE.lastIndex = 0;
+    let cursor = 0;
+    let appended = false;
+    let match;
+    while ((match = DATE_HIGHLIGHT_RE.exec(line)) !== null) {
+        const parsed = parseFrstDate(match[0]);
+        const bucket = classifyDateAgainstClusters(parsed);
+        if (!bucket) continue;
+        if (match.index > cursor) {
+            textEl.appendChild(document.createTextNode(line.slice(cursor, match.index)));
+        }
+        const span = document.createElement('span');
+        span.className = `date-cluster-${bucket}`;
+        span.textContent = match[0];
+        textEl.appendChild(span);
+        cursor = match.index + match[0].length;
+        appended = true;
+    }
+    if (!appended) {
+        textEl.textContent = line;
+        return;
+    }
+    if (cursor < line.length) {
+        textEl.appendChild(document.createTextNode(line.slice(cursor)));
+    }
+}
+
 function renderLogLines() {
     const container = document.getElementById('logLines');
     const savedScrollTop = container.scrollTop;
@@ -710,7 +740,7 @@ function renderLogLines() {
 
         const text = document.createElement('span');
         text.className = 'line-text';
-        text.textContent = line;
+        appendLineTextWithDateHighlight(text, line);
 
         lineDiv.appendChild(badge);
         lineDiv.appendChild(text);

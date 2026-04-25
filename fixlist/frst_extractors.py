@@ -112,7 +112,7 @@ def extract_frst_service(line):
 
 def extract_frst_runkey(line):
     regexp = r"HK(LM)?(U\\S[0-9-]+)?(-x32)?\\\.\.\.\\Run(Once)?: \[([^]]*)\] => ([^[\n]+)(\[([^]]*)\] \(([^\)]*)\))?"
-    group_map = {"name": 5, "filepath": 6, "company": 8, "date": 9}
+    group_map = {"name": 5, "filepath": 6, "date": 8, "company": 9}
     return extract_frst_entry(line, regexp, group_map, entry_type="runkey")
 
 
@@ -170,9 +170,15 @@ def extract_installed_software(line):
     return extract_frst_entry(line, regexp, group_map, entry_type="installed_software")
 
 
+_ONEMONTH_TS = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?"
+
+
 def extract_onemonth(line):
-    regexp = r".* - .* - \d* .{5} (\((.*)\) )?(\w:\\.*)"
-    group_map = {"company": 2, "filepath": 3}
+    regexp = (
+        r"(" + _ONEMONTH_TS + r") - " + _ONEMONTH_TS +
+        r" - \d+ .{5} (\((.*)\) )?(\w:\\.*)"
+    )
+    group_map = {"date": 1, "company": 3, "filepath": 4}
     return extract_frst_entry(line, regexp, group_map, entry_type="onemonth")
 
 

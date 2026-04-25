@@ -106,6 +106,17 @@
 .status-j { color: var(--la-status-j); }
 .status-unknown { color: var(--la-status-unknown); }
 
+/* Date-cluster highlights: dates that match a B/P/! seed line */
+.date-cluster-b,
+.date-cluster-p,
+.date-cluster-w {
+    border-radius: 2px;
+    padding: 0 2px;
+}
+.date-cluster-b { background: color-mix(in srgb, var(--la-status-b) 35%, transparent); }
+.date-cluster-p { background: color-mix(in srgb, var(--la-status-p) 35%, transparent); }
+.date-cluster-w { background: color-mix(in srgb, var(--la-status-w) 35%, transparent); }
+
 /* Upload id color utility classes */
 .upload-id-link {
     font-weight: 600;

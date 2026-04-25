@@ -583,6 +583,30 @@ def _status_and_reason_from_matches(matches):
     return _ordered_status_codes(statuses), _dedupe(reasons), _dedupe(alert_descriptions)
 
 
+_ONEMONTH_DATES_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?) - "
+    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?) - "
+)
+# Captures "YYYY-MM-DD" or "YYYY-MM-DD HH:MM(:SS)?" anywhere within a string.
+# Used to strip the leading file size out of FRST's "[size date]" bracket format.
+_DATE_NORMALIZE_RE = re.compile(r"(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?)")
+
+
+def _extract_dates(line: str, parsed_entry) -> list[str]:
+    if parsed_entry is None:
+        return []
+    if parsed_entry.entry_type == "onemonth":
+        match = _ONEMONTH_DATES_RE.match(line)
+        if match:
+            t1, t2 = match.group(1), match.group(2)
+            return [t1, t2] if t1 != t2 else [t1]
+    if parsed_entry.date:
+        match = _DATE_NORMALIZE_RE.search(parsed_entry.date)
+        if match:
+            return [match.group(1)]
+    return []
+
+
 def _build_line_result(
     line: str,
     status_codes: str,
@@ -590,6 +614,7 @@ def _build_line_result(
     reasons: list[str],
     matcher: str,
     alert_descriptions: list[str] | None = None,
+    dates: list[str] | None = None,
 ):
     dominant_status = _dominant_status(status_codes)
     return {
@@ -602,11 +627,15 @@ def _build_line_result(
         "reasons": reasons,
         "matcher": matcher,
         "matched": dominant_status != "?",
+        "dates": dates or [],
         "_alert_descriptions": alert_descriptions or [],
     }
 
 
 def _analyze_single_line(line: str, buckets):
+    parsed_entry = ex.get_frst_entry(line)
+    dates = _extract_dates(line, parsed_entry)
+
     exact_matches = []
     for rule in buckets[ClassificationRule.MATCH_EXACT]:
         if rule.source_text.strip() == line.strip():
@@ -620,6 +649,7 @@ def _analyze_single_line(line: str, buckets):
             reasons,
             "exact",
             alert_descriptions,
+            dates=dates,
         )
 
     for extractor in PARSER_ORDER:
@@ -641,6 +671,7 @@ def _analyze_single_line(line: str, buckets):
                 reasons,
                 "parsed_entry",
                 alert_descriptions,
+                dates=dates,
             )
 
     filepath = ex.extract_any_frst_path(line)
@@ -662,6 +693,7 @@ def _analyze_single_line(line: str, buckets):
                 reasons,
                 "filepath",
                 alert_descriptions,
+                dates=dates,
             )
 
     substring_matches = []
@@ -678,6 +710,7 @@ def _analyze_single_line(line: str, buckets):
             reasons,
             "substring",
             alert_descriptions,
+            dates=dates,
         )
 
     regex_matches = []
@@ -694,11 +727,11 @@ def _analyze_single_line(line: str, buckets):
             reasons,
             "regex",
             alert_descriptions,
+            dates=dates,
         )
 
-    unknown_entry = ex.get_frst_entry(line)
-    unknown_entry_type = unknown_entry.entry_type if unknown_entry else ""
-    return _build_line_result(line, "?", unknown_entry_type, [], "unknown")
+    unknown_entry_type = parsed_entry.entry_type if parsed_entry else ""
+    return _build_line_result(line, "?", unknown_entry_type, [], "unknown", dates=dates)
 
 
 def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]:
