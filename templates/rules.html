@@ -301,6 +301,7 @@
             {% csrf_token %}
             <input type="hidden" name="action" value="edit">
             <input type="hidden" name="pk" id="editPk">
+            <input type="hidden" name="return_q" value="{{ current_query_string }}">
             <div class="form-group">
                 <label for="editStatus">status</label>
                 <select id="editStatus" name="status" required>

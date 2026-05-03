@@ -123,6 +123,11 @@ def rules_view(request):
                     ])
                     invalidate_rule_buckets_cache()
                     messages.success(request, 'Rule updated.')
+            return_q = request.POST.get('return_q', '').strip()
+            if return_q:
+                safe_query = urlencode(parse_qsl(return_q, keep_blank_values=True), doseq=True)
+                if safe_query:
+                    return redirect(f"{reverse('rules')}?{safe_query}")
             return redirect('rules')
 
         if action == 'delete':
