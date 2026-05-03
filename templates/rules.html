@@ -319,7 +319,11 @@
             </div>
             <div class="form-group">
                 <label for="editPriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
-                <input type="number" id="editPriority" name="priority" class="priority-input" min="{{ priority_min }}" max="{{ priority_max }}" required>
+                <select id="editPriority" name="priority" class="priority-input" required>
+                    {% for value, label in priority_choices %}
+                    <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <div class="form-group">
                 <label for="editSourceText">source text</label>
@@ -443,7 +447,7 @@ function startEdit(pk, status, matchType, sourceText, description, isEnabled, pr
     document.getElementById('editSourceText').value = sourceText;
     document.getElementById('editDescription').value = description;
     document.getElementById('editIsEnabled').checked = isEnabled;
-    document.getElementById('editPriority').value = priority;
+    document.getElementById('editPriority').value = String(priority);
     document.getElementById('editPriority').dataset.userTouched = 'true';
     document.getElementById('editSection').style.display = 'block';
     document.getElementById('editSourceText').focus();
@@ -454,12 +458,12 @@ document.getElementById('editMatchType').addEventListener('change', function () 
     if (priorityInput.dataset.userTouched !== 'true') {
         const fallback = DEFAULT_PRIORITY_BY_MATCH_TYPE[this.value];
         if (fallback !== undefined) {
-            priorityInput.value = fallback;
+            priorityInput.value = String(fallback);
         }
     }
 });
 
-document.getElementById('editPriority').addEventListener('input', function () {
+document.getElementById('editPriority').addEventListener('change', function () {
     this.dataset.userTouched = 'true';
 });
 

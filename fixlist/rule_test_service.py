@@ -4,7 +4,7 @@ import re
 
 from . import frst_extractors as ex
 from .analyzer import STATUS_LABELS, STATUS_PRECEDENCE, _load_rule_buckets, inspect_line_matches, parse_rule_line
-from .models import ClassificationRule
+from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
 
 
 def build_rule_test_results(
@@ -53,7 +53,7 @@ def build_rule_test_results(
     if priority is None:
         new_priority = ClassificationRule.default_priority_for(match_type)
     else:
-        new_priority = max(0, min(25, int(priority)))
+        new_priority = max(PRIORITY_MIN, min(PRIORITY_MAX, int(priority)))
 
     # Load existing rule buckets once for inspect_line_matches.
     buckets = _load_rule_buckets()

@@ -14,13 +14,20 @@ from django.utils import timezone
 
 
 PRIORITY_MIN = 0
-PRIORITY_MAX = 25
+PRIORITY_MAX = 20
 DEFAULT_PRIORITY_BY_MATCH_TYPE = {
-    'exact': 20,
-    'parsed': 10,
-    'filepath': 8,
-    'substring': 5,
-    'regex': 2,
+    'exact': 19,
+    'parsed': 15,
+    'filepath': 11,
+    'substring': 7,
+    'regex': 3,
+}
+PRIORITY_DEFAULT_LABELS = {
+    DEFAULT_PRIORITY_BY_MATCH_TYPE['exact']: 'exact line',
+    DEFAULT_PRIORITY_BY_MATCH_TYPE['parsed']: 'parsed entries',
+    DEFAULT_PRIORITY_BY_MATCH_TYPE['filepath']: 'filepath',
+    DEFAULT_PRIORITY_BY_MATCH_TYPE['substring']: 'substring',
+    DEFAULT_PRIORITY_BY_MATCH_TYPE['regex']: 'regex',
 }
 
 
@@ -262,7 +269,7 @@ class ClassificationRule(models.Model):
         validators=[MinValueValidator(PRIORITY_MIN), MaxValueValidator(PRIORITY_MAX)],
         db_index=True,
         help_text=(
-            '0-25; higher wins. Lower priorities are entirely shadowed. '
+            '0-20; higher wins. Lower priorities are entirely shadowed. '
             'Auto-set from match_type when blank.'
         ),
     )

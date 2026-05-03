@@ -19,8 +19,24 @@ from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
     invalidate_rule_buckets_cache,
 )
-from ..models import ClassificationRule, DEFAULT_PRIORITY_BY_MATCH_TYPE, PRIORITY_MAX, PRIORITY_MIN
+from ..models import (
+    ClassificationRule,
+    DEFAULT_PRIORITY_BY_MATCH_TYPE,
+    PRIORITY_DEFAULT_LABELS,
+    PRIORITY_MAX,
+    PRIORITY_MIN,
+)
 from ..rule_test_service import build_rule_test_results
+
+
+def _priority_choices():
+    return [
+        (
+            str(p),
+            f"{p} ({PRIORITY_DEFAULT_LABELS[p]})" if p in PRIORITY_DEFAULT_LABELS else str(p),
+        )
+        for p in range(PRIORITY_MIN, PRIORITY_MAX + 1)
+    ]
 
 
 def _coerce_priority(raw_value, match_type: str) -> int:
@@ -202,6 +218,7 @@ def rules_view(request):
         'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
         'priority_min': PRIORITY_MIN,
         'priority_max': PRIORITY_MAX,
+        'priority_choices': _priority_choices(),
     }
     return render(request, 'rules.html', context)
 
@@ -282,6 +299,7 @@ def add_rule_view(request):
         'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
         'priority_min': PRIORITY_MIN,
         'priority_max': PRIORITY_MAX,
+        'priority_choices': _priority_choices(),
     }
     return render(request, 'add_rule.html', context)
 

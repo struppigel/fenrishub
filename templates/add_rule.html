@@ -251,7 +251,12 @@
             </div>
             <div class="form-group">
                 <label for="rulePriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
-                <input type="number" id="rulePriority" name="priority" min="{{ priority_min }}" max="{{ priority_max }}" value="{{ form_priority }}" placeholder="auto from match type">
+                <select id="rulePriority" name="priority">
+                    <option value="" {% if form_priority == '' %}selected{% endif %}>auto from match type</option>
+                    {% for value, label in priority_choices %}
+                    <option value="{{ value }}" {% if form_priority == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
                 <div style="font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">only change this if there is a problem</div>
             </div>
             <div class="form-group">
@@ -600,11 +605,8 @@
         const matchType = document.getElementById('ruleMatchType').value;
         const fallback = DEFAULT_PRIORITY_BY_MATCH_TYPE[matchType];
         const input = document.getElementById('rulePriority');
-        if (fallback !== undefined) {
-            input.placeholder = 'auto: ' + fallback;
-            if (input.dataset.userTouched !== 'true') {
-                input.value = fallback;
-            }
+        if (fallback !== undefined && input.dataset.userTouched !== 'true') {
+            input.value = String(fallback);
         }
     }
 
@@ -635,7 +637,7 @@
     });
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
     document.getElementById('ruleStatus').addEventListener('change', schedulePreviewUpdate);
-    document.getElementById('rulePriority').addEventListener('input', function () {
+    document.getElementById('rulePriority').addEventListener('change', function () {
         this.dataset.userTouched = 'true';
         schedulePreviewUpdate();
     });

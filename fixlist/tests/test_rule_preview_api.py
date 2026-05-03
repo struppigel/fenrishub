@@ -317,10 +317,10 @@ class RulePreviewApiTests(TestCase):
         result = response.json()["results"][0]
         self.assertTrue(result["matched"])
         self.assertTrue(result["new_rule_shadowed"])
-        # new regex rule (priority 2) shadowed by existing substring rule (priority 5)
-        self.assertEqual(result["new_rule_shadowed_by"], "priority 5")
-        self.assertEqual(result["new_rule_priority"], 2)
-        self.assertEqual(result["existing_priority"], 5)
+        # new regex rule (priority 3) shadowed by existing substring rule (priority 7)
+        self.assertEqual(result["new_rule_shadowed_by"], "priority 7")
+        self.assertEqual(result["new_rule_priority"], 3)
+        self.assertEqual(result["existing_priority"], 7)
 
     def test_new_rule_not_shadowed_when_higher_tier(self):
         """new_rule_shadowed is False when new substring rule shadows existing regex."""
@@ -389,10 +389,10 @@ class RulePreviewApiTests(TestCase):
         result = response.json()["results"][0]
         self.assertTrue(result["matched"])
         self.assertTrue(result["new_rule_shadowed"])
-        # new substring rule (priority 5) shadowed by existing exact rule (priority 20)
-        self.assertEqual(result["new_rule_shadowed_by"], "priority 20")
-        self.assertEqual(result["new_rule_priority"], 5)
-        self.assertEqual(result["existing_priority"], 20)
+        # new substring rule (priority 7) shadowed by existing exact rule (priority 19)
+        self.assertEqual(result["new_rule_shadowed_by"], "priority 19")
+        self.assertEqual(result["new_rule_priority"], 7)
+        self.assertEqual(result["existing_priority"], 19)
 
     def test_shadowed_fields_present_when_not_matched(self):
         """new_rule_shadowed fields are present even when new rule doesn't match."""
