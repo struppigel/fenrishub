@@ -2,13 +2,14 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser, User
+from django.contrib.messages import get_messages
 from django.core.management import call_command
 from django.http import Http404, HttpResponse
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from ..models import Fixlist, UploadedLog
+from ..models import AccessLog, Fixlist, UploadedLog
 from ..views import shared_fixlist_view
 
 
@@ -243,6 +244,23 @@ class FixlistsTrashViewTests(TestCase):
     def test_empty_trash_redirects_to_trash(self):
         response = self.client.post(reverse("fixlists_trash"), {"action": "empty_trash"})
         self.assertRedirects(response, reverse("fixlists_trash"))
+
+    def test_empty_trash_count_excludes_cascaded_rows(self):
+        first = self._trashed(username="One")
+        second = self._trashed(username="Two")
+        for _ in range(3):
+            AccessLog.objects.create(fixlist=first)
+        for _ in range(5):
+            AccessLog.objects.create(fixlist=second)
+
+        response = self.client.post(reverse("fixlists_trash"), {"action": "empty_trash"})
+
+        messages_list = list(get_messages(response.wsgi_request))
+        self.assertEqual(len(messages_list), 1)
+        self.assertEqual(
+            str(messages_list[0]),
+            "Trash emptied (2 fixlist(s) permanently deleted).",
+        )
 
 
 class TrashedFixlistGuestAccessTests(TestCase):

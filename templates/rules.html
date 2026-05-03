@@ -54,6 +54,19 @@
         width: 70px;
     }
 
+    .rule-priority {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        flex-shrink: 0;
+        width: 32px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .priority-input {
+        width: 60px;
+    }
+
     .rule-source {
         font-size: 12px;
         color: var(--la-text-neutral);
@@ -291,7 +304,7 @@
             <div class="form-group">
                 <label for="editStatus">status</label>
                 <select id="editStatus" name="status" required>
-                    {% for code, label in status_choices %}
+                    {% for code, label in creatable_status_choices %}
                     <option value="{{ code }}">{{ code }} - {{ label }}</option>
                     {% endfor %}
                 </select>
@@ -303,6 +316,10 @@
                     <option value="{{ code }}">{{ label }}</option>
                     {% endfor %}
                 </select>
+            </div>
+            <div class="form-group">
+                <label for="editPriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
+                <input type="number" id="editPriority" name="priority" class="priority-input" min="{{ priority_min }}" max="{{ priority_max }}" required>
             </div>
             <div class="form-group">
                 <label for="editSourceText">source text</label>
@@ -363,6 +380,7 @@
             <option value="recent" {% if sort == 'recent' %}selected{% endif %}>recently edited</option>
             <option value="created" {% if sort == 'created' %}selected{% endif %}>recently created</option>
             <option value="status" {% if sort == 'status' %}selected{% endif %}>by status</option>
+            <option value="priority" {% if sort == 'priority' %}selected{% endif %}>by priority</option>
         </select>
     </div>
 
@@ -374,12 +392,13 @@
             <div class="rule-row">
                 <span class="rule-status-badge {{ rule.status_css_class }}">{{ rule.status }}</span>
                 <span class="rule-match-type">{{ rule.get_match_type_display }}</span>
+                <span class="rule-priority" title="priority">p{{ rule.priority }}</span>
                 <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
                 {% if filter_mode != 'own' %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
                 {% if rule.owner_id == request.user.id %}
                 <div class="rule-actions">
                     <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
-                    <button type="button" class="rule-act" onclick="startEdit({{ rule.pk }}, '{{ rule.status|escapejs }}', '{{ rule.match_type|escapejs }}', `{{ rule.source_text|escapejs }}`, '{{ rule.description|escapejs }}', {{ rule.is_enabled|yesno:'true,false' }})">edit</button>
+                    <button type="button" class="rule-act" onclick="startEdit({{ rule.pk }}, '{{ rule.status|escapejs }}', '{{ rule.match_type|escapejs }}', `{{ rule.source_text|escapejs }}`, '{{ rule.description|escapejs }}', {{ rule.is_enabled|yesno:'true,false' }}, {{ rule.priority }})">edit</button>
                     <form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act rule-act-del" onclick="return confirm('Delete this rule?');">delete</button></form>
                 </div>
                 {% endif %}
@@ -415,16 +434,34 @@
 </div>
 
 <script>
-function startEdit(pk, status, matchType, sourceText, description, isEnabled) {
+const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
+
+function startEdit(pk, status, matchType, sourceText, description, isEnabled, priority) {
     document.getElementById('editPk').value = pk;
     document.getElementById('editStatus').value = status;
     document.getElementById('editMatchType').value = matchType;
     document.getElementById('editSourceText').value = sourceText;
     document.getElementById('editDescription').value = description;
     document.getElementById('editIsEnabled').checked = isEnabled;
+    document.getElementById('editPriority').value = priority;
+    document.getElementById('editPriority').dataset.userTouched = 'true';
     document.getElementById('editSection').style.display = 'block';
     document.getElementById('editSourceText').focus();
 }
+
+document.getElementById('editMatchType').addEventListener('change', function () {
+    const priorityInput = document.getElementById('editPriority');
+    if (priorityInput.dataset.userTouched !== 'true') {
+        const fallback = DEFAULT_PRIORITY_BY_MATCH_TYPE[this.value];
+        if (fallback !== undefined) {
+            priorityInput.value = fallback;
+        }
+    }
+});
+
+document.getElementById('editPriority').addEventListener('input', function () {
+    this.dataset.userTouched = 'true';
+});
 
 function cancelForm() {
     document.getElementById('editSection').style.display = 'none';

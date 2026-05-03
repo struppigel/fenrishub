@@ -7,7 +7,13 @@ from .analyzer import STATUS_LABELS, STATUS_PRECEDENCE, _load_rule_buckets, insp
 from .models import ClassificationRule
 
 
-def build_rule_test_results(source_text: str, status: str, match_type: str, lines: list) -> dict:
+def build_rule_test_results(
+    source_text: str,
+    status: str,
+    match_type: str,
+    lines: list,
+    priority: int | None = None,
+) -> dict:
     """Build per-line rule test results for the rules test API."""
     parsed_rule = parse_rule_line(source_text, status=status)
 
@@ -44,20 +50,10 @@ def build_rule_test_results(source_text: str, status: str, match_type: str, line
     elif match_type not in ('exact', 'substring', 'regex'):
         raise ValueError(f'Unsupported match_type: {match_type}')
 
-    # Matcher type precedence (same order as _analyze_single_line in analyzer.py).
-    matcher_order = ['exact', 'parsed_entry', 'filepath', 'substring', 'regex']
-    match_type_to_matcher = {
-        'exact': 'exact',
-        'parsed': 'parsed_entry',
-        'filepath': 'filepath',
-        'substring': 'substring',
-        'regex': 'regex',
-    }
-    new_matcher = match_type_to_matcher.get(match_type, 'unknown')
-    try:
-        new_matcher_idx = matcher_order.index(new_matcher)
-    except ValueError:
-        new_matcher_idx = len(matcher_order)
+    if priority is None:
+        new_priority = ClassificationRule.default_priority_for(match_type)
+    else:
+        new_priority = max(0, min(25, int(priority)))
 
     # Load existing rule buckets once for inspect_line_matches.
     buckets = _load_rule_buckets()
@@ -120,31 +116,32 @@ def build_rule_test_results(source_text: str, status: str, match_type: str, line
             result['existing_matches'] = inspection['matches']
             result['existing_shadowed'] = inspection['shadowed_matches']
 
-            # Compute combined status respecting matcher type precedence.
-            # The analyzer picks the first matcher tier that has any matches;
-            # lower tiers are shadowed entirely.
-            existing_matcher = inspection.get('effective_matcher', 'unknown')
-            try:
-                existing_matcher_idx = matcher_order.index(existing_matcher)
-            except ValueError:
-                existing_matcher_idx = len(matcher_order)
+            # Compute combined status respecting numeric priority.
+            # The analyzer picks the highest-priority match group; lower
+            # priorities are shadowed entirely. Within the winning priority,
+            # all statuses combine and STATUS_PRECEDENCE picks the dominant.
+            existing_priority = inspection.get('effective_priority')
 
             new_rule_shadowed = False
             if result['matched']:
-                if new_matcher_idx < existing_matcher_idx:
-                    # New rule's matcher tier is higher -> it shadows existing.
+                if existing_priority is None or new_priority > existing_priority:
+                    # No existing matches, or new rule wins on priority.
                     effective_statuses = [status]
-                elif new_matcher_idx == existing_matcher_idx:
-                    # Same tier -> combine statuses.
+                elif new_priority == existing_priority:
+                    # Tie -> combine statuses.
                     effective_statuses = [m['status'] for m in inspection['matches']] + [status]
                 else:
-                    # New rule's matcher tier is lower -> shadowed by existing.
+                    # New rule's priority is lower -> shadowed by existing.
                     effective_statuses = [m['status'] for m in inspection['matches']]
                     new_rule_shadowed = True
             else:
                 effective_statuses = [m['status'] for m in inspection['matches']]
+            result['new_rule_priority'] = new_priority
+            result['existing_priority'] = existing_priority
             result['new_rule_shadowed'] = new_rule_shadowed
-            result['new_rule_shadowed_by'] = existing_matcher if new_rule_shadowed else None
+            result['new_rule_shadowed_by'] = (
+                f'priority {existing_priority}' if new_rule_shadowed else None
+            )
 
             combined = '?'
             for status_code in STATUS_PRECEDENCE:
@@ -173,6 +170,8 @@ def build_rule_test_results(source_text: str, status: str, match_type: str, line
             result['existing_shadowed'] = []
             result['combined_status'] = '?'
             result['combined_status_label'] = 'unknown'
+            result['new_rule_priority'] = new_priority
+            result['existing_priority'] = None
             result['new_rule_shadowed'] = False
             result['new_rule_shadowed_by'] = None
             result['new_rule_outranked'] = False

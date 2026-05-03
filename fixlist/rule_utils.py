@@ -283,6 +283,11 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
             }
         )
 
+        # Unknown (?) is the absence of a classification, not a meaningful one.
+        # A rule with status '?' would have no effect, so skip it.
+        if new_status == ClassificationRule.STATUS_UNKNOWN:
+            continue
+
         source_name = f'analyzer-review:{username}'
         parsed = parse_rule_line(line, status=new_status, source_name=source_name)
         if not parsed:
@@ -299,6 +304,19 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
         inspection = inspect_line_matches(line, buckets=buckets)
         dominant_existing = inspection['dominant_status']
         status_codes = inspection['status_codes']
+        existing_top_priority = inspection.get('effective_priority')
+        new_priority = (
+            existing_rule.priority
+            if existing_rule
+            else ClassificationRule.default_priority_for(parsed['match_type'])
+        )
+
+        # If the new rule's priority strictly exceeds every existing match's priority,
+        # it shadows all of them and there is nothing for the user to resolve.
+        new_rule_shadows_existing = (
+            existing_top_priority is not None and new_priority > existing_top_priority
+        )
+
         dominant_matching_rules = [
             match
             for match in inspection['matches']
@@ -310,7 +328,7 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
             if match['status'] != new_status and match['status'] != dominant_existing
         ]
 
-        if dominant_existing not in ('?', new_status):
+        if not new_rule_shadows_existing and dominant_existing not in ('?', new_status):
             override_conflicts.append(
                 {
                     'id': change['id'],
@@ -322,7 +340,7 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
                 }
             )
 
-        if overlapping_matches:
+        if not new_rule_shadows_existing and overlapping_matches:
             overlap_conflicts.append(
                 {
                     'id': change['id'],
@@ -341,6 +359,7 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
                 'to_status': new_status,
                 'action': action,
                 'match_type': parsed['match_type'],
+                'priority': new_priority,
                 'source_text': parsed['source_text'],
                 'description': parsed['description'],
                 'existing_rule_id': existing_rule.id if existing_rule else None,
@@ -412,6 +431,11 @@ def _persist_selected_pending_rules(
         source_name = f'{source_prefix}:{username}'
         for change in normalized_changes:
             if change['id'] not in effective_selected_ids:
+                continue
+
+            # Skip "Unknown" rule candidates — they would have no classification effect.
+            if change['new_status'] == ClassificationRule.STATUS_UNKNOWN:
+                skipped_changes += 1
                 continue
 
             parsed = parse_rule_line(change['line'], status=change['new_status'], source_name=source_name)

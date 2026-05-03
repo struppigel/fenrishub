@@ -465,9 +465,13 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
                 "file_not_signed": parsed["file_not_signed"],
                 "is_enabled": True,
             }
-            _, is_created = ClassificationRule.objects.update_or_create(**lookup, defaults=defaults)
+            rule, is_created = ClassificationRule.objects.update_or_create(**lookup, defaults=defaults)
             if is_created:
                 created += 1
+                default_priority = ClassificationRule.default_priority_for(parsed["match_type"])
+                if rule.priority != default_priority:
+                    rule.priority = default_priority
+                    rule.save(update_fields=["priority", "updated_at"])
             else:
                 updated += 1
         except Exception as exc:  # pragma: no cover - defensive for admin uploads
@@ -632,106 +636,53 @@ def _build_line_result(
     }
 
 
+_MATCHER_ENTRY_TYPE_LABELS = {
+    "exact": "exactmatch",
+    "filepath": "filepath",
+    "substring": "substrings",
+    "regex": "regex",
+}
+_MATCHER_PREFERENCE = ("parsed_entry", "exact", "filepath", "substring", "regex")
+
+
+def _entry_type_for_winning_group(top_matches, parsed_entry):
+    matchers = {m[2] for m in top_matches}
+    if "parsed_entry" in matchers:
+        for rule, _reason, matcher in top_matches:
+            if matcher == "parsed_entry" and rule.entry_type:
+                return rule.entry_type
+        return "parsed"
+    for matcher in _MATCHER_PREFERENCE:
+        if matcher in matchers and matcher in _MATCHER_ENTRY_TYPE_LABELS:
+            return _MATCHER_ENTRY_TYPE_LABELS[matcher]
+    return parsed_entry.entry_type if parsed_entry else ""
+
+
 def _analyze_single_line(line: str, buckets):
     parsed_entry = ex.get_frst_entry(line)
     dates = _extract_dates(line, parsed_entry)
 
-    exact_matches = []
-    for rule in buckets[ClassificationRule.MATCH_EXACT]:
-        if rule.source_text.strip() == line.strip():
-            exact_matches.append((rule, "found exact match"))
-    if exact_matches:
-        status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(exact_matches)
-        return _build_line_result(
-            line,
-            status_codes,
-            "exactmatch",
-            reasons,
-            "exact",
-            alert_descriptions,
-            dates=dates,
-        )
+    effective_matches, _shadowed, matcher_label, _top_priority = (
+        _collect_effective_and_shadowed_matches_for_line(line, buckets)
+    )
 
-    for extractor in PARSER_ORDER:
-        entry = extractor(line)
-        if not entry:
-            continue
+    if not effective_matches:
+        unknown_entry_type = parsed_entry.entry_type if parsed_entry else ""
+        return _build_line_result(line, "?", unknown_entry_type, [], "unknown", dates=dates)
 
-        parsed_matches = []
-        for rule, parsed_rule_entry in buckets[ClassificationRule.MATCH_PARSED_ENTRY]:
-            if entry == parsed_rule_entry:
-                parsed_matches.append((rule, f"matched {entry.entry_type or 'parsed'} entry"))
-
-        if parsed_matches:
-            status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(parsed_matches)
-            return _build_line_result(
-                line,
-                status_codes,
-                entry.entry_type,
-                reasons,
-                "parsed_entry",
-                alert_descriptions,
-                dates=dates,
-            )
-
-    filepath = ex.extract_any_frst_path(line)
-    if filepath:
-        normalized = ex.normalize_path(filepath).lower().strip()
-        path_matches = []
-        for rule, rule_path, parsed_fallback in buckets["__filepath_any"]:
-            if parsed_fallback and rule_path in buckets["__parsed_filepath_exclusions"]:
-                continue
-            if normalized == rule_path:
-                path_matches.append((rule, "found matching normalized path"))
-
-        if path_matches:
-            status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(path_matches)
-            return _build_line_result(
-                line,
-                status_codes,
-                "filepath",
-                reasons,
-                "filepath",
-                alert_descriptions,
-                dates=dates,
-            )
-
-    substring_matches = []
-    for rule in buckets[ClassificationRule.MATCH_SUBSTRING]:
-        if rule.source_text and rule.source_text in line:
-            substring_matches.append((rule, f'found substring "{rule.source_text}"'))
-
-    if substring_matches:
-        status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(substring_matches)
-        return _build_line_result(
-            line,
-            status_codes,
-            "substrings",
-            reasons,
-            "substring",
-            alert_descriptions,
-            dates=dates,
-        )
-
-    regex_matches = []
-    for rule, compiled_regex in buckets[ClassificationRule.MATCH_REGEX]:
-        if compiled_regex.search(line):
-            regex_matches.append((rule, f'found regex match for "{rule.source_text}"'))
-
-    if regex_matches:
-        status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(regex_matches)
-        return _build_line_result(
-            line,
-            status_codes,
-            "regex",
-            reasons,
-            "regex",
-            alert_descriptions,
-            dates=dates,
-        )
-
-    unknown_entry_type = parsed_entry.entry_type if parsed_entry else ""
-    return _build_line_result(line, "?", unknown_entry_type, [], "unknown", dates=dates)
+    status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(
+        [(rule, reason) for rule, reason, _matcher in effective_matches]
+    )
+    entry_type = _entry_type_for_winning_group(effective_matches, parsed_entry)
+    return _build_line_result(
+        line,
+        status_codes,
+        entry_type,
+        reasons,
+        matcher_label,
+        alert_descriptions,
+        dates=dates,
+    )
 
 
 def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]:
@@ -783,24 +734,49 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
     return groups
 
 
+_MATCH_TYPE_TO_PRIMARY_MATCHER = {
+    ClassificationRule.MATCH_EXACT: "exact",
+    ClassificationRule.MATCH_PARSED_ENTRY: "parsed_entry",
+    ClassificationRule.MATCH_FILEPATH: "filepath",
+    ClassificationRule.MATCH_SUBSTRING: "substring",
+    ClassificationRule.MATCH_REGEX: "regex",
+}
+
+
+def _matcher_preference(rule, matcher: str) -> int:
+    """Lower is preferred. Parsed entry beats everything; otherwise the rule's own match_type wins."""
+    if matcher == "parsed_entry":
+        return 0
+    if matcher == _MATCH_TYPE_TO_PRIMARY_MATCHER.get(rule.match_type):
+        return 1
+    return 2
+
+
+def _dedupe_matches_by_rule(matches):
+    by_rule_id = {}
+    for entry in matches:
+        rule, _reason, matcher = entry
+        existing = by_rule_id.get(rule.id)
+        if existing is None or _matcher_preference(rule, matcher) < _matcher_preference(rule, existing[2]):
+            by_rule_id[rule.id] = entry
+    return list(by_rule_id.values())
+
+
 def _collect_effective_and_shadowed_matches_for_line(line: str, buckets):
     groups = _collect_match_groups_for_line(line, buckets)
-    matcher_order = ["exact", "parsed_entry", "filepath", "substring", "regex"]
+    flat = _dedupe_matches_by_rule(m for matches in groups.values() for m in matches)
 
-    effective_matcher = "unknown"
-    effective_matches = []
-    shadowed_matches = []
+    if not flat:
+        return [], [], "unknown", None
 
-    for index, matcher in enumerate(matcher_order):
-        matches = groups.get(matcher, [])
-        if matches:
-            effective_matcher = matcher
-            effective_matches = matches
-            for later_matcher in matcher_order[index + 1 :]:
-                shadowed_matches.extend(groups.get(later_matcher, []))
-            break
+    top_priority = max(rule.priority for rule, _reason, _matcher in flat)
+    effective_matches = [m for m in flat if m[0].priority == top_priority]
+    shadowed_matches = [m for m in flat if m[0].priority < top_priority]
 
-    return effective_matches, shadowed_matches, effective_matcher
+    matchers = sorted({m[2] for m in effective_matches})
+    effective_matcher = matchers[0] if len(matchers) == 1 else f"priority:{top_priority}"
+
+    return effective_matches, shadowed_matches, effective_matcher, top_priority
 
 
 def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]]:
@@ -819,6 +795,7 @@ def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]
                 "id": rule.id,
                 "status": rule.status,
                 "match_type": rule.match_type,
+                "priority": rule.priority,
                 "source_text": rule.source_text,
                 "description": rule.description,
                 "source_name": rule.source_name,
@@ -853,10 +830,12 @@ def inspect_line_matches(line: str, buckets=None) -> dict:
         }
 
     active_buckets = buckets or _get_cached_rule_buckets()
-    effective_matches, shadowed_matches, effective_matcher = _collect_effective_and_shadowed_matches_for_line(
-        line_value,
-        active_buckets,
-    )
+    (
+        effective_matches,
+        shadowed_matches,
+        effective_matcher,
+        effective_priority,
+    ) = _collect_effective_and_shadowed_matches_for_line(line_value, active_buckets)
 
     statuses = [rule.status for rule, _, _ in effective_matches]
     status_codes = _ordered_status_codes(statuses)
@@ -869,6 +848,7 @@ def inspect_line_matches(line: str, buckets=None) -> dict:
         "status_codes": status_codes,
         "dominant_status": dominant_status,
         "effective_matcher": effective_matcher,
+        "effective_priority": effective_priority,
         "reasons": _dedupe(reasons),
         "matches": serialized_matches,
         "shadowed_matches": serialized_shadowed_matches,

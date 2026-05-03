@@ -39,7 +39,17 @@
     }
 
     .rule-form-panel textarea {
-        min-height: 60px;
+        min-height: 120px;
+    }
+
+    #rulePriority {
+        color: var(--la-text-disabled);
+        opacity: 0.65;
+    }
+
+    #rulePriority:focus {
+        color: var(--la-text-main);
+        opacity: 1;
     }
 
     .log-input-panel {
@@ -226,7 +236,7 @@
             <div class="form-group">
                 <label for="ruleStatus">status</label>
                 <select id="ruleStatus" name="status" required>
-                    {% for code, label in status_choices %}
+                    {% for code, label in creatable_status_choices %}
                     <option value="{{ code }}" {% if form_status == code %}selected{% endif %}>{{ code }} - {{ label }}</option>
                     {% endfor %}
                 </select>
@@ -238,6 +248,11 @@
                     <option value="{{ code }}" {% if form_match_type == code %}selected{% endif %}>{{ label }}</option>
                     {% endfor %}
                 </select>
+            </div>
+            <div class="form-group">
+                <label for="rulePriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
+                <input type="number" id="rulePriority" name="priority" min="{{ priority_min }}" max="{{ priority_max }}" value="{{ form_priority }}" placeholder="auto from match type">
+                <div style="font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">only change this if there is a problem</div>
             </div>
             <div class="form-group">
                 <label for="ruleSourceText">match line or pattern</label>
@@ -279,6 +294,7 @@
 <script>
 (function () {
     const TEST_RULE_URL = "{% url 'test_rule_api' %}";
+    const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
     let debounceTimer = null;
     let fetchController = null;
     const DEBOUNCE_MS = 300;
@@ -470,7 +486,7 @@
 
     /* ── server-side preview (all match types) ── */
 
-    async function renderPreview(lines, sourceText, matchType, status) {
+    async function renderPreview(lines, sourceText, matchType, status, priority) {
         if (fetchController) fetchController.abort();
         fetchController = new AbortController();
 
@@ -480,7 +496,7 @@
             const resp = await fetch(TEST_RULE_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
-                body: JSON.stringify({ source_text: sourceText, status: status, match_type: matchType, lines: lines }),
+                body: JSON.stringify({ source_text: sourceText, status: status, match_type: matchType, priority: priority, lines: lines }),
                 signal: fetchController.signal,
             });
 
@@ -539,14 +555,15 @@
                 if (result.new_rule_shadowed) {
                     const notice = document.createElement('div');
                     notice.className = 'new-rule-notice';
-                    notice.textContent = 'new rule matched but is shadowed by higher-precedence ' +
-                        result.new_rule_shadowed_by + ' matcher \u2014 it will have no effect on this line';
+                    notice.textContent = 'new rule (priority ' + result.new_rule_priority +
+                        ') matched but is shadowed by an existing higher-priority rule (' +
+                        result.new_rule_shadowed_by + ') \u2014 it will have no effect on this line';
                     wrapper.appendChild(notice);
                 } else if (result.new_rule_outranked) {
                     const notice = document.createElement('div');
                     notice.className = 'new-rule-notice';
                     notice.textContent = 'new rule matched but its status is outranked by ' +
-                        result.new_rule_outranked_by + ' at the same matcher tier \u2014 ' +
+                        result.new_rule_outranked_by + ' at the same priority \u2014 ' +
                         result.combined_status_label + ' (' + result.combined_status +
                         ') takes precedence over this rule\u2019s status';
                     wrapper.appendChild(notice);
@@ -572,6 +589,25 @@
 
     /* ── main update ── */
 
+    function currentPriority() {
+        const raw = document.getElementById('rulePriority').value;
+        if (raw === '' || raw === null) return null;
+        const parsed = parseInt(raw, 10);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function syncPriorityPlaceholder() {
+        const matchType = document.getElementById('ruleMatchType').value;
+        const fallback = DEFAULT_PRIORITY_BY_MATCH_TYPE[matchType];
+        const input = document.getElementById('rulePriority');
+        if (fallback !== undefined) {
+            input.placeholder = 'auto: ' + fallback;
+            if (input.dataset.userTouched !== 'true') {
+                input.value = fallback;
+            }
+        }
+    }
+
     function updatePreview() {
         const sourceText = document.getElementById('ruleSourceText').value.trim();
         const matchType = document.getElementById('ruleMatchType').value;
@@ -582,7 +618,7 @@
 
         document.getElementById('colorLegend').style.display = 'none';
         var status = document.getElementById('ruleStatus').value;
-        renderPreview(lines, sourceText, matchType, status);
+        renderPreview(lines, sourceText, matchType, status, currentPriority());
     }
 
     function schedulePreviewUpdate() {
@@ -593,9 +629,22 @@
     /* ── event listeners ── */
 
     document.getElementById('ruleSourceText').addEventListener('input', schedulePreviewUpdate);
-    document.getElementById('ruleMatchType').addEventListener('change', schedulePreviewUpdate);
+    document.getElementById('ruleMatchType').addEventListener('change', function () {
+        syncPriorityPlaceholder();
+        schedulePreviewUpdate();
+    });
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
     document.getElementById('ruleStatus').addEventListener('change', schedulePreviewUpdate);
+    document.getElementById('rulePriority').addEventListener('input', function () {
+        this.dataset.userTouched = 'true';
+        schedulePreviewUpdate();
+    });
+
+    /* If the user already submitted a value (form_priority), mark as touched. */
+    if (document.getElementById('rulePriority').value !== '') {
+        document.getElementById('rulePriority').dataset.userTouched = 'true';
+    }
+    syncPriorityPlaceholder();
 })();
 </script>
 {% endblock %}

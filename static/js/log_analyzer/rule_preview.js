@@ -244,17 +244,14 @@ function buildRuleDetailRows(change) {
     });
 }
 
-function changeTypeMeta(action) {
-    if (action === 'discard-new') {
-        return { symbol: 'x', label: 'discard new', className: 'discard' };
-    }
+function changeTypeLabel(action) {
     if (action === 'update-existing-status') {
-        return { symbol: '>', label: 'update existing status', className: 'status-update' };
+        return 'update existing status';
     }
     if (action === 'update') {
-        return { symbol: '~', label: 'save update', className: 'update' };
+        return 'save update';
     }
-    return { symbol: '+', label: 'save new', className: 'save' };
+    return 'save new';
 }
 
 function renderContradictionLists(preview) {
@@ -286,14 +283,10 @@ function renderContradictionListsForRule() {
 
 function renderRuleCandidates(ruleChanges) {
     const container = document.getElementById('ruleCandidatesList');
-    const legendContainer = document.getElementById('ruleLegend');
     if (!container) {
         return;
     }
     container.innerHTML = '';
-    if (legendContainer) {
-        legendContainer.innerHTML = '';
-    }
 
     if (!Array.isArray(ruleChanges) || ruleChanges.length === 0) {
         selectedRuleCandidateIds = [];
@@ -304,58 +297,6 @@ function renderRuleCandidates(ruleChanges) {
         refreshFinalReviewSummary([]);
         renderPlannedExistingRuleChanges([]);
         return;
-    }
-
-    if (legendContainer) {
-        const changeLegend = [
-            { symbol: '+', label: 'save new rule', className: 'save' },
-            { symbol: '~', label: 'save update', className: 'update' },
-            { symbol: '>', label: 'update existing status only', className: 'status-update' },
-            { symbol: 'x', label: 'discard new rule', className: 'discard' },
-        ];
-        changeLegend.forEach((item) => {
-            const legendItem = document.createElement('div');
-            legendItem.className = 'legend-item legend-item-symbol';
-
-            const symbol = document.createElement('span');
-            symbol.className = `rule-change-symbol rule-change-${item.className}`;
-            symbol.textContent = item.symbol;
-
-            const label = document.createElement('span');
-            label.textContent = item.label;
-
-            legendItem.appendChild(symbol);
-            legendItem.appendChild(label);
-            legendContainer.appendChild(legendItem);
-        });
-
-        const legendBreak = document.createElement('div');
-        legendBreak.className = 'legend-row-break';
-        legendContainer.appendChild(legendBreak);
-
-        const colorLegend = [
-            { label: 'CLSID', color: '#f0a070' },
-            { label: 'name', color: '#8ca8ff' },
-            { label: 'filepath', color: '#f070f0' },
-            { label: 'filename', color: '#f0f070' },
-            { label: 'company', color: '#70f0f0' },
-            { label: 'arguments', color: '#f0a0a0' },
-        ];
-        colorLegend.forEach((item) => {
-            const legendItem = document.createElement('div');
-            legendItem.className = 'legend-item legend-item-color';
-
-            const swatch = document.createElement('div');
-            swatch.className = 'legend-swatch';
-            swatch.style.backgroundColor = item.color;
-
-            const label = document.createElement('span');
-            label.textContent = item.label;
-
-            legendItem.appendChild(swatch);
-            legendItem.appendChild(label);
-            legendContainer.appendChild(legendItem);
-        });
     }
 
     const nextSelectedRuleIds = [];
@@ -392,20 +333,20 @@ function renderRuleCandidates(ruleChanges) {
             change.description = descriptionOverride;
         }
 
-        if (isRemoved) {
+        if (isRemoved || plan.hasDiscard) {
             return;
         }
 
         renderedRowCount += 1;
 
-        const action = plan.effectiveAction;
-        const actionMeta = changeTypeMeta(action);
+        const actionLabel = changeTypeLabel(plan.effectiveAction);
 
-        const symbol = document.createElement('span');
-        symbol.className = `rule-change-symbol rule-change-${actionMeta.className}`;
-        symbol.textContent = actionMeta.symbol;
-        symbol.setAttribute('aria-label', actionMeta.label);
-        symbol.setAttribute('title', actionMeta.label);
+        const finalStatus = change.to_status || '?';
+        const finalStatusClass = STATUS_CLASS_MAP[finalStatus] || 'status-unknown';
+        const statusBadge = document.createElement('span');
+        statusBadge.className = `status-badge ${finalStatusClass}`;
+        statusBadge.textContent = finalStatus;
+        statusBadge.setAttribute('title', `final status: ${finalStatus} (${STATUS_LABEL_MAP[finalStatus] || 'unknown'})`);
 
         const content = document.createElement('div');
         content.className = 'rule-candidate-content';
@@ -420,7 +361,7 @@ function renderRuleCandidates(ruleChanges) {
         text.className = 'rule-candidate-text';
         text.appendChild(
             document.createTextNode(
-                `${actionMeta.label} | ${change.from_status} -> ${change.to_status} | ${change.match_type} | `
+                `${actionLabel} | ${change.from_status} -> ${change.to_status} | ${change.match_type} | `
             )
         );
 
@@ -438,8 +379,6 @@ function renderRuleCandidates(ruleChanges) {
         }
         if (plan.hasUpdateExisting) {
             planNotes.push('new rule will not be submitted; selected existing rules will receive the new status');
-        } else if (plan.hasDiscard) {
-            planNotes.push('new rule will be discarded and not submitted');
         }
         if (!plan.suppressNewRule && plan.disableRuleIds.length > 0) {
             planNotes.push(`existing rules to disable: ${plan.disableRuleIds.map((id) => `#${id}`).join(', ')}`);
@@ -491,7 +430,7 @@ function renderRuleCandidates(ruleChanges) {
         header.appendChild(controls);
         content.appendChild(header);
 
-        row.appendChild(symbol);
+        row.appendChild(statusBadge);
         row.appendChild(content);
         container.appendChild(row);
     });

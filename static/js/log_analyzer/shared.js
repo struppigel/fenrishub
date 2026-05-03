@@ -29,7 +29,6 @@ const STATUS_LABEL_MAP = {
     '?': 'unknown',
 };
 const STATUS_PRECEDENCE_ORDER = ['B', 'P', 'C', 'A', '!', 'G', 'S', 'I', 'J', '?'];
-const MATCH_TYPE_PRECEDENCE_ORDER = ['exact', 'parsed', 'filepath', 'substring', 'regex'];
 const MATCH_TYPE_LABEL_MAP = {
     exact: 'Exact line',
     parsed: 'Parsed',
@@ -66,7 +65,7 @@ let conflictWizardState = {
     discardedRuleIds: new Set(),
 };
 
-const DATE_CLUSTER_TOLERANCE_MS = 5 * 60 * 1000;
+const DATE_CLUSTER_TOLERANCE_MS = 10 * 60 * 1000;
 const DATE_CLUSTER_STATUS_TO_BUCKET = { B: 'b', P: 'p', '!': 'w' };
 let dateClusters = {
     b: { days: new Set(), stamps: [] },
@@ -131,8 +130,7 @@ function classifyDateAgainstClusters(parsed) {
                     return bucketKey;
                 }
             }
-        }
-        if (bucket.days.has(parsed.ymd)) {
+        } else if (bucket.days.has(parsed.ymd)) {
             return bucketKey;
         }
     }

@@ -17,22 +17,17 @@ function statusDominance(statuses) {
     return '?';
 }
 
-function matchTypePrecedenceRank(matchType) {
-    const index = MATCH_TYPE_PRECEDENCE_ORDER.indexOf(matchType);
-    return index === -1 ? MATCH_TYPE_PRECEDENCE_ORDER.length : index;
-}
-
-function precedenceSummary(newStatus, existingStatus, newMatchType, existingMatchType) {
+function precedenceSummary(newStatus, existingStatus, newMatchType, existingMatchType, newPriority, existingPriority) {
     const newLabel = STATUS_LABEL_MAP[newStatus] || 'unknown';
     const existingLabel = STATUS_LABEL_MAP[existingStatus] || 'unknown';
     if (!newStatus || !existingStatus) {
         return 'Insufficient data to compute precedence.';
     }
 
-    const newRank = matchTypePrecedenceRank(newMatchType);
-    const existingRank = matchTypePrecedenceRank(existingMatchType);
     const newMatchLabel = MATCH_TYPE_LABEL_MAP[newMatchType] || newMatchType || '?';
     const existingMatchLabel = MATCH_TYPE_LABEL_MAP[existingMatchType] || existingMatchType || '?';
+    const newPrioStr = (newPriority === null || newPriority === undefined) ? '?' : newPriority;
+    const existingPrioStr = (existingPriority === null || existingPriority === undefined) ? '?' : existingPriority;
 
     if (newStatus === existingStatus) {
         const winner = statusDominance([newStatus, existingStatus]);
@@ -40,15 +35,17 @@ function precedenceSummary(newStatus, existingStatus, newMatchType, existingMatc
         return `Both rules resolve to ${winner} (${winnerLabel}), so either rule set produces the same status.`;
     }
 
-    if (newMatchType && existingMatchType && newRank !== existingRank) {
-        const matchWinner = newRank < existingRank ? 'new rule' : 'existing rule';
-        const matchWinnerStatus = newRank < existingRank ? newStatus : existingStatus;
-        const matchWinnerLabel = newRank < existingRank ? newLabel : existingLabel;
-        const higherType = newRank < existingRank ? newMatchLabel : existingMatchLabel;
-        const lowerType = newRank < existingRank ? existingMatchLabel : newMatchLabel;
+    if (Number.isFinite(newPriority) && Number.isFinite(existingPriority) && newPriority !== existingPriority) {
+        const newWins = newPriority > existingPriority;
+        const matchWinner = newWins ? 'new rule' : 'existing rule';
+        const matchWinnerStatus = newWins ? newStatus : existingStatus;
+        const matchWinnerLabel = newWins ? newLabel : existingLabel;
+        const higherPrio = newWins ? newPriority : existingPriority;
+        const lowerPrio = newWins ? existingPriority : newPriority;
         return (
-            `new: ${newStatus} (${newLabel}) [${newMatchLabel}], existing: ${existingStatus} (${existingLabel}) [${existingMatchLabel}]. ` +
-            `If both stay enabled, ${matchWinnerStatus} (${matchWinnerLabel}) wins because ${higherType} takes precedence over ${lowerType} (${matchWinner}).`
+            `new: ${newStatus} (${newLabel}) [${newMatchLabel}, priority ${newPrioStr}], ` +
+            `existing: ${existingStatus} (${existingLabel}) [${existingMatchLabel}, priority ${existingPrioStr}]. ` +
+            `If both stay enabled, ${matchWinnerStatus} (${matchWinnerLabel}) wins because priority ${higherPrio} takes precedence over priority ${lowerPrio} (${matchWinner}).`
         );
     }
 
@@ -56,8 +53,9 @@ function precedenceSummary(newStatus, existingStatus, newMatchType, existingMatc
     const winnerLabel = STATUS_LABEL_MAP[winner] || 'unknown';
     const winnerSource = winner === newStatus ? 'new rule' : 'existing rule';
     return (
-        `new: ${newStatus} (${newLabel}), existing: ${existingStatus} (${existingLabel}). ` +
-        `If both stay enabled, ${winner} (${winnerLabel}) wins by status precedence (${winnerSource}).`
+        `new: ${newStatus} (${newLabel}) [priority ${newPrioStr}], ` +
+        `existing: ${existingStatus} (${existingLabel}) [priority ${existingPrioStr}]. ` +
+        `If both stay enabled, ${winner} (${winnerLabel}) wins by status precedence at priority ${newPrioStr} (${winnerSource}).`
     );
 }
 
@@ -517,10 +515,7 @@ function renderConflictWizardStep() {
 
     const total = conflictWizardState.queue.length;
     if (progressEl) {
-        progressEl.textContent = (
-            `conflict ${conflictWizardState.index + 1} of ${total} | ` +
-            `pending change id: ${item.change_id} | existing db rule id: ${item.existing_rule ? item.existing_rule.id : '?'} | type: ${item.contradiction_type}`
-        );
+        progressEl.textContent = `conflict ${conflictWizardState.index + 1} of ${total}`;
     }
 
     const newRule = item.new_rule || {};
@@ -530,6 +525,7 @@ function renderConflictWizardStep() {
         { key: 'pending_change_id', value: newRule.id },
         { key: 'status', value: `${newRule.to_status} (${STATUS_LABEL_MAP[newRule.to_status] || 'unknown'})` },
         { key: 'match_type', value: newRule.match_type },
+        { key: 'priority', value: newRule.priority },
         { key: 'source_text', value: newRule.source_text },
         { key: 'description', value: newRule.description },
         { key: 'entry_type', value: newRule.entry_type },
@@ -544,6 +540,7 @@ function renderConflictWizardStep() {
         { key: 'owner', value: existingRule.owner_username || '(unknown)' },
         { key: 'status', value: `${existingRule.status} (${STATUS_LABEL_MAP[existingRule.status] || 'unknown'})` },
         { key: 'match_type', value: existingRule.match_type },
+        { key: 'priority', value: existingRule.priority },
         { key: 'source_text', value: existingRule.source_text },
         { key: 'description', value: existingRule.description },
         { key: 'entry_type', value: existingRule.entry_type },
@@ -555,7 +552,11 @@ function renderConflictWizardStep() {
     ]);
 
     if (precedenceEl) {
-        precedenceEl.textContent = precedenceSummary(newRule.to_status, existingRule.status, newRule.match_type, existingRule.match_type);
+        precedenceEl.textContent = precedenceSummary(
+            newRule.to_status, existingRule.status,
+            newRule.match_type, existingRule.match_type,
+            newRule.priority, existingRule.priority,
+        );
     }
 
     renderConflictWizardActions(item);

@@ -19,8 +19,19 @@ from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
     invalidate_rule_buckets_cache,
 )
-from ..models import ClassificationRule
+from ..models import ClassificationRule, DEFAULT_PRIORITY_BY_MATCH_TYPE, PRIORITY_MAX, PRIORITY_MIN
 from ..rule_test_service import build_rule_test_results
+
+
+def _coerce_priority(raw_value, match_type: str) -> int:
+    """Return a clamped priority for the given match_type, or the default if unset/invalid."""
+    if raw_value is None or str(raw_value).strip() == '':
+        return ClassificationRule.default_priority_for(match_type)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return ClassificationRule.default_priority_for(match_type)
+    return max(PRIORITY_MIN, min(PRIORITY_MAX, value))
 
 
 @login_required
@@ -38,9 +49,10 @@ def rules_view(request):
             match_type = request.POST.get('match_type', '').strip()
             source_text = request.POST.get('source_text', '').strip()
             description = request.POST.get('description', '').strip()
+            priority = _coerce_priority(request.POST.get('priority'), match_type)
             if not source_text:
                 messages.error(request, 'Rule source text is required.')
-            elif status not in dict(ClassificationRule.STATUS_CHOICES):
+            elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
                 messages.error(request, 'Invalid status.')
             elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
                 messages.error(request, 'Invalid match type.')
@@ -55,7 +67,9 @@ def rules_view(request):
                     match_type=match_type,
                     source_text=source_text,
                     description=description,
+                    priority=priority,
                 )
+                invalidate_rule_buckets_cache()
                 messages.success(request, 'Rule created.')
             return redirect('rules')
 
@@ -67,9 +81,10 @@ def rules_view(request):
             source_text = request.POST.get('source_text', '').strip()
             description = request.POST.get('description', '').strip()
             is_enabled = request.POST.get('is_enabled') == 'on'
+            priority = _coerce_priority(request.POST.get('priority'), match_type)
             if not source_text:
                 messages.error(request, 'Rule source text is required.')
-            elif status not in dict(ClassificationRule.STATUS_CHOICES):
+            elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
                 messages.error(request, 'Invalid status.')
             elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
                 messages.error(request, 'Invalid match type.')
@@ -85,8 +100,10 @@ def rules_view(request):
                     rule.source_text = source_text
                     rule.description = description
                     rule.is_enabled = is_enabled
+                    rule.priority = priority
                     rule.save(update_fields=[
-                        'status', 'match_type', 'source_text', 'description', 'is_enabled', 'updated_at',
+                        'status', 'match_type', 'source_text', 'description',
+                        'is_enabled', 'priority', 'updated_at',
                     ])
                     invalidate_rule_buckets_cache()
                     messages.success(request, 'Rule updated.')
@@ -126,6 +143,7 @@ def rules_view(request):
         'recent': '-updated_at',
         'created': '-created_at',
         'status': ('status', 'match_type', 'source_text'),
+        'priority': ('-priority', 'status', 'match_type', 'source_text'),
     }
 
     if filter_mode == 'all':
@@ -176,9 +194,14 @@ def rules_view(request):
         'sort': sort,
         'current_query_string': request.GET.urlencode(),
         'status_choices': ClassificationRule.STATUS_CHOICES,
+        'creatable_status_choices': ClassificationRule.CREATABLE_STATUS_CHOICES,
         'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
         'status_map': STATUS_MAP,
         'match_type_map': MATCH_TYPE_MAP,
+        'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
+        'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
+        'priority_min': PRIORITY_MIN,
+        'priority_max': PRIORITY_MAX,
     }
     return render(request, 'rules.html', context)
 
@@ -191,9 +214,10 @@ def add_rule_view(request):
     form_match_type = request.GET.get('match_type', '').strip()
     form_source_text = ''
     form_description = ''
+    form_priority = ''
 
-    if form_status not in dict(ClassificationRule.STATUS_CHOICES):
-        form_status = ClassificationRule.STATUS_UNKNOWN
+    if form_status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
+        form_status = ClassificationRule.STATUS_MALWARE
     if form_match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
         form_match_type = ClassificationRule.MATCH_EXACT
 
@@ -202,17 +226,20 @@ def add_rule_view(request):
         match_type = request.POST.get('match_type', '').strip()
         source_text = request.POST.get('source_text', '').strip()
         description = request.POST.get('description', '').strip()
+        raw_priority = request.POST.get('priority', '').strip()
         form_status = status
         form_match_type = match_type
         form_source_text = source_text
         form_description = description
+        form_priority = raw_priority
         if not source_text:
             messages.error(request, 'Rule source text is required.')
-        elif status not in dict(ClassificationRule.STATUS_CHOICES):
+        elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
             messages.error(request, 'Invalid status.')
         elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
             messages.error(request, 'Invalid match type.')
         else:
+            priority = _coerce_priority(raw_priority, match_type)
             parsed = parse_rule_line(source_text, status=status, source_name=f'web-add-rule:{request.user.username}')
             if parsed and match_type in (ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH):
                 parsed['match_type'] = match_type
@@ -222,6 +249,7 @@ def add_rule_view(request):
                 'match_type': match_type,
                 'source_text': source_text,
                 'description': description,
+                'priority': priority,
             }
             if parsed:
                 for field in ('entry_type', 'clsid', 'name', 'filepath', 'normalized_filepath',
@@ -243,11 +271,17 @@ def add_rule_view(request):
 
     context = {
         'status_choices': ClassificationRule.STATUS_CHOICES,
+        'creatable_status_choices': ClassificationRule.CREATABLE_STATUS_CHOICES,
         'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
         'form_status': form_status,
         'form_match_type': form_match_type,
         'form_source_text': form_source_text,
         'form_description': form_description,
+        'form_priority': form_priority,
+        'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
+        'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
+        'priority_min': PRIORITY_MIN,
+        'priority_max': PRIORITY_MAX,
     }
     return render(request, 'add_rule.html', context)
 
@@ -265,6 +299,7 @@ def test_rule_api(request):
     status = (payload.get('status') or '?').strip()
     match_type = (payload.get('match_type') or '').strip()
     lines = payload.get('lines', [])
+    raw_priority = payload.get('priority')
 
     if not isinstance(lines, list) or len(lines) > 500:
         return JsonResponse({'error': 'Field "lines" must be a list with at most 500 entries.'}, status=400)
@@ -273,12 +308,21 @@ def test_rule_api(request):
     if status not in VALID_STATUSES:
         status = '?'
 
+    if raw_priority is None or raw_priority == '':
+        priority = None
+    else:
+        try:
+            priority = max(PRIORITY_MIN, min(PRIORITY_MAX, int(raw_priority)))
+        except (TypeError, ValueError):
+            priority = None
+
     try:
         response_payload = build_rule_test_results(
             source_text=source_text,
             status=status,
             match_type=match_type,
             lines=lines,
+            priority=priority,
         )
     except ValueError as exc:
         return JsonResponse({'error': str(exc)}, status=400)

@@ -1,7 +1,9 @@
 from django.db import IntegrityError, models
+from django.db.models import Q
 from django.db.models.signals import post_save
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.dispatch import receiver
 import secrets
 import string
@@ -9,6 +11,17 @@ import re
 
 import mmh3
 from django.utils import timezone
+
+
+PRIORITY_MIN = 0
+PRIORITY_MAX = 25
+DEFAULT_PRIORITY_BY_MATCH_TYPE = {
+    'exact': 20,
+    'parsed': 10,
+    'filepath': 8,
+    'substring': 5,
+    'regex': 2,
+}
 
 
 def get_default_rule_owner_id():
@@ -193,6 +206,12 @@ class ClassificationRule(models.Model):
         (STATUS_UNKNOWN, 'Unknown'),
     ]
 
+    # Statuses a user can assign when creating or editing a rule.
+    # `?` (Unknown) is the default for unmatched lines, not a meaningful classification.
+    CREATABLE_STATUS_CHOICES = [
+        (code, label) for code, label in STATUS_CHOICES if code != '?'
+    ]
+
     STATUS_CSS_CLASS_MAP = {
         'B': 'status-b', 'P': 'status-p', 'C': 'status-c',
         '!': 'status-w', 'A': 'status-a', 'G': 'status-g', 'S': 'status-s',
@@ -237,20 +256,46 @@ class ClassificationRule(models.Model):
     arguments = models.TextField(blank=True)
     file_not_signed = models.BooleanField(default=False)
 
+    priority = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(PRIORITY_MIN), MaxValueValidator(PRIORITY_MAX)],
+        db_index=True,
+        help_text=(
+            '0-25; higher wins. Lower priorities are entirely shadowed. '
+            'Auto-set from match_type when blank.'
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['status', 'match_type', 'source_text']
+        ordering = ['-priority', 'status', 'match_type', 'source_text']
         unique_together = ('owner', 'status', 'match_type', 'source_text')
+        constraints = [
+            models.CheckConstraint(
+                check=Q(priority__gte=PRIORITY_MIN) & Q(priority__lte=PRIORITY_MAX),
+                name='classificationrule_priority_range',
+            ),
+        ]
 
     @property
     def status_css_class(self):
         return self.STATUS_CSS_CLASS_MAP.get(self.status, 'status-unknown')
 
+    @classmethod
+    def default_priority_for(cls, match_type: str) -> int:
+        return DEFAULT_PRIORITY_BY_MATCH_TYPE.get(match_type, 10)
+
+    def save(self, *args, **kwargs):
+        if self.priority is None:
+            self.priority = self.default_priority_for(self.match_type)
+        super().save(*args, **kwargs)
+
     def __str__(self):
         owner_name = self.owner.username if self.owner_id else 'unknown'
-        return f"{self.status} [{self.match_type}] {self.source_text[:80]} ({owner_name})"
+        return f"{self.status} [{self.match_type}] p{self.priority} {self.source_text[:80]} ({owner_name})"
 
 
 _FRST_MARKER = 'Scan result of Farbar Recovery Scan Tool'

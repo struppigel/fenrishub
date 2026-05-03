@@ -115,7 +115,9 @@ def fixlists_trash_view(request):
             return redirect('fixlists_trash')
 
         if action == 'empty_trash':
-            count, _ = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=False).delete()
+            qs = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=False)
+            count = qs.count()
+            qs.delete()
             messages.success(request, f'Trash emptied ({count} fixlist(s) permanently deleted).')
             return redirect('fixlists_trash')
 
