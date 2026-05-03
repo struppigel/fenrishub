@@ -221,6 +221,46 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(len(rule_matches), 1)
         self.assertEqual(rule_matches[0]["matcher"], "parsed_entry")
 
+    def test_filepath_fallback_uses_effective_priority_one(self):
+        self.client.login(username="analyzer", password="password123")
+        clean_line = (
+            r"CHR Extension: (Dark Reader) - "
+            r"C:\Users\Admin\AppData\Local\Google\Chrome\User Data\Default\Extensions\eimadpbcbfnmbkopoojfekhnkhdbieeh "
+            r"[2025-12-15]"
+        )
+        pup_line = (
+            r"CHR Extension: (No Name) - "
+            r"C:\Users\ahmed\AppData\Local\Google\Chrome\User Data\Default\Extensions\eimadpbcbfnmbkopoojfekhnkhdbieeh "
+            r"[2026-02-13] [UpdateUrl:0] <==== ATTENTION"
+        )
+
+        clean_rule = parse_rule_line(
+            clean_line,
+            status=ClassificationRule.STATUS_CLEAN,
+            source_name="test-suite",
+        )
+        pup_rule = parse_rule_line(
+            pup_line,
+            status=ClassificationRule.STATUS_PUP,
+            source_name="test-suite",
+        )
+
+        self.assertIsNotNone(clean_rule)
+        self.assertIsNotNone(pup_rule)
+        ClassificationRule.objects.create(owner=self.user, **clean_rule)
+        ClassificationRule.objects.create(owner=self.user, **pup_rule)
+
+        inspection = inspect_line_matches(clean_line)
+
+        self.assertEqual(inspection["dominant_status"], ClassificationRule.STATUS_CLEAN)
+        self.assertEqual(inspection["effective_matcher"], "parsed_entry")
+        self.assertEqual(inspection["effective_priority"], 15)
+
+        shadowed_statuses = {match["status"] for match in inspection["shadowed_matches"]}
+        shadowed_matchers = {match["matcher"] for match in inspection["shadowed_matches"]}
+        self.assertIn(ClassificationRule.STATUS_PUP, shadowed_statuses)
+        self.assertIn("filepath", shadowed_matchers)
+
     def test_inspect_line_matches_uses_runtime_precedence_and_tracks_shadowed_matches(self):
         self.client.login(username="analyzer", password="password123")
         service_line = (

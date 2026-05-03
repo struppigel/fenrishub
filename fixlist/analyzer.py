@@ -742,6 +742,8 @@ _MATCH_TYPE_TO_PRIMARY_MATCHER = {
     ClassificationRule.MATCH_REGEX: "regex",
 }
 
+_FILEPATH_FALLBACK_EFFECTIVE_PRIORITY = 1
+
 
 def _matcher_preference(rule, matcher: str) -> int:
     """Lower is preferred. Parsed entry beats everything; otherwise the rule's own match_type wins."""
@@ -750,6 +752,17 @@ def _matcher_preference(rule, matcher: str) -> int:
     if matcher == _MATCH_TYPE_TO_PRIMARY_MATCHER.get(rule.match_type):
         return 1
     return 2
+
+
+def _effective_match_priority(rule, matcher: str) -> int:
+    """Effective priority for a specific match instance.
+
+    Filepath fallback matches for non-filepath rules are intentionally weak so
+    they cannot dominate true primary matches from other rules.
+    """
+    if matcher == "filepath" and rule.match_type != ClassificationRule.MATCH_FILEPATH:
+        return _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY
+    return rule.priority
 
 
 def _dedupe_matches_by_rule(matches):
@@ -769,9 +782,13 @@ def _collect_effective_and_shadowed_matches_for_line(line: str, buckets):
     if not flat:
         return [], [], "unknown", None
 
-    top_priority = max(rule.priority for rule, _reason, _matcher in flat)
-    effective_matches = [m for m in flat if m[0].priority == top_priority]
-    shadowed_matches = [m for m in flat if m[0].priority < top_priority]
+    top_priority = max(_effective_match_priority(rule, matcher) for rule, _reason, matcher in flat)
+    effective_matches = [
+        m for m in flat if _effective_match_priority(m[0], m[2]) == top_priority
+    ]
+    shadowed_matches = [
+        m for m in flat if _effective_match_priority(m[0], m[2]) < top_priority
+    ]
 
     matchers = sorted({m[2] for m in effective_matches})
     effective_matcher = matchers[0] if len(matchers) == 1 else f"priority:{top_priority}"
