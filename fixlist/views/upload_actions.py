@@ -8,7 +8,21 @@ from django.utils import timezone
 from ..models import UploadedLog
 from ..permissions import user_can_delete_uploaded_log
 from ..upload_utils import soft_delete_uploaded_log, restore_uploaded_log, execute_merge
-from .utils import _uploads_redirect_with_state, _purge_old_trash
+from .utils import redirect_preserving_filters, _purge_old_trash, check_missing_ids
+
+
+def _check_unauthorized_uploads(request, logs, *, verb, target):
+    """Return error redirect if user can't act on some logs; else None."""
+    unauthorized = sorted(
+        log.upload_id for log in logs if not user_can_delete_uploaded_log(request.user, log)
+    )
+    if not unauthorized:
+        return None
+    messages.error(
+        request,
+        f'Only the assigned helper can {verb}: {", ".join(unauthorized)}.',
+    )
+    return redirect_preserving_filters(request, target)
 
 
 def handle_delete_action(request, upload_id: str, action_scope_uploads) -> HttpResponse:
@@ -16,11 +30,11 @@ def handle_delete_action(request, upload_id: str, action_scope_uploads) -> HttpR
     uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
     if not user_can_delete_uploaded_log(request.user, uploaded_log):
         messages.error(request, f'Only the assigned helper can delete {upload_id}.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
     soft_delete_uploaded_log(uploaded_log)
     _purge_old_trash()
     messages.success(request, f'Upload {upload_id} moved to trash.')
-    return _uploads_redirect_with_state(request)
+    return redirect_preserving_filters(request, 'uploaded_logs')
 
 
 def handle_assign_to_me_action(request, upload_id: str, action_scope_uploads) -> HttpResponse:
@@ -28,12 +42,12 @@ def handle_assign_to_me_action(request, upload_id: str, action_scope_uploads) ->
     uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=True)
     if uploaded_log.recipient_user_id is not None:
         messages.error(request, f'Upload {upload_id} is already assigned.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     uploaded_log.recipient_user = request.user
     uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
     messages.success(request, f'Upload {upload_id} assigned to {request.user.username}.')
-    return _uploads_redirect_with_state(request)
+    return redirect_preserving_filters(request, 'uploaded_logs')
 
 
 def handle_unassign_to_general_action(request, upload_id: str, action_scope_uploads) -> HttpResponse:
@@ -41,132 +55,106 @@ def handle_unassign_to_general_action(request, upload_id: str, action_scope_uplo
     uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=True)
     if uploaded_log.recipient_user_id is None:
         messages.error(request, f'Upload {upload_id} is already unassigned.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
     if uploaded_log.recipient_user_id != request.user.id:
         messages.error(request, f'Only the assigned helper can unassign {upload_id}.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     uploaded_log.recipient_user = None
     uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
     messages.success(request, f'{upload_id} was unassigned')
-    return _uploads_redirect_with_state(request)
+    return redirect_preserving_filters(request, 'uploaded_logs')
 
 
 def handle_delete_selected_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:
     """Handle delete multiple selected uploads."""
     if not selected_ids:
         messages.error(request, 'Select at least one upload to delete.')
-        return redirect('uploaded_logs')
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
-    selected_logs = list(UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=True).defer('content'))
+    selected_logs = list(
+        UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=True).defer('content')
+    )
     found_ids = {entry.upload_id for entry in selected_logs}
-    missing_ids = [upload_id for upload_id in selected_ids if upload_id not in found_ids]
-    if missing_ids:
-        messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
-        return _uploads_redirect_with_state(request)
+    if resp := check_missing_ids(request, selected_ids, found_ids,
+                                 item_label='upload', target='uploaded_logs'):
+        return resp
+    if resp := _check_unauthorized_uploads(request, selected_logs,
+                                           verb='delete', target='uploaded_logs'):
+        return resp
 
-    undeletable_ids = [
-        log.upload_id for log in selected_logs
-        if not user_can_delete_uploaded_log(request.user, log)
-    ]
-    if undeletable_ids:
-        messages.error(
-            request,
-            f'Only the assigned helper can delete: {", ".join(sorted(undeletable_ids))}.',
-        )
-        return _uploads_redirect_with_state(request)
-
-    now = timezone.now()
-    UploadedLog.objects.filter(upload_id__in=[log.upload_id for log in selected_logs]).update(deleted_at=now)
-
+    UploadedLog.objects.filter(
+        upload_id__in=[log.upload_id for log in selected_logs]
+    ).update(deleted_at=timezone.now())
     _purge_old_trash()
     messages.success(request, f'Moved {len(selected_logs)} selected upload(s) to trash.')
-    return _uploads_redirect_with_state(request)
+    return redirect_preserving_filters(request, 'uploaded_logs')
 
 
 def handle_restore_selected_action(request, selected_ids: list) -> HttpResponse:
     """Handle restore multiple selected trashed uploads."""
     if not selected_ids:
         messages.error(request, 'Select at least one upload to restore.')
-        return redirect('uploads_trash')
+        return redirect_preserving_filters(request, 'uploads_trash')
 
     selected_logs = list(
         UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=False).defer('content')
     )
     found_ids = {entry.upload_id for entry in selected_logs}
-    missing_ids = [upload_id for upload_id in selected_ids if upload_id not in found_ids]
-    if missing_ids:
-        messages.error(request, f'Unable to find upload(s) in trash: {", ".join(missing_ids)}.')
-        return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
-
-    unrestorable_ids = [
-        log.upload_id for log in selected_logs
-        if not user_can_delete_uploaded_log(request.user, log)
-    ]
-    if unrestorable_ids:
-        messages.error(
-            request,
-            f'Only the assigned helper can restore: {", ".join(sorted(unrestorable_ids))}.',
-        )
-        return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
+    if resp := check_missing_ids(request, selected_ids, found_ids,
+                                 item_label='upload', target='uploads_trash', in_trash=True):
+        return resp
+    if resp := _check_unauthorized_uploads(request, selected_logs,
+                                           verb='restore', target='uploads_trash'):
+        return resp
 
     for log in selected_logs:
         restore_uploaded_log(log)
 
     messages.success(request, f'Restored {len(selected_logs)} upload(s).')
-    return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
+    return redirect_preserving_filters(request, 'uploads_trash')
 
 
 def handle_delete_permanent_selected_action(request, selected_ids: list) -> HttpResponse:
     """Handle permanently delete multiple selected trashed uploads."""
     if not selected_ids:
         messages.error(request, 'Select at least one upload to delete.')
-        return redirect('uploads_trash')
+        return redirect_preserving_filters(request, 'uploads_trash')
 
     selected_logs = list(
         UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=False).defer('content')
     )
     found_ids = {entry.upload_id for entry in selected_logs}
-    missing_ids = [upload_id for upload_id in selected_ids if upload_id not in found_ids]
-    if missing_ids:
-        messages.error(request, f'Unable to find upload(s) in trash: {", ".join(missing_ids)}.')
-        return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
-
-    undeletable_ids = [
-        log.upload_id for log in selected_logs
-        if not user_can_delete_uploaded_log(request.user, log)
-    ]
-    if undeletable_ids:
-        messages.error(
-            request,
-            f'Only the assigned helper can permanently delete: {", ".join(sorted(undeletable_ids))}.',
-        )
-        return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
+    if resp := check_missing_ids(request, selected_ids, found_ids,
+                                 item_label='upload', target='uploads_trash', in_trash=True):
+        return resp
+    if resp := _check_unauthorized_uploads(request, selected_logs,
+                                           verb='permanently delete', target='uploads_trash'):
+        return resp
 
     count = len(selected_logs)
     UploadedLog.objects.filter(upload_id__in=[log.upload_id for log in selected_logs]).delete()
-
     messages.success(request, f'Permanently deleted {count} upload(s).')
-    return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
+    return redirect_preserving_filters(request, 'uploads_trash')
 
 
 def _redirect_after_merge(request, merged_upload: UploadedLog, to_analyzer: bool) -> HttpResponse:
     if to_analyzer:
         return redirect(f"{reverse('log_analyzer')}?upload_id={merged_upload.upload_id}")
-    return _uploads_redirect_with_state(request)
+    return redirect_preserving_filters(request, 'uploaded_logs')
 
 
 def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer: bool) -> HttpResponse:
     if len(selected_ids) < 2:
         messages.error(request, 'Select at least two uploads to merge.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     selected_logs = list(action_scope_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
     logs_by_id = {entry.upload_id: entry for entry in selected_logs}
     missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
     if missing_ids:
         messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
     usernames = list(set(log.reddit_username for log in ordered_logs))
@@ -200,25 +188,25 @@ def _confirm_merge(request, selected_ids: list, action_scope_uploads, to_analyze
 
     if len(selected_ids) < 2:
         messages.error(request, 'Select at least two uploads to merge.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     if not selected_username:
         messages.error(request, 'Please select a username.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     selected_logs = list(action_scope_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
     logs_by_id = {entry.upload_id: entry for entry in selected_logs}
     missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
     if missing_ids:
         messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
 
     available_usernames = set(log.reddit_username for log in ordered_logs)
     if selected_username not in available_usernames:
         messages.error(request, 'Invalid username selection.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     merged_upload = execute_merge(
         ordered_logs=ordered_logs,
@@ -256,10 +244,10 @@ def handle_copy_to_me_action(request, upload_id: str, action_scope_uploads) -> H
     uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
     if uploaded_log.recipient_user_id is None:
         messages.error(request, f'Upload {upload_id} is not assigned — use assign instead.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
     if uploaded_log.recipient_user_id == request.user.id:
         messages.error(request, f'Upload {upload_id} is already assigned to you.')
-        return _uploads_redirect_with_state(request)
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     copy = UploadedLog(
         reddit_username=uploaded_log.reddit_username,
@@ -276,7 +264,7 @@ def handle_copy_to_me_action(request, upload_id: str, action_scope_uploads) -> H
         setattr(copy, field_name, getattr(uploaded_log, field_name))
     copy.save()
     messages.success(request, f'Copied {upload_id} as {copy.upload_id} assigned to {request.user.username}.')
-    return _uploads_redirect_with_state(request)
+    return redirect_preserving_filters(request, 'uploaded_logs')
 
 
 def handle_rescan_stats_selected_action(request, selected_ids: list, action_scope_uploads) -> HttpResponse:

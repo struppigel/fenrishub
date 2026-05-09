@@ -74,34 +74,6 @@
         color: var(--la-text-muted);
         margin-bottom: 8px;
     }
-
-    .pagination {
-        display: flex;
-        gap: 4px;
-        margin-top: 12px;
-        align-items: center;
-        flex-wrap: wrap;
-        font-size: 12px;
-    }
-
-    .pagination a {
-        padding: 4px 8px;
-        color: var(--la-text-muted);
-        text-decoration: none;
-        border: 1px solid var(--la-border);
-        background-color: var(--la-bg-1);
-    }
-
-    .pagination a:hover {
-        color: var(--la-text-primary);
-    }
-
-    .pagination .current-page {
-        padding: 4px 8px;
-        border: 1px solid var(--la-text-primary);
-        color: var(--la-text-primary);
-        background-color: var(--la-bg-0);
-    }
 </style>
 {% endblock %}
 
@@ -121,16 +93,10 @@
 </form>
 {% endif %}
 
-<form method="get" action="{% url submit_url_name %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">
-    <input type="text" name="q" value="{{ search_query }}" placeholder="search by reddit user or token" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
-    <select name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 180px;">
-        <option value="">all reddit users</option>
-        {% for username in all_usernames %}
-        <option value="{{ username }}" {% if username == username_filter %}selected{% endif %}>u/{{ username }}</option>
-        {% endfor %}
-    </select>
+<form method="get" action="{% url submit_url_name %}" class="search-filter-form">
+    {% include "partials/search_filter_inputs.html" with search_placeholder="search by reddit user or token" all_users_label="all reddit users" %}
     {% if search_query or username_filter %}
-    <a href="{% url submit_url_name %}" style="padding: 4px 8px; font-size: 12px; color: var(--la-text-muted); text-decoration: none; border: 1px solid var(--la-border); background-color: var(--la-bg-1);">clear</a>
+    <a href="{% url submit_url_name %}" class="search-filter-clear">clear</a>
     {% endif %}
 </form>
 
@@ -216,23 +182,7 @@
     </div>
     {% endfor %}
 
-    {% if page_obj.paginator.num_pages > 1 %}
-    <div class="pagination">
-        {% if page_obj.has_previous %}
-        <a href="?page={{ page_obj.previous_page_number }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">prev</a>
-        {% endif %}
-        {% for num in page_obj.paginator.page_range %}
-            {% if num == page_obj.number %}
-            <span class="current-page">{{ num }}</span>
-            {% elif num == 1 or num == page_obj.paginator.num_pages or num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
-            <a href="?page={{ num }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">{{ num }}</a>
-            {% endif %}
-        {% endfor %}
-        {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">next</a>
-        {% endif %}
-    </div>
-    {% endif %}
+    {% include "partials/pagination.html" %}
 {% else %}
     <div class="info-box">{% if is_trash %}trash is empty.{% else %}no fixlists yet.{% endif %}</div>
 {% endif %}
@@ -240,124 +190,20 @@
 
 {% block extra_js %}
 <script>
-const SELECTED_FIXLIST_PKS_KEY = '{{ selection_storage_key|default:"fenrishub_selected_fixlist_pks"|escapejs }}';
-
-function getStoredSelectedPks() {
-    try {
-        const stored = sessionStorage.getItem(SELECTED_FIXLIST_PKS_KEY);
-        if (!stored) return new Set();
-        return new Set(JSON.parse(stored));
-    } catch (e) {
-        return new Set();
-    }
-}
-
-function setStoredSelectedPks(set) {
-    try {
-        sessionStorage.setItem(SELECTED_FIXLIST_PKS_KEY, JSON.stringify([...set]));
-    } catch (e) {}
-}
-
-function clearStoredSelectedPks() {
-    try {
-        sessionStorage.removeItem(SELECTED_FIXLIST_PKS_KEY);
-    } catch (e) {}
-}
-
-function syncStoredSelectionsToForm() {
-    const form = document.getElementById('bulkFixlistForm');
-    if (!form) return;
-
-    form.querySelectorAll('input[type="hidden"][name="selected_pks"]').forEach(el => el.remove());
-
-    const stored = getStoredSelectedPks();
-    const visibleIds = new Set();
-
-    document.querySelectorAll('input.fixlist-select[name="selected_pks"]').forEach(cb => {
-        visibleIds.add(cb.value);
-        cb.checked = stored.has(cb.value);
-    });
-
-    stored.forEach(id => {
-        if (!visibleIds.has(id)) {
-            const hidden = document.createElement('input');
-            hidden.type = 'hidden';
-            hidden.name = 'selected_pks';
-            hidden.value = id;
-            form.appendChild(hidden);
-        }
-    });
-
-    updateSelectionIndicator(stored.size);
-}
-
-function updateSelectionIndicator(count) {
-    const indicator = document.getElementById('selectionIndicator');
-    const countEl = document.getElementById('selectionCount');
-    if (!indicator || !countEl) return;
-    countEl.textContent = count;
-    indicator.hidden = count === 0;
-}
-
-function bindFixlistCheckboxes() {
-    document.querySelectorAll('input.fixlist-select[name="selected_pks"]').forEach(cb => {
-        if (cb.dataset.selectionBound === '1') return;
-        cb.dataset.selectionBound = '1';
-        cb.addEventListener('change', () => {
-            const stored = getStoredSelectedPks();
-            if (cb.checked) {
-                stored.add(cb.value);
-            } else {
-                stored.delete(cb.value);
-            }
-            setStoredSelectedPks(stored);
-            syncStoredSelectionsToForm();
-        });
-    });
-}
-
-function seedStoredSelectionsFromPreCheckedBoxes() {
-    // If the user clicked a checkbox before DOMContentLoaded fired, the change
-    // listener wasn't attached yet so the click never reached sessionStorage.
-    // Pick up that pre-checked state so the subsequent sync doesn't undo it.
-    const stored = getStoredSelectedPks();
-    let changed = false;
-    document.querySelectorAll('input.fixlist-select[name="selected_pks"]').forEach(cb => {
-        if (cb.checked && !stored.has(cb.value)) {
-            stored.add(cb.value);
-            changed = true;
-        }
-    });
-    if (changed) {
-        setStoredSelectedPks(stored);
-    }
-}
+const fixlistSelection = createSelectionManager({
+    storageKey: '{{ selection_storage_key|default:"fenrishub_selected_fixlist_pks"|escapejs }}',
+    formId: 'bulkFixlistForm',
+    checkboxClass: 'fixlist-select',
+    inputName: 'selected_pks',
+});
 
 document.addEventListener('DOMContentLoaded', function() {
-    seedStoredSelectionsFromPreCheckedBoxes();
-    syncStoredSelectionsToForm();
-    bindFixlistCheckboxes();
-
-    const bulkForm = document.getElementById('bulkFixlistForm');
-    if (bulkForm) {
-        bulkForm.addEventListener('submit', () => {
-            clearStoredSelectedPks();
-        });
-    }
-
-    const clearLink = document.getElementById('clearSelectionLink');
-    if (clearLink) {
-        clearLink.addEventListener('click', (event) => {
-            event.preventDefault();
-            clearStoredSelectedPks();
-            syncStoredSelectionsToForm();
-        });
-    }
+    fixlistSelection.init();
 });
 
 {% if is_trash %}
 function confirmRestoreSelected() {
-    const count = getStoredSelectedPks().size;
+    const count = fixlistSelection.getStored().size;
     if (count === 0) {
         alert('Select at least one fixlist to restore.');
         return false;
@@ -366,7 +212,7 @@ function confirmRestoreSelected() {
 }
 
 function confirmDeletePermanentSelected() {
-    const count = getStoredSelectedPks().size;
+    const count = fixlistSelection.getStored().size;
     if (count === 0) {
         alert('Select at least one fixlist to delete.');
         return false;
@@ -375,7 +221,7 @@ function confirmDeletePermanentSelected() {
 }
 {% else %}
 function confirmDeleteSelected() {
-    const count = getStoredSelectedPks().size;
+    const count = fixlistSelection.getStored().size;
     if (count === 0) {
         alert('Select at least one fixlist to delete.');
         return false;

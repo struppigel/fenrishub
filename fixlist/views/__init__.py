@@ -65,7 +65,7 @@ from .utils import (
     get_updatable_uploads,
     get_client_ip,
     _purge_old_trash,
-    _uploads_redirect_with_state,
+    redirect_preserving_filters,
     _resolve_upload_recipient_username,
     _consume_anonymous_upload_slot,
     _anonymous_upload_limit,

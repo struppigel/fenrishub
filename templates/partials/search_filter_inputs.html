@@ -1,0 +1,18 @@
+{% comment %}
+Search-text input + reddit-username select, used in dashboard and uploaded_logs
+listings. Wrap in a <form method="get" action="..."> in the calling template,
+along with any extra controls (clear link, show_all toggle, etc.).
+
+Context:
+  search_query, username_filter, all_usernames  (required)
+  search_placeholder    placeholder text for the search input
+  all_users_label       label for the "all users" option (e.g. "all reddit users")
+  select_id             optional DOM id for the <select> (referenced by JS)
+{% endcomment %}
+<input type="text" name="q" value="{{ search_query }}" placeholder="{{ search_placeholder|default:'search' }}" class="search-filter-input">
+<select{% if select_id %} id="{{ select_id }}"{% endif %} name="u" onchange="this.form.submit()" class="search-filter-select">
+    <option value="">{{ all_users_label|default:'all users' }}</option>
+    {% for username in all_usernames %}
+    <option value="{{ username }}" {% if username == username_filter %}selected{% endif %}>u/{{ username }}</option>
+    {% endfor %}
+</select>

@@ -12,6 +12,8 @@ import re
 import mmh3
 from django.utils import timezone
 
+from .status_types import STATUS_CHOICES as _STATUS_CHOICES, STATUS_CSS_CLASS
+
 
 PRIORITY_MIN = 0
 PRIORITY_MAX = 20
@@ -200,18 +202,7 @@ class ClassificationRule(models.Model):
     STATUS_JUNK = 'J'
     STATUS_UNKNOWN = '?'
 
-    STATUS_CHOICES = [
-        (STATUS_MALWARE, 'Malware'),
-        (STATUS_PUP, 'Potentially unwanted'),
-        (STATUS_CLEAN, 'Clean'),
-        (STATUS_WARNING, 'Warning'),
-        (STATUS_ALERT, 'Alert'),
-        (STATUS_GRAYWARE, 'Grayware'),
-        (STATUS_SECURITY, 'Security software'),
-        (STATUS_INFO, 'Informational'),
-        (STATUS_JUNK, 'Junk'),
-        (STATUS_UNKNOWN, 'Unknown'),
-    ]
+    STATUS_CHOICES = _STATUS_CHOICES
 
     # Statuses a user can assign when creating or editing a rule.
     # `?` (Unknown) is the default for unmatched lines, not a meaningful classification.
@@ -219,11 +210,7 @@ class ClassificationRule(models.Model):
         (code, label) for code, label in STATUS_CHOICES if code != '?'
     ]
 
-    STATUS_CSS_CLASS_MAP = {
-        'B': 'status-b', 'P': 'status-p', 'C': 'status-c',
-        '!': 'status-w', 'A': 'status-a', 'G': 'status-g', 'S': 'status-s',
-        'I': 'status-i', 'J': 'status-j', '?': 'status-unknown',
-    }
+    STATUS_CSS_CLASS_MAP = STATUS_CSS_CLASS
 
     MATCH_EXACT = 'exact'
     MATCH_SUBSTRING = 'substring'

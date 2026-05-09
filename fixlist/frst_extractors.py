@@ -313,29 +313,40 @@ def extract_firewall_rule(line):
     return entry
 
 
+# Single source of truth for extractor order (first match wins) and membership.
+# Extractors that don't yield a meaningful filepath are excluded from path extraction.
+_NON_PATH_EXTRACTORS = frozenset({
+    extract_installed_software,      # group_map yields name + company only
+    extract_custom_appcompatflags,   # group_map yields clsid + name only
+})
+
+_ALL_EXTRACTORS = (
+    extract_frst_service,
+    extract_frst_runkey,
+    extract_frst_activesetup,
+    extract_frst_shortcut,
+    extract_frst_scheduled_task,
+    extract_frst_startup,
+    extract_firewall_rule,
+    extract_onemonth,
+    extract_process,
+    extract_installed_software,
+    extract_browser_extension,
+    extract_custom_clsid,
+    extract_context_menu_handler,
+    extract_bho,
+    extract_shelliconoverlayidentifiers,
+    extract_print_monitors,
+    extract_custom_appcompatflags,
+    extract_custom_appcompatsdb,
+    extract_package,
+)
+
+_PATH_EXTRACTORS = tuple(fn for fn in _ALL_EXTRACTORS if fn not in _NON_PATH_EXTRACTORS)
+
+
 def get_frst_entry(line):
-    extractors = [
-        extract_frst_service,
-        extract_frst_runkey,
-        extract_frst_activesetup,
-        extract_frst_shortcut,
-        extract_frst_scheduled_task,
-        extract_frst_startup,
-        extract_firewall_rule,
-        extract_onemonth,
-        extract_process,
-        extract_installed_software,
-        extract_browser_extension,
-        extract_custom_clsid,
-        extract_context_menu_handler,
-        extract_bho,
-        extract_shelliconoverlayidentifiers,
-        extract_print_monitors,
-        extract_custom_appcompatflags,
-        extract_custom_appcompatsdb,
-        extract_package,
-    ]
-    for extractor in extractors:
+    for extractor in _ALL_EXTRACTORS:
         entry = extractor(line)
         if entry:
             return entry
@@ -347,26 +358,7 @@ def extract_any_frst_path(line):
     if line.startswith(filepath_prefix):
         return line[len(filepath_prefix):].strip()
 
-    extractors = [
-        extract_frst_service,
-        extract_frst_runkey,
-        extract_frst_activesetup,
-        extract_frst_shortcut,
-        extract_frst_scheduled_task,
-        extract_frst_startup,
-        extract_firewall_rule,
-        extract_onemonth,
-        extract_process,
-        extract_browser_extension,
-        extract_custom_clsid,
-        extract_context_menu_handler,
-        extract_bho,
-        extract_shelliconoverlayidentifiers,
-        extract_print_monitors,
-        extract_custom_appcompatsdb,
-        extract_package,
-    ]
-    for extractor in extractors:
+    for extractor in _PATH_EXTRACTORS:
         entry = extractor(line)
         if entry and entry.filepath and "(No File)" not in line:
             return entry.filepath

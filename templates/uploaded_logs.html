@@ -115,33 +115,6 @@
         margin-bottom: 8px;
     }
 
-    .pagination {
-        display: flex;
-        gap: 4px;
-        margin-top: 12px;
-        align-items: center;
-        flex-wrap: wrap;
-        font-size: 12px;
-    }
-
-    .pagination a {
-        padding: 4px 8px;
-        color: var(--la-text-muted);
-        text-decoration: none;
-        border: 1px solid var(--la-border);
-        background-color: var(--la-bg-1);
-    }
-
-    .pagination a:hover {
-        color: var(--la-text-primary);
-    }
-
-    .pagination .current-page {
-        padding: 4px 8px;
-        border: 1px solid var(--la-text-primary);
-        color: var(--la-text-primary);
-        background-color: var(--la-bg-0);
-    }
 
 </style>
 {% endblock %}
@@ -163,14 +136,8 @@
 </form>
 {% endif %}
 
-<form method="get" action="{% url submit_url_name %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">
-    <input type="text" name="q" value="{{ search_query }}" placeholder="search by user, upload id, assignee" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
-    <select id="uploaderSelect" name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 180px;">
-        <option value="">all users</option>
-        {% for username in all_usernames %}
-        <option value="{{ username }}" {% if username == username_filter %}selected{% endif %}>u/{{ username }}</option>
-        {% endfor %}
-    </select>
+<form method="get" action="{% url submit_url_name %}" class="search-filter-form">
+    {% include "partials/search_filter_inputs.html" with search_placeholder="search by user, upload id, assignee" all_users_label="all users" select_id="uploaderSelect" %}
     <label style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 0; color: var(--la-text-primary); font-size: 12px;">
         <span>all channels</span>
         <span class="toggle-switch">
@@ -330,23 +297,7 @@
     </div>
     {% endfor %}
 
-    {% if page_obj.paginator.num_pages > 1 %}
-    <div class="pagination">
-        {% if page_obj.has_previous %}
-        <a href="?page={{ page_obj.previous_page_number }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">prev</a>
-        {% endif %}
-        {% for num in page_obj.paginator.page_range %}
-            {% if num == page_obj.number %}
-            <span class="current-page">{{ num }}</span>
-            {% elif num == 1 or num == page_obj.paginator.num_pages or num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
-            <a href="?page={{ num }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">{{ num }}</a>
-            {% endif %}
-        {% endfor %}
-        {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">next</a>
-        {% endif %}
-    </div>
-    {% endif %}
+    {% include "partials/pagination.html" %}
 {% else %}
     <div class="info-box">{% if is_trash %}trash is empty.{% else %}no uploaded logs yet.{% endif %}</div>
 {% endif %}
@@ -432,8 +383,8 @@ async function handleAllChannelsToggle(checkbox) {
         }
         updateUploadsModeInUrl(showAll);
         ensureUploadsModeCached(!showAll).catch(() => {});
-        syncStoredSelectionsToForm();
-        bindUploadCheckboxes();
+        uploadSelection.syncToForm();
+        uploadSelection.bindCheckboxes();
         bindUploadActionForms();
     } catch (error) {
         checkbox.form.submit();
@@ -460,8 +411,8 @@ async function refreshUploadsList() {
         const toggle = document.getElementById('allChannelsToggle');
         const currentShowAll = toggle && toggle.checked;
         uploadsListCache[uploadsModeKey(currentShowAll)] = currentContainer.innerHTML;
-        bindUploadCheckboxes();
-        syncStoredSelectionsToForm();
+        uploadSelection.bindCheckboxes();
+        uploadSelection.syncToForm();
         bindUploadActionForms();
         return true;
     } catch (e) {
@@ -512,123 +463,19 @@ function bindUploadActionForms() {
     });
 }
 
-const SELECTED_UPLOAD_IDS_KEY = '{{ selection_storage_key|default:"fenrishub_selected_upload_ids"|escapejs }}';
-
-function getStoredSelectedUploadIds() {
-    try {
-        const stored = sessionStorage.getItem(SELECTED_UPLOAD_IDS_KEY);
-        if (!stored) return new Set();
-        return new Set(JSON.parse(stored));
-    } catch (e) {
-        return new Set();
-    }
-}
-
-function setStoredSelectedUploadIds(set) {
-    try {
-        sessionStorage.setItem(SELECTED_UPLOAD_IDS_KEY, JSON.stringify([...set]));
-    } catch (e) {}
-}
-
-function clearStoredSelectedUploadIds() {
-    try {
-        sessionStorage.removeItem(SELECTED_UPLOAD_IDS_KEY);
-    } catch (e) {}
-}
-
-function syncStoredSelectionsToForm() {
-    const form = document.getElementById('mergeUploadsForm');
-    if (!form) return;
-
-    form.querySelectorAll('input[type="hidden"][name="selected_upload_ids"]').forEach(el => el.remove());
-
-    const stored = getStoredSelectedUploadIds();
-    const visibleIds = new Set();
-
-    document.querySelectorAll('input.upload-select[name="selected_upload_ids"]').forEach(cb => {
-        visibleIds.add(cb.value);
-        cb.checked = stored.has(cb.value);
-    });
-
-    stored.forEach(id => {
-        if (!visibleIds.has(id)) {
-            const hidden = document.createElement('input');
-            hidden.type = 'hidden';
-            hidden.name = 'selected_upload_ids';
-            hidden.value = id;
-            form.appendChild(hidden);
-        }
-    });
-
-    updateSelectionIndicator(stored.size);
-}
-
-function updateSelectionIndicator(count) {
-    const indicator = document.getElementById('selectionIndicator');
-    const countEl = document.getElementById('selectionCount');
-    if (!indicator || !countEl) return;
-    countEl.textContent = count;
-    indicator.hidden = count === 0;
-}
-
-function bindUploadCheckboxes() {
-    document.querySelectorAll('input.upload-select[name="selected_upload_ids"]').forEach(cb => {
-        if (cb.dataset.selectionBound === '1') return;
-        cb.dataset.selectionBound = '1';
-        cb.addEventListener('change', () => {
-            const stored = getStoredSelectedUploadIds();
-            if (cb.checked) {
-                stored.add(cb.value);
-            } else {
-                stored.delete(cb.value);
-            }
-            setStoredSelectedUploadIds(stored);
-            syncStoredSelectionsToForm();
-        });
-    });
-}
-
-function seedStoredSelectionsFromPreCheckedBoxes() {
-    // If the user clicked a checkbox before DOMContentLoaded fired, the change
-    // listener wasn't attached yet so the click never reached sessionStorage.
-    // Pick up that pre-checked state so the subsequent sync doesn't undo it.
-    const stored = getStoredSelectedUploadIds();
-    let changed = false;
-    document.querySelectorAll('input.upload-select[name="selected_upload_ids"]').forEach(cb => {
-        if (cb.checked && !stored.has(cb.value)) {
-            stored.add(cb.value);
-            changed = true;
-        }
-    });
-    if (changed) {
-        setStoredSelectedUploadIds(stored);
-    }
-}
+const uploadSelection = createSelectionManager({
+    storageKey: '{{ selection_storage_key|default:"fenrishub_selected_upload_ids"|escapejs }}',
+    formId: 'mergeUploadsForm',
+    checkboxClass: 'upload-select',
+    inputName: 'selected_upload_ids',
+});
 
 document.addEventListener('DOMContentLoaded', function() {
     const toggle = document.getElementById('allChannelsToggle');
     const uploadsListContainer = document.getElementById('uploadsListContainer');
 
-    seedStoredSelectionsFromPreCheckedBoxes();
-    syncStoredSelectionsToForm();
-    bindUploadCheckboxes();
+    uploadSelection.init();
     bindUploadActionForms();
-
-    const mergeForm = document.getElementById('mergeUploadsForm');
-    if (mergeForm) {
-        mergeForm.addEventListener('submit', () => {
-            clearStoredSelectedUploadIds();
-        });
-    }
-
-    const clearLink = document.getElementById('clearSelectionLink');
-    if (clearLink) {
-        clearLink.addEventListener('click', (event) => {
-            event.preventDefault();
-            clearStoredSelectedUploadIds();
-            syncStoredSelectionsToForm();
-        });
-    }
 
     if (!toggle || !uploadsListContainer) {
         return;
@@ -649,7 +496,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 {% if is_trash %}
 function confirmRestoreSelected() {
-    const count = getStoredSelectedUploadIds().size;
+    const count = uploadSelection.getStored().size;
     if (count === 0) {
         alert('Select at least one upload to restore.');
         return false;
@@ -658,7 +505,7 @@ function confirmRestoreSelected() {
 }
 
 function confirmDeletePermanentSelected() {
-    const count = getStoredSelectedUploadIds().size;
+    const count = uploadSelection.getStored().size;
     if (count === 0) {
         alert('Select at least one upload to delete.');
         return false;
@@ -676,7 +523,7 @@ function copyHelperUploadUrl(button) {
 }
 
 function confirmMerge() {
-    const count = getStoredSelectedUploadIds().size;
+    const count = uploadSelection.getStored().size;
     if (count === 0) {
         alert('Select at least one upload to merge.');
         return false;
@@ -685,7 +532,7 @@ function confirmMerge() {
 }
 
 function confirmMergealyze() {
-    const count = getStoredSelectedUploadIds().size;
+    const count = uploadSelection.getStored().size;
     if (count === 0) {
         alert('Select at least one upload to mergealyze.');
         return false;
@@ -694,7 +541,7 @@ function confirmMergealyze() {
 }
 
 function confirmDeleteSelected() {
-    const count = getStoredSelectedUploadIds().size;
+    const count = uploadSelection.getStored().size;
     if (count === 0) {
         alert('Select at least one upload to delete.');
         return false;
@@ -703,7 +550,7 @@ function confirmDeleteSelected() {
 }
 
 function confirmRescan() {
-    const count = getStoredSelectedUploadIds().size;
+    const count = uploadSelection.getStored().size;
     if (count === 0) {
         alert('Select at least one upload to rescan.');
         return false;
@@ -712,12 +559,12 @@ function confirmRescan() {
 }
 
 function confirmDiff() {
-    const selected = [...getStoredSelectedUploadIds()];
+    const selected = [...uploadSelection.getStored()];
     if (selected.length !== 2) {
         alert('Select exactly two uploads to diff.');
         return;
     }
-    clearStoredSelectedUploadIds();
+    uploadSelection.clearStored();
     const urlTemplate = "{% url 'diff_uploaded_logs' '__ID1__' '__ID2__' %}";
     window.location.href = urlTemplate.replace('__ID1__', selected[0]).replace('__ID2__', selected[1]);
 }

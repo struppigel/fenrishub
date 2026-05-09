@@ -6,6 +6,7 @@ used across multiple view domains.
 """
 
 from django.shortcuts import render, redirect
+from django.contrib import messages
 from django.contrib.auth.models import User
 from django.conf import settings
 from django.core.cache import cache
@@ -91,26 +92,42 @@ def get_updatable_uploads(user):
     )
 
 
-def _uploads_redirect_with_state(request, target_url_name='uploaded_logs'):
-    """Redirect to an uploads listing view preserving query parameters."""
-    query_params = {}
+_TRUTHY_VALUES = {'1', 'true', 'on', 'yes'}
+
+
+def redirect_preserving_filters(request, target_url_name):
+    """Redirect to a listing view, preserving search/filter query params from POST or GET.
+
+    Preserves `q` and `u` as-is. Normalises `show_all` to `'1'` when set to a truthy
+    value (uploads-only filter; fixlist forms never submit it, so it's harmless there).
+    """
+    params = {}
+    for key in ('q', 'u'):
+        value = (request.POST.get(key) or request.GET.get(key) or '').strip()
+        if value:
+            params[key] = value
 
     show_all = (request.POST.get('show_all') or request.GET.get('show_all') or '').strip().lower()
-    if show_all in {'1', 'true', 'on', 'yes'}:
-        query_params['show_all'] = '1'
+    if show_all in _TRUTHY_VALUES:
+        params['show_all'] = '1'
 
-    username_filter = (request.POST.get('u') or request.GET.get('u') or '').strip()
-    if username_filter:
-        query_params['u'] = username_filter
-
-    search_query = (request.POST.get('q') or request.GET.get('q') or '').strip()
-    if search_query:
-        query_params['q'] = search_query
-
-    if query_params:
-        return redirect(f"{reverse(target_url_name)}?{urlencode(query_params)}")
-
+    if params:
+        return redirect(f"{reverse(target_url_name)}?{urlencode(params)}")
     return redirect(target_url_name)
+
+
+def check_missing_ids(request, requested_ids, found_ids, *, item_label, target, in_trash=False):
+    """Return an error redirect if any requested IDs are missing from found_ids; else None.
+
+    `requested_ids` is the user-submitted list (preserves order); `found_ids` is the set
+    of IDs the queryset actually returned.
+    """
+    missing = [i for i in requested_ids if i not in found_ids]
+    if not missing:
+        return None
+    location = ' in trash' if in_trash else ''
+    messages.error(request, f'Unable to find {item_label}(s){location}: {", ".join(missing)}.')
+    return redirect_preserving_filters(request, target)
 
 
 def get_client_ip(request):

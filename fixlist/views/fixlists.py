@@ -15,12 +15,11 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse, HttpResponse, Http404
 from django.core.paginator import Paginator
 from django.db.models import F, Q
-from django.urls import reverse
 from django.utils import timezone
 
 from ..models import Fixlist, AccessLog, UploadedLog
 from .auth import DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
-from .utils import _purge_old_trash, get_client_ip
+from .utils import _purge_old_trash, get_client_ip, redirect_preserving_filters, check_missing_ids
 
 
 def _collect_selected_pks(request):
@@ -34,23 +33,6 @@ def _collect_selected_pks(request):
         seen.add(normalized)
         selected.append(normalized)
     return selected
-
-
-def _fixlists_redirect_with_state(request, target_url_name):
-    """Redirect to a fixlists listing view, preserving search/filter query params."""
-    query_params = {}
-
-    username_filter = (request.POST.get('u') or request.GET.get('u') or '').strip()
-    if username_filter:
-        query_params['u'] = username_filter
-
-    search_query = (request.POST.get('q') or request.GET.get('q') or '').strip()
-    if search_query:
-        query_params['q'] = search_query
-
-    if query_params:
-        return redirect(f"{reverse(target_url_name)}?{urlencode(query_params)}")
-    return redirect(target_url_name)
 
 
 def _build_fixlists_listing_context(request, *, deleted: bool) -> dict:
@@ -100,57 +82,53 @@ def handle_fixlist_delete_selected_action(request, selected_pks: list) -> HttpRe
     """Move multiple selected fixlists to trash."""
     if not selected_pks:
         messages.error(request, 'Select at least one fixlist to delete.')
-        return _fixlists_redirect_with_state(request, target_url_name='dashboard')
+        return redirect_preserving_filters(request, 'dashboard')
 
     qs = Fixlist.objects.filter(pk__in=selected_pks, owner=request.user, deleted_at__isnull=True)
     found_pks = {str(pk) for pk in qs.values_list('pk', flat=True)}
-    missing_pks = [pk for pk in selected_pks if pk not in found_pks]
-    if missing_pks:
-        messages.error(request, f'Unable to find fixlist(s): {", ".join(missing_pks)}.')
-        return _fixlists_redirect_with_state(request, target_url_name='dashboard')
+    if resp := check_missing_ids(request, selected_pks, found_pks,
+                                 item_label='fixlist', target='dashboard'):
+        return resp
 
-    now = timezone.now()
-    count = qs.update(deleted_at=now)
+    count = qs.update(deleted_at=timezone.now())
     _purge_old_trash()
     messages.success(request, f'Moved {count} fixlist(s) to trash.')
-    return _fixlists_redirect_with_state(request, target_url_name='dashboard')
+    return redirect_preserving_filters(request, 'dashboard')
 
 
 def handle_fixlist_restore_selected_action(request, selected_pks: list) -> HttpResponse:
     """Restore multiple selected trashed fixlists."""
     if not selected_pks:
         messages.error(request, 'Select at least one fixlist to restore.')
-        return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+        return redirect_preserving_filters(request, 'fixlists_trash')
 
     qs = Fixlist.objects.filter(pk__in=selected_pks, owner=request.user, deleted_at__isnull=False)
     found_pks = {str(pk) for pk in qs.values_list('pk', flat=True)}
-    missing_pks = [pk for pk in selected_pks if pk not in found_pks]
-    if missing_pks:
-        messages.error(request, f'Unable to find fixlist(s) in trash: {", ".join(missing_pks)}.')
-        return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+    if resp := check_missing_ids(request, selected_pks, found_pks,
+                                 item_label='fixlist', target='fixlists_trash', in_trash=True):
+        return resp
 
     count = qs.update(deleted_at=None)
     messages.success(request, f'Restored {count} fixlist(s).')
-    return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+    return redirect_preserving_filters(request, 'fixlists_trash')
 
 
 def handle_fixlist_delete_permanent_selected_action(request, selected_pks: list) -> HttpResponse:
     """Permanently delete multiple selected trashed fixlists."""
     if not selected_pks:
         messages.error(request, 'Select at least one fixlist to delete.')
-        return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+        return redirect_preserving_filters(request, 'fixlists_trash')
 
     qs = Fixlist.objects.filter(pk__in=selected_pks, owner=request.user, deleted_at__isnull=False)
     found_pks = {str(pk) for pk in qs.values_list('pk', flat=True)}
-    missing_pks = [pk for pk in selected_pks if pk not in found_pks]
-    if missing_pks:
-        messages.error(request, f'Unable to find fixlist(s) in trash: {", ".join(missing_pks)}.')
-        return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+    if resp := check_missing_ids(request, selected_pks, found_pks,
+                                 item_label='fixlist', target='fixlists_trash', in_trash=True):
+        return resp
 
     count = qs.count()
     qs.delete()
     messages.success(request, f'Permanently deleted {count} fixlist(s).')
-    return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+    return redirect_preserving_filters(request, 'fixlists_trash')
 
 
 def _is_fixlist_owner(user, fixlist):

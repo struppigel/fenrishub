@@ -5,35 +5,12 @@ from typing import Iterable
 
 from . import frst_extractors as ex
 from .models import ClassificationRule, ParsedFilepathExclusion, get_default_rule_owner_id, detect_log_type
-
-STATUS_PRECEDENCE = "BPCA!GSIJ?"
-VALID_STATUSES = set(STATUS_PRECEDENCE)
-
-STATUS_LABELS = {
-    "B": "malware",
-    "P": "potentially unwanted",
-    "C": "clean",
-    "!": "warning",
-    "A": "alert",
-    "G": "grayware",
-    "S": "security",
-    "I": "informational",
-    "J": "junk",
-    "?": "unknown",
-}
-
-STATUS_CSS_CLASS = {
-    "B": "status-b",
-    "P": "status-p",
-    "C": "status-c",
-    "!": "status-w",
-    "A": "status-a",
-    "G": "status-g",
-    "S": "status-s",
-    "I": "status-i",
-    "J": "status-j",
-    "?": "status-unknown",
-}
+from .status_types import (
+    STATUS_PRECEDENCE,
+    VALID_STATUSES,
+    STATUS_LABELS,
+    STATUS_CSS_CLASS,
+)
 
 FRST_END_OF_ADDITION = "==================== End of Addition.txt ======================="
 FRST_END_OF_LOG = "==================== End of FRST.txt ========================"

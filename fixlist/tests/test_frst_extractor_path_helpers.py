@@ -12,7 +12,12 @@ filename was highlighted instead of the full path).
 from django.test import TestCase
 
 from ..frst_extractors import (
+    _ALL_EXTRACTORS,
+    _PATH_EXTRACTORS,
     _denormalize_path_pattern,
+    extract_custom_appcompatflags,
+    extract_frst_service,
+    extract_installed_software,
     find_value_position,
 )
 
@@ -127,3 +132,29 @@ class DenormalizePathPatternTests(TestCase):
         pattern = _denormalize_path_pattern(r"C:\Users\username\Raxec")
         # Any user, but the trailing component must still match literally.
         self.assertIsNone(re.search(pattern, r"C:\Users\Lucian\Different", re.IGNORECASE))
+
+
+class ExtractorRegistryTests(TestCase):
+    """Guard against accidentally dropping an extractor from the registry tables
+    or wiring up a path-eligible extractor that yields no filepath."""
+
+    def test_all_extractors_count(self):
+        self.assertEqual(len(_ALL_EXTRACTORS), 19)
+
+    def test_path_extractors_excludes_non_path_yielders(self):
+        self.assertNotIn(extract_installed_software, _PATH_EXTRACTORS)
+        self.assertNotIn(extract_custom_appcompatflags, _PATH_EXTRACTORS)
+        self.assertEqual(len(_PATH_EXTRACTORS), len(_ALL_EXTRACTORS) - 2)
+
+    def test_path_extractors_preserves_order(self):
+        # _PATH_EXTRACTORS must be a strict subsequence of _ALL_EXTRACTORS so
+        # first-match-wins semantics carry over from get_frst_entry.
+        path_iter = iter(_PATH_EXTRACTORS)
+        current = next(path_iter, None)
+        for fn in _ALL_EXTRACTORS:
+            if fn is current:
+                current = next(path_iter, None)
+        self.assertIsNone(current)
+
+    def test_known_extractor_present(self):
+        self.assertIn(extract_frst_service, _ALL_EXTRACTORS)

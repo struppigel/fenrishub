@@ -347,6 +347,63 @@
             min-width: 120px;
         }
 
+        .search-filter-form {
+            margin-bottom: 10px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .search-filter-input,
+        .search-filter-select {
+            padding: 4px 8px;
+            background: var(--la-bg-1);
+            color: var(--la-text-main);
+            border: 1px solid var(--la-border);
+            font-family: inherit;
+            font-size: 12px;
+        }
+
+        .search-filter-input { width: 220px; }
+        .search-filter-select { width: 180px; }
+
+        .search-filter-clear {
+            padding: 4px 8px;
+            font-size: 12px;
+            color: var(--la-text-muted);
+            text-decoration: none;
+            border: 1px solid var(--la-border);
+            background-color: var(--la-bg-1);
+        }
+
+        .pagination {
+            display: flex;
+            gap: 4px;
+            margin-top: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+            font-size: 12px;
+        }
+
+        .pagination a {
+            padding: 4px 8px;
+            color: var(--la-text-muted);
+            text-decoration: none;
+            border: 1px solid var(--la-border);
+            background-color: var(--la-bg-1);
+        }
+
+        .pagination a:hover {
+            color: var(--la-text-primary);
+        }
+
+        .pagination .current-page {
+            padding: 4px 8px;
+            border: 1px solid var(--la-text-primary);
+            color: var(--la-text-primary);
+            background-color: var(--la-bg-0);
+        }
+
         .fixlist-item {
             padding: 10px;
             margin-bottom: 8px;
@@ -664,6 +721,7 @@
         if (e.target === this) this.classList.remove('show');
     });
     </script>
+    <script src="{% static 'js/selection_manager.js' %}"></script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>
