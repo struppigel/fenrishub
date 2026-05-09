@@ -91,8 +91,8 @@ def get_updatable_uploads(user):
     )
 
 
-def _uploads_redirect_with_state(request):
-    """Redirect to uploaded_logs view preserving query parameters."""
+def _uploads_redirect_with_state(request, target_url_name='uploaded_logs'):
+    """Redirect to an uploads listing view preserving query parameters."""
     query_params = {}
 
     show_all = (request.POST.get('show_all') or request.GET.get('show_all') or '').strip().lower()
@@ -108,9 +108,9 @@ def _uploads_redirect_with_state(request):
         query_params['q'] = search_query
 
     if query_params:
-        return redirect(f"{reverse('uploaded_logs')}?{urlencode(query_params)}")
+        return redirect(f"{reverse(target_url_name)}?{urlencode(query_params)}")
 
-    return redirect('uploaded_logs')
+    return redirect(target_url_name)
 
 
 def get_client_ip(request):

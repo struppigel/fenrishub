@@ -7,10 +7,11 @@ from .views.analyzer import (
     preview_pending_rule_changes_api,
     update_analyzed_line_status_api,
 )
-from .views.auth import change_password_view, dashboard_view, login_view, logout_view, profile_view
+from .views.auth import change_password_view, login_view, logout_view, profile_view
 from .views.fixlists import (
     copy_to_clipboard_api,
     create_fixlist_view,
+    dashboard_view,
     download_fixlist,
     fixlists_trash_view,
     shared_fixlist_view,

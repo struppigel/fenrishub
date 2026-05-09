@@ -2,6 +2,8 @@ from django import template
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 
+from fixlist import frst_extractors as ex
+
 register = template.Library()
 
 _FIELDS = [
@@ -22,21 +24,17 @@ def highlight_parsed(rule, max_chars=120):
         truncated = source[:max_chars] + ('...' if len(source) > max_chars else '')
         return escape(truncated)
 
-    lower_source = source.lower()
     candidates = []
 
     for priority, (attr, css_class) in enumerate(_FIELDS):
         value = (getattr(rule, attr, '') or '').strip()
         if not value:
             continue
-        lower_value = value.lower()
-        start = 0
-        while start < len(lower_source):
-            pos = lower_source.find(lower_value, start)
-            if pos == -1:
-                break
-            candidates.append((pos, pos + len(lower_value), css_class, priority))
-            start = pos + len(lower_value)
+        position = ex.find_value_position(value, source, field_name=attr)
+        if position is None:
+            continue
+        start, end = position
+        candidates.append((start, end, css_class, priority))
 
     candidates.sort(key=lambda c: (c[0], -(c[1] - c[0]), c[3]))
 

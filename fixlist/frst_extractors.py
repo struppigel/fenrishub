@@ -67,6 +67,75 @@ def normalize_path(path):
     return FIREFOX_PROFILE_RE.sub(r"\1profile", path)
 
 
+_PATH_DRIVE_MARK = "\x00DRIVE\x00"
+_PATH_USER_MARK = "\x00USER\x00"
+_PATH_FFPROFILE_MARK = "\x00FFPROFILE\x00"
+
+
+def _denormalize_path_pattern(normalized_path):
+    """Build a regex matching the original (un-normalized) form of a path.
+
+    normalize_path() rewrites three things; this reverses each as a wildcard:
+    drive letter (forced to C:), \\Users\\<user>\\ (forced to username), and
+    Firefox profile name (forced to "profile"). Other characters are matched
+    literally (case-insensitively).
+    """
+    if not normalized_path:
+        return None
+
+    work = normalized_path
+    if len(work) >= 2 and work[1] == ":":
+        work = _PATH_DRIVE_MARK + work[2:]
+
+    work = re.sub(
+        r"(?i)(\\Users\\)username(\\)",
+        r"\1" + _PATH_USER_MARK + r"\2",
+        work,
+    )
+    work = re.sub(
+        r"(?i)(\\Mozilla\\Firefox\\Profiles\\)profile",
+        r"\1" + _PATH_FFPROFILE_MARK,
+        work,
+    )
+
+    pattern = re.escape(work)
+    pattern = pattern.replace(re.escape(_PATH_DRIVE_MARK), r"[A-Za-z]:")
+    pattern = pattern.replace(re.escape(_PATH_USER_MARK), r"[^\\]+")
+    pattern = pattern.replace(re.escape(_PATH_FFPROFILE_MARK), r"[^\\]+")
+    return pattern
+
+
+def find_value_position(value, source, field_name=None):
+    """Locate value inside source. Returns (start, end) or None.
+
+    Tries a case-insensitive literal find first. For path-bearing fields
+    (filepath, filename), falls back to a denormalized regex so values that
+    were rewritten by normalize_path still align with the original line.
+    """
+    if not value or not source:
+        return None
+
+    lower_source = source.lower()
+    lower_value = value.lower()
+    pos = lower_source.find(lower_value)
+    if pos != -1:
+        return (pos, pos + len(value))
+
+    if field_name not in ("filepath", "filename"):
+        return None
+
+    pattern = _denormalize_path_pattern(value)
+    if not pattern:
+        return None
+    try:
+        match = re.search(pattern, source, re.IGNORECASE)
+    except re.error:
+        return None
+    if match:
+        return (match.start(), match.end())
+    return None
+
+
 def extract_frst_entry(line, regexp, group_map, entry_type=""):
     pattern = re.compile(regexp)
     no_desc_line = strip_description(line)

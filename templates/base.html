@@ -166,6 +166,22 @@
             margin-top: 6px;
         }
 
+        /* Invisible bridge across the margin-top gap so cursor travel from
+           the username button down into the menu doesn't drop :hover. */
+        .profile-menu::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: -2px;
+            height: 2px;
+        }
+
+        .page-context .profile-menu::before {
+            top: -6px;
+            height: 6px;
+        }
+
         .profile-dropdown:focus-within .profile-menu,
         .profile-dropdown:hover .profile-menu {
             display: block;
@@ -575,6 +591,7 @@
                             <div class="profile-menu">
                                 <a href="{% url 'profile' %}">profile settings</a>
                                 <a href="{% url 'change_password' %}">change password</a>
+                                <a href="{% url 'statistics' %}">stats</a>
                                 <form method="post" action="{% url 'logout' %}">
                                     {% csrf_token %}
                                     <button type="submit">logout</button>
@@ -596,7 +613,6 @@
                     <a href="{% url 'snippets' %}">snippets</a>
                     <a href="{% url 'rules' %}">rules</a>
                     <a href="{% url 'uploaded_logs' %}">uploads</a>
-                    <a href="{% url 'statistics' %}">stats</a>
                 </div>
                 <div class="nav-right" style="display: flex; gap: 8px; align-items: center;">
                     <div id="bannerStatistics" class="banner-statistics" style="display: none;"></div>

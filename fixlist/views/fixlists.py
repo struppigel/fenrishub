@@ -5,6 +5,7 @@ Handles: creating, editing, sharing, downloading, and managing fixlists.
 """
 
 import re
+from urllib.parse import urlencode
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
@@ -12,12 +13,144 @@ from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse, HttpResponse, Http404
-from django.db.models import F
+from django.core.paginator import Paginator
+from django.db.models import F, Q
+from django.urls import reverse
 from django.utils import timezone
 
 from ..models import Fixlist, AccessLog, UploadedLog
 from .auth import DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
 from .utils import _purge_old_trash, get_client_ip
+
+
+def _collect_selected_pks(request):
+    """Pull and dedupe selected_pks from POST."""
+    selected = []
+    seen = set()
+    for raw in request.POST.getlist('selected_pks'):
+        normalized = str(raw).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        selected.append(normalized)
+    return selected
+
+
+def _fixlists_redirect_with_state(request, target_url_name):
+    """Redirect to a fixlists listing view, preserving search/filter query params."""
+    query_params = {}
+
+    username_filter = (request.POST.get('u') or request.GET.get('u') or '').strip()
+    if username_filter:
+        query_params['u'] = username_filter
+
+    search_query = (request.POST.get('q') or request.GET.get('q') or '').strip()
+    if search_query:
+        query_params['q'] = search_query
+
+    if query_params:
+        return redirect(f"{reverse(target_url_name)}?{urlencode(query_params)}")
+    return redirect(target_url_name)
+
+
+def _build_fixlists_listing_context(request, *, deleted: bool) -> dict:
+    """Build shared listing context (search/filter/pagination) for fixlists pages.
+
+    Used by both the dashboard and the fixlists trash. Reads `q`, `u`, and
+    `page` from request.GET; flips between active and trashed fixlists via
+    the `deleted` keyword. Always scoped to request.user as owner.
+    """
+    username_filter = request.GET.get('u', '').strip()
+    search_query = request.GET.get('q', '').strip()
+
+    base_qs = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=not deleted)
+    fixlists_qs = base_qs
+    if username_filter:
+        fixlists_qs = fixlists_qs.filter(username=username_filter)
+    if search_query:
+        fixlists_qs = fixlists_qs.filter(
+            Q(username__icontains=search_query) | Q(share_token__icontains=search_query)
+        )
+    if deleted:
+        fixlists_qs = fixlists_qs.order_by('-deleted_at')
+
+    page_obj = Paginator(fixlists_qs, 10).get_page(request.GET.get('page'))
+
+    pagination_params = {}
+    if username_filter:
+        pagination_params['u'] = username_filter
+    if search_query:
+        pagination_params['q'] = search_query
+
+    all_usernames = (
+        base_qs.values_list('username', flat=True).distinct().order_by('username')
+    )
+
+    return {
+        'fixlists': page_obj.object_list,
+        'page_obj': page_obj,
+        'username_filter': username_filter,
+        'all_usernames': all_usernames,
+        'search_query': search_query,
+        'pagination_query': urlencode(pagination_params),
+    }
+
+
+def handle_fixlist_delete_selected_action(request, selected_pks: list) -> HttpResponse:
+    """Move multiple selected fixlists to trash."""
+    if not selected_pks:
+        messages.error(request, 'Select at least one fixlist to delete.')
+        return _fixlists_redirect_with_state(request, target_url_name='dashboard')
+
+    qs = Fixlist.objects.filter(pk__in=selected_pks, owner=request.user, deleted_at__isnull=True)
+    found_pks = {str(pk) for pk in qs.values_list('pk', flat=True)}
+    missing_pks = [pk for pk in selected_pks if pk not in found_pks]
+    if missing_pks:
+        messages.error(request, f'Unable to find fixlist(s): {", ".join(missing_pks)}.')
+        return _fixlists_redirect_with_state(request, target_url_name='dashboard')
+
+    now = timezone.now()
+    count = qs.update(deleted_at=now)
+    _purge_old_trash()
+    messages.success(request, f'Moved {count} fixlist(s) to trash.')
+    return _fixlists_redirect_with_state(request, target_url_name='dashboard')
+
+
+def handle_fixlist_restore_selected_action(request, selected_pks: list) -> HttpResponse:
+    """Restore multiple selected trashed fixlists."""
+    if not selected_pks:
+        messages.error(request, 'Select at least one fixlist to restore.')
+        return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+
+    qs = Fixlist.objects.filter(pk__in=selected_pks, owner=request.user, deleted_at__isnull=False)
+    found_pks = {str(pk) for pk in qs.values_list('pk', flat=True)}
+    missing_pks = [pk for pk in selected_pks if pk not in found_pks]
+    if missing_pks:
+        messages.error(request, f'Unable to find fixlist(s) in trash: {", ".join(missing_pks)}.')
+        return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+
+    count = qs.update(deleted_at=None)
+    messages.success(request, f'Restored {count} fixlist(s).')
+    return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+
+
+def handle_fixlist_delete_permanent_selected_action(request, selected_pks: list) -> HttpResponse:
+    """Permanently delete multiple selected trashed fixlists."""
+    if not selected_pks:
+        messages.error(request, 'Select at least one fixlist to delete.')
+        return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+
+    qs = Fixlist.objects.filter(pk__in=selected_pks, owner=request.user, deleted_at__isnull=False)
+    found_pks = {str(pk) for pk in qs.values_list('pk', flat=True)}
+    missing_pks = [pk for pk in selected_pks if pk not in found_pks]
+    if missing_pks:
+        messages.error(request, f'Unable to find fixlist(s) in trash: {", ".join(missing_pks)}.')
+        return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
+
+    count = qs.count()
+    qs.delete()
+    messages.success(request, f'Permanently deleted {count} fixlist(s).')
+    return _fixlists_redirect_with_state(request, target_url_name='fixlists_trash')
 
 
 def _is_fixlist_owner(user, fixlist):
@@ -44,6 +177,33 @@ def _assert_can_access_shared_fixlist(request, fixlist):
         raise Http404
     if not fixlist.is_public and not request.user.is_authenticated:
         raise Http404
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def dashboard_view(request):
+    """List all fixlists for the logged-in user with search/filter/bulk actions."""
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+        selected_pks = _collect_selected_pks(request)
+
+        if action == 'delete_selected':
+            return handle_fixlist_delete_selected_action(request, selected_pks)
+
+        messages.error(request, 'Invalid action.')
+        return redirect('dashboard')
+
+    listing_context = _build_fixlists_listing_context(request, deleted=False)
+    fixlist_trash_count = Fixlist.objects.filter(
+        owner=request.user, deleted_at__isnull=False
+    ).count()
+    return render(request, 'dashboard.html', {
+        **listing_context,
+        'fixlist_trash_count': fixlist_trash_count,
+        'is_trash': False,
+        'submit_url_name': 'dashboard',
+        'selection_storage_key': 'fenrishub_selected_fixlist_pks',
+    })
 
 
 @login_required
@@ -97,6 +257,7 @@ def fixlists_trash_view(request):
     """Trash bin for soft-deleted fixlists."""
     if request.method == 'POST':
         action = request.POST.get('action', '')
+        selected_pks = _collect_selected_pks(request)
 
         if action == 'restore':
             pk = request.POST.get('pk', '').strip()
@@ -114,6 +275,12 @@ def fixlists_trash_view(request):
             messages.success(request, f'Fixlist "{username}" permanently deleted.')
             return redirect('fixlists_trash')
 
+        if action == 'restore_selected':
+            return handle_fixlist_restore_selected_action(request, selected_pks)
+
+        if action == 'delete_permanent_selected':
+            return handle_fixlist_delete_permanent_selected_action(request, selected_pks)
+
         if action == 'empty_trash':
             qs = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=False)
             count = qs.count()
@@ -124,8 +291,13 @@ def fixlists_trash_view(request):
         messages.error(request, 'Invalid action.')
         return redirect('fixlists_trash')
 
-    trashed = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=False).order_by('-deleted_at')
-    return render(request, 'fixlists_trash.html', {'fixlists': trashed})
+    listing_context = _build_fixlists_listing_context(request, deleted=True)
+    return render(request, 'dashboard.html', {
+        **listing_context,
+        'is_trash': True,
+        'submit_url_name': 'fixlists_trash',
+        'selection_storage_key': 'fenrishub_selected_fixlist_trash_pks',
+    })
 
 
 @login_required

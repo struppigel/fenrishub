@@ -1,11 +1,15 @@
 {% extends 'base.html' %}
 
-{% block title %}Dashboard - Fenris{% endblock %}
+{% block title %}{% if is_trash %}Trash{% else %}Dashboard{% endif %} - Fenris{% endblock %}
 
 {% block page_context_label %}fixlists{% endblock %}
 
 {% block extra_css %}
 <style>
+    .fixlist-select {
+        margin-right: 8px;
+    }
+
     .fixlist-actions .action-btn {
         display: inline-flex;
         align-items: center;
@@ -52,76 +56,333 @@
     .visibility-state-hidden {
         color: var(--la-warning-text);
     }
+
+    .bulk-controls {
+        margin-bottom: 12px;
+        justify-content: space-between;
+        width: 100%;
+    }
+
+    .bulk-controls .delete-btn {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+        border-color: var(--la-error-border);
+    }
+
+    .fixlists-count {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        margin-bottom: 8px;
+    }
+
+    .pagination {
+        display: flex;
+        gap: 4px;
+        margin-top: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        font-size: 12px;
+    }
+
+    .pagination a {
+        padding: 4px 8px;
+        color: var(--la-text-muted);
+        text-decoration: none;
+        border: 1px solid var(--la-border);
+        background-color: var(--la-bg-1);
+    }
+
+    .pagination a:hover {
+        color: var(--la-text-primary);
+    }
+
+    .pagination .current-page {
+        padding: 4px 8px;
+        border: 1px solid var(--la-text-primary);
+        color: var(--la-text-primary);
+        background-color: var(--la-bg-0);
+    }
 </style>
 {% endblock %}
 
 {% block content %}
-<div>
-    <div class="button-group">
-        <a href="{% url 'create_fixlist' %}"><button type="button">create new</button></a>
-        <a href="{% url 'fixlists_trash' %}" style="margin-left: auto;"><button type="button"{% if fixlist_trash_count %} style="color: var(--la-warning-text);"{% endif %}>trash{% if fixlist_trash_count %} ({{ fixlist_trash_count }}){% endif %}</button></a>
+<h3>{% if is_trash %}trash{% else %}your fixlists{% endif %}</h3>
+
+<form id="bulkFixlistForm" method="post" action="{% url submit_url_name %}">
+    {% csrf_token %}
+    {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+    {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+</form>
+
+{% if is_trash %}
+<form id="emptyTrashForm" method="post" action="{% url 'fixlists_trash' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="empty_trash">
+</form>
+{% endif %}
+
+<form method="get" action="{% url submit_url_name %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">
+    <input type="text" name="q" value="{{ search_query }}" placeholder="search by reddit user or token" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
+    <select name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 180px;">
+        <option value="">all reddit users</option>
+        {% for username in all_usernames %}
+        <option value="{{ username }}" {% if username == username_filter %}selected{% endif %}>u/{{ username }}</option>
+        {% endfor %}
+    </select>
+    {% if search_query or username_filter %}
+    <a href="{% url submit_url_name %}" style="padding: 4px 8px; font-size: 12px; color: var(--la-text-muted); text-decoration: none; border: 1px solid var(--la-border); background-color: var(--la-bg-1);">clear</a>
+    {% endif %}
+</form>
+
+<div class="bulk-controls button-group">
+    <div style="display: flex; gap: 8px; align-items: center;">
+        {% if is_trash %}
+        <button type="submit" form="bulkFixlistForm" name="action" value="restore_selected" onclick="return confirmRestoreSelected();" title="restore the selected fixlists">restore</button>
+        <button type="submit" form="bulkFixlistForm" name="action" value="delete_permanent_selected" class="delete-btn" onclick="return confirmDeletePermanentSelected();" title="permanently delete the selected fixlists">delete</button>
+        {% else %}
+        <button type="submit" form="bulkFixlistForm" name="action" value="delete_selected" class="delete-btn" onclick="return confirmDeleteSelected();" title="move the selected fixlists to trash">delete</button>
+        {% endif %}
+        <span id="selectionIndicator" class="muted" hidden style="font-size: 12px;">
+            <span id="selectionCount">0</span> selected
+            <a href="#" id="clearSelectionLink" style="margin-left: 6px;">clear</a>
+        </span>
     </div>
+    <div style="display: flex; gap: 8px;">
+        {% if is_trash %}
+        <a href="{% url 'dashboard' %}"><button type="button" title="back to your fixlists">back to fixlists</button></a>
+        <button type="submit" form="emptyTrashForm" {% if not fixlists %}disabled{% endif %} class="delete-btn" onclick="return confirm('Permanently delete all trashed fixlists?');" title="permanently delete every fixlist in your trash">empty trash</button>
+        {% else %}
+        <a href="{% url 'create_fixlist' %}"><button type="button" title="create a new fixlist">create new</button></a>
+        <a href="{% url 'fixlists_trash' %}"><button type="button"{% if fixlist_trash_count %} style="color: var(--la-warning-text);"{% endif %} title="view trashed fixlists">trash{% if fixlist_trash_count %} ({{ fixlist_trash_count }}){% endif %}</button></a>
+        {% endif %}
+    </div>
+</div>
 
-    <div class="divider"></div>
+<div class="fixlists-count">{{ page_obj.paginator.count }} {% if is_trash %}trashed {% endif %}fixlist{{ page_obj.paginator.count|pluralize }}{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
 
-    <h3>your fixlists</h3>
-
-    {% if fixlists %}
-        {% for fixlist in fixlists %}
-        <div class="fixlist-item">
-            <div style="flex: 1;">
-                <div class="fixlist-title">{{ fixlist.username }}</div>
+{% if fixlists %}
+    {% for fixlist in fixlists %}
+    <div class="fixlist-item">
+        <div style="display: flex; align-items: flex-start; gap: 10px; flex: 1;">
+            <input class="fixlist-select" form="bulkFixlistForm" type="checkbox" name="selected_pks" value="{{ fixlist.pk }}" aria-label="select fixlist {{ fixlist.username }}">
+            <div>
+                <div class="fixlist-title">u/{{ fixlist.username }}</div>
                 <div class="fixlist-meta">
-                    created {{ fixlist.created_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }} |
+                    created {{ fixlist.created_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }}{% if not is_trash %} |
                     {% if fixlist.is_public %}
                     <span class="visibility-state visibility-state-public">public</span>
                     {% else %}
                     <span class="visibility-state visibility-state-hidden">hidden</span>
-                    {% endif %}
+                    {% endif %}{% endif %}{% if is_trash and fixlist.deleted_at %} | deleted {{ fixlist.deleted_at|date:"Y-m-d H:i" }}{% endif %}
                 </div>
             </div>
-            <div class="fixlist-actions">
-                <button type="button" class="action-btn" onclick="copyShareLink('{% url 'shared_fixlist' fixlist.share_token %}', this)">copy link</button>
-                <a href="{% url 'view_fixlist' fixlist.pk %}" class="action-btn">view</a>
-                <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
-                    {% csrf_token %}
-                    <input type="hidden" name="next" value="dashboard">
-                    {% if fixlist.is_public %}
-                    <input type="hidden" name="action" value="disable_public">
-                    <button type="submit" class="action-btn visibility-toggle-btn">hide</button>
-                    {% else %}
-                    <input type="hidden" name="action" value="enable_public">
-                    <button type="submit" class="action-btn visibility-toggle-btn">publish</button>
-                    {% endif %}
-                </form>
-                <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="delete">
-                    <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this fixlist to trash?');">delete</button>
-                </form>
-            </div>
         </div>
-        {% endfor %}
-    {% else %}
-        <div class="info-box">
-            no fixlists yet.
+        <div class="fixlist-actions">
+            {% if is_trash %}
+            <a href="{% url 'view_fixlist' fixlist.pk %}" class="action-btn">view</a>
+            <form method="post" action="{% url 'fixlists_trash' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="restore">
+                <input type="hidden" name="pk" value="{{ fixlist.pk }}">
+                <button type="submit" class="action-btn">restore</button>
+            </form>
+            <form method="post" action="{% url 'fixlists_trash' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete_permanent">
+                <input type="hidden" name="pk" value="{{ fixlist.pk }}">
+                <button type="submit" class="action-btn delete-btn" onclick="return confirm('Permanently delete this fixlist?');">delete</button>
+            </form>
+            {% else %}
+            <button type="button" class="action-btn" onclick="copyShareLink('{% url 'shared_fixlist' fixlist.share_token %}', this)">copy link</button>
+            <a href="{% url 'view_fixlist' fixlist.pk %}" class="action-btn">view</a>
+            <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="dashboard">
+                {% if fixlist.is_public %}
+                <input type="hidden" name="action" value="disable_public">
+                <button type="submit" class="action-btn visibility-toggle-btn">hide</button>
+                {% else %}
+                <input type="hidden" name="action" value="enable_public">
+                <button type="submit" class="action-btn visibility-toggle-btn">publish</button>
+                {% endif %}
+            </form>
+            <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete">
+                <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this fixlist to trash?');">delete</button>
+            </form>
+            {% endif %}
         </div>
-    {% endif %}
+    </div>
+    {% endfor %}
 
     {% if page_obj.paginator.num_pages > 1 %}
-    <div class="button-group" style="margin-top: 12px;">
+    <div class="pagination">
         {% if page_obj.has_previous %}
-        <a href="?page={{ page_obj.previous_page_number }}"><button type="button">previous</button></a>
+        <a href="?page={{ page_obj.previous_page_number }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">prev</a>
         {% endif %}
-        <span style="padding: 8px 4px; font-size: 12px; color: var(--la-text-muted);">page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+        {% for num in page_obj.paginator.page_range %}
+            {% if num == page_obj.number %}
+            <span class="current-page">{{ num }}</span>
+            {% elif num == 1 or num == page_obj.paginator.num_pages or num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
+            <a href="?page={{ num }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">{{ num }}</a>
+            {% endif %}
+        {% endfor %}
         {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}"><button type="button">next</button></a>
+        <a href="?page={{ page_obj.next_page_number }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">next</a>
         {% endif %}
     </div>
     {% endif %}
-</div>
+{% else %}
+    <div class="info-box">{% if is_trash %}trash is empty.{% else %}no fixlists yet.{% endif %}</div>
+{% endif %}
+{% endblock %}
 
+{% block extra_js %}
 <script>
+const SELECTED_FIXLIST_PKS_KEY = '{{ selection_storage_key|default:"fenrishub_selected_fixlist_pks"|escapejs }}';
+
+function getStoredSelectedPks() {
+    try {
+        const stored = sessionStorage.getItem(SELECTED_FIXLIST_PKS_KEY);
+        if (!stored) return new Set();
+        return new Set(JSON.parse(stored));
+    } catch (e) {
+        return new Set();
+    }
+}
+
+function setStoredSelectedPks(set) {
+    try {
+        sessionStorage.setItem(SELECTED_FIXLIST_PKS_KEY, JSON.stringify([...set]));
+    } catch (e) {}
+}
+
+function clearStoredSelectedPks() {
+    try {
+        sessionStorage.removeItem(SELECTED_FIXLIST_PKS_KEY);
+    } catch (e) {}
+}
+
+function syncStoredSelectionsToForm() {
+    const form = document.getElementById('bulkFixlistForm');
+    if (!form) return;
+
+    form.querySelectorAll('input[type="hidden"][name="selected_pks"]').forEach(el => el.remove());
+
+    const stored = getStoredSelectedPks();
+    const visibleIds = new Set();
+
+    document.querySelectorAll('input.fixlist-select[name="selected_pks"]').forEach(cb => {
+        visibleIds.add(cb.value);
+        cb.checked = stored.has(cb.value);
+    });
+
+    stored.forEach(id => {
+        if (!visibleIds.has(id)) {
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'selected_pks';
+            hidden.value = id;
+            form.appendChild(hidden);
+        }
+    });
+
+    updateSelectionIndicator(stored.size);
+}
+
+function updateSelectionIndicator(count) {
+    const indicator = document.getElementById('selectionIndicator');
+    const countEl = document.getElementById('selectionCount');
+    if (!indicator || !countEl) return;
+    countEl.textContent = count;
+    indicator.hidden = count === 0;
+}
+
+function bindFixlistCheckboxes() {
+    document.querySelectorAll('input.fixlist-select[name="selected_pks"]').forEach(cb => {
+        if (cb.dataset.selectionBound === '1') return;
+        cb.dataset.selectionBound = '1';
+        cb.addEventListener('change', () => {
+            const stored = getStoredSelectedPks();
+            if (cb.checked) {
+                stored.add(cb.value);
+            } else {
+                stored.delete(cb.value);
+            }
+            setStoredSelectedPks(stored);
+            syncStoredSelectionsToForm();
+        });
+    });
+}
+
+function seedStoredSelectionsFromPreCheckedBoxes() {
+    // If the user clicked a checkbox before DOMContentLoaded fired, the change
+    // listener wasn't attached yet so the click never reached sessionStorage.
+    // Pick up that pre-checked state so the subsequent sync doesn't undo it.
+    const stored = getStoredSelectedPks();
+    let changed = false;
+    document.querySelectorAll('input.fixlist-select[name="selected_pks"]').forEach(cb => {
+        if (cb.checked && !stored.has(cb.value)) {
+            stored.add(cb.value);
+            changed = true;
+        }
+    });
+    if (changed) {
+        setStoredSelectedPks(stored);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    seedStoredSelectionsFromPreCheckedBoxes();
+    syncStoredSelectionsToForm();
+    bindFixlistCheckboxes();
+
+    const bulkForm = document.getElementById('bulkFixlistForm');
+    if (bulkForm) {
+        bulkForm.addEventListener('submit', () => {
+            clearStoredSelectedPks();
+        });
+    }
+
+    const clearLink = document.getElementById('clearSelectionLink');
+    if (clearLink) {
+        clearLink.addEventListener('click', (event) => {
+            event.preventDefault();
+            clearStoredSelectedPks();
+            syncStoredSelectionsToForm();
+        });
+    }
+});
+
+{% if is_trash %}
+function confirmRestoreSelected() {
+    const count = getStoredSelectedPks().size;
+    if (count === 0) {
+        alert('Select at least one fixlist to restore.');
+        return false;
+    }
+    return confirm('Restore ' + count + ' selected fixlist(s)?');
+}
+
+function confirmDeletePermanentSelected() {
+    const count = getStoredSelectedPks().size;
+    if (count === 0) {
+        alert('Select at least one fixlist to delete.');
+        return false;
+    }
+    return confirm('Permanently delete ' + count + ' selected fixlist(s)?');
+}
+{% else %}
+function confirmDeleteSelected() {
+    const count = getStoredSelectedPks().size;
+    if (count === 0) {
+        alert('Select at least one fixlist to delete.');
+        return false;
+    }
+    return confirm('Move ' + count + ' selected fixlist(s) to trash?');
+}
+
 function copyShareLink(path, button) {
     const fullLink = `${window.location.origin}${path}`;
     const originalText = button.textContent;
@@ -132,5 +393,6 @@ function copyShareLink(path, button) {
         }, 1200);
     });
 }
+{% endif %}
 </script>
 {% endblock %}

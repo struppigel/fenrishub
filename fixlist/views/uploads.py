@@ -24,7 +24,8 @@ from .upload_actions import (
     handle_delete_action, handle_assign_to_me_action, handle_unassign_to_general_action,
     handle_copy_to_me_action, handle_delete_selected_action, handle_merge_action,
     handle_confirm_merge_action, handle_mergealyze_action, handle_confirm_mergealyze_action,
-    handle_rescan_stats_selected_action,
+    handle_rescan_stats_selected_action, handle_restore_selected_action,
+    handle_delete_permanent_selected_action,
 )
 from .utils import (
     _anonymous_upload_limit, _consume_anonymous_upload_slot, _resolve_upload_recipient_username,
@@ -201,35 +202,10 @@ def uploaded_logs_view(request):
             messages.error(request, 'Invalid action.')
             return redirect('uploaded_logs')
 
-    username_filter = request.GET.get('u', '').strip()
-    show_all = request.GET.get('show_all', '').strip() in {'1', 'true', 'on', 'yes'}
-    search_query = request.GET.get('q', '').strip()
+    listing_context = _build_uploads_listing_context(request, deleted=False)
+    page_obj = listing_context['page_obj']
+    list_visible_uploads = listing_context.pop('_list_visible_uploads')
 
-    list_visible_uploads = (
-        UploadedLog.objects.all()
-        if show_all
-        else UploadedLog.objects.filter(recipient_user=request.user)
-    )
-
-    uploads = list_visible_uploads.filter(deleted_at__isnull=True).select_related('recipient_user').defer('content')
-    if username_filter:
-        uploads = uploads.filter(reddit_username=username_filter)
-    if search_query:
-        from django.db.models import Q
-        uploads = uploads.filter(
-            Q(upload_id__icontains=search_query)
-            | Q(reddit_username__icontains=search_query)
-            | Q(recipient_user__username__icontains=search_query)
-        )
-    page_obj = Paginator(uploads, 8).get_page(request.GET.get('page'))
-    pagination_params = {}
-    if username_filter:
-        pagination_params['u'] = username_filter
-    if show_all:
-        pagination_params['show_all'] = '1'
-    if search_query:
-        pagination_params['q'] = search_query
-    all_usernames = list_visible_uploads.filter(deleted_at__isnull=True).values_list('reddit_username', flat=True).distinct().order_by('reddit_username')
     trash_count = UploadedLog.objects.filter(deleted_at__isnull=False).count()
     page_content_hashes = {
         uploaded_log.content_hash
@@ -247,17 +223,80 @@ def uploaded_logs_view(request):
         )
     helper_upload_url = request.build_absolute_uri(reverse('upload_log_for_helper', args=[request.user.username]))
     return render(request, 'uploaded_logs.html', {
+        **listing_context,
+        'trash_count': trash_count,
+        'duplicate_hashes': duplicate_hashes,
+        'helper_upload_url': helper_upload_url,
+        'is_trash': False,
+        'submit_url_name': 'uploaded_logs',
+        'selection_storage_key': 'fenrishub_selected_upload_ids',
+    })
+
+
+def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
+    """Build shared listing context (filters/search/pagination) for uploads pages.
+
+    Used by both the live uploads view and the trash view. Reads `q`, `u`,
+    `show_all`, and `page` from request.GET; flips between active and trashed
+    records via the `deleted` keyword.
+
+    The returned dict is suitable for direct splatting into a render() context.
+    It also carries a private `_list_visible_uploads` queryset so callers can
+    derive related data (e.g. duplicate-hash detection) without rebuilding the
+    base filter chain.
+    """
+    from django.db.models import Q
+
+    username_filter = request.GET.get('u', '').strip()
+    show_all = request.GET.get('show_all', '').strip() in {'1', 'true', 'on', 'yes'}
+    search_query = request.GET.get('q', '').strip()
+
+    list_visible_uploads = (
+        UploadedLog.objects.all()
+        if show_all
+        else UploadedLog.objects.filter(recipient_user=request.user)
+    )
+
+    deleted_filter = {'deleted_at__isnull': not deleted}
+    uploads = list_visible_uploads.filter(**deleted_filter).select_related('recipient_user').defer('content')
+    if username_filter:
+        uploads = uploads.filter(reddit_username=username_filter)
+    if search_query:
+        uploads = uploads.filter(
+            Q(upload_id__icontains=search_query)
+            | Q(reddit_username__icontains=search_query)
+            | Q(recipient_user__username__icontains=search_query)
+        )
+    if deleted:
+        uploads = uploads.order_by('-deleted_at')
+
+    page_obj = Paginator(uploads, 8).get_page(request.GET.get('page'))
+
+    pagination_params = {}
+    if username_filter:
+        pagination_params['u'] = username_filter
+    if show_all:
+        pagination_params['show_all'] = '1'
+    if search_query:
+        pagination_params['q'] = search_query
+
+    all_usernames = (
+        list_visible_uploads.filter(**deleted_filter)
+        .values_list('reddit_username', flat=True)
+        .distinct()
+        .order_by('reddit_username')
+    )
+
+    return {
         'uploads': page_obj.object_list,
         'page_obj': page_obj,
         'username_filter': username_filter,
         'all_usernames': all_usernames,
-        'trash_count': trash_count,
-        'duplicate_hashes': duplicate_hashes,
-        'helper_upload_url': helper_upload_url,
         'show_all': show_all,
         'search_query': search_query,
         'pagination_query': urlencode(pagination_params),
-    })
+        '_list_visible_uploads': list_visible_uploads,
+    }
 
 
 @login_required
@@ -397,6 +436,15 @@ def uploads_trash_view(request):
     if request.method == 'POST':
         action = request.POST.get('action', '')
 
+        selected_ids = []
+        seen_ids = set()
+        for upload_id in request.POST.getlist('selected_upload_ids'):
+            normalized_id = str(upload_id).strip()
+            if not normalized_id or normalized_id in seen_ids:
+                continue
+            seen_ids.add(normalized_id)
+            selected_ids.append(normalized_id)
+
         if action == 'restore':
             upload_id = request.POST.get('upload_id', '').strip()
             uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=False)
@@ -417,8 +465,14 @@ def uploads_trash_view(request):
             messages.success(request, f'Upload {upload_id} permanently deleted.')
             return redirect('uploads_trash')
 
+        if action == 'restore_selected':
+            return handle_restore_selected_action(request, selected_ids)
+
+        if action == 'delete_permanent_selected':
+            return handle_delete_permanent_selected_action(request, selected_ids)
+
         if action == 'empty_trash':
-            deletable_logs = [log for log in action_scope_uploads.filter(deleted_at__isnull=False) 
+            deletable_logs = [log for log in action_scope_uploads.filter(deleted_at__isnull=False)
                             if user_can_delete_uploaded_log(request.user, log)]
             if not deletable_logs:
                 messages.error(request, 'You have no deleted uploads to clean from trash.')
@@ -432,9 +486,14 @@ def uploads_trash_view(request):
         messages.error(request, 'Invalid action.')
         return redirect('uploads_trash')
 
-    trashed = UploadedLog.objects.filter(deleted_at__isnull=False).select_related('recipient_user').defer('content').order_by('-deleted_at')
-    page_obj = Paginator(trashed, 8).get_page(request.GET.get('page'))
-    return render(request, 'uploads_trash.html', {'uploads': page_obj.object_list, 'page_obj': page_obj})
+    listing_context = _build_uploads_listing_context(request, deleted=True)
+    listing_context.pop('_list_visible_uploads', None)
+    return render(request, 'uploaded_logs.html', {
+        **listing_context,
+        'is_trash': True,
+        'submit_url_name': 'uploads_trash',
+        'selection_storage_key': 'fenrishub_selected_trash_ids',
+    })
 
 
 @login_required

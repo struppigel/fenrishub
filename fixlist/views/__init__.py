@@ -8,7 +8,6 @@ from .auth import (
     login_view,
     change_password_view,
     profile_view,
-    dashboard_view,
     logout_view,
 )
 
@@ -23,6 +22,7 @@ from .uploads import (
 
 from .fixlists import (
     create_fixlist_view,
+    dashboard_view,
     fixlists_trash_view,
     view_fixlist,
     shared_fixlist_view,

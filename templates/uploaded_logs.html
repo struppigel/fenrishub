@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 
-{% block title %}Uploads - Fenris{% endblock %}
+{% block title %}{% if is_trash %}Trash{% else %}Uploads{% endif %} - Fenris{% endblock %}
 
 {% block page_context_label %}uploads{% endblock %}
 
@@ -147,16 +147,23 @@
 {% endblock %}
 
 {% block content %}
-<h3>uploaded logs</h3>
+<h3>{% if is_trash %}trash{% else %}uploaded logs{% endif %}</h3>
 
-<form id="mergeUploadsForm" method="post" action="{% url 'uploaded_logs' %}">
+<form id="mergeUploadsForm" method="post" action="{% url submit_url_name %}">
     {% csrf_token %}
     {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
     {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
     {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
 </form>
 
-<form method="get" action="{% url 'uploaded_logs' %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">
+{% if is_trash %}
+<form id="emptyTrashForm" method="post" action="{% url 'uploads_trash' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="empty_trash">
+</form>
+{% endif %}
+
+<form method="get" action="{% url submit_url_name %}" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center;">
     <input type="text" name="q" value="{{ search_query }}" placeholder="search by user, upload id, assignee" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
     <select id="uploaderSelect" name="u" onchange="this.form.submit()" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 180px;">
         <option value="">all users</option>
@@ -171,32 +178,44 @@
             <span class="toggle-slider"></span>
         </span>
     </label>
+    {% if not is_trash %}
     <div style="margin-left: auto; display: flex; gap: 6px; align-items: center; font-size: 11px; line-height: 1.2; color: var(--la-text-primary);">
         <span>helper URL: <strong id="helperUploadUrl">{{ helper_upload_url }}</strong></span>
         <button type="button" onclick="copyHelperUploadUrl(this)" style="padding: 3px 8px; font-size: 11px; line-height: 1;">copy</button>
     </div>
+    {% endif %}
 </form>
 
 <div id="uploadsListContainer">
 <div class="merge-controls button-group">
     <div style="display: flex; gap: 8px; align-items: center;">
+        {% if is_trash %}
+        <button type="submit" form="mergeUploadsForm" name="action" value="restore_selected" onclick="return confirmRestoreSelected();" title="restore the selected uploads">restore</button>
+        <button type="submit" form="mergeUploadsForm" name="action" value="delete_permanent_selected" class="delete-btn" onclick="return confirmDeletePermanentSelected();" title="permanently delete the selected uploads">delete</button>
+        {% else %}
         <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();" title="merge selected uploads into one log assigned to you">merge</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="mergealyze" onclick="return confirmMergealyze();" title="merge selected uploads, assign to you, and open in log analyzer">mergealyze</button>
         <button type="button" onclick="confirmDiff();" title="show a side-by-side diff of exactly two selected uploads">diff</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();" title="move the selected uploads to trash">delete</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="rescan_selected" onclick="return confirmRescan();" title="re-run the analyzer on the selected uploads to refresh stats">rescan</button>
+        {% endif %}
         <span id="selectionIndicator" class="muted" hidden style="font-size: 12px;">
             <span id="selectionCount">0</span> selected
             <a href="#" id="clearSelectionLink" style="margin-left: 6px;">clear</a>
         </span>
     </div>
     <div style="display: flex; gap: 8px;">
+        {% if is_trash %}
+        <a href="{% url 'uploaded_logs' %}"><button type="button" title="back to the uploads list">back to uploads</button></a>
+        <button type="submit" form="emptyTrashForm" {% if not uploads %}disabled{% endif %} class="delete-btn" onclick="return confirm('Permanently delete all trashed uploads?');" title="permanently delete every upload in your trash">empty trash</button>
+        {% else %}
         <a href="{% url 'upload_log_for_helper' request.user.username %}"><button type="button" title="upload a new FRST log into your channel">upload</button></a>
         <a href="{% url 'uploads_trash' %}"><button type="button"{% if trash_count %} style="color: var(--la-warning-text);"{% endif %} title="view deleted uploads (trash bin)">trash{% if trash_count %} ({{ trash_count }}){% endif %}</button></a>
+        {% endif %}
     </div>
 </div>
 
-<div class="uploads-count">{{ page_obj.paginator.count }} upload{{ page_obj.paginator.count|pluralize }}{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
+<div class="uploads-count">{{ page_obj.paginator.count }} {% if is_trash %}trashed {% endif %}upload{{ page_obj.paginator.count|pluralize }}{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
 
 {% if uploads %}
     {% for uploaded_log in uploads %}
@@ -208,12 +227,12 @@
                     <a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>
                     {% if uploaded_log.recipient_user %}
                     <span>({{ uploaded_log.recipient_user.username }})</span>
-                    {% elif show_all %}
+                    {% elif show_all or is_trash %}
                     <span>(unassigned)</span>
                     {% endif %}
                 </div>
                 <div class="fixlist-meta">
-                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if uploaded_log.content_hash %} | <span class="content-hash{% if uploaded_log.content_hash in duplicate_hashes %} duplicate-hash{% endif %}" title="{{ uploaded_log.content_hash }}">{{ uploaded_log.content_hash|truncatechars:11 }}</span>{% endif %}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}
+                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if not is_trash and uploaded_log.content_hash %} | <span class="content-hash{% if uploaded_log.content_hash in duplicate_hashes %} duplicate-hash{% endif %}" title="{{ uploaded_log.content_hash }}">{{ uploaded_log.content_hash|truncatechars:11 }}</span>{% endif %}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}{% if is_trash and uploaded_log.deleted_at %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}{% endif %}
                 </div>
                 <div class="fixlist-meta upload-stats">
                     lines {{ uploaded_log.total_line_count }}
@@ -245,6 +264,23 @@
             </div>
         </div>
         <div class="fixlist-actions">
+            {% if is_trash %}
+            <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn" title="open this upload's detail page">view</a>
+            {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == request.user %}
+            <form method="post" action="{% url 'uploads_trash' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="restore">
+                <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                <button type="submit" class="action-btn" title="restore this upload from trash">restore</button>
+            </form>
+            <form method="post" action="{% url 'uploads_trash' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete_permanent">
+                <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                <button type="submit" class="action-btn delete-btn" onclick="return confirm('Permanently delete this upload?');" title="permanently delete this upload">delete</button>
+            </form>
+            {% endif %}
+            {% else %}
             {% if not uploaded_log.recipient_user %}
             <form method="post" action="{% url 'uploaded_logs' %}">
                 {% csrf_token %}
@@ -289,6 +325,7 @@
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this upload to trash?');" title="move this upload to trash">delete</button>
             </form>
             {% endif %}
+            {% endif %}
         </div>
     </div>
     {% endfor %}
@@ -311,7 +348,7 @@
     </div>
     {% endif %}
 {% else %}
-    <div class="info-box">no uploaded logs yet.</div>
+    <div class="info-box">{% if is_trash %}trash is empty.{% else %}no uploaded logs yet.{% endif %}</div>
 {% endif %}
 </div>
 {% endblock %}
@@ -475,7 +512,7 @@ function bindUploadActionForms() {
     });
 }
 
-const SELECTED_UPLOAD_IDS_KEY = 'fenrishub_selected_upload_ids';
+const SELECTED_UPLOAD_IDS_KEY = '{{ selection_storage_key|default:"fenrishub_selected_upload_ids"|escapejs }}';
 
 function getStoredSelectedUploadIds() {
     try {
@@ -551,10 +588,28 @@ function bindUploadCheckboxes() {
     });
 }
 
+function seedStoredSelectionsFromPreCheckedBoxes() {
+    // If the user clicked a checkbox before DOMContentLoaded fired, the change
+    // listener wasn't attached yet so the click never reached sessionStorage.
+    // Pick up that pre-checked state so the subsequent sync doesn't undo it.
+    const stored = getStoredSelectedUploadIds();
+    let changed = false;
+    document.querySelectorAll('input.upload-select[name="selected_upload_ids"]').forEach(cb => {
+        if (cb.checked && !stored.has(cb.value)) {
+            stored.add(cb.value);
+            changed = true;
+        }
+    });
+    if (changed) {
+        setStoredSelectedUploadIds(stored);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     const toggle = document.getElementById('allChannelsToggle');
     const uploadsListContainer = document.getElementById('uploadsListContainer');
 
+    seedStoredSelectionsFromPreCheckedBoxes();
     syncStoredSelectionsToForm();
     bindUploadCheckboxes();
     bindUploadActionForms();
@@ -592,6 +647,25 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+{% if is_trash %}
+function confirmRestoreSelected() {
+    const count = getStoredSelectedUploadIds().size;
+    if (count === 0) {
+        alert('Select at least one upload to restore.');
+        return false;
+    }
+    return confirm('Restore ' + count + ' selected upload(s)?');
+}
+
+function confirmDeletePermanentSelected() {
+    const count = getStoredSelectedUploadIds().size;
+    if (count === 0) {
+        alert('Select at least one upload to delete.');
+        return false;
+    }
+    return confirm('Permanently delete ' + count + ' selected upload(s)?');
+}
+{% else %}
 function copyHelperUploadUrl(button) {
     const value = document.getElementById('helperUploadUrl').textContent;
     navigator.clipboard.writeText(value).then(function() {
@@ -647,5 +721,6 @@ function confirmDiff() {
     const urlTemplate = "{% url 'diff_uploaded_logs' '__ID1__' '__ID2__' %}";
     window.location.href = urlTemplate.replace('__ID1__', selected[0]).replace('__ID2__', selected[1]);
 }
+{% endif %}
 </script>
 {% endblock %}

@@ -94,6 +94,88 @@ class FixlistSoftDeleteTests(TestCase):
         self.assertTrue(Fixlist.objects.filter(pk=recent.pk).exists())
 
 
+class DashboardSearchAndFilterTests(TestCase):
+    def setUp(self):
+        self.user = _make_user("alice")
+        self.client.login(username="alice", password="password123")
+
+    def test_dashboard_search_filters_by_username(self):
+        _make_fixlist(self.user, username="amber_meadow")
+        _make_fixlist(self.user, username="quiet_forest")
+
+        response = self.client.get(reverse("dashboard"), {"q": "amber"})
+        listed = {f.username for f in response.context["fixlists"]}
+
+        self.assertEqual(listed, {"amber_meadow"})
+
+    def test_dashboard_search_filters_by_share_token(self):
+        first = _make_fixlist(self.user, username="hits")
+        _make_fixlist(self.user, username="misses")
+        token_fragment = first.share_token[:8]
+
+        response = self.client.get(reverse("dashboard"), {"q": token_fragment})
+        listed = {f.username for f in response.context["fixlists"]}
+
+        self.assertEqual(listed, {"hits"})
+
+    def test_dashboard_user_dropdown_filters_by_username(self):
+        _make_fixlist(self.user, username="alpha_user")
+        _make_fixlist(self.user, username="beta_user")
+
+        response = self.client.get(reverse("dashboard"), {"u": "alpha_user"})
+        listed = {f.username for f in response.context["fixlists"]}
+
+        self.assertEqual(listed, {"alpha_user"})
+
+    def test_dashboard_user_dropdown_lists_all_active_usernames(self):
+        _make_fixlist(self.user, username="alpha_user")
+        _make_fixlist(self.user, username="beta_user")
+        _make_fixlist(self.user, username="trashed_user", deleted_at=timezone.now())
+
+        response = self.client.get(reverse("dashboard"))
+        usernames = list(response.context["all_usernames"])
+
+        self.assertIn("alpha_user", usernames)
+        self.assertIn("beta_user", usernames)
+        self.assertNotIn("trashed_user", usernames)
+
+    def test_dashboard_pagination_preserves_filters(self):
+        for index in range(11):
+            _make_fixlist(self.user, username=f"paged_{index}")
+
+        response = self.client.get(reverse("dashboard"), {"q": "paged"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "page=2")
+        self.assertContains(response, "q=paged")
+
+    def test_dashboard_bulk_delete_moves_fixlists_to_trash(self):
+        first = _make_fixlist(self.user, username="bulk_del_1")
+        second = _make_fixlist(self.user, username="bulk_del_2")
+
+        self.client.post(
+            reverse("dashboard"),
+            {"action": "delete_selected", "selected_pks": [first.pk, second.pk]},
+        )
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertIsNotNone(first.deleted_at)
+        self.assertIsNotNone(second.deleted_at)
+
+    def test_dashboard_bulk_delete_cannot_affect_other_users(self):
+        bob = _make_user("bob")
+        bobs = _make_fixlist(bob, username="bobs_active")
+
+        self.client.post(
+            reverse("dashboard"),
+            {"action": "delete_selected", "selected_pks": [bobs.pk]},
+        )
+
+        bobs.refresh_from_db()
+        self.assertIsNone(bobs.deleted_at)
+
+
 class FixlistsTrashViewTests(TestCase):
     def setUp(self):
         self.user = _make_user("alice")
@@ -261,6 +343,85 @@ class FixlistsTrashViewTests(TestCase):
             str(messages_list[0]),
             "Trash emptied (2 fixlist(s) permanently deleted).",
         )
+
+    # --- search and filter ---
+
+    def test_trash_search_filters_by_username(self):
+        self._trashed(username="amber_meadow")
+        self._trashed(username="quiet_forest")
+
+        response = self.client.get(reverse("fixlists_trash"), {"q": "amber"})
+        listed = {f.username for f in response.context["fixlists"]}
+
+        self.assertEqual(listed, {"amber_meadow"})
+
+    def test_trash_user_dropdown_filters_by_username(self):
+        self._trashed(username="zed")
+        self._trashed(username="yan")
+
+        response = self.client.get(reverse("fixlists_trash"), {"u": "zed"})
+        listed = {f.username for f in response.context["fixlists"]}
+
+        self.assertEqual(listed, {"zed"})
+
+    def test_trash_pagination_preserves_filters(self):
+        for index in range(11):
+            self._trashed(username=f"paged_{index}")
+
+        response = self.client.get(reverse("fixlists_trash"), {"q": "paged"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "page=2")
+        self.assertContains(response, "q=paged")
+
+    # --- bulk actions ---
+
+    def test_trash_bulk_restore_clears_deleted_at(self):
+        first = self._trashed(username="bulk_restore_1")
+        second = self._trashed(username="bulk_restore_2")
+
+        self.client.post(
+            reverse("fixlists_trash"),
+            {"action": "restore_selected", "selected_pks": [first.pk, second.pk]},
+        )
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertIsNone(first.deleted_at)
+        self.assertIsNone(second.deleted_at)
+
+    def test_trash_bulk_delete_permanent_removes_records(self):
+        first = self._trashed(username="bulk_perm_1")
+        second = self._trashed(username="bulk_perm_2")
+
+        self.client.post(
+            reverse("fixlists_trash"),
+            {"action": "delete_permanent_selected", "selected_pks": [first.pk, second.pk]},
+        )
+
+        self.assertFalse(Fixlist.objects.filter(pk__in=[first.pk, second.pk]).exists())
+
+    def test_trash_bulk_actions_cannot_affect_other_users(self):
+        bob = _make_user("bob")
+        bobs_trash = _make_fixlist(bob, username="bobs_trash", deleted_at=timezone.now())
+
+        self.client.post(
+            reverse("fixlists_trash"),
+            {"action": "delete_permanent_selected", "selected_pks": [bobs_trash.pk]},
+        )
+
+        self.assertTrue(Fixlist.objects.filter(pk=bobs_trash.pk).exists())
+
+    def test_trash_bulk_restore_rejects_active_fixlist(self):
+        active = _make_fixlist(self.user, username="active")
+
+        self.client.post(
+            reverse("fixlists_trash"),
+            {"action": "restore_selected", "selected_pks": [active.pk]},
+        )
+
+        active.refresh_from_db()
+        self.assertIsNone(active.deleted_at)
 
 
 class TrashedFixlistGuestAccessTests(TestCase):

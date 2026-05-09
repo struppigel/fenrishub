@@ -89,7 +89,7 @@ class AuthenticationAndAccessTests(TestCase):
         request = self.factory.get(reverse("dashboard"))
         request.user = self.user
 
-        with patch("fixlist.views.auth.render", return_value=HttpResponse("ok")) as mock_render:
+        with patch("fixlist.views.fixlists.render", return_value=HttpResponse("ok")) as mock_render:
             response = dashboard_view(request)
 
         rendered_context = mock_render.call_args.args[2]

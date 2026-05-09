@@ -289,6 +289,156 @@ class TrashViewTests(TestCase):
             ).exists()
         )
 
+    # --- search and filters ---
+
+    def test_trash_defaults_to_own_user(self):
+        from django.utils import timezone as tz
+        bob = User.objects.create_user(username='bob', password='password123')
+        self._make_log('mine-trashed', deleted_at=tz.now())
+        self._make_log('bobs-trashed', deleted_at=tz.now(), recipient_user=bob)
+
+        own = self.client.get(reverse('uploads_trash'))
+        all_view = self.client.get(reverse('uploads_trash'), {'show_all': '1'})
+
+        self.assertContains(own, 'mine-trashed')
+        self.assertNotContains(own, 'bobs-trashed')
+        self.assertContains(all_view, 'mine-trashed')
+        self.assertContains(all_view, 'bobs-trashed')
+
+    def test_trash_search_filters_by_upload_id(self):
+        from django.utils import timezone as tz
+        self._make_log('amber-meadow', deleted_at=tz.now())
+        self._make_log('quiet-forest', deleted_at=tz.now())
+
+        response = self.client.get(reverse('uploads_trash'), {'q': 'amber'})
+
+        self.assertContains(response, 'amber-meadow')
+        self.assertNotContains(response, 'quiet-forest')
+
+    def test_trash_search_filters_by_reddit_username(self):
+        from django.utils import timezone as tz
+        UploadedLog.objects.create(
+            upload_id='hit-by-reddit',
+            reddit_username='alice_redditor',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.user,
+            deleted_at=tz.now(),
+        )
+        UploadedLog.objects.create(
+            upload_id='miss-by-reddit',
+            reddit_username='someone_else',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.user,
+            deleted_at=tz.now(),
+        )
+
+        response = self.client.get(reverse('uploads_trash'), {'q': 'alice_redditor'})
+
+        self.assertContains(response, 'hit-by-reddit')
+        self.assertNotContains(response, 'miss-by-reddit')
+
+    def test_trash_user_dropdown_filters_by_reddit_username(self):
+        from django.utils import timezone as tz
+        UploadedLog.objects.create(
+            upload_id='for-zed',
+            reddit_username='zed',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.user,
+            deleted_at=tz.now(),
+        )
+        UploadedLog.objects.create(
+            upload_id='for-yan',
+            reddit_username='yan',
+            original_filename='x.txt',
+            content='payload',
+            recipient_user=self.user,
+            deleted_at=tz.now(),
+        )
+
+        response = self.client.get(reverse('uploads_trash'), {'u': 'zed'})
+
+        self.assertContains(response, 'for-zed')
+        self.assertNotContains(response, 'for-yan')
+
+    def test_trash_pagination_preserves_filters(self):
+        from django.utils import timezone as tz
+        for index in range(9):
+            self._make_log(
+                f'paged-{index}',
+                deleted_at=tz.now() + timedelta(seconds=index),
+            )
+
+        response = self.client.get(
+            reverse('uploads_trash'),
+            {'q': 'paged', 'show_all': '1', 'u': 'test_user'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'page=2')
+        self.assertContains(response, 'q=paged')
+        self.assertContains(response, 'show_all=1')
+        self.assertContains(response, 'u=test_user')
+
+    # --- bulk actions ---
+
+    def test_trash_bulk_restore_clears_deleted_at(self):
+        from django.utils import timezone as tz
+        first = self._make_log('bulk-restore-1', deleted_at=tz.now())
+        second = self._make_log('bulk-restore-2', deleted_at=tz.now())
+
+        self.client.post(
+            reverse('uploads_trash'),
+            {'action': 'restore_selected',
+             'selected_upload_ids': [first.upload_id, second.upload_id]},
+        )
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertIsNone(first.deleted_at)
+        self.assertIsNone(second.deleted_at)
+
+    def test_trash_bulk_delete_permanent_removes_records(self):
+        from django.utils import timezone as tz
+        first = self._make_log('bulk-perm-1', deleted_at=tz.now())
+        second = self._make_log('bulk-perm-2', deleted_at=tz.now())
+
+        self.client.post(
+            reverse('uploads_trash'),
+            {'action': 'delete_permanent_selected',
+             'selected_upload_ids': [first.upload_id, second.upload_id]},
+        )
+
+        self.assertFalse(UploadedLog.objects.filter(upload_id='bulk-perm-1').exists())
+        self.assertFalse(UploadedLog.objects.filter(upload_id='bulk-perm-2').exists())
+
+    def test_trash_bulk_actions_require_ownership(self):
+        from django.utils import timezone as tz
+        bob = User.objects.create_user(username='bob', password='password123')
+        bobs_log = self._make_log('bobs-trash', deleted_at=tz.now(), recipient_user=bob)
+
+        self.client.post(
+            reverse('uploads_trash'),
+            {'action': 'delete_permanent_selected',
+             'selected_upload_ids': [bobs_log.upload_id]},
+        )
+
+        self.assertTrue(UploadedLog.objects.filter(upload_id='bobs-trash').exists())
+
+    def test_trash_bulk_restore_rejects_active_log(self):
+        active = self._make_log('still-active')
+
+        self.client.post(
+            reverse('uploads_trash'),
+            {'action': 'restore_selected',
+             'selected_upload_ids': [active.upload_id]},
+        )
+
+        active.refresh_from_db()
+        self.assertIsNone(active.deleted_at)
+
     # --- rescan excludes trashed logs ---
 
     def test_rescan_does_not_process_trashed_logs(self):

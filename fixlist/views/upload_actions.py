@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from ..models import UploadedLog
 from ..permissions import user_can_delete_uploaded_log
-from ..upload_utils import soft_delete_uploaded_log, execute_merge
+from ..upload_utils import soft_delete_uploaded_log, restore_uploaded_log, execute_merge
 from .utils import _uploads_redirect_with_state, _purge_old_trash
 
 
@@ -82,6 +82,72 @@ def handle_delete_selected_action(request, selected_ids: list, action_scope_uplo
     _purge_old_trash()
     messages.success(request, f'Moved {len(selected_logs)} selected upload(s) to trash.')
     return _uploads_redirect_with_state(request)
+
+
+def handle_restore_selected_action(request, selected_ids: list) -> HttpResponse:
+    """Handle restore multiple selected trashed uploads."""
+    if not selected_ids:
+        messages.error(request, 'Select at least one upload to restore.')
+        return redirect('uploads_trash')
+
+    selected_logs = list(
+        UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=False).defer('content')
+    )
+    found_ids = {entry.upload_id for entry in selected_logs}
+    missing_ids = [upload_id for upload_id in selected_ids if upload_id not in found_ids]
+    if missing_ids:
+        messages.error(request, f'Unable to find upload(s) in trash: {", ".join(missing_ids)}.')
+        return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
+
+    unrestorable_ids = [
+        log.upload_id for log in selected_logs
+        if not user_can_delete_uploaded_log(request.user, log)
+    ]
+    if unrestorable_ids:
+        messages.error(
+            request,
+            f'Only the assigned helper can restore: {", ".join(sorted(unrestorable_ids))}.',
+        )
+        return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
+
+    for log in selected_logs:
+        restore_uploaded_log(log)
+
+    messages.success(request, f'Restored {len(selected_logs)} upload(s).')
+    return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
+
+
+def handle_delete_permanent_selected_action(request, selected_ids: list) -> HttpResponse:
+    """Handle permanently delete multiple selected trashed uploads."""
+    if not selected_ids:
+        messages.error(request, 'Select at least one upload to delete.')
+        return redirect('uploads_trash')
+
+    selected_logs = list(
+        UploadedLog.objects.filter(upload_id__in=selected_ids, deleted_at__isnull=False).defer('content')
+    )
+    found_ids = {entry.upload_id for entry in selected_logs}
+    missing_ids = [upload_id for upload_id in selected_ids if upload_id not in found_ids]
+    if missing_ids:
+        messages.error(request, f'Unable to find upload(s) in trash: {", ".join(missing_ids)}.')
+        return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
+
+    undeletable_ids = [
+        log.upload_id for log in selected_logs
+        if not user_can_delete_uploaded_log(request.user, log)
+    ]
+    if undeletable_ids:
+        messages.error(
+            request,
+            f'Only the assigned helper can permanently delete: {", ".join(sorted(undeletable_ids))}.',
+        )
+        return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
+
+    count = len(selected_logs)
+    UploadedLog.objects.filter(upload_id__in=[log.upload_id for log in selected_logs]).delete()
+
+    messages.success(request, f'Permanently deleted {count} upload(s).')
+    return _uploads_redirect_with_state(request, target_url_name='uploads_trash')
 
 
 def _redirect_after_merge(request, merged_upload: UploadedLog, to_analyzer: bool) -> HttpResponse:

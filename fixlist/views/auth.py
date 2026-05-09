@@ -9,10 +9,9 @@ from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
-from django.core.paginator import Paginator
 from django.views.decorators.http import require_http_methods
 
-from ..models import Fixlist, UserProfile
+from ..models import UserProfile
 
 
 DEFAULT_FRST_FIX_MESSAGE_TEMPLATE = """FRST  Fix
@@ -67,16 +66,6 @@ def change_password_view(request):
         form = PasswordChangeForm(request.user)
 
     return render(request, 'change_password.html', {'form': form})
-
-
-@login_required
-@require_http_methods(["GET"])
-def dashboard_view(request):
-    """List all fixlists for the logged-in user."""
-    fixlists_qs = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True)
-    fixlist_trash_count = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=False).count()
-    page_obj = Paginator(fixlists_qs, 10).get_page(request.GET.get('page'))
-    return render(request, 'dashboard.html', {'fixlists': page_obj, 'fixlist_trash_count': fixlist_trash_count, 'page_obj': page_obj})
 
 
 @login_required
