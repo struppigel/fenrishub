@@ -601,10 +601,17 @@ def _build_line_result(
     dominant_status = _dominant_status(status_codes)
     components = {}
     if parsed_entry is not None:
-        for key in ("filepath", "filename", "clsid", "name", "company"):
+        for key in ("clsid", "name", "company"):
             value = getattr(parsed_entry, key, "") or ""
             if value:
                 components[key] = value
+        for key in ("filepath", "filename"):
+            normalized = getattr(parsed_entry, key, "") or ""
+            if not normalized:
+                continue
+            pos = ex.find_value_position(normalized, line, key)
+            if pos:
+                components[key] = line[pos[0]:pos[1]]
     return {
         "line": line,
         "status_codes": status_codes,

@@ -95,6 +95,51 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
         self.assertIn("dominant_status", inspection)
         self.assertIn("matches", inspection)
 
+    def test_analyze_api_components_preserve_raw_filepath_and_filename(self):
+        """Components in the analyze response must hold the raw (un-normalized)
+        filepath/filename as it appears in the source line — not the form rewritten
+        by normalize_path() (drive forced to C:, username replaced, etc.). The line
+        copy menu reads these to put the original path on the user's clipboard."""
+        self.client.login(username="analyzer", password="password123")
+        raw_path = r"D:\Users\Lucian\AppData\Local\bad.exe"
+        runkey_line = (
+            rf"HKU\S-1-5-21-111-222-333-1001\...\Run: [SomeValue] => {raw_path} "
+            r"[2024-01-01] (Acme)"
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": runkey_line}),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["lines"]), 1)
+        components = payload["lines"][0].get("components") or {}
+        self.assertEqual(components.get("filepath"), raw_path)
+        self.assertEqual(components.get("filename"), "bad.exe")
+        self.assertEqual(components.get("name"), "SomeValue")
+        self.assertEqual(components.get("company"), "Acme")
+
+    def test_analyze_api_components_omit_path_keys_for_unparsed_lines(self):
+        """When no FRST extractor matches a line, no parsed_entry exists and the
+        components dict contains no filepath/filename keys (so the copy menu hides
+        those options)."""
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": "just an unstructured comment line"}),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        components = payload["lines"][0].get("components") or {}
+        self.assertNotIn("filepath", components)
+        self.assertNotIn("filename", components)
+
     def test_analyze_api_returns_known_and_unknown_statuses(self):
         self.client.login(username="analyzer", password="password123")
         ClassificationRule.objects.create(
