@@ -649,6 +649,7 @@
                                 <a href="{% url 'profile' %}">profile settings</a>
                                 <a href="{% url 'change_password' %}">change password</a>
                                 <a href="{% url 'statistics' %}">stats</a>
+                                <a href="{% url 'help' %}">help</a>
                                 <form method="post" action="{% url 'logout' %}">
                                     {% csrf_token %}
                                     <button type="submit">logout</button>

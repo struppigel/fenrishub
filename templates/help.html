@@ -1,0 +1,377 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Help - FenrisHub{% endblock %}
+{% block page_context_label %}help{% endblock %}
+
+{% block extra_css %}
+<style>
+    .help-content {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 8px 0 64px;
+        color: var(--la-text-main);
+        font-size: 13px;
+        line-height: 1.55;
+    }
+    .help-content h2 {
+        font-size: 18px;
+        margin-top: 36px;
+        margin-bottom: 12px;
+        color: var(--la-text-main);
+    }
+    .help-content > h2:first-child { margin-top: 0; }
+    .help-content h3 {
+        font-size: 15px;
+        margin-top: 24px;
+        margin-bottom: 10px;
+        color: var(--la-text-main);
+    }
+    .help-content p { margin: 8px 0; }
+    .help-content ul, .help-content ol { margin: 8px 0; padding-left: 22px; }
+    .help-content li { margin: 3px 0; }
+    .help-content img {
+        max-width: 100%;
+        height: auto;
+        display: block;
+        margin: 14px 0;
+        border: 1px solid var(--la-border);
+        border-radius: 4px;
+    }
+    .help-content a {
+        color: var(--la-text-primary);
+        text-decoration: none;
+    }
+    .help-content a:hover { text-decoration: underline; }
+    .help-content code {
+        background: var(--la-bg-3);
+        padding: 1px 5px;
+        border-radius: 3px;
+        color: var(--la-text-neutral);
+        font-size: 0.92em;
+    }
+    .help-toc {
+        background: var(--la-bg-3);
+        border: 1px solid var(--la-border);
+        border-radius: 4px;
+        padding: 10px 16px;
+        margin-bottom: 24px;
+        font-size: 12px;
+    }
+    .help-toc strong { color: var(--la-text-main); font-size: 13px; }
+    .help-toc ul { margin: 6px 0; padding-left: 22px; list-style: disc; }
+    .help-toc ul ul { margin: 2px 0; }
+    .help-tip {
+        background: var(--la-warning-bg);
+        border: 1px solid var(--la-warning-border);
+        color: var(--la-warning-text);
+        padding: 10px 14px;
+        border-radius: 4px;
+        margin: 14px 0;
+    }
+    .help-tip strong { color: var(--la-warning-hover); }
+    .help-content :target { scroll-margin-top: 80px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="help-content">
+    <h2>Fenris help</h2>
+
+    <nav class="help-toc">
+        <strong>contents</strong>
+        <ul>
+            <li><a href="#fenris">Fenris</a></li>
+            <li><a href="#uploads">Uploads</a></li>
+            <li><a href="#analyze">Analyze</a>
+                <ul>
+                    <li><a href="#log-line-verdicts">Log line verdicts</a></li>
+                    <li><a href="#analyze-left">Left side - the analyzed log</a></li>
+                    <li><a href="#analyze-right">Right side - fixlist editing</a></li>
+                </ul>
+            </li>
+            <li><a href="#fixlists">Fixlists</a></li>
+            <li><a href="#snippets">Snippets</a></li>
+            <li><a href="#rules">Rules</a>
+                <ul>
+                    <li><a href="#rule-components">Rule components</a></li>
+                    <li><a href="#rule-priorities">Rule priorities</a></li>
+                    <li><a href="#match-types">Match types</a></li>
+                    <li><a href="#testing-rules">Testing rules</a></li>
+                </ul>
+            </li>
+            <li><a href="#cases">Cases</a>
+                <ul>
+                    <li><a href="#creating-cases">Creating cases</a></li>
+                </ul>
+            </li>
+        </ul>
+    </nav>
+
+    <h2 id="fenris">Fenris</h2>
+    <p>Fenris is the name for the FRST log analyzer that I initially created for myself as a commandline tool and eventually turned into a web application for shared usage. It is currently on malwareanalysis.cc and also serves as upload platform for logs.</p>
+
+    <h2 id="uploads">Uploads</h2>
+    <p>This view lists all uploaded logs. Per default you see only the ones assigned to you. You can toggle to see all uploaded logs with the &quot;all channels&quot; button. Logs have a unique ID consisting of two keywords and potentially a suffix. Logs are automatically categorized into FRST, Addition, FRST&amp;Addition, Fixlog, Unknown. Depending on that category their keywords have a different color.</p>
+
+    <img src="{% static 'images/help/01-uploads-list.png' %}" alt="Uploads list view" loading="lazy">
+
+    <p>The keywords are shown to the user after upload and will allow you to find them properly. There is a search bar on the top, where you can type the keyword or username and press enter, such that it will filter logs that way.</p>
+
+    <p>The helper-URL is the URL that you use when instructing users to upload.</p>
+
+    <div class="help-tip">
+        <strong>Pro-tip:</strong> If you add <code>?u=User123</code>, you can prefill the username for the uploader, e.g.: <a href="https://malwareanalysis.cc/upload/struppigel/?u=User123" target="_blank" rel="noopener">https://malwareanalysis.cc/upload/struppigel/?u=User123</a>. If you don't want to assign uploaded logs to you, e.g., provide generic instructions, use this generic upload page: <a href="https://malwareanalysis.cc/upload/" target="_blank" rel="noopener">https://malwareanalysis.cc/upload/</a>.
+    </div>
+
+    <div class="help-tip">
+        <strong>Tip:</strong> Users often copy the very first FRST scan instructions, so using the general upload page for the first comment makes sense, such that these logs are unassigned.
+    </div>
+
+    <p>The buttons <strong>merge</strong> and <strong>mergalyze</strong> will:</p>
+    <ul>
+        <li>create one log out of the selected ones</li>
+        <li>move the old, still separate logs into trash with <code>-trsh</code> suffix - that means in case you merged the wrong logs, you can still get the old ones back</li>
+        <li>mergalyze will additionally open the merged log in the analyzer whereas merge stays on the uploads page</li>
+    </ul>
+
+    <p>The <strong>diff</strong> button shows a differential of two selected logs.</p>
+
+    <p>The <strong>delete</strong> button moves logs to trash. The trash deletes logs after 7 days automatically (Note: All logs are deleted after 30 days since upload time automatically for privacy reasons and to keep the database small).</p>
+
+    <p>The <strong>rescan</strong> button triggers a new log analysis for selected logs and updates the statistics. This is useful if you changed rules (more about that later in rules).</p>
+
+    <p>For each log the following data is shown:</p>
+
+    <p><code>keywords (assignee) filename | username | upload-timestamp | log type | md5 hash total line counter | log analysis verdict counts | percentage of known lines</code></p>
+
+    <img src="{% static 'images/help/02-uploads-row-format.png' %}" alt="Uploads row format with duplicate md5 highlight" loading="lazy">
+
+    <p>The md5 hash is there to see if there are duplicates. If a log has a duplicate, it will mark the md5 hash of both logs yellow-ish, such as in the picture above.</p>
+
+    <p>For each individual log you also have an assign or unassign button, a view button, analyze and delete.</p>
+
+    <p><strong>view</strong> shows a bit more metadata and the log contents. You can also change the name of the user that uploaded the log (sometimes users add typos or use the wrong name).</p>
+
+    <p><strong>analyze</strong> is for log analysis and creating fixlists. More on that later.</p>
+
+    <p><strong>delete</strong> does the same as the bulk delete button: It moves the log to the trash.</p>
+
+    <p><strong>assign</strong> assigns the log to you as helper. The assignment prevents other helpers from deleting your log, prevents them from assigning it themselves, and makes the log directly visible in your uploads overview (unless all channels is toggled) for easier access. It has otherwise no technical implications.</p>
+
+    <p><strong>unassign</strong> just removes the assignment again. This is useful if you want another helper to take the log for analysis. If a log is assigned to another helper and you desperately still want to work on it but the helper isn't online and can't unassign the log, then you can <strong>copy</strong> the assigned log.</p>
+
+    <p>The <strong>copy</strong> button only appears if the log is assigned to someone else. The copy button creates a copy with new keywords (because these must be unique) and autoassigns the log to you.</p>
+
+    <h2 id="analyze">Analyze</h2>
+    <p>This is the heart of the log analysis and Fixlist creation and the original purpose of Fenris. On the left side you see the log. Each line will be categorized into one of 10 verdicts, which have their own color. The legend on the bottom explains the colors and the shorthand for each verdict category. If you click on the legend, the log lines will be filtered to show or not show lines of that category.</p>
+
+    <h3 id="log-line-verdicts">Log line verdicts</h3>
+
+    <p><strong>Bad or Malware</strong> - these are bad log lines, usually malware entries, which always must be handled in some way.</p>
+
+    <p><strong>PUP</strong> - stands for potentially unwanted. That includes questionable software, the presence of legitimate remote access tools, which can either be used by the user or part of an infection, or just indicators for an infection, e.g. currently we mark the RenPy folder as PUP, although it is a legitimate execution environment but helps to identify RenLoader infections. PUP is always a case-by-case decision or user's choice.</p>
+
+    <p><strong>Clean</strong> - these lines are legitimate entries in the log.</p>
+
+    <p><strong>Alert</strong> - these lines create Alerts, which you will see above the log with a description if they trigger. Alerts help us identify general issues in the log that we need to address, e.g. a dying hard disk or multiple enabled antivirus products.</p>
+
+    <img src="{% static 'images/help/03-analyze-overview.png' %}" alt="Analyzer view with alerts" loading="lazy">
+
+    <p><strong>Warning</strong> - these are usually lines where FRST issues a warning, most of the time they need to be addressed.</p>
+
+    <p><strong>Grayware</strong> - these are lines that detect illegal software such as cheats, cracks, hacktools. They pose a security risk. How you treat them, whether you demand removal or warn the user, is up to you.</p>
+
+    <p><strong>Security</strong> - these mark security software such as antivirus scanners. They are a separate category from Clean so that you can get a better overview on the scanners that were already used to clean the system.</p>
+
+    <p><strong>Info</strong> - these are lines that belong to the structure of FRST logs such as titles, explanations and separator lines. A line in that category cannot be moved to the Fixlog by clicking because that wouldn't make sense.</p>
+
+    <p><strong>Junk</strong> - these are orphaned registry entries, temp files or junk files. Lines in that category are optional to remove, but usually added in fixlists.</p>
+
+    <p><strong>?</strong> - unknown, these lines have no known category.</p>
+
+    <img src="{% static 'images/help/04-analyze-legend.png' %}" alt="Analyzer legend with verdict categories" loading="lazy">
+
+    <p>The analyzer has two sides: the left side is the log and the right side is the Fixlist you are working on.</p>
+
+    <h3 id="analyze-left">Left side in analyzer - the analyzed log</h3>
+
+    <p>The left side colors each log line with one of the verdicts (B, P, C, A, J, G, S, I, J, ?). The symbol at the start of the line also displays the verdict and is at the same time a button that lets you pick a verdict. The picker looks as follows.</p>
+
+    <img src="{% static 'images/help/05-analyze-verdict-picker.png' %}" alt="Verdict picker" loading="lazy">
+
+    <p>If you change a verdict, it will be effective for the current log. If you want to persist the verdict for future logs, you should press the &quot;save rules&quot; button on the top. This will trigger a wizard for rule saving that lets you decide how to handle conflicts. If you are unsure what to choose in case of a conflict, most of the time &quot;keep both rules&quot; is the right choice. Rules that are added this way will always be either of type &quot;parsed&quot; or &quot;exact line&quot; - these types will be explained in detail in the rules section.</p>
+
+    <p>If there is a PUP, Malware or Warning verdict for a line with a timestamp, other timestamps that are roughly at the same time (+/- 10 minutes) or dates that are at the same day will be highlighted. That makes it easier for you to find related lines to problematic entries. The color of the highlight matches the verdict color.</p>
+
+    <img src="{% static 'images/help/06-analyze-timestamp-highlight.png' %}" alt="Timestamp highlights for related entries" loading="lazy">
+
+    <p>The top row has some more special buttons.</p>
+
+    <p>Firstly there is the <strong>edit log</strong> button, which allows you to change the log contents or paste an entire log. While in editing mode, this button will change to a <strong>parse lines</strong> button which triggers the analysis.</p>
+
+    <p>Next to that is a question mark <strong>?</strong> button. If active, you can click on log lines and it will open a window with detailed information about them, especially how they are parsed, which components they have, and which rule decided about the verdict. Toggle the button again to exit the question mark mode.</p>
+
+    <p>Next to that is the <strong>C</strong> button. It's a quicker way to mark lines as Clean. If active, any lines that you click will receive the Clean verdict. You need to toggle the button again to exit the C mode.</p>
+
+    <p>The <strong>logs</strong> button hides or displays the log picker. You can use the log picker to choose and load a different log. It only shows logs assigned to you.</p>
+
+    <p>The <strong>FRST path</strong> button copies the path for FRST64.exe to the clipboard.</p>
+
+    <p>The top buttons on the right side are for the Fixlist creation.</p>
+
+    <img src="{% static 'images/help/07-analyze-top-buttons.png' %}" alt="Analyzer top buttons for fixlist creation" loading="lazy">
+
+    <h3 id="analyze-right">Right side in analyzer - fixlist editing</h3>
+
+    <p>To add a line to the fixlist in progress, simply click the line on the left side. This will copy the line to the right side at the current position of the cursor. There are also ways to move many lines at once.</p>
+
+    <p>The <strong>B</strong>, <strong>P</strong>, <strong>J</strong> and <strong>!</strong> buttons here will bulk move lines marked with this category to the Fixlist.</p>
+
+    <p><strong>ignore FW</strong> decides if the bulk move includes the Firewall entries or not. E.g., if you reset the Firewall of the system anyway, you may decide to move all Junk entries except the Firewall.</p>
+
+    <p><strong>hide fix</strong> hides the right side text area with the Fixlist to allow using more screen space while analyzing the log.</p>
+
+    <p><strong>snippets</strong> lets you choose a code snippet that you may want to include in the fixlist. This is probably empty at the beginning. The snippets can be managed in the snippets view.</p>
+
+    <p><strong>save fix</strong> will do two things:</p>
+    <ol>
+        <li>Ask you if you want to save rules, if you changed line verdicts</li>
+        <li>Open the fixlist creator with the current Fixlist contents</li>
+    </ol>
+
+    <p>In the fixlist creation page, you can add internal notes, adjust the username, and change the contents.</p>
+
+    <p>You need to click on <strong>Create</strong> on the bottom to finalize saving the fixlist. The Fixlist area is prefilled with a template. You can change this template in your profile settings.</p>
+
+    <h2 id="fixlists">Fixlists</h2>
+
+    <p>The fixlist overview shows all fixlists that you created. Other people can only see fixlists if they have the share link or token and if the fixlist is public. The token is a unique identifier for the fixlist.</p>
+
+    <p>From the overview page you can hide individual fixlists, copy their link or delete them.</p>
+
+    <p>If you are viewing an individual fixlist, you can also access the source log the list was based on (the source log is only available if the fixlist was created via the analyzer on an uploaded log).</p>
+
+    <p>You can change the username from here.</p>
+
+    <p>You can edit the contents, even after sharing the fixlist link. So last minute changes are no problem.</p>
+
+    <p><strong>copy fix message</strong> will put a predefined message into the clipboard that instructs users how to fix. To change this predefined message template, click on your username on the top right, click on profile settings, and adjust the frst fix message. This frst fix message template has placeholders for the username, helpername (you), fixlist link and frst path, which will be automatically filled into the template. Some of these only work if the fixlist has an associated uploaded log, e.g., the FRST path is part of the FRST log and not the Fixlist. So if that is missing, it's probably because your Fixlist was created without a log.</p>
+
+    <img src="{% static 'images/help/08-fixlist-view.png' %}" alt="Individual fixlist view" loading="lazy">
+
+    <h2 id="snippets">Snippets</h2>
+
+    <p>This manages your code snippets that you may want to include into fixes. Snippets can also be shared with other users.</p>
+
+    <p>Use <strong>add snippet</strong> to create a new snippet.</p>
+
+    <p>Every snippet has a category, that you can choose yourself for better organization and filtering. The default is <strong>generic</strong>.</p>
+
+    <p>The name of the snippet is the title that you see when you choose it. I usually name it like so: <code>{tool or main command} {what it does}</code> - e.g. &quot;defender delete history&quot;, &quot;hitmanpro scan&quot;.</p>
+
+    <p>A shared snippet is visible to other helpers. Non-shared snippets are only visible to you and can be used for work in progress snippets or simply things you are not willing to share.</p>
+
+    <p>Once you created a snippet, you need to click the <strong>select</strong> button so that it becomes available in the snippet picker in the Analyze view. To include other helper's snippets, choose the helper's name in the combobox that says &quot;my snippets&quot;. Then press select for the snippets you want to include.</p>
+
+    <img src="{% static 'images/help/09-snippets-list.png' %}" alt="Snippets list with previews" loading="lazy">
+
+    <p><strong>hide preview</strong> lets you see a more concise snippet list. Per default the preview shows the first two lines of the snippet code.</p>
+
+    <img src="{% static 'images/help/10-snippets-hide-preview.png' %}" alt="Snippets list with previews hidden" loading="lazy">
+
+    <h2 id="rules">Rules</h2>
+
+    <p>Rules decide about the verdict of a log line. Rules are probably the most complicated part of Fenris. You don't need the rules as a beginner, you can choose to never use this view. But if you ever want more flexibility when adjusting how log lines are parsed, this is a way to do it.</p>
+
+    <p>Currently all users share all rules equally. That means your rules affect all others as well, so be mindful of changes. This will likely change in the future, but needs feature updates.</p>
+
+    <h3 id="rule-components">Rule components</h3>
+
+    <p>Let's take a look at the <strong>add rule</strong> dialog first. A rule consists of the following components:</p>
+
+    <p><strong>status</strong> decides about the verdict of a line.</p>
+
+    <p><strong>match type</strong> tells how to interpret the pattern, more on that later.</p>
+
+    <p><strong>priority</strong> is the priority level. I suggest using the one that fits the match type unless there are issues you cannot solve otherwise. More about priorities later.</p>
+
+    <p><strong>match line / pattern</strong> - the pattern that needs to match, e.g., this might be a regex, substring or a full log line.</p>
+
+    <p>The <strong>description</strong> shows up as explanation if you hover over a matched line. The description is very important for Alert rules because it contains the Alert text. It is recommended to add a description for PUP too because these require a case-by-case decision.</p>
+
+    <h3 id="rule-priorities">Rule priorities</h3>
+
+    <p>A line can have only one verdict, but several rules may match on one line. If that happens, the analyzer has to decide which rule comes first to form a verdict based on it. The rule with the highest priority will win in that case. But what happens if there are two or more matching rules with the same priority? In that case, the analyzer chooses the verdict based on verdict precedence, which is the same order as the legend in the analyzer: B &lt; P &lt; C &lt; A &lt; ! &lt; G &lt; S &lt; I &lt; J &lt; ?</p>
+
+    <h3 id="match-types">Match types</h3>
+
+    <p>The following match types are possible:</p>
+
+    <p><strong>Exact line</strong> - the line must be exactly the same as the pattern from start to end.</p>
+
+    <p><strong>Substring</strong> - the line must have a matching substring.</p>
+
+    <p><strong>Regex</strong> - the line must match the regex. I recommend <a href="https://regex101.com/" target="_blank" rel="noopener">https://regex101.com/</a> for writing and testing regex. Change the flavor on regex101 to Python. If you want case insensitive patterns, prepend <code>(?i)</code> to the regex.</p>
+
+    <p><strong>File path</strong> - the line is a file path. The path will be normalized, e.g., drive letter and username and firefox profile are internally substituted for path comparisons that make sense. This is the main difference to Substring, where these normalizations would not happen.</p>
+
+    <p><strong>Parsed</strong> - Fenris automatically parses known log lines into components like file path, timestamp, company, name, clsid. When comparing parsed lines these lines must match for these components except the timestamp. Furthermore, file paths are extracted from parsed entries and matched by the analyzer with lowest priority (with hardcoded exceptions for execution environments like cmd, powershell).</p>
+
+    <h3 id="testing-rules">Testing rules</h3>
+
+    <p>In the <strong>add rule</strong> page, there is a big box named <strong>test log lines</strong>; that is where you put lines from logs inside to test if they are detected by your rule.</p>
+
+    <img src="{% static 'images/help/11-rules-test-input.png' %}" alt="Test log lines input box" loading="lazy">
+
+    <p>The result will be shown on the bottom once you added a pattern. (The example below is nonsense here, it's just for demonstration.)</p>
+
+    <img src="{% static 'images/help/12-rules-test-result.png' %}" alt="Test rule result with effective rule highlighted" loading="lazy">
+
+    <p>Here you can see that the Battle.net line was matched by several rules, your new rule and a file path rule. In this case your new rule decides about the verdict because it has a higher priority (the example is nonsense, it's not really junk). The deciding rule is marked as &quot;effective&quot; and the text also mentions that the log line is marked C without your new rule (&quot;was C clean&quot;). The dataX.pak lines with green highlight are here matched by your rule but not any other rule. The remaining lines are not matched at all and would get the ? - unknown verdict in a log.</p>
+
+    <h2 id="cases">Cases</h2>
+
+    <p>The cases view is pretty much still work in progress, so a little wonky, but already usable. The idea is that you see all logs and fixlists for one case at once and can add your own notes about the removal process, e.g., for steps to do later, to not forget things.</p>
+
+    <h3 id="creating-cases">Creating cases</h3>
+
+    <p>If you are learning or observing other helpers, please stick with the training/observer option.</p>
+
+    <p>The username should be the exact name that is saved in Fenris as the log's username.</p>
+
+    <p>In the symptom description I typically copy/paste the initial text or help request of the user.</p>
+
+    <p>The reference URL is, e.g., a link to the reddit post or forum post with the help request.</p>
+
+    <p><strong>auto-assign</strong> will assign newly uploaded logs by that user to you if they were uploaded into the general upload channel. This makes only sense if you are actually working on the case. You should of course not snatch other helper's posts by auto-assigning them. That's why the training/observer case cannot auto-assign.</p>
+
+    <img src="{% static 'images/help/13-case-create.png' %}" alt="Create case dialog" loading="lazy">
+
+    <p>After you created a case, the view will look relatively empty.</p>
+
+    <img src="{% static 'images/help/14-case-empty.png' %}" alt="Empty case view" loading="lazy">
+
+    <p>But if you chose the right username and the user uploaded logs to Fenris, you can press <strong>add all items for u/username</strong> and this will automatically add all logs of this user to the case. Alternatively you can choose every log separately.</p>
+
+    <img src="{% static 'images/help/15-case-populated.png' %}" alt="Populated case view" loading="lazy">
+
+    <p>This is how an actual case looks like after adding logs and fixlists. In an actual case (not training) new user logs will automatically appear in the case. The entries in the case view are sorted by upload or creation time.</p>
+
+    <p>The case view also supports adding notes, which I generally use to remind me of things I should still do.</p>
+
+    <p>A note is always attached to a log, fixlist or another note. To add a note, press the little <strong>+</strong> button.</p>
+
+    <p>You may have noticed that some parts of the case view are on the left and others on the right. This mimics common messenger layout like Whatsapp. The logs that the user uploaded are on the left. Your own creations like Metadata, Fixlists and notes are on the right.</p>
+
+    <p>The case view also shows log lines statistics, which makes it possible to see how log lines for B, P, ! disappear over time due to your fixes and which ones are left and must be addressed.</p>
+
+    <p>Trashed logs do not appear in case view. So if you trash a log, it will be removed here as well.</p>
+
+    <p>Pressing the small red <strong>x</strong> button will detach an uploaded log reference from the case view. It does <strong>not</strong> delete logs or fixlists. It does however delete notes since these are only available in cases. Metadata cannot be deleted from here, only if you delete the whole case.</p>
+
+    <p>To prevent cases from auto-assigning logs or just to mark them as done for yourself, press the small pencil on the META entry. Then change the status to closed.</p>
+
+    <img src="{% static 'images/help/16-case-edit-meta.png' %}" alt="Edit case meta to closed" loading="lazy">
+</div>
+{% endblock %}

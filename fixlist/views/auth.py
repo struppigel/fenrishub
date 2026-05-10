@@ -103,3 +103,9 @@ def logout_view(request):
     """User logout view."""
     logout(request)
     return redirect('login')
+
+
+@login_required
+@require_http_methods(["GET"])
+def help_view(request):
+    return render(request, 'help.html')
