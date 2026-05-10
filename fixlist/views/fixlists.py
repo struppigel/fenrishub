@@ -19,6 +19,7 @@ from django.utils import timezone
 
 from ..models import Fixlist, AccessLog, UploadedLog
 from .auth import DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
+from .guest import deny_guests
 from .utils import _purge_old_trash, get_client_ip, redirect_preserving_filters, check_missing_ids
 
 
@@ -184,6 +185,7 @@ def dashboard_view(request):
     })
 
 
+@deny_guests
 @login_required
 @require_http_methods(["GET", "POST"])
 def create_fixlist_view(request):

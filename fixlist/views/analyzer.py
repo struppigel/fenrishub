@@ -24,13 +24,27 @@ from ..rule_utils import (
     _persist_selected_pending_rules,
 )
 from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE
+from .guest import deny_guests, guest_or_login_required, is_guest_request
 from .utils import get_action_scoped_uploads, get_updatable_uploads
 
 
-@login_required
+@guest_or_login_required
 @require_http_methods(["GET"])
 def log_analyzer_view(request):
     """Render log analyzer tool."""
+    if is_guest_request(request):
+        return render(
+            request,
+            'log_analyzer.html',
+            {
+                'uploaded_logs': [],
+                'initial_upload_id': '',
+                'is_superuser': False,
+                'snippets_json': mark_safe('[]'),
+                'fixlist_template': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
+            },
+        )
+
     uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True).defer('content')[:200]
     requested_upload_id = (request.GET.get('upload_id') or '').strip()
     initial_upload_id = requested_upload_id if requested_upload_id else ''
@@ -64,7 +78,7 @@ def log_analyzer_view(request):
     )
 
 
-@login_required
+@guest_or_login_required
 @require_http_methods(["POST"])
 def analyze_log_api(request):
     """Analyze pasted FRST log content and return line-level classifications."""
@@ -84,7 +98,7 @@ def analyze_log_api(request):
     upload_id = upload_id.strip()
 
     analysis = analyze_log_text(log_text)
-    if upload_id:
+    if upload_id and not is_guest_request(request):
         uploaded_log = get_updatable_uploads(request.user).filter(upload_id=upload_id).first()
         if uploaded_log:
             try:
@@ -97,7 +111,7 @@ def analyze_log_api(request):
     return JsonResponse(analysis)
 
 
-@login_required
+@guest_or_login_required
 @require_http_methods(["POST"])
 def analyze_line_details_api(request):
     """Inspect a single line and return parsed metadata plus matching rule details."""
@@ -122,10 +136,11 @@ def analyze_line_details_api(request):
     if requested_status not in VALID_STATUSES:
         requested_status = ClassificationRule.STATUS_UNKNOWN
 
+    actor_label = 'guest' if is_guest_request(request) else request.user.username
     parsed_rule = parse_rule_line(
         line,
         status=requested_status,
-        source_name=f'analyzer-inspect:{request.user.username}',
+        source_name=f'analyzer-inspect:{actor_label}',
     )
     inspection = inspect_line_matches(line)
 
@@ -138,6 +153,7 @@ def analyze_line_details_api(request):
     )
 
 
+@deny_guests
 @login_required
 @require_http_methods(["POST"])
 def preview_pending_rule_changes_api(request):
@@ -157,6 +173,7 @@ def preview_pending_rule_changes_api(request):
     return JsonResponse(preview)
 
 
+@deny_guests
 @login_required
 @require_http_methods(["POST"])
 def persist_pending_rule_changes_api(request):
@@ -191,7 +208,7 @@ def persist_pending_rule_changes_api(request):
     return JsonResponse({'ok': True, **result})
 
 
-@login_required
+@guest_or_login_required
 @require_http_methods(["POST"])
 def update_analyzed_line_status_api(request):
     """Validate a status override payload without persisting it to the database."""
@@ -228,7 +245,8 @@ def update_analyzed_line_status_api(request):
     if status == ClassificationRule.STATUS_ALERT:
         return JsonResponse({'error': 'Setting alert status from analyzer is not allowed.'}, status=400)
 
-    source_name = f'analyzer-ui:{request.user.username}'
+    actor_label = 'guest' if is_guest_request(request) else request.user.username
+    source_name = f'analyzer-ui:{actor_label}'
     parsed = parse_rule_line(line, status=status, source_name=source_name)
     if not parsed:
         return JsonResponse({'error': 'Unable to parse line into a classification rule.'}, status=400)

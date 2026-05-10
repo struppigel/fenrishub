@@ -113,6 +113,47 @@ class AccessLog(models.Model):
         return f"Access to {self.fixlist.username} at {self.accessed_at}"
 
 
+class SiteConfig(models.Model):
+    """Singleton holding site-wide settings (e.g. the guest access token)."""
+
+    guest_token = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='Shared secret for guest access to the log analyzer and help page. Leave blank to disable guest access entirely.',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Site configuration'
+        verbose_name_plural = 'Site configuration'
+
+    def __str__(self):
+        return 'Site configuration'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        # Singleton: never delete.
+        return
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    @classmethod
+    def current_guest_token(cls):
+        return (cls.get_solo().guest_token or '').strip()
+
+    @staticmethod
+    def generate_guest_token():
+        alphabet = string.ascii_letters + string.digits
+        return ''.join(secrets.choice(alphabet) for _ in range(32))
+
+
 MEMORABLE_ID_ADJECTIVES = [
     'amber', 'ancient', 'arcane', 'ardent', 'async', 'atomic', 'autumn', 'azure', 'balmy',
     'blazing', 'blessed', 'bold', 'brave', 'bright', 'brisk', 'bronze', 'cached', 'calm',

@@ -12,6 +12,7 @@ from django.contrib.auth.forms import PasswordChangeForm
 from django.views.decorators.http import require_http_methods
 
 from ..models import UserProfile
+from .guest import guest_or_login_required
 
 
 DEFAULT_FRST_FIX_MESSAGE_TEMPLATE = """FRST  Fix
@@ -105,7 +106,7 @@ def logout_view(request):
     return redirect('login')
 
 
-@login_required
+@guest_or_login_required
 @require_http_methods(["GET"])
 def help_view(request):
     return render(request, 'help.html')

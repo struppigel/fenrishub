@@ -20,6 +20,7 @@ from ..forms import UploadedLogForm
 from ..models import UploadedLog
 from ..permissions import user_can_delete_uploaded_log
 from ..upload_utils import soft_delete_uploaded_log, restore_uploaded_log, execute_merge
+from .guest import deny_guests
 from .upload_actions import (
     handle_delete_action, handle_assign_to_me_action, handle_unassign_to_general_action,
     handle_copy_to_me_action, handle_delete_selected_action, handle_merge_action,
@@ -496,6 +497,7 @@ def uploads_trash_view(request):
     })
 
 
+@deny_guests
 @login_required
 @require_http_methods(["GET"])
 def uploaded_log_content_api(request, upload_id):

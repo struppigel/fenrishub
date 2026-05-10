@@ -144,8 +144,8 @@
         <button type="button" id="resetButton" style="display: none;">edit log</button>
         <button type="button" id="questionCursorModeButton" aria-pressed="false" title="question cursor mode">?</button>
         <button type="button" id="cleanCursorModeButton" aria-pressed="false" title="mark lines as clean">C</button>
-        <button type="button" id="saveRulesRescanButton">save rules</button>
-        <button type="button" id="toggleLoadUploadButton">logs</button>
+        {% if not is_guest %}<button type="button" id="saveRulesRescanButton">save rules</button>{% endif %}
+        {% if not is_guest %}<button type="button" id="toggleLoadUploadButton">logs</button>{% endif %}
         <button type="button" id="copyFrstPathButton">FRST path</button>
         {% if is_superuser %}<button type="button" id="addRemainingCleanButton" title="Mark remaining parsed entries as clean (like CLI --clean_save)">remaining = C</button>{% endif %}
     </div>
@@ -161,15 +161,18 @@
                 ignore FW
             </label>
         </div>
+        {% if not is_guest %}
         <div class="snippet-menu" id="snippetMenu">
             <button type="button" class="snippet-menu-trigger" id="snippetMenuTrigger">snippets &#x25BE;</button>
             <div class="snippet-menu-dropdown" id="snippetMenuDropdown"></div>
         </div>
+        {% endif %}
         <button type="button" id="toggleFixlistPanelButton" aria-pressed="false" title="toggle fixlist panel visibility">hide fix</button>
-        <button type="button" id="saveFixlistButton" class="save-fixlist-button">save fix</button>
+        {% if not is_guest %}<button type="button" id="saveFixlistButton" class="save-fixlist-button">save fix</button>{% endif %}
     </div>
 </div>
 
+{% if not is_guest %}
 <div class="upload-source-row" id="uploadSourceRow" hidden>
     <label for="uploadSourceSelect">logs</label>
     <select id="uploadSourceSelect">
@@ -180,6 +183,7 @@
     </select>
     <span id="uploadLoadStatus" class="muted" aria-live="polite"></span>
 </div>
+{% endif %}
 
 <div class="textareas-box">
     <div class="left-panel">
@@ -312,6 +316,7 @@ window.logAnalyzerConfig = {
     snippets: {{ snippets_json }},
     isSuperuser: {{ is_superuser|yesno:"true,false" }},
     currentUsername: "{{ request.user.username|escapejs }}",
+    guestToken: "{{ guest_token|default:''|escapejs }}",
 };
 </script>
 <script defer src="{% static 'js/log_analyzer/shared.js' %}"></script>

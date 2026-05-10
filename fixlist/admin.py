@@ -15,6 +15,7 @@ from .models import (
     InfectionCaseLog,
     InfectionCaseNote,
     ParsedFilepathExclusion,
+    SiteConfig,
     UploadedLog,
 )
 
@@ -292,3 +293,65 @@ class ParsedFilepathExclusionAdmin(admin.ModelAdmin):
     search_fields = ('normalized_filepath', 'note')
     readonly_fields = ('created_at', 'updated_at')
     fields = ('normalized_filepath', 'note', 'is_enabled', 'created_at', 'updated_at')
+
+
+@admin.register(SiteConfig)
+class SiteConfigAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'guest_token_preview', 'updated_at')
+    readonly_fields = ('updated_at',)
+    fields = ('guest_token', 'updated_at')
+    change_list_template = 'admin/fixlist/siteconfig/change_list.html'
+
+    def guest_token_preview(self, obj):
+        token = obj.guest_token or ''
+        if not token:
+            return '(disabled)'
+        if len(token) <= 8:
+            return token
+        return f'{token[:4]}…{token[-4:]}'
+
+    guest_token_preview.short_description = 'guest token'
+
+    def has_add_permission(self, request):
+        return not SiteConfig.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                'regenerate-guest-token/',
+                self.admin_site.admin_view(self.regenerate_guest_token_view),
+                name='fixlist_siteconfig_regenerate_guest_token',
+            ),
+            path(
+                'clear-guest-token/',
+                self.admin_site.admin_view(self.clear_guest_token_view),
+                name='fixlist_siteconfig_clear_guest_token',
+            ),
+        ]
+        return custom_urls + urls
+
+    def regenerate_guest_token_view(self, request):
+        if request.method != 'POST':
+            return HttpResponseRedirect(reverse('admin:fixlist_siteconfig_changelist'))
+        config = SiteConfig.get_solo()
+        config.guest_token = SiteConfig.generate_guest_token()
+        config.save()
+        self.message_user(
+            request,
+            f'New guest token generated: {config.guest_token}',
+            level=messages.SUCCESS,
+        )
+        return HttpResponseRedirect(reverse('admin:fixlist_siteconfig_changelist'))
+
+    def clear_guest_token_view(self, request):
+        if request.method != 'POST':
+            return HttpResponseRedirect(reverse('admin:fixlist_siteconfig_changelist'))
+        config = SiteConfig.get_solo()
+        config.guest_token = ''
+        config.save()
+        self.message_user(request, 'Guest access disabled.', level=messages.SUCCESS)
+        return HttpResponseRedirect(reverse('admin:fixlist_siteconfig_changelist'))

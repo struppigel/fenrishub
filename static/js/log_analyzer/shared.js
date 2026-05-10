@@ -43,8 +43,18 @@ const CONFLICT_ACTION_KEEP_BOTH = 'keep_both';
 const CONFLICT_ACTION_KEEP_NEW_DISABLE_OTHER = 'keep_new_disable_other';
 const CONFLICT_ACTION_DISCARD_NEW = 'discard_new';
 const analyzerConfig = window.logAnalyzerConfig || {};
-const ANALYZE_LOG_URL = analyzerConfig.analyzeLogUrl || '';
-const LINE_DETAILS_URL = analyzerConfig.lineDetailsUrl || '';
+const GUEST_TOKEN = analyzerConfig.guestToken || '';
+
+function withGuestToken(url) {
+    if (!GUEST_TOKEN || !url) {
+        return url;
+    }
+    const separator = url.indexOf('?') === -1 ? '?' : '&';
+    return `${url}${separator}guest=${encodeURIComponent(GUEST_TOKEN)}`;
+}
+
+const ANALYZE_LOG_URL = withGuestToken(analyzerConfig.analyzeLogUrl || '');
+const LINE_DETAILS_URL = withGuestToken(analyzerConfig.lineDetailsUrl || '');
 const PREVIEW_RULE_CHANGES_URL = analyzerConfig.previewRuleChangesUrl || '';
 const PERSIST_RULE_CHANGES_URL = analyzerConfig.persistRuleChangesUrl || '';
 const CREATE_FIXLIST_URL = analyzerConfig.createFixlistUrl || '';

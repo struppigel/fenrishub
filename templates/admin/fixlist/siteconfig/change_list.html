@@ -1,0 +1,17 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+<li>
+    <form method="post" action="{% url 'admin:fixlist_siteconfig_regenerate_guest_token' %}" style="display:inline;">
+        {% csrf_token %}
+        <button type="submit" class="button" style="background:none;border:none;padding:0;cursor:pointer;color:inherit;text-decoration:underline;">Regenerate guest token</button>
+    </form>
+</li>
+<li>
+    <form method="post" action="{% url 'admin:fixlist_siteconfig_clear_guest_token' %}" style="display:inline;" onsubmit="return confirm('Disable guest access? Existing guest links will stop working.');">
+        {% csrf_token %}
+        <button type="submit" class="button" style="background:none;border:none;padding:0;cursor:pointer;color:inherit;text-decoration:underline;">Disable guest access</button>
+    </form>
+</li>
+{{ block.super }}
+{% endblock %}

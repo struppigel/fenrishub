@@ -676,6 +676,16 @@
                     <div id="bannerStatistics" class="banner-statistics" style="display: none;"></div>
                 </div>
             </div>
+            {% elif is_guest %}
+            <div class="nav">
+                <div class="nav-left">
+                    <a href="{% url 'log_analyzer' %}?guest={{ guest_token }}">analyze</a>
+                    <a href="{% url 'help' %}?guest={{ guest_token }}">help</a>
+                </div>
+                <div class="nav-right" style="display: flex; gap: 8px; align-items: center;">
+                    <div id="bannerStatistics" class="banner-statistics" style="display: none;"></div>
+                </div>
+            </div>
             {% else %}
             {% block nav %}
             <div class="nav">
