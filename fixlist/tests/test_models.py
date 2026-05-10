@@ -121,11 +121,12 @@ class UploadedLogModelTests(TestCase):
 
         uploaded.apply_analysis_summary(
             {
-                'total_lines': 6,
+                'total_lines': 7,
                 'status_counts': {
                     'B': 1,
                     'P': 2,
                     'C': 0,
+                    'A': 1,
                     '!': 1,
                     'G': 0,
                     'S': 0,
@@ -138,10 +139,11 @@ class UploadedLogModelTests(TestCase):
         uploaded.save(update_fields=UploadedLog.analysis_stat_update_fields())
         uploaded.refresh_from_db()
 
-        self.assertEqual(uploaded.total_line_count, 6)
+        self.assertEqual(uploaded.total_line_count, 7)
         self.assertEqual(uploaded.count_malware, 1)
         self.assertEqual(uploaded.count_pup, 2)
         self.assertEqual(uploaded.count_clean, 0)
+        self.assertEqual(uploaded.count_alert, 1)
         self.assertEqual(uploaded.count_warning, 1)
         self.assertEqual(uploaded.count_grayware, 0)
         self.assertEqual(uploaded.count_security, 0)

@@ -668,6 +668,148 @@ async function saveStatusSelection(index, newStatus) {
     }
 }
 
+const LINE_COPY_COMPONENT_LABELS = [
+    ['filepath', 'filepath'],
+    ['filename', 'filename'],
+    ['clsid', 'clsid'],
+    ['name', 'name'],
+    ['company', 'company'],
+];
+
+let lineCopyMenuEl = null;
+let lineCopyMenuTrigger = null;
+
+function ensureLineCopyMenu() {
+    if (lineCopyMenuEl && document.body.contains(lineCopyMenuEl)) {
+        return lineCopyMenuEl;
+    }
+    const menu = document.createElement('div');
+    menu.className = 'line-copy-menu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    menu.addEventListener('click', (event) => event.stopPropagation());
+    document.body.appendChild(menu);
+    lineCopyMenuEl = menu;
+    return menu;
+}
+
+function closeLineCopyMenu() {
+    if (lineCopyMenuTrigger) {
+        lineCopyMenuTrigger.setAttribute('aria-expanded', 'false');
+        lineCopyMenuTrigger = null;
+    }
+    if (lineCopyMenuEl) {
+        lineCopyMenuEl.hidden = true;
+        lineCopyMenuEl.innerHTML = '';
+    }
+}
+
+async function copyToClipboard(value) {
+    if (typeof value !== 'string') return false;
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(value);
+            return true;
+        }
+    } catch (err) {
+        // fall through to fallback
+    }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (err) {
+        return false;
+    }
+}
+
+function openLineCopyMenu(trigger, index) {
+    const entry = analyzedLines[index];
+    if (!entry) return;
+
+    if (lineCopyMenuTrigger === trigger && lineCopyMenuEl && !lineCopyMenuEl.hidden) {
+        closeLineCopyMenu();
+        return;
+    }
+
+    const menu = ensureLineCopyMenu();
+    menu.innerHTML = '';
+
+    const items = [{ key: 'whole line', value: entry.line || '' }];
+    const components = (entry && typeof entry.components === 'object') ? entry.components : {};
+    LINE_COPY_COMPONENT_LABELS.forEach(([key, label]) => {
+        const value = components ? components[key] : '';
+        if (value) {
+            items.push({ key: label, value });
+        }
+    });
+
+    items.forEach(({ key, value }) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'line-copy-menu-item';
+        item.setAttribute('role', 'menuitem');
+
+        const label = document.createElement('span');
+        label.className = 'line-copy-menu-key';
+        label.textContent = key;
+
+        const preview = document.createElement('span');
+        preview.className = 'line-copy-menu-value';
+        preview.textContent = value;
+
+        item.appendChild(label);
+        item.appendChild(preview);
+        item.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            const ok = await copyToClipboard(value);
+            if (!ok) {
+                alert('Failed to copy to clipboard.');
+            }
+            closeLineCopyMenu();
+        });
+        menu.appendChild(item);
+    });
+
+    menu.hidden = false;
+    if (lineCopyMenuTrigger && lineCopyMenuTrigger !== trigger) {
+        lineCopyMenuTrigger.setAttribute('aria-expanded', 'false');
+    }
+    lineCopyMenuTrigger = trigger;
+    trigger.setAttribute('aria-expanded', 'true');
+
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth || 240;
+    const menuHeight = menu.offsetHeight || 0;
+    let left = rect.right - menuWidth;
+    if (left < 8) left = Math.max(8, rect.left);
+    if (left + menuWidth > window.innerWidth - 8) {
+        left = window.innerWidth - menuWidth - 8;
+    }
+    let top = rect.bottom + 4;
+    if (top + menuHeight > window.innerHeight - 8) {
+        top = Math.max(8, rect.top - menuHeight - 4);
+    }
+    menu.style.left = `${left + window.scrollX}px`;
+    menu.style.top = `${top + window.scrollY}px`;
+}
+
+function setupLineCopyMenu() {
+    document.addEventListener('click', () => closeLineCopyMenu());
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeLineCopyMenu();
+    });
+    window.addEventListener('resize', () => closeLineCopyMenu());
+    document.addEventListener('scroll', () => closeLineCopyMenu(), true);
+}
+
 const DATE_HIGHLIGHT_RE = /\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?/g;
 
 function appendLineTextWithDateHighlight(textEl, line) {
@@ -742,8 +884,23 @@ function renderLogLines() {
         text.className = 'line-text';
         appendLineTextWithDateHighlight(text, line);
 
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'line-copy-trigger';
+        copyBtn.dataset.lineIndex = String(index);
+        copyBtn.setAttribute('aria-label', 'copy line or component');
+        copyBtn.setAttribute('aria-haspopup', 'menu');
+        copyBtn.setAttribute('aria-expanded', 'false');
+        copyBtn.title = 'copy line or component';
+        copyBtn.innerHTML = '⎘';
+        copyBtn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            openLineCopyMenu(copyBtn, index);
+        });
+
         lineDiv.appendChild(badge);
         lineDiv.appendChild(text);
+        lineDiv.appendChild(copyBtn);
 
         const reasons = Array.isArray(entry.reasons) ? entry.reasons : [];
         lineDiv.title = reasons.length > 0 ? `${line}\n\n${reasons.join('\n')}` : line;

@@ -368,6 +368,7 @@ class UploadedLog(models.Model):
     count_malware = models.PositiveIntegerField(default=0)
     count_pup = models.PositiveIntegerField(default=0)
     count_clean = models.PositiveIntegerField(default=0)
+    count_alert = models.PositiveIntegerField(default=0)
     count_warning = models.PositiveIntegerField(default=0)
     count_grayware = models.PositiveIntegerField(default=0)
     count_security = models.PositiveIntegerField(default=0)
@@ -383,6 +384,7 @@ class UploadedLog(models.Model):
         'B': 'count_malware',
         'P': 'count_pup',
         'C': 'count_clean',
+        'A': 'count_alert',
         '!': 'count_warning',
         'G': 'count_grayware',
         'S': 'count_security',
@@ -700,6 +702,7 @@ class UploadedLogStat(models.Model):
     count_malware = models.PositiveIntegerField(default=0)
     count_pup = models.PositiveIntegerField(default=0)
     count_clean = models.PositiveIntegerField(default=0)
+    count_alert = models.PositiveIntegerField(default=0)
     count_warning = models.PositiveIntegerField(default=0)
     count_grayware = models.PositiveIntegerField(default=0)
     count_security = models.PositiveIntegerField(default=0)

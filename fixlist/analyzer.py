@@ -596,8 +596,15 @@ def _build_line_result(
     matcher: str,
     alert_descriptions: list[str] | None = None,
     dates: list[str] | None = None,
+    parsed_entry=None,
 ):
     dominant_status = _dominant_status(status_codes)
+    components = {}
+    if parsed_entry is not None:
+        for key in ("filepath", "filename", "clsid", "name", "company"):
+            value = getattr(parsed_entry, key, "") or ""
+            if value:
+                components[key] = value
     return {
         "line": line,
         "status_codes": status_codes,
@@ -609,6 +616,7 @@ def _build_line_result(
         "matcher": matcher,
         "matched": dominant_status != "?",
         "dates": dates or [],
+        "components": components,
         "_alert_descriptions": alert_descriptions or [],
     }
 
@@ -645,7 +653,10 @@ def _analyze_single_line(line: str, buckets):
 
     if not effective_matches:
         unknown_entry_type = parsed_entry.entry_type if parsed_entry else ""
-        return _build_line_result(line, "?", unknown_entry_type, [], "unknown", dates=dates)
+        return _build_line_result(
+            line, "?", unknown_entry_type, [], "unknown",
+            dates=dates, parsed_entry=parsed_entry,
+        )
 
     status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(
         [(rule, reason) for rule, reason, _matcher in effective_matches]
@@ -659,6 +670,7 @@ def _analyze_single_line(line: str, buckets):
         matcher_label,
         alert_descriptions,
         dates=dates,
+        parsed_entry=parsed_entry,
     )
 
 

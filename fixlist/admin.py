@@ -212,7 +212,7 @@ class UploadedLogAdmin(admin.ModelAdmin):
         ('Analysis Stats', {
             'fields': (
                 'total_line_count',
-                'count_malware', 'count_pup', 'count_clean', 'count_warning',
+                'count_malware', 'count_pup', 'count_clean', 'count_alert', 'count_warning',
                 'count_grayware', 'count_security', 'count_info', 'count_junk', 'count_unknown',
                 'fixlog_total', 'fixlog_success', 'fixlog_not_found', 'fixlog_error',
             ),

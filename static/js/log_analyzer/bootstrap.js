@@ -492,6 +492,9 @@ exposeLegacyAnalyzerGlobals();
 document.addEventListener('DOMContentLoaded', () => {
     initializeCursorPosition();
     setupStatusPicker();
+    if (typeof setupLineCopyMenu === 'function') {
+        setupLineCopyMenu();
+    }
     initializePendingStatusChanges();
     if (typeof applyQuestionCursorModeState === 'function') {
         applyQuestionCursorModeState();
