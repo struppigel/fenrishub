@@ -95,6 +95,7 @@ class UserProfile(models.Model):
     frst_fix_message = models.TextField(blank=True, default='')
     word_wrap = models.BooleanField(default=False)
     analyzer_fixlist_template = models.TextField(blank=True, default='')
+    last_seen = models.DateTimeField(null=True, blank=True, db_index=True)
 
     def __str__(self):
         return f'Profile for {self.user.username}'

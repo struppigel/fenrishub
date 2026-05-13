@@ -140,6 +140,118 @@ class AddRuleViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(ClassificationRule.objects.filter(source_text="DUP-LINE").count(), 1)
 
+    # -- Bulk create from multi-line source_text --
+
+    def test_create_multiple_rules_from_multiline_source(self):
+        response = self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "pattern-one\npattern-two\npattern-three",
+                "description": "shared description",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        rules = ClassificationRule.objects.filter(owner=self.user).order_by("source_text")
+        self.assertEqual(rules.count(), 3)
+        for rule in rules:
+            self.assertEqual(rule.status, ClassificationRule.STATUS_MALWARE)
+            self.assertEqual(rule.match_type, ClassificationRule.MATCH_SUBSTRING)
+            self.assertEqual(rule.description, "shared description")
+        self.assertSetEqual(
+            set(rules.values_list("source_text", flat=True)),
+            {"pattern-one", "pattern-two", "pattern-three"},
+        )
+
+    def test_create_multiple_rules_skips_duplicates(self):
+        make_rule(
+            "pattern-one",
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+        )
+        response = self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "pattern-one\npattern-two\npattern-three\npattern-four",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ClassificationRule.objects.filter(owner=self.user).count(), 4)
+        body = response.content.decode()
+        self.assertIn("3 rules created", body)
+        self.assertIn("1 duplicate", body)
+
+    def test_create_multiple_rules_dedupes_within_submit(self):
+        response = self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "same-pattern\nsame-pattern\nsame-pattern",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(ClassificationRule.objects.filter(source_text="same-pattern").count(), 1)
+
+    def test_create_multiple_rules_strips_blank_lines(self):
+        response = self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "alpha\n\n   \nbeta\n\ngamma\n",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertSetEqual(
+            set(ClassificationRule.objects.filter(owner=self.user).values_list("source_text", flat=True)),
+            {"alpha", "beta", "gamma"},
+        )
+
+    def test_create_multiple_rules_handles_crlf(self):
+        response = self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "alpha\r\nbeta\r\ngamma\r\n",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        sources = set(ClassificationRule.objects.filter(owner=self.user).values_list("source_text", flat=True))
+        self.assertSetEqual(sources, {"alpha", "beta", "gamma"})
+        for source in sources:
+            self.assertFalse(source.endswith("\r"))
+
+    def test_create_multiple_rules_all_duplicates_stays_on_form(self):
+        make_rule(
+            "alpha",
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+        )
+        make_rule(
+            "beta",
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+        )
+        response = self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "alpha\nbeta",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ClassificationRule.objects.filter(owner=self.user).count(), 2)
+
     # -- rules.html links to add page --
 
     def test_rules_page_links_to_add_rule(self):

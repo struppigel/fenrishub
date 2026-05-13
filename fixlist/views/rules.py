@@ -50,6 +50,35 @@ def _coerce_priority(raw_value, match_type: str) -> int:
     return max(PRIORITY_MIN, min(PRIORITY_MAX, value))
 
 
+def _split_patterns(source_text: str) -> list:
+    """Split a textarea blob into individual pattern lines, dropping empties.
+
+    Each non-empty line becomes its own pattern. Trims whitespace per line so
+    a trailing \\r on Windows pastes does not produce pseudo-duplicates.
+    Preserves order and de-duplicates within the submit.
+    """
+    seen = set()
+    patterns = []
+    for raw in source_text.splitlines():
+        line = raw.strip()
+        if not line or line in seen:
+            continue
+        seen.add(line)
+        patterns.append(line)
+    return patterns
+
+
+def _format_skipped(skipped: list, limit: int = 5) -> str:
+    """Format a short summary of skipped patterns for a user-facing message."""
+    if not skipped:
+        return ''
+    shown = skipped[:limit]
+    parts = ', '.join(repr(s) for s in shown)
+    if len(skipped) > limit:
+        parts += f', … and {len(skipped) - limit} more'
+    return parts
+
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def rules_view(request):
@@ -66,27 +95,51 @@ def rules_view(request):
             source_text = request.POST.get('source_text', '').strip()
             description = request.POST.get('description', '').strip()
             priority = _coerce_priority(request.POST.get('priority'), match_type)
-            if not source_text:
+            patterns = _split_patterns(source_text)
+            if not patterns:
                 messages.error(request, 'Rule source text is required.')
             elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
                 messages.error(request, 'Invalid status.')
             elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
                 messages.error(request, 'Invalid match type.')
-            elif ClassificationRule.objects.filter(
-                owner=request.user, status=status, match_type=match_type, source_text=source_text
-            ).exists():
-                messages.error(request, 'A rule with this status, match type, and source text already exists.')
             else:
-                ClassificationRule.objects.create(
-                    owner=request.user,
-                    status=status,
-                    match_type=match_type,
-                    source_text=source_text,
-                    description=description,
-                    priority=priority,
+                existing = set(
+                    ClassificationRule.objects.filter(
+                        owner=request.user,
+                        status=status,
+                        match_type=match_type,
+                        source_text__in=patterns,
+                    ).values_list('source_text', flat=True)
                 )
-                invalidate_rule_buckets_cache()
-                messages.success(request, 'Rule created.')
+                to_create = [
+                    ClassificationRule(
+                        owner=request.user,
+                        status=status,
+                        match_type=match_type,
+                        source_text=pattern,
+                        description=description,
+                        priority=priority,
+                    )
+                    for pattern in patterns if pattern not in existing
+                ]
+                skipped = [pattern for pattern in patterns if pattern in existing]
+                if to_create:
+                    ClassificationRule.objects.bulk_create(to_create)
+                    invalidate_rule_buckets_cache()
+                    n = len(to_create)
+                    messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
+                    if skipped:
+                        m = len(skipped)
+                        messages.warning(
+                            request,
+                            f'{m} duplicate{"" if m == 1 else "s"} skipped: {_format_skipped(skipped)}',
+                        )
+                else:
+                    m = len(skipped)
+                    messages.error(
+                        request,
+                        f'No rules created. {m} duplicate{"" if m == 1 else "s"} skipped: {_format_skipped(skipped)}',
+                    )
             return redirect('rules')
 
         if action == 'edit':
@@ -254,7 +307,8 @@ def add_rule_view(request):
         form_source_text = source_text
         form_description = description
         form_priority = raw_priority
-        if not source_text:
+        patterns = _split_patterns(source_text)
+        if not patterns:
             messages.error(request, 'Rule source text is required.')
         elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
             messages.error(request, 'Invalid status.')
@@ -262,34 +316,64 @@ def add_rule_view(request):
             messages.error(request, 'Invalid match type.')
         else:
             priority = _coerce_priority(raw_priority, match_type)
-            parsed = parse_rule_line(source_text, status=status, source_name=f'web-add-rule:{request.user.username}')
-            if parsed and match_type in (ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH):
-                parsed['match_type'] = match_type
-            create_kwargs = {
-                'owner': request.user,
-                'status': status,
-                'match_type': match_type,
-                'source_text': source_text,
-                'description': description,
-                'priority': priority,
-            }
-            if parsed:
-                for field in ('entry_type', 'clsid', 'name', 'filepath', 'normalized_filepath',
-                              'filename', 'company', 'arguments', 'file_not_signed', 'source_name'):
-                    if parsed.get(field):
-                        create_kwargs[field] = parsed[field]
+            existing = set(
+                ClassificationRule.objects.filter(
+                    owner=request.user,
+                    status=status,
+                    match_type=match_type,
+                    source_text__in=patterns,
+                ).values_list('source_text', flat=True)
+            )
 
-            duplicate = ClassificationRule.objects.filter(
-                owner=request.user, status=status, match_type=match_type, source_text=source_text,
-            ).exists()
-            if duplicate:
-                messages.error(request, 'A rule with this status, match type, and source text already exists.')
-            else:
-                ClassificationRule.objects.create(**create_kwargs)
+            to_create = []
+            skipped = []
+            for pattern in patterns:
+                if pattern in existing:
+                    skipped.append(pattern)
+                    continue
+                parsed = parse_rule_line(
+                    pattern,
+                    status=status,
+                    source_name=f'web-add-rule:{request.user.username}',
+                )
+                if parsed and match_type in (ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH):
+                    parsed['match_type'] = match_type
+                create_kwargs = {
+                    'owner': request.user,
+                    'status': status,
+                    'match_type': match_type,
+                    'source_text': pattern,
+                    'description': description,
+                    'priority': priority,
+                }
+                if parsed:
+                    for field in ('entry_type', 'clsid', 'name', 'filepath', 'normalized_filepath',
+                                  'filename', 'company', 'arguments', 'file_not_signed', 'source_name'):
+                        if parsed.get(field):
+                            create_kwargs[field] = parsed[field]
+                to_create.append(ClassificationRule(**create_kwargs))
+
+            if to_create:
+                ClassificationRule.objects.bulk_create(to_create)
                 invalidate_rule_buckets_cache()
-                messages.success(request, 'Rule created.')
+                n = len(to_create)
+                messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
+                if skipped:
+                    summary = _format_skipped(skipped)
+                    m = len(skipped)
+                    messages.warning(
+                        request,
+                        f'{m} duplicate{"" if m == 1 else "s"} skipped: {summary}',
+                    )
                 keep_qs = urlencode({'status': status, 'match_type': match_type})
                 return redirect(f"{reverse('add_rule')}?{keep_qs}")
+            else:
+                summary = _format_skipped(skipped)
+                m = len(skipped)
+                messages.error(
+                    request,
+                    f'No rules created. {m} duplicate{"" if m == 1 else "s"} skipped: {summary}',
+                )
 
     context = {
         'status_choices': ClassificationRule.STATUS_CHOICES,
@@ -339,15 +423,35 @@ def test_rule_api(request):
         except (TypeError, ValueError):
             priority = None
 
+    patterns = _split_patterns(source_text)
+    if not patterns:
+        return JsonResponse({'error': 'Field "source_text" is required.'}, status=400)
+    if len(patterns) > 100:
+        return JsonResponse({'error': 'At most 100 patterns are allowed.'}, status=400)
+
     try:
-        response_payload = build_rule_test_results(
-            source_text=source_text,
+        first_payload = build_rule_test_results(
+            source_text=patterns[0],
             status=status,
             match_type=match_type,
             lines=lines,
             priority=priority,
         )
+        aggregated_results = list(first_payload['results'])
+        for pattern in patterns[1:]:
+            extra = build_rule_test_results(
+                source_text=pattern,
+                status=status,
+                match_type=match_type,
+                lines=lines,
+                priority=priority,
+            )
+            for idx, item in enumerate(extra['results']):
+                if item.get('matched') and not aggregated_results[idx].get('matched'):
+                    aggregated_results[idx] = item
     except ValueError as exc:
         return JsonResponse({'error': str(exc)}, status=400)
 
+    response_payload = dict(first_payload)
+    response_payload['results'] = aggregated_results
     return JsonResponse(response_payload)

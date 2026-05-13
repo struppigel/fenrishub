@@ -101,6 +101,28 @@ class RulesViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(ClassificationRule.objects.filter(source_text="DUP-LINE").count(), 1)
 
+    def test_create_multiple_rules_from_multiline_source(self):
+        response = self.client.post(
+            reverse("rules"),
+            {
+                "action": "create",
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "alpha\nbeta\ngamma",
+                "description": "shared",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        rules = ClassificationRule.objects.filter(owner=self.user)
+        self.assertEqual(rules.count(), 3)
+        for rule in rules:
+            self.assertEqual(rule.description, "shared")
+            self.assertEqual(rule.match_type, ClassificationRule.MATCH_SUBSTRING)
+        self.assertSetEqual(
+            set(rules.values_list("source_text", flat=True)),
+            {"alpha", "beta", "gamma"},
+        )
+
     # -- Edit --
 
     def test_edit_own_rule(self):

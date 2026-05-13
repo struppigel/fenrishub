@@ -492,3 +492,27 @@ class RulePreviewApiTests(TestCase):
         self.assertFalse(result["matched"])
         self.assertFalse(result["new_rule_outranked"])
         self.assertIsNone(result["new_rule_outranked_by"])
+
+    # -- Multi-pattern aggregation --
+
+    def test_multiple_patterns_aggregate_matches_per_line(self):
+        response = self._post({
+            "source_text": "alpha\nbeta\ngamma",
+            "match_type": "substring",
+            "status": "B",
+            "lines": ["this has alpha", "this has beta", "this has gamma", "clean line"],
+        })
+        data = response.json()
+        self.assertTrue(data["results"][0]["matched"])
+        self.assertTrue(data["results"][1]["matched"])
+        self.assertTrue(data["results"][2]["matched"])
+        self.assertFalse(data["results"][3]["matched"])
+
+    def test_multiple_patterns_rejects_over_limit(self):
+        response = self._post({
+            "source_text": "\n".join(f"pattern-{i}" for i in range(101)),
+            "match_type": "substring",
+            "status": "B",
+            "lines": ["x"],
+        })
+        self.assertEqual(response.status_code, 400)

@@ -91,6 +91,13 @@
             text-align: right;
         }
 
+        .online-indicator {
+            font-size: 11px;
+            color: var(--la-text-neutral);
+            white-space: nowrap;
+            cursor: default;
+        }
+
         .nav {
             display: flex;
             align-items: center;
@@ -673,6 +680,7 @@
                     <a href="{% url 'uploaded_logs' %}">uploads</a>
                 </div>
                 <div class="nav-right" style="display: flex; gap: 8px; align-items: center;">
+                    <span class="online-indicator" title="{{ online_users.names|join:', ' }}">{{ online_users.count }} online</span>
                     <div id="bannerStatistics" class="banner-statistics" style="display: none;"></div>
                 </div>
             </div>
