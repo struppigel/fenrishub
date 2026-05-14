@@ -303,9 +303,10 @@ function renderLineInspector(detailsPayload, entry) {
                 const scopeLabel = match._scope === 'shadowed' ? 'shadowed' : 'effective';
                 const matcherText = match.matcher ? ` | matcher: ${match.matcher}` : '';
                 const reasonText = match.reason ? ` | reason: ${match.reason}` : '';
+                const ownerText = match.owner_username ? ` | by ${match.owner_username}` : '';
                 item.textContent =
                     `${scopeLabel} | #${match.id} | ${match.status} (${STATUS_LABEL_MAP[match.status] || 'unknown'}) | ` +
-                    `${match.match_type}${matcherText} | ${match.source_text}${reasonText}`;
+                    `${match.match_type}${matcherText} | ${match.source_text}${reasonText}${ownerText}`;
                 matchesListEl.appendChild(item);
             });
         }
@@ -1072,6 +1073,51 @@ function addRemainingAsClean() {
     renderLogLines();
 }
 
+const PENDING_FIXLIST_PAYLOAD_KEY = 'fenrishub_pending_fixlist_payload';
+
+function submitFixlistDirectly({ content, sourceUploadId }) {
+    if (!CREATE_FIXLIST_URL) {
+        alert('Fixlist endpoint is not configured.');
+        return;
+    }
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = CREATE_FIXLIST_URL;
+
+    const addField = (name, value) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+    };
+
+    addField('csrfmiddlewaretoken', getCookie('csrftoken') || '');
+    addField('content', content || '');
+    if (sourceUploadId) {
+        addField('source_upload_id', sourceUploadId);
+    }
+
+    document.body.appendChild(form);
+    form.submit();
+}
+
+function consumePendingFixlistPayload() {
+    let raw = null;
+    try {
+        raw = sessionStorage.getItem(PENDING_FIXLIST_PAYLOAD_KEY);
+        sessionStorage.removeItem(PENDING_FIXLIST_PAYLOAD_KEY);
+    } catch (e) {
+        return null;
+    }
+    if (!raw) return null;
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        return null;
+    }
+}
+
 function beginRuleWorkflow(target) {
     setRuleSubmitTarget(target);
 
@@ -1090,7 +1136,12 @@ function beginRuleWorkflow(target) {
     }
 
     sessionStorage.removeItem(CONFLICT_RESOLUTION_STORAGE_KEY);
-    window.location.href = CREATE_FIXLIST_URL;
+    const payload = consumePendingFixlistPayload();
+    if (!payload || !payload.content) {
+        alert('Add at least one line before saving.');
+        return;
+    }
+    submitFixlistDirectly(payload);
 }
 
 function goToCreateFixlist() {
@@ -1100,7 +1151,13 @@ function goToCreateFixlist() {
         return;
     }
 
-    sessionStorage.setItem('fenrishub_prefill_content', selected);
+    const uploadSelect = document.getElementById('uploadSourceSelect');
+    const sourceUploadId = uploadSelect ? (uploadSelect.value || '').trim() : '';
+
+    sessionStorage.setItem(
+        PENDING_FIXLIST_PAYLOAD_KEY,
+        JSON.stringify({ content: selected, sourceUploadId }),
+    );
     beginRuleWorkflow(RULE_SUBMIT_TARGET_CREATE_FIXLIST);
 }
 

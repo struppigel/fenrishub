@@ -191,7 +191,7 @@ def dashboard_view(request):
 def create_fixlist_view(request):
     """Create a new fixlist on a dedicated page."""
     if request.method == 'POST':
-        username = request.POST.get('username', 'Unknown')
+        username = (request.POST.get('username', '') or '').strip()
         content = request.POST.get('content', '')
         internal_note = request.POST.get('internal_note', '')
         source_upload_id = (request.POST.get('source_upload_id', '') or '').strip()
@@ -201,7 +201,12 @@ def create_fixlist_view(request):
             source_uploaded_log = UploadedLog.objects.filter(
                 upload_id=source_upload_id,
                 deleted_at__isnull=True,
-            ).only('id').first()
+            ).only('id', 'reddit_username').first()
+
+        if not username and source_uploaded_log and source_uploaded_log.reddit_username:
+            username = source_uploaded_log.reddit_username
+        if not username:
+            username = 'Unknown'
 
         fixlist = Fixlist.objects.create(
             owner=request.user,
@@ -298,6 +303,8 @@ def view_fixlist(request, pk):
             fixlist.content = request.POST.get('content', fixlist.content)
             fixlist.internal_note = request.POST.get('internal_note', fixlist.internal_note)
             fixlist.save()
+            saved_at = timezone.localtime(fixlist.updated_at).strftime('%H:%M:%S')
+            messages.success(request, f'fixlist saved at {saved_at}')
             return redirect('view_fixlist', pk=fixlist.pk)
         
         elif action == 'delete':

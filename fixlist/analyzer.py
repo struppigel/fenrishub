@@ -549,18 +549,25 @@ def _load_rule_buckets():
     return buckets
 
 
+def _owner_suffix(rule) -> str:
+    if rule.owner_id and getattr(rule.owner, "username", ""):
+        return f" (by {rule.owner.username})"
+    return ""
+
+
 def _status_and_reason_from_matches(matches):
     statuses = []
     reasons = []
     alert_descriptions = []
     for rule, reason in matches:
         statuses.append(rule.status)
+        owner_suffix = _owner_suffix(rule)
         if rule.description:
-            reasons.append(f"{rule.status}: {rule.description}")
+            reasons.append(f"{rule.status}: {rule.description}{owner_suffix}")
             if rule.status == ClassificationRule.STATUS_ALERT:
                 alert_descriptions.append(rule.description)
         if reason:
-            reasons.append(f"{rule.status}: {reason}")
+            reasons.append(f"{rule.status}: {reason}{owner_suffix}")
     return _ordered_status_codes(statuses), _dedupe(reasons), _dedupe(alert_descriptions)
 
 
@@ -798,10 +805,11 @@ def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]
 
     for rule, reason, matcher in matches:
         reason_value = reason or ""
+        owner_suffix = _owner_suffix(rule)
         if reason_value:
-            reasons.append(f"{rule.status}: {reason_value}")
+            reasons.append(f"{rule.status}: {reason_value}{owner_suffix}")
         if rule.description:
-            reasons.append(f"{rule.status}: {rule.description}")
+            reasons.append(f"{rule.status}: {rule.description}{owner_suffix}")
 
         serialized_matches.append(
             {

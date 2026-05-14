@@ -249,6 +249,14 @@ class IncompleteLogFlagTests(TestCase):
              _frst_and_addition_only_frst_ending, True),
             ('fixlog_type_never_incomplete', 'Fixlog',
              'Fix result of Farbar Recovery Scan Tool\nsome fix', False),
+            # End markers fused with the next log's header on the same line
+            # (a common paste artifact) must still count as complete.
+            ('frst_and_addition_end_markers_fused_with_next_log', 'FRST&Addition',
+             'Scan result of Farbar Recovery Scan Tool\nfrst content\n'
+             f'{FRST_END_OF_LOG}Additional scan result of Farbar Recovery Scan Tool\n'
+             'addition content\n'
+             f'{FRST_END_OF_ADDITION}Scan result of Farbar Recovery Scan Tool (x64)',
+             False),
         ]
         for label, log_type, content, expected in cases:
             with self.subTest(label=label):

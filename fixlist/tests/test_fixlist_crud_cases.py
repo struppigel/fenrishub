@@ -58,6 +58,38 @@ class FixlistCrudViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(created.source_uploaded_log_id, upload.id)
 
+    def test_create_fixlist_derives_username_from_source_upload(self):
+        upload = UploadedLog.objects.create(
+            upload_id="derive-username",
+            reddit_username="derived_user",
+            original_filename="FRST.txt",
+            content="line-1",
+        )
+
+        response = self.client.post(
+            reverse("create_fixlist"),
+            {
+                "content": "ioc-1\nioc-2",
+                "source_upload_id": upload.upload_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        created = Fixlist.objects.get(source_uploaded_log_id=upload.id)
+        self.assertEqual(created.username, "derived_user")
+
+    def test_create_fixlist_falls_back_to_unknown_username(self):
+        response = self.client.post(
+            reverse("create_fixlist"),
+            {
+                "content": "ioc-1\nioc-2",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        created = Fixlist.objects.get(content="ioc-1\nioc-2")
+        self.assertEqual(created.username, "Unknown")
+
     def test_create_fixlist_ignores_unknown_source_upload_id(self):
         response = self.client.post(
             reverse("create_fixlist"),
