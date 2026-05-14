@@ -18,7 +18,7 @@ from ..analyzer import (
     VALID_STATUSES, invalidate_rule_buckets_cache,
 )
 from ..models import ClassificationRule, FixlistSnippet, UploadedLog
-from ..validators import PayloadValidator, BadJsonError
+from ..validators import PayloadValidator, BadJsonError, PayloadTooLargeError
 from ..rule_utils import (
     _normalize_pending_changes, _build_pending_rule_preview,
     _persist_selected_pending_rules,
@@ -84,6 +84,8 @@ def analyze_log_api(request):
     """Analyze pasted FRST log content and return line-level classifications."""
     try:
         payload = PayloadValidator.json_payload(request)
+    except PayloadTooLargeError as exc:
+        return PayloadValidator.error_response(str(exc), status=413)
     except BadJsonError:
         return PayloadValidator.error_response('Invalid JSON payload.')
 
@@ -117,6 +119,8 @@ def analyze_line_details_api(request):
     """Inspect a single line and return parsed metadata plus matching rule details."""
     try:
         payload = PayloadValidator.json_payload(request)
+    except PayloadTooLargeError as exc:
+        return PayloadValidator.error_response(str(exc), status=413)
     except BadJsonError:
         return PayloadValidator.error_response('Invalid JSON payload.')
 
@@ -160,6 +164,8 @@ def preview_pending_rule_changes_api(request):
     """Preview optional rule persistence before creating a fixlist."""
     try:
         payload = PayloadValidator.json_payload(request)
+    except PayloadTooLargeError as exc:
+        return PayloadValidator.error_response(str(exc), status=413)
     except BadJsonError:
         return PayloadValidator.error_response('Invalid JSON payload.')
 
@@ -180,6 +186,8 @@ def persist_pending_rule_changes_api(request):
     """Persist selected pending analyzer changes as classification rules immediately."""
     try:
         payload = PayloadValidator.json_payload(request)
+    except PayloadTooLargeError as exc:
+        return PayloadValidator.error_response(str(exc), status=413)
     except BadJsonError:
         return PayloadValidator.error_response('Invalid JSON payload.')
 
@@ -214,6 +222,8 @@ def update_analyzed_line_status_api(request):
     """Validate a status override payload without persisting it to the database."""
     try:
         payload = PayloadValidator.json_payload(request)
+    except PayloadTooLargeError as exc:
+        return PayloadValidator.error_response(str(exc), status=413)
     except BadJsonError:
         return PayloadValidator.error_response('Invalid JSON payload.')
 

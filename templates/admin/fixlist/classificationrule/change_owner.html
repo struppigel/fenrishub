@@ -1,0 +1,98 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+    .change-owner-page .module.aligned .form-row {
+        display: grid;
+        grid-template-columns: 180px minmax(320px, 1fr);
+        align-items: start;
+        column-gap: 16px;
+        row-gap: 6px;
+        padding: 10px 12px;
+    }
+
+    .change-owner-page .module.aligned .form-row > label {
+        margin: 6px 0 0;
+        width: auto;
+        float: none;
+        padding: 0;
+        font-weight: 600;
+    }
+
+    .change-owner-page .module.aligned .form-row > input,
+    .change-owner-page .module.aligned .form-row > select,
+    .change-owner-page .module.aligned .form-row > div {
+        width: 100%;
+        max-width: 480px;
+        box-sizing: border-box;
+        float: none;
+        margin: 0;
+    }
+
+    .change-owner-page .module.aligned .form-row .help,
+    .change-owner-page .module.aligned .form-row .errorlist {
+        grid-column: 2;
+        margin: 0;
+    }
+
+    .change-owner-page .submit-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        justify-content: flex-start;
+    }
+
+    .change-owner-page .submit-row input,
+    .change-owner-page .submit-row .button {
+        min-width: 140px;
+        height: 34px;
+        padding: 0 14px;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        font-weight: 600;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main" class="change-owner-page">
+    <h1>Change owner of selected rules</h1>
+    <p>
+        You selected <strong>{{ rule_count }}</strong> rule(s).
+        Choose the new owner below. Optionally limit the change to the most
+        recently created N rules from the selection.
+    </p>
+
+    <form method="post" novalidate>
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        <fieldset class="module aligned">
+            {% for field in form %}
+            <div class="form-row">
+                {{ field.errors }}
+                {{ field.label_tag }}
+                {{ field }}
+                {% if field.help_text %}
+                <div class="help">{{ field.help_text }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </fieldset>
+
+        {% for pk in selected_ids %}
+        <input type="hidden" name="_selected_action" value="{{ pk }}">
+        {% endfor %}
+        <input type="hidden" name="action" value="{{ action_name }}">
+        <input type="hidden" name="apply" value="1">
+
+        <div class="submit-row">
+            <input type="submit" value="Reassign owner" class="default">
+            <a href="{% url 'admin:fixlist_classificationrule_changelist' %}" class="button cancel-link">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

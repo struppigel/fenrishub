@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib import admin, messages
+from django.contrib.auth.models import User
 from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
@@ -53,6 +54,19 @@ class RuleImportForm(forms.Form):
         return cleaned
 
 
+class ChangeRuleOwnerForm(forms.Form):
+    new_owner = forms.ModelChoiceField(
+        queryset=User.objects.order_by('username'),
+        label='New owner',
+    )
+    limit_to_last_n = forms.IntegerField(
+        required=False,
+        min_value=1,
+        label='Limit to last N (optional)',
+        help_text='If set, restricts the reassignment to the most recently created N rules from the selection.',
+    )
+
+
 @admin.register(Fixlist)
 class FixlistAdmin(admin.ModelAdmin):
     list_display = ('username', 'owner', 'download_count', 'created_at', 'share_token')
@@ -76,6 +90,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
     list_filter = ('status', 'owner', 'match_type', 'entry_type', 'is_enabled', 'source_name')
     search_fields = ('source_text', 'description', 'name', 'filepath', 'clsid', 'company', 'owner__username')
     readonly_fields = ('created_at', 'updated_at')
+    actions = ['change_owner']
 
     fieldsets = (
         (
@@ -117,6 +132,45 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         return obj.source_text[:77] + '...'
 
     short_source.short_description = 'source_text'
+
+    @admin.action(description='Change owner of selected rules…')
+    def change_owner(self, request, queryset):
+        if request.POST.get('apply'):
+            form = ChangeRuleOwnerForm(request.POST)
+            if form.is_valid():
+                new_owner = form.cleaned_data['new_owner']
+                limit_n = form.cleaned_data.get('limit_to_last_n')
+                if limit_n:
+                    ids = list(
+                        queryset.order_by('-created_at').values_list('pk', flat=True)[:limit_n]
+                    )
+                    target_qs = ClassificationRule.objects.filter(pk__in=ids)
+                else:
+                    target_qs = queryset
+                updated = target_qs.update(owner=new_owner)
+                self.message_user(
+                    request,
+                    f'Reassigned {updated} rule(s) to {new_owner.username}.',
+                    level=messages.SUCCESS,
+                )
+                return None
+        else:
+            form = ChangeRuleOwnerForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            'opts': self.model._meta,
+            'title': 'Change owner of selected rules',
+            'form': form,
+            'rule_count': queryset.count(),
+            'selected_ids': list(queryset.values_list('pk', flat=True)),
+            'action_name': 'change_owner',
+        }
+        return TemplateResponse(
+            request,
+            'admin/fixlist/classificationrule/change_owner.html',
+            context,
+        )
 
     def get_urls(self):
         urls = super().get_urls()
