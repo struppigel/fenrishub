@@ -143,6 +143,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Verbose FRST + Addition logs routinely exceed Django's 2.5 MB default.
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+# Admin bulk actions can submit one hidden field per selected row.
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 50000
 
 LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = 'dashboard'

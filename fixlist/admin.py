@@ -1,6 +1,7 @@
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.auth.models import User
+from django.db import IntegrityError, transaction
 from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
@@ -141,18 +142,54 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                 new_owner = form.cleaned_data['new_owner']
                 limit_n = form.cleaned_data.get('limit_to_last_n')
                 if limit_n:
-                    ids = list(
+                    target_pks = list(
                         queryset.order_by('-created_at').values_list('pk', flat=True)[:limit_n]
                     )
-                    target_qs = ClassificationRule.objects.filter(pk__in=ids)
                 else:
-                    target_qs = queryset
-                updated = target_qs.update(owner=new_owner)
-                self.message_user(
-                    request,
-                    f'Reassigned {updated} rule(s) to {new_owner.username}.',
-                    level=messages.SUCCESS,
-                )
+                    target_pks = list(queryset.values_list('pk', flat=True))
+
+                target_qs = ClassificationRule.objects.filter(pk__in=target_pks)
+
+                try:
+                    with transaction.atomic():
+                        updated = target_qs.exclude(owner=new_owner).update(owner=new_owner)
+                    skipped_conflicts = []
+                    already_owned = target_qs.filter(owner=new_owner).count()
+                except IntegrityError:
+                    updated = 0
+                    already_owned = 0
+                    skipped_conflicts = []
+                    for rule in target_qs.iterator():
+                        if rule.owner_id == new_owner.id:
+                            already_owned += 1
+                            continue
+                        try:
+                            with transaction.atomic():
+                                ClassificationRule.objects.filter(pk=rule.pk).update(
+                                    owner=new_owner,
+                                )
+                            updated += 1
+                        except IntegrityError:
+                            skipped_conflicts.append(rule)
+
+                parts = [f'Reassigned {updated} rule(s) to {new_owner.username}.']
+                if already_owned:
+                    parts.append(
+                        f'Skipped {already_owned} already owned by {new_owner.username}.'
+                    )
+                if skipped_conflicts:
+                    examples = '; '.join(
+                        f'#{r.pk} [{r.match_type}] {r.source_text[:60]}'
+                        for r in skipped_conflicts[:5]
+                    )
+                    suffix = '' if len(skipped_conflicts) <= 5 else ' (…)'
+                    parts.append(
+                        f'Skipped {len(skipped_conflicts)} due to existing '
+                        f'(status, match_type, source_text) collisions under '
+                        f'{new_owner.username}: {examples}{suffix}'
+                    )
+                level = messages.WARNING if skipped_conflicts else messages.SUCCESS
+                self.message_user(request, ' '.join(parts), level=level)
                 return None
         else:
             form = ChangeRuleOwnerForm()
