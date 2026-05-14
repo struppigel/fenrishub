@@ -6,7 +6,7 @@ from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 
-from .analyzer import import_rules_from_lines
+from .analyzer import import_rules_from_lines, invalidate_rule_buckets_cache
 from .models import (
     AccessLog,
     ClassificationRule,
@@ -91,7 +91,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
     list_filter = ('status', 'owner', 'match_type', 'entry_type', 'is_enabled', 'source_name')
     search_fields = ('source_text', 'description', 'name', 'filepath', 'clsid', 'company', 'owner__username')
     readonly_fields = ('created_at', 'updated_at')
-    actions = ['change_owner']
+    actions = ['change_owner', 'strip_leading_case_insensitive_flag']
 
     fieldsets = (
         (
@@ -133,6 +133,59 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         return obj.source_text[:77] + '...'
 
     short_source.short_description = 'source_text'
+
+    @admin.action(description='Strip leading "(?i)" from selected regex rules')
+    def strip_leading_case_insensitive_flag(self, request, queryset):
+        prefix = '(?i)'
+        regex_qs = queryset.filter(match_type=ClassificationRule.MATCH_REGEX)
+        skipped_non_regex = queryset.count() - regex_qs.count()
+
+        candidates = regex_qs.filter(source_text__startswith=prefix)
+        skipped_no_prefix = regex_qs.count() - candidates.count()
+
+        updated = 0
+        skipped_conflicts = []
+        skipped_empty = 0
+
+        for rule in candidates.iterator():
+            new_source = rule.source_text[len(prefix):]
+            if not new_source:
+                skipped_empty += 1
+                continue
+            try:
+                with transaction.atomic():
+                    rule.source_text = new_source
+                    rule.save(update_fields=['source_text', 'updated_at'])
+                updated += 1
+            except IntegrityError:
+                skipped_conflicts.append(rule)
+
+        if updated:
+            invalidate_rule_buckets_cache()
+
+        parts = [f'Stripped "(?i)" prefix from {updated} regex rule(s).']
+        if skipped_non_regex:
+            parts.append(f'Skipped {skipped_non_regex} non-regex rule(s).')
+        if skipped_no_prefix:
+            parts.append(f'Skipped {skipped_no_prefix} regex rule(s) without "(?i)" prefix.')
+        if skipped_empty:
+            parts.append(f'Skipped {skipped_empty} where stripping would leave an empty pattern.')
+        if skipped_conflicts:
+            examples = '; '.join(
+                f'#{r.pk} {r.source_text[:60]}'
+                for r in skipped_conflicts[:5]
+            )
+            suffix = '' if len(skipped_conflicts) <= 5 else ' (…)'
+            parts.append(
+                f'Skipped {len(skipped_conflicts)} due to '
+                f'(owner, status, match_type, source_text) collision: {examples}{suffix}'
+            )
+        level = (
+            messages.WARNING
+            if (skipped_conflicts or skipped_empty or skipped_non_regex)
+            else messages.SUCCESS
+        )
+        self.message_user(request, ' '.join(parts), level=level)
 
     @admin.action(description='Change owner of selected rules…')
     def change_owner(self, request, queryset):

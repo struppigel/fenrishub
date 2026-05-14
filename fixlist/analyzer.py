@@ -3,6 +3,11 @@ import time
 from datetime import datetime
 from typing import Iterable
 
+try:
+    import re2 as _re2
+except ImportError:
+    _re2 = None
+
 from . import frst_extractors as ex
 from .models import ClassificationRule, ParsedFilepathExclusion, get_default_rule_owner_id, detect_log_type
 from .status_types import (
@@ -504,7 +509,11 @@ def _load_rule_buckets():
         ClassificationRule.MATCH_PARSED_ENTRY: [],
         "__filepath_any": [],
         "__parsed_filepath_exclusions": parsed_filepath_exclusions,
+        "__regex_set": None,
+        "__regex_set_rules": [],
     }
+
+    pending_regex_rules = []
 
     for rule in rules:
         if rule.status not in VALID_STATUSES:
@@ -523,11 +532,7 @@ def _load_rule_buckets():
             )
 
         if rule.match_type == ClassificationRule.MATCH_REGEX:
-            try:
-                compiled = re.compile(rule.source_text)
-            except re.error:
-                continue
-            buckets[ClassificationRule.MATCH_REGEX].append((rule, compiled))
+            pending_regex_rules.append(rule)
             continue
 
         if rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
@@ -546,7 +551,63 @@ def _load_rule_buckets():
 
         buckets[rule.match_type].append(rule)
 
+    _build_regex_matchers(buckets, pending_regex_rules)
     return buckets
+
+
+def _build_regex_matchers(buckets, regex_rules):
+    """Compile regex rules into a re2.Set for one-pass multi-pattern matching.
+
+    Patterns rejected by re2 (backreferences, lookaround, syntax it doesn't support)
+    fall back to stdlib re. If re2 is unavailable, all rules use stdlib re.
+    """
+    if not regex_rules:
+        return
+
+    fallback_bucket = buckets[ClassificationRule.MATCH_REGEX]
+
+    def _add_to_fallback(rule):
+        try:
+            compiled = re.compile(rule.source_text)
+        except re.error:
+            return
+        fallback_bucket.append((rule, compiled))
+
+    if _re2 is None:
+        for rule in regex_rules:
+            _add_to_fallback(rule)
+        return
+
+    try:
+        options = _re2.Options()
+        options.max_mem = 64 * 1024 * 1024
+        regex_set = _re2.Set(options, _re2.Anchor.UNANCHORED)
+    except Exception:
+        for rule in regex_rules:
+            _add_to_fallback(rule)
+        return
+
+    set_rules = []
+    for rule in regex_rules:
+        try:
+            regex_set.add(rule.source_text)
+        except Exception:
+            _add_to_fallback(rule)
+            continue
+        set_rules.append(rule)
+
+    if not set_rules:
+        return
+
+    try:
+        regex_set.compile()
+    except Exception:
+        for rule in set_rules:
+            _add_to_fallback(rule)
+        return
+
+    buckets["__regex_set"] = regex_set
+    buckets["__regex_set_rules"] = set_rules
 
 
 def _owner_suffix(rule) -> str:
@@ -729,6 +790,17 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
     for rule in buckets[ClassificationRule.MATCH_SUBSTRING]:
         if rule.source_text and rule.source_text in line:
             groups["substring"].append((rule, f'found substring "{rule.source_text}"', "substring"))
+
+    regex_set = buckets.get("__regex_set")
+    if regex_set is not None:
+        set_rules = buckets["__regex_set_rules"]
+        try:
+            matched_indices = regex_set.match(line)
+        except Exception:
+            matched_indices = ()
+        for idx in matched_indices:
+            rule = set_rules[idx]
+            groups["regex"].append((rule, f'found regex match for "{rule.source_text}"', "regex"))
 
     for rule, compiled_regex in buckets[ClassificationRule.MATCH_REGEX]:
         if compiled_regex.search(line):

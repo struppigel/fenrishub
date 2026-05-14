@@ -6,3 +6,4 @@ gunicorn==23.0.0
 whitenoise==6.9.0
 mmh3>=5.2,<6
 charset-normalizer>=3.3,<4
+google-re2>=1.1
