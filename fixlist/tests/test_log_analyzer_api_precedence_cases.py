@@ -103,7 +103,11 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(analyze_payload["lines"][0]["matcher"], "parsed_entry")
         self.assertEqual(analyze_payload["lines"][1]["matcher"], "filepath")
         self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
-        self.assertEqual(analyze_payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+        self.assertEqual(analyze_payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_UNKNOWN)
+        self.assertEqual(
+            analyze_payload["lines"][1]["filepath_highlight"]["status"],
+            ClassificationRule.STATUS_MALWARE,
+        )
 
     def test_parsed_fallback_filepath_respects_exclusion_list(self):
         self.client.login(username="analyzer", password="password123")
@@ -171,7 +175,11 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
 
         self.assertEqual(analyze_response.status_code, 200)
         self.assertEqual(analyze_payload["lines"][0]["matcher"], "filepath")
-        self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+        self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_UNKNOWN)
+        self.assertEqual(
+            analyze_payload["lines"][0]["filepath_highlight"]["status"],
+            ClassificationRule.STATUS_MALWARE,
+        )
 
         inspection = inspect_line_matches(same_path_line)
         self.assertEqual(inspection["effective_matcher"], "filepath")

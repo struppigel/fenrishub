@@ -665,6 +665,7 @@ def _build_line_result(
     alert_descriptions: list[str] | None = None,
     dates: list[str] | None = None,
     parsed_entry=None,
+    filepath_highlight: dict | None = None,
 ):
     dominant_status = _dominant_status(status_codes)
     components = {}
@@ -692,8 +693,25 @@ def _build_line_result(
         "matched": dominant_status != "?",
         "dates": dates or [],
         "components": components,
+        "filepath_highlight": filepath_highlight,
         "_alert_descriptions": alert_descriptions or [],
     }
+
+
+def _build_filepath_highlight_payload(line: str, status_codes: str) -> dict:
+    dominant_status = _dominant_status(status_codes)
+    payload = {
+        "status": dominant_status,
+        "css_class": STATUS_CSS_CLASS.get(dominant_status, "status-unknown"),
+    }
+    filepath_value = ex.extract_any_frst_path(line)
+    if not filepath_value:
+        return payload
+    pos = ex.find_value_position(filepath_value, line, "filepath")
+    if pos:
+        payload["start"] = pos[0]
+        payload["end"] = pos[1]
+    return payload
 
 
 _MATCHER_ENTRY_TYPE_LABELS = {
@@ -736,6 +754,21 @@ def _analyze_single_line(line: str, buckets):
     status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(
         [(rule, reason) for rule, reason, _matcher in effective_matches]
     )
+
+    if all(matcher == "filepath" for _rule, _reason, matcher in effective_matches):
+        unknown_entry_type = parsed_entry.entry_type if parsed_entry else ""
+        return _build_line_result(
+            line,
+            "?",
+            unknown_entry_type,
+            reasons,
+            "filepath",
+            alert_descriptions,
+            dates=dates,
+            parsed_entry=parsed_entry,
+            filepath_highlight=_build_filepath_highlight_payload(line, status_codes),
+        )
+
     entry_type = _entry_type_for_winning_group(effective_matches, parsed_entry)
     return _build_line_result(
         line,

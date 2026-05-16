@@ -889,29 +889,66 @@ function createChromeExtIdTrigger(extId) {
     return btn;
 }
 
-function appendLineTextWithDateHighlight(textEl, line) {
-    const spans = findHighlightSpans(line);
-    if (!spans.length) {
+function buildInnerHighlightNode(span) {
+    if (span.type === 'date') {
+        const el = document.createElement('span');
+        el.className = `date-cluster-${span.bucket}`;
+        el.textContent = span.text;
+        return el;
+    }
+    return createChromeExtIdTrigger(span.text);
+}
+
+function appendLineTextWithDateHighlight(textEl, line, filepathHighlight = null) {
+    const innerSpans = findHighlightSpans(line);
+    const fp = filepathHighlight
+        && Number.isInteger(filepathHighlight.start)
+        && Number.isInteger(filepathHighlight.end)
+        && filepathHighlight.end > filepathHighlight.start
+        ? filepathHighlight
+        : null;
+
+    function emitChunk(parent, start, end) {
+        let cursor = start;
+        for (const span of innerSpans) {
+            if (span.end <= cursor) continue;
+            if (span.start >= end) break;
+            if (span.start < start || span.end > end) continue;
+            if (span.start > cursor) {
+                parent.appendChild(document.createTextNode(line.slice(cursor, span.start)));
+            }
+            parent.appendChild(buildInnerHighlightNode(span));
+            cursor = span.end;
+        }
+        if (cursor < end) {
+            parent.appendChild(document.createTextNode(line.slice(cursor, end)));
+        }
+    }
+
+    if (!innerSpans.length && !fp) {
         textEl.textContent = line;
         return;
     }
-    let cursor = 0;
-    for (const span of spans) {
-        if (span.start > cursor) {
-            textEl.appendChild(document.createTextNode(line.slice(cursor, span.start)));
-        }
-        if (span.type === 'date') {
-            const el = document.createElement('span');
-            el.className = `date-cluster-${span.bucket}`;
-            el.textContent = span.text;
-            textEl.appendChild(el);
-        } else if (span.type === 'chrome-ext-id') {
-            textEl.appendChild(createChromeExtIdTrigger(span.text));
-        }
-        cursor = span.end;
+
+    if (!fp) {
+        emitChunk(textEl, 0, line.length);
+        return;
     }
-    if (cursor < line.length) {
-        textEl.appendChild(document.createTextNode(line.slice(cursor)));
+
+    const fpStart = Math.max(0, Math.min(fp.start, line.length));
+    const fpEnd = Math.max(fpStart, Math.min(fp.end, line.length));
+
+    if (fpStart > 0) {
+        emitChunk(textEl, 0, fpStart);
+    }
+    if (fpEnd > fpStart) {
+        const wrapper = document.createElement('span');
+        wrapper.className = `filepath-highlight ${fp.css_class || ''}`.trim();
+        emitChunk(wrapper, fpStart, fpEnd);
+        textEl.appendChild(wrapper);
+    }
+    if (fpEnd < line.length) {
+        emitChunk(textEl, fpEnd, line.length);
     }
 }
 
@@ -1043,7 +1080,7 @@ function renderLogLines() {
 
         const text = document.createElement('span');
         text.className = 'line-text';
-        appendLineTextWithDateHighlight(text, line);
+        appendLineTextWithDateHighlight(text, line, entry.filepath_highlight);
 
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';

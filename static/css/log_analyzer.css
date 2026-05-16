@@ -971,6 +971,18 @@ body.clean-cursor-mode .line-text {
     white-space: nowrap;
 }
 
+.filepath-highlight { color: inherit; }
+.filepath-highlight.status-b { color: var(--la-status-b); }
+.filepath-highlight.status-p { color: var(--la-status-p); }
+.filepath-highlight.status-c { color: var(--la-status-c); }
+.filepath-highlight.status-w { color: var(--la-status-w); }
+.filepath-highlight.status-a { color: var(--la-status-a); }
+.filepath-highlight.status-g { color: var(--la-status-g); }
+.filepath-highlight.status-s { color: var(--la-status-s); }
+.filepath-highlight.status-i { color: var(--la-status-i); }
+.filepath-highlight.status-j { color: var(--la-status-j); }
+.filepath-highlight.status-unknown { color: var(--la-status-unknown); }
+
 .chrome-ext-id-trigger {
     display: inline;
     padding: 0;

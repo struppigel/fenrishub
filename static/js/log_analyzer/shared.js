@@ -360,6 +360,7 @@ function applyPendingOverrides() {
             status_label: STATUS_LABEL_MAP[overrideStatus] || 'unknown',
             reasons: [...baseReasons, `manual override: ${pending.original_status} -> ${pending.new_status}`],
             matched: overrideStatus !== '?',
+            filepath_highlight: null,
         };
     });
     recomputeDateClusters();
