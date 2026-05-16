@@ -418,3 +418,217 @@ class LogAnalyzerApiWarningTests(LogAnalyzerApiBaseTestCase):
         self.assertIn("2026-04-05 19:25:34", warning["details"][0])
         # Check that details include the full information
         self.assertEqual(len(warning["details"]), 3)
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_warns_for_recent_os_install_within_last_week(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        log = "Microsoft Windows 11 Pro Version 25H2 26200.8457 (X64) (2026-05-15 10:20:31)\n"
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {w["code"]: w for w in payload["warnings"]}
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("recent_os_install", warnings_by_code)
+        warning = warnings_by_code["recent_os_install"]
+        self.assertIn("yesterday", warning["message"])
+        self.assertIn("10:20:31", warning["message"])
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_does_not_warn_for_os_install_older_than_7_days(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        log = "Microsoft Windows 11 Pro Version 25H2 26200.8457 (X64) (2026-05-08 10:20:31)\n"
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        warning_codes = {w["code"] for w in response.json()["warnings"]}
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("recent_os_install", warning_codes)
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_os_install_warning_includes_corroborating_signs(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        log = (
+            "Microsoft Windows 11 Pro Version 25H2 26200.8457 (X64) (2026-05-15 10:20:31)\n"
+            "2026-05-16 09:00 - C:\\Windows.old\n"
+            "2026-05-16 09:00 - C:\\Windows\\Panther\\setupact.log\n"
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        warning = {w["code"]: w for w in response.json()["warnings"]}["recent_os_install"]
+        self.assertIn("Corroborating signs:", warning["details"])
+        joined = "\n".join(warning["details"])
+        self.assertIn("Windows.old", joined)
+        self.assertIn("Panther", joined)
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_os_install_warning_flags_user_profile_created_near_install(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        log = (
+            "Microsoft Windows 11 Pro Version 25H2 26200.8457 (X64) (2026-05-15 10:20:31)\n"
+            "==================== One month (created) (Whitelisted) =========\n"
+            "2026-05-15 17:47 - 2026-05-15 19:17 - 000000000 ____D C:\\Users\\caber\n"
+            "==================== One month (modified) ==================\n"
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        warning = {w["code"]: w for w in response.json()["warnings"]}["recent_os_install"]
+        joined = "\n".join(warning["details"])
+        self.assertIn("C:\\Users\\caber created near install date", joined)
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_os_install_warning_skips_system_user_profiles(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        # Only Public/Default profiles are present; should NOT count as corroborating.
+        log = (
+            "Microsoft Windows 11 Pro Version 25H2 26200.8457 (X64) (2026-05-15 10:20:31)\n"
+            "==================== One month (created) (Whitelisted) =========\n"
+            "2026-05-15 17:47 - 2026-05-15 19:17 - 000000000 ____D C:\\Users\\Public\n"
+            "2026-05-15 17:47 - 2026-05-15 19:17 - 000000000 ____D C:\\Users\\Default\n"
+            "==================== One month (modified) ==================\n"
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        warning = {w["code"]: w for w in response.json()["warnings"]}["recent_os_install"]
+        joined = "\n".join(warning["details"])
+        self.assertNotIn("created near install date", joined)
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_os_install_warning_flags_oldest_created_matching_install(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        log = (
+            "Microsoft Windows 11 Pro Version 25H2 26200.8457 (X64) (2026-05-15 10:20:31)\n"
+            "==================== One month (created) (Whitelisted) =========\n"
+            "2026-05-16 09:00 - 2026-05-16 09:00 - 000001234 _____ C:\\foo\\bar.txt\n"
+            "2026-05-15 11:00 - 2026-05-15 11:00 - 000001234 _____ C:\\foo\\install-time.dll\n"
+            "==================== One month (modified) ==================\n"
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        warning = {w["code"]: w for w in response.json()["warnings"]}["recent_os_install"]
+        joined = "\n".join(warning["details"])
+        self.assertIn("Oldest file in 'One month (created)' section dates to install day", joined)
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_os_install_warning_does_not_flag_when_oldest_predates_install(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        # Oldest "created" entry is from before install (e.g. preserved user files) — not a fresh-install signal.
+        log = (
+            "Microsoft Windows 11 Pro Version 25H2 26200.8457 (X64) (2026-05-15 10:20:31)\n"
+            "==================== One month (created) (Whitelisted) =========\n"
+            "2026-05-10 09:00 - 2026-05-10 09:00 - 000001234 _____ C:\\foo\\bar.txt\n"
+            "==================== One month (modified) ==================\n"
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        warning = {w["code"]: w for w in response.json()["warnings"]}["recent_os_install"]
+        joined = "\n".join(warning["details"])
+        self.assertNotIn("Oldest file in 'One month (created)' section", joined)
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_os_install_warning_handles_arm64(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        log = "Microsoft Windows 11 Pro Version 25H2 26200.8457 (ARM64) (2026-05-14 08:00:00)\n"
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        warnings_by_code = {w["code"]: w for w in response.json()["warnings"]}
+        self.assertIn("recent_os_install", warnings_by_code)
+        self.assertIn("2026-05-14 08:00:00", warnings_by_code["recent_os_install"]["message"])
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_does_not_warn_for_future_os_install_date(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        log = "Microsoft Windows 11 Pro Version 25H2 26200.8457 (X64) (2026-06-01 10:00:00)\n"
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        warning_codes = {w["code"] for w in response.json()["warnings"]}
+        self.assertNotIn("recent_os_install", warning_codes)
+
+    @patch("fixlist.analyzer.datetime")
+    def test_analyze_api_os_install_ignores_invalid_date(self, mock_datetime):
+        mock_datetime.now.return_value = datetime(2026, 5, 16, 14, 30, 0)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        self.client.login(username="analyzer", password="password123")
+        # Feb 30 is not a real date
+        log = "Microsoft Windows 11 Pro Version 25H2 26200.8457 (X64) (2026-02-30 10:00:00)\n"
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": log}),
+            content_type="application/json",
+        )
+
+        warning_codes = {w["code"] for w in response.json()["warnings"]}
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("recent_os_install", warning_codes)

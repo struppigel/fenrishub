@@ -317,6 +317,160 @@ def _detect_recent_restore_operation_warning(raw_log_text: str) -> dict | None:
     )
 
 
+_OS_INSTALL_DATE_RE = re.compile(
+    r"^Microsoft\s+Windows\b.*?\((?:X64|X86|ARM64)\)\s+"
+    r"\((\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})\)\s*$",
+    re.IGNORECASE,
+)
+
+_OS_INSTALL_CORROBORATING_SIGNS = (
+    (r"C:\Windows.old", "C:\\Windows.old present (in-place upgrade leftover, normally removed after ~10 days)"),
+    (r"C:\Windows\Panther", "C:\\Windows\\Panther present (Windows setup artifacts directory)"),
+    (r"C:\$WINDOWS.~BT", "C:\\$WINDOWS.~BT present (install staging directory)"),
+    (r"C:\$WINDOWS.~WS", "C:\\$WINDOWS.~WS present (install staging directory)"),
+)
+
+# Top-level user profile folder creation in FRST "One month (created)" entries:
+#   2026-05-16 17:47 - 2026-05-16 19:17 - 000000000 ____D C:\Users\caber
+_USER_PROFILE_CREATE_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})\s+-\s+"
+    r"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+-\s+"
+    r"\d+\s+[A-Z_]*D[A-Z_]*\s+"
+    r"C:\\Users\\([^\\\s]+)\s*$",
+    re.IGNORECASE,
+)
+_SYSTEM_USER_PROFILES = frozenset({
+    "public", "default", "default user", "all users",
+    "defaultaccount", "wdagutilityaccount",
+})
+
+_ONE_MONTH_CREATED_HEADER = "One month (created)"
+_ONE_MONTH_ENTRY_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})\s+-\s+"
+)
+
+
+def _find_user_profile_created_near_install(raw_log_text: str, install_dt: datetime) -> str | None:
+    """Return a non-system username whose profile folder was created within 24h of install."""
+    for raw_line in (raw_log_text or "").splitlines():
+        match = _USER_PROFILE_CREATE_RE.match(raw_line.strip())
+        if not match:
+            continue
+        try:
+            created = datetime(
+                int(match.group(1)), int(match.group(2)), int(match.group(3)),
+                int(match.group(4)), int(match.group(5)),
+            )
+        except (ValueError, TypeError):
+            continue
+        username = match.group(6)
+        if username.lower() in _SYSTEM_USER_PROFILES:
+            continue
+        if abs((created - install_dt).total_seconds()) <= 24 * 3600:
+            return username
+    return None
+
+
+def _find_oldest_one_month_created(raw_log_text: str) -> datetime | None:
+    """Return the earliest creation date in FRST's 'One month (created)' section."""
+    in_section = False
+    earliest = None
+    for raw_line in (raw_log_text or "").splitlines():
+        line = raw_line.strip()
+        if "====" in line:
+            if _ONE_MONTH_CREATED_HEADER in line:
+                in_section = True
+                continue
+            if in_section:
+                # A subsequent section delimiter ends the "One month (created)" block.
+                break
+            continue
+        if not in_section:
+            continue
+        match = _ONE_MONTH_ENTRY_RE.match(line)
+        if not match:
+            continue
+        try:
+            candidate = datetime(
+                int(match.group(1)), int(match.group(2)), int(match.group(3)),
+                int(match.group(4)), int(match.group(5)),
+            )
+        except (ValueError, TypeError):
+            continue
+        if earliest is None or candidate < earliest:
+            earliest = candidate
+    return earliest
+
+
+def _detect_recent_os_install_warning(raw_log_text: str) -> dict | None:
+    """Detect if Windows was installed or feature-updated within the last 7 days."""
+    install_dt = None
+    for raw_line in (raw_log_text or "").splitlines():
+        match = _OS_INSTALL_DATE_RE.match(raw_line.strip())
+        if not match:
+            continue
+        try:
+            year, month, day, hour, minute, second = map(int, match.groups())
+            candidate = datetime(year, month, day, hour, minute, second)
+        except (ValueError, TypeError):
+            continue
+        if install_dt is None:
+            install_dt = candidate
+
+    if install_dt is None:
+        return None
+
+    now = datetime.now()
+    time_diff = now - install_dt
+    if time_diff.total_seconds() < 0:
+        return None
+    days_ago = time_diff.days
+    if days_ago > 7:
+        return None
+
+    formatted_time = install_dt.strftime("%Y-%m-%d %H:%M:%S")
+    if days_ago == 0:
+        time_str = f"today at {install_dt.strftime('%H:%M:%S')}"
+    elif days_ago == 1:
+        time_str = f"yesterday at {install_dt.strftime('%H:%M:%S')}"
+    else:
+        time_str = f"{days_ago} days ago on {formatted_time}"
+
+    haystack = (raw_log_text or "").lower()
+    corroborating = [
+        description
+        for needle, description in _OS_INSTALL_CORROBORATING_SIGNS
+        if needle.lower() in haystack
+    ]
+
+    profile_username = _find_user_profile_created_near_install(raw_log_text, install_dt)
+    if profile_username:
+        corroborating.append(
+            f"User profile C:\\Users\\{profile_username} created near install date"
+        )
+
+    oldest_created = _find_oldest_one_month_created(raw_log_text)
+    if oldest_created is not None and oldest_created.date() == install_dt.date():
+        corroborating.append(
+            "Oldest file in 'One month (created)' section dates to install day"
+        )
+
+    message = (
+        f"Windows install or feature-update date is {time_str}. "
+    )
+    details = []
+    if corroborating:
+        details.append("Corroborating signs:")
+        details.extend(f"  - {sign}" for sign in corroborating)
+
+    return _build_warning(
+        "recent_os_install",
+        "Recent Windows install or feature update detected",
+        message,
+        details,
+    )
+
+
 def _build_log_warnings(raw_log_text: str) -> list[dict]:
     warnings = []
     for warning in (
@@ -324,6 +478,7 @@ def _build_log_warnings(raw_log_text: str) -> list[dict]:
         _detect_low_memory_warning(raw_log_text),
         _detect_multiple_enabled_av_warning(raw_log_text),
         _detect_recent_restore_operation_warning(raw_log_text),
+        _detect_recent_os_install_warning(raw_log_text),
     ):
         if warning:
             warnings.append(warning)
