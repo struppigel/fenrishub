@@ -319,6 +319,7 @@ function attachLineKeys(lines) {
             _baseCssClass: entry.css_class || STATUS_CLASS_MAP[baseStatus] || 'status-unknown',
             _baseStatusLabel: entry.status_label || STATUS_LABEL_MAP[baseStatus] || 'unknown',
             _baseReasons: baseReasons,
+            _baseFilepathHighlight: entry.filepath_highlight || null,
         };
     });
 }
@@ -348,6 +349,7 @@ function applyPendingOverrides() {
                 status_label: entry._baseStatusLabel || STATUS_LABEL_MAP[baseStatus] || 'unknown',
                 reasons: baseReasons,
                 matched: baseStatus !== '?',
+                filepath_highlight: entry._baseFilepathHighlight || null,
             };
         }
 

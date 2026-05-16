@@ -372,6 +372,20 @@ body.clean-cursor-mode .line-text {
     outline-offset: 1px;
 }
 
+/* Badge always reflects its own status colour so the verdict is visible even
+   when the surrounding line is rendered as `status-unknown` (e.g. parsed-entry
+   filepath-fallback matches). */
+.log-line .status-badge.status-b { color: var(--la-status-b); }
+.log-line .status-badge.status-p { color: var(--la-status-p); }
+.log-line .status-badge.status-c { color: var(--la-status-c); }
+.log-line .status-badge.status-w { color: var(--la-status-w); }
+.log-line .status-badge.status-a { color: var(--la-status-a); }
+.log-line .status-badge.status-g { color: var(--la-status-g); }
+.log-line .status-badge.status-s { color: var(--la-status-s); }
+.log-line .status-badge.status-i { color: var(--la-status-i); }
+.log-line .status-badge.status-j { color: var(--la-status-j); }
+.log-line .status-badge.status-unknown { color: var(--la-status-unknown); }
+
 .rule-review-content:focus {
     outline: none;
     border-color: var(--la-focus-alt);

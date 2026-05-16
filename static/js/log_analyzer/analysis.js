@@ -617,8 +617,13 @@ async function saveStatusSelection(index, newStatus) {
     }
     const currentStatus = entry.dominant_status || '?';
     const baseStatus = entry._baseDominantStatus || currentStatus;
+    // Lines whose only base match was a parsed-entry filepath fallback show the
+    // rule's verdict on the badge but no full match exists yet. Clicking even
+    // the same status must register an override so the workflow can persist a
+    // full parsed_entry rule for this line.
+    const hasFilepathFallback = Boolean(entry._baseFilepathHighlight);
 
-    if (currentStatus === newStatus) {
+    if (currentStatus === newStatus && !hasFilepathFallback) {
         closeStatusPicker();
         return;
     }
@@ -635,7 +640,7 @@ async function saveStatusSelection(index, newStatus) {
         const lineKey = pendingOverrideKeyForEntry(entry, index);
         const existing = pendingStatusChanges.get(lineKey);
 
-        if (newStatus === baseStatus) {
+        if (newStatus === baseStatus && !hasFilepathFallback) {
             pendingStatusChanges.delete(lineKey);
         } else {
             let id = existing ? existing.id : null;
@@ -1047,6 +1052,9 @@ function renderLogLines() {
         const line = entry.line;
         const cssClass = entry.css_class || 'status-unknown';
         const status = entry.dominant_status || '?';
+        // Badge always reflects the verdict's colour even when the line itself is
+        // styled as unknown (e.g. parsed-entry filepath-fallback matches).
+        const badgeClass = STATUS_CLASS_MAP[status] || 'status-unknown';
 
         const lineDiv = document.createElement('div');
         lineDiv.className = copiedLineIndexes.has(index)
@@ -1055,7 +1063,7 @@ function renderLogLines() {
 
         const badge = document.createElement('button');
         badge.type = 'button';
-        badge.className = `status-badge ${cssClass}`;
+        badge.className = `status-badge ${badgeClass}`;
         badge.dataset.lineIndex = String(index);
         badge.setAttribute('aria-haspopup', 'radiogroup');
         badge.setAttribute('aria-expanded', 'false');

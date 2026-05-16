@@ -103,7 +103,15 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(analyze_payload["lines"][0]["matcher"], "parsed_entry")
         self.assertEqual(analyze_payload["lines"][1]["matcher"], "filepath")
         self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+        # Parsed-entry rule's filepath fallback: badge (dominant_status) carries
+        # the verdict, but `css_class` stays unknown so the line text isn't
+        # coloured — only the filepath substring (via filepath_highlight) is.
         self.assertEqual(analyze_payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_MALWARE)
+        self.assertEqual(analyze_payload["lines"][1]["css_class"], "status-unknown")
+        self.assertEqual(
+            analyze_payload["lines"][1]["filepath_highlight"]["status"],
+            ClassificationRule.STATUS_MALWARE,
+        )
 
     def test_parsed_fallback_filepath_respects_exclusion_list(self):
         self.client.login(username="analyzer", password="password123")

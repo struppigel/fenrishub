@@ -786,6 +786,36 @@ def _build_line_result(
     }
 
 
+def _build_filepath_highlight_payload(line: str, status_codes: str) -> dict:
+    dominant_status = _dominant_status(status_codes)
+    payload = {
+        "status": dominant_status,
+        "css_class": STATUS_CSS_CLASS.get(dominant_status, "status-unknown"),
+    }
+    filepath_value = ex.extract_any_frst_path(line)
+    if not filepath_value:
+        return payload
+    pos = ex.find_value_position(filepath_value, line, "filepath")
+    if pos:
+        payload["start"] = pos[0]
+        payload["end"] = pos[1]
+    return payload
+
+
+def _all_matches_are_parsed_entry_filepath_fallback(matches) -> bool:
+    """A parsed-entry fallback is a match where the rule's own type is
+    `parsed_entry` but the line only matched via the rule's stored filepath.
+    Those matches should colour just the filepath rather than flip the verdict —
+    the rule's parsed entry didn't actually match the line shape."""
+    if not matches:
+        return False
+    return all(
+        matcher == "filepath"
+        and rule.match_type != ClassificationRule.MATCH_FILEPATH
+        for rule, _reason, matcher in matches
+    )
+
+
 _MATCHER_ENTRY_TYPE_LABELS = {
     "exact": "exactmatch",
     "filepath": "filepath",
@@ -826,6 +856,25 @@ def _analyze_single_line(line: str, buckets):
     status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(
         [(rule, reason) for rule, reason, _matcher in effective_matches]
     )
+
+    if _all_matches_are_parsed_entry_filepath_fallback(effective_matches):
+        fallback_entry_type = parsed_entry.entry_type if parsed_entry else ""
+        result = _build_line_result(
+            line,
+            status_codes,
+            fallback_entry_type,
+            reasons,
+            "filepath",
+            alert_descriptions,
+            dates=dates,
+            parsed_entry=parsed_entry,
+            filepath_highlight=_build_filepath_highlight_payload(line, status_codes),
+        )
+        # Verdict is set (badge shows the rule's status), but the surrounding
+        # line text should not take the verdict colour — only the filepath
+        # substring does, via filepath_highlight.
+        result["css_class"] = STATUS_CSS_CLASS.get("?", "status-unknown")
+        return result
 
     entry_type = _entry_type_for_winning_group(effective_matches, parsed_entry)
     return _build_line_result(
