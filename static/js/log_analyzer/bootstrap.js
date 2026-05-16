@@ -495,6 +495,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof setupLineCopyMenu === 'function') {
         setupLineCopyMenu();
     }
+    if (typeof setupChromeExtMenu === 'function') {
+        setupChromeExtMenu();
+    }
     initializePendingStatusChanges();
     if (typeof applyQuestionCursorModeState === 'function') {
         applyQuestionCursorModeState();

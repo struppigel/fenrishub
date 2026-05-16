@@ -743,6 +743,11 @@ function openLineCopyMenu(trigger, index) {
     const menu = ensureLineCopyMenu();
     menu.innerHTML = '';
 
+    const header = document.createElement('div');
+    header.className = 'line-copy-menu-header';
+    header.textContent = 'copy to clipboard';
+    menu.appendChild(header);
+
     const items = [{ key: 'whole line', value: entry.line || '' }];
     const components = (entry && typeof entry.components === 'object') ? entry.components : {};
     LINE_COPY_COMPONENT_LABELS.forEach(([key, label]) => {
@@ -812,33 +817,188 @@ function setupLineCopyMenu() {
 }
 
 const DATE_HIGHLIGHT_RE = /\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?/g;
+const CHROME_EXT_ID_RE = /(?<=\\Extensions\\)[a-p]{32}\b/g;
 
-function appendLineTextWithDateHighlight(textEl, line) {
+const CHROME_EXT_MENU_ITEMS = [
+    {
+        key: 'crxplorer',
+        url: (id) => `https://crxplorer.com/extension/${id}`,
+    },
+    {
+        key: 'chrome web store',
+        url: (id) => `https://chromewebstore.google.com/detail/${id}`,
+    },
+    {
+        key: 'crxviewer',
+        url: (id) => `https://robwu.nl/crxviewer/?crx=${encodeURIComponent(`https://chromewebstore.google.com/detail/${id}`)}`,
+    },
+];
+
+function findHighlightSpans(line) {
+    const spans = [];
+
     DATE_HIGHLIGHT_RE.lastIndex = 0;
-    let cursor = 0;
-    let appended = false;
     let match;
     while ((match = DATE_HIGHLIGHT_RE.exec(line)) !== null) {
         const parsed = parseFrstDate(match[0]);
         const bucket = classifyDateAgainstClusters(parsed);
         if (!bucket) continue;
-        if (match.index > cursor) {
-            textEl.appendChild(document.createTextNode(line.slice(cursor, match.index)));
-        }
-        const span = document.createElement('span');
-        span.className = `date-cluster-${bucket}`;
-        span.textContent = match[0];
-        textEl.appendChild(span);
-        cursor = match.index + match[0].length;
-        appended = true;
+        spans.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            type: 'date',
+            text: match[0],
+            bucket,
+        });
     }
-    if (!appended) {
+
+    CHROME_EXT_ID_RE.lastIndex = 0;
+    while ((match = CHROME_EXT_ID_RE.exec(line)) !== null) {
+        spans.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            type: 'chrome-ext-id',
+            text: match[0],
+        });
+    }
+
+    spans.sort((a, b) => a.start - b.start);
+    const filtered = [];
+    let lastEnd = -1;
+    for (const span of spans) {
+        if (span.start < lastEnd) continue;
+        filtered.push(span);
+        lastEnd = span.end;
+    }
+    return filtered;
+}
+
+function createChromeExtIdTrigger(extId) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chrome-ext-id-trigger';
+    btn.textContent = extId;
+    btn.title = `Chrome extension ID: ${extId}`;
+    btn.setAttribute('aria-haspopup', 'menu');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.dataset.extId = extId;
+    btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openChromeExtMenu(btn, extId);
+    });
+    return btn;
+}
+
+function appendLineTextWithDateHighlight(textEl, line) {
+    const spans = findHighlightSpans(line);
+    if (!spans.length) {
         textEl.textContent = line;
         return;
+    }
+    let cursor = 0;
+    for (const span of spans) {
+        if (span.start > cursor) {
+            textEl.appendChild(document.createTextNode(line.slice(cursor, span.start)));
+        }
+        if (span.type === 'date') {
+            const el = document.createElement('span');
+            el.className = `date-cluster-${span.bucket}`;
+            el.textContent = span.text;
+            textEl.appendChild(el);
+        } else if (span.type === 'chrome-ext-id') {
+            textEl.appendChild(createChromeExtIdTrigger(span.text));
+        }
+        cursor = span.end;
     }
     if (cursor < line.length) {
         textEl.appendChild(document.createTextNode(line.slice(cursor)));
     }
+}
+
+let chromeExtMenuEl = null;
+let chromeExtMenuTrigger = null;
+
+function ensureChromeExtMenu() {
+    if (chromeExtMenuEl && document.body.contains(chromeExtMenuEl)) {
+        return chromeExtMenuEl;
+    }
+    const menu = document.createElement('div');
+    menu.className = 'chrome-ext-menu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    menu.addEventListener('click', (event) => event.stopPropagation());
+    document.body.appendChild(menu);
+    chromeExtMenuEl = menu;
+    return menu;
+}
+
+function closeChromeExtMenu() {
+    if (chromeExtMenuTrigger) {
+        chromeExtMenuTrigger.setAttribute('aria-expanded', 'false');
+        chromeExtMenuTrigger = null;
+    }
+    if (chromeExtMenuEl) {
+        chromeExtMenuEl.hidden = true;
+        chromeExtMenuEl.innerHTML = '';
+    }
+}
+
+function openChromeExtMenu(trigger, extId) {
+    if (chromeExtMenuTrigger === trigger && chromeExtMenuEl && !chromeExtMenuEl.hidden) {
+        closeChromeExtMenu();
+        return;
+    }
+
+    const menu = ensureChromeExtMenu();
+    menu.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'chrome-ext-menu-header';
+    header.textContent = 'open extension id in';
+    menu.appendChild(header);
+
+    CHROME_EXT_MENU_ITEMS.forEach(({ key, url }) => {
+        const link = document.createElement('a');
+        link.className = 'chrome-ext-menu-item';
+        link.setAttribute('role', 'menuitem');
+        link.href = url(extId);
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = key;
+        link.addEventListener('click', () => closeChromeExtMenu());
+        menu.appendChild(link);
+    });
+
+    if (chromeExtMenuTrigger && chromeExtMenuTrigger !== trigger) {
+        chromeExtMenuTrigger.setAttribute('aria-expanded', 'false');
+    }
+    chromeExtMenuTrigger = trigger;
+    trigger.setAttribute('aria-expanded', 'true');
+
+    menu.hidden = false;
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth || 220;
+    const menuHeight = menu.offsetHeight || 0;
+    let left = rect.left;
+    if (left + menuWidth > window.innerWidth - 8) {
+        left = window.innerWidth - menuWidth - 8;
+    }
+    if (left < 8) left = 8;
+    let top = rect.bottom + 4;
+    if (top + menuHeight > window.innerHeight - 8) {
+        top = Math.max(8, rect.top - menuHeight - 4);
+    }
+    menu.style.left = `${left + window.scrollX}px`;
+    menu.style.top = `${top + window.scrollY}px`;
+}
+
+function setupChromeExtMenu() {
+    document.addEventListener('click', () => closeChromeExtMenu());
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeChromeExtMenu();
+    });
+    window.addEventListener('resize', () => closeChromeExtMenu());
+    document.addEventListener('scroll', () => closeChromeExtMenu(), true);
 }
 
 function renderLogLines() {

@@ -61,3 +61,7 @@ Fenris/
 .coverage
 htmlcov/
 testfile.txt
+badlog.txt
+
+# Local sync scripts
+scripts/

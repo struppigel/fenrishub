@@ -924,6 +924,13 @@ body.clean-cursor-mode .line-text {
     box-shadow: var(--la-shadow);
 }
 
+.line-copy-menu-header {
+    padding: 4px 10px;
+    color: var(--la-text-muted);
+    border-bottom: 1px solid var(--la-border);
+    user-select: text;
+}
+
 .line-copy-menu-item {
     display: flex;
     align-items: baseline;
@@ -962,6 +969,66 @@ body.clean-cursor-mode .line-text {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.chrome-ext-id-trigger {
+    display: inline;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+    color: inherit;
+    font: inherit;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.chrome-ext-id-trigger:hover,
+.chrome-ext-id-trigger:focus-visible,
+.chrome-ext-id-trigger[aria-expanded="true"] {
+    text-decoration: underline;
+}
+
+.chrome-ext-id-trigger:focus-visible {
+    outline: 1px solid var(--la-focus);
+    outline-offset: 1px;
+}
+
+.chrome-ext-menu {
+    position: absolute;
+    z-index: 200;
+    min-width: 200px;
+    background: var(--la-bg-1);
+    border: 1px solid var(--la-border-strong);
+    padding: 2px 0;
+    font-family: monospace;
+    font-size: 12px;
+    box-shadow: var(--la-shadow);
+}
+
+.chrome-ext-menu-header {
+    padding: 4px 10px;
+    color: var(--la-text-muted);
+    border-bottom: 1px solid var(--la-border);
+    user-select: text;
+}
+
+.chrome-ext-menu-item {
+    display: block;
+    padding: 4px 10px;
+    color: var(--la-text-primary);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.chrome-ext-menu-item:hover {
+    text-decoration: underline;
+}
+
+.chrome-ext-menu-item:focus-visible {
+    outline: 1px solid var(--la-focus);
+    outline-offset: -1px;
 }
 
 @media (max-width: 980px) {
