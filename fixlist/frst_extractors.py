@@ -136,6 +136,55 @@ def find_value_position(value, source, field_name=None):
     return None
 
 
+_FRST_FILEPATH_TRAILING_MARKERS_RE = re.compile(
+    r"\s*<====.*$|\s+\(No File\)\s*$"
+)
+
+# When an extractor's filepath capture has no separate arguments group (typical
+# for runkey/service), it can swallow trailing command-line args. We split at the
+# first executable-extension boundary followed by whitespace — paths like
+# `C:\Program Files\app\app.exe -flag` and `conhost.exe --headless ... "" args`.
+_BINARY_PATH_ENDINGS = r"exe|dll|bat|cmd|ps1|scr|vbs|wsf|com|msi"
+_FRST_BINARY_AND_ARGS_RE = re.compile(
+    r'^(?:"(?P<quoted>[^"]+)"|(?P<bare>\S.*?\.(?:' + _BINARY_PATH_ENDINGS + r')))'
+    r'(?P<sep>\s+|"\s+)(?P<args>\S.*)$',
+    re.IGNORECASE,
+)
+
+
+def _split_binary_and_args(value: str) -> tuple[str, str]:
+    if not value:
+        return value, ""
+    match = _FRST_BINARY_AND_ARGS_RE.match(value)
+    if not match:
+        return value, ""
+    binary = match.group("quoted") or match.group("bare")
+    args = match.group("args").strip()
+    return binary, args
+
+
+def _strip_frst_filepath_markers(value: str) -> str:
+    """Strip FRST status markers that some extractors otherwise pull into the filepath.
+
+    `(No File)` flags that FRST couldn't locate the referenced file on disk and
+    `<==== ATTENTION` is FRST's malware-suspect highlight — neither belongs in
+    a filepath. Both are always trailing, never embedded in a real path.
+
+    Also strips the surrounding quotes FRST puts around paths containing spaces
+    (e.g. `"C:\\Program Files (x86)\\App\\bin.exe"`).
+    """
+    if not value:
+        return value
+    prev = None
+    while prev != value:
+        prev = value
+        value = _FRST_FILEPATH_TRAILING_MARKERS_RE.sub("", value).rstrip()
+    value = value.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        value = value[1:-1].strip()
+    return value
+
+
 def extract_frst_entry(line, regexp, group_map, entry_type=""):
     pattern = re.compile(regexp)
     no_desc_line = strip_description(line)
@@ -151,11 +200,13 @@ def extract_frst_entry(line, regexp, group_map, entry_type=""):
 
     clsid = get_value("clsid")
     name = get_value("name")
-    filepath = normalize_path(get_value("filepath"))
+    filepath = normalize_path(_strip_frst_filepath_markers(get_value("filepath")))
+    arguments = get_value("arguments")
+    if not arguments:
+        filepath, arguments = _split_binary_and_args(filepath)
     filename = (ntpath.basename(filepath) or "").strip()
     date = get_value("date")
     company = get_value("company")
-    arguments = get_value("arguments")
     file_not_signed = "[File not signed]" in line
     description = get_description(line)
 
@@ -173,20 +224,34 @@ def extract_frst_entry(line, regexp, group_map, entry_type=""):
     )
 
 
+# Company captures must accept nested parens like `Intel(R) Client Connectivity
+# Division SW -> Intel Corporation`. Replace `[^\)]*` with `(.*?)` plus a lookahead
+# requiring the closing `)` to be followed by valid trailing content — never
+# just any `)`. The `\(` alternative covers concatenated entries where another
+# `(...)` group follows the company (e.g. process-style continuations).
+_COMPANY_GROUP = r"(.*?)\)(?=\s*(?:<====|\(No File\)|\[File not signed\]|\(|$))"
+
+
 def extract_frst_service(line):
-    regexp = r"[RSU][0-5] ([^;]+); ([^[\n]+)(\[([^]]*)\] \(([^\)]*)\))?"
+    regexp = r"[RSU][0-5] ([^;]+); ([^[\n]+)(\[([^]]*)\] \(" + _COMPANY_GROUP + r")?"
     group_map = {"name": 1, "filepath": 2, "date": 4, "company": 5}
     return extract_frst_entry(line, regexp, group_map, entry_type="service")
 
 
 def extract_frst_runkey(line):
-    regexp = r"HK(LM)?(U\\S[0-9-]+)?(-x32)?\\\.\.\.\\Run(Once)?: \[([^]]*)\] => ([^[\n]+)(\[([^]]*)\] \(([^\)]*)\))?"
+    regexp = (
+        r"HK(LM)?(U\\S[0-9-]+)?(-x32)?\\\.\.\.\\Run(Once)?: \[([^]]*)\] => "
+        r"([^[\n]+)(\[([^]]*)\] \(" + _COMPANY_GROUP + r")?"
+    )
     group_map = {"name": 5, "filepath": 6, "date": 8, "company": 9}
     return extract_frst_entry(line, regexp, group_map, entry_type="runkey")
 
 
 def extract_frst_activesetup(line):
-    regexp = r"HKLM\\[\w \\]+\\Installed Components: \[\{([^]{}]*)\}\] -> ([^[\n]+)(\[([^]]*)\] \(([^\)]*)\))?"
+    regexp = (
+        r"HKLM\\[\w \\]+\\Installed Components: \[\{([^]{}]*)\}\] -> "
+        r"([^[\n]+)(\[([^]]*)\] \(" + _COMPANY_GROUP + r")?"
+    )
     group_map = {"clsid": 1, "filepath": 2, "date": 4, "company": 5}
     return extract_frst_entry(line, regexp, group_map, entry_type="activesetup")
 
@@ -221,14 +286,44 @@ def extract_frst_shortcut(line):
     return None
 
 
+def extract_frst_scheduled_task_command(line):
+    regexp = r"Task:\s*?\{(.*?)\}.*?=>\s*Command\(\d+\):\s*(.+?)\s*$"
+    group_map = {"clsid": 1, "arguments": 2}
+    return extract_frst_entry(line, regexp, group_map, entry_type="scheduled_task_command")
+
+
 def extract_frst_scheduled_task(line):
-    regexp = r"Task:\s*?\{(.*?)\}(.*?)\=>([^\[]*)[^\[]*(\[(.*?)\])?.*\((.+)\)"
-    group_map = {"clsid": 1, "filepath": 3, "date": 5, "company": 6}
+    # Binary form: `Task: {GUID} - <task path> => <filepath>` followed by any of:
+    #   - `[<size date>] (<company>)`     (canonical FRST output)
+    #   - `-> <args>`                     (e.g. Opera/iTop autoupdate tasks)
+    #   - `<==== ATTENTION`               (FRST malware marker)
+    #   - `[File not signed]` / end-of-line
+    # The filepath ends at the first ` [`, ` ->`, ` <====`, or end-of-line — `(x86)`
+    # in `C:\Program Files (x86)\...` and an empty `()` company both parse correctly.
+    regexp = (
+        r"Task:\s*?\{(.*?)\}(.*?)=>"
+        r"(?!\s*(?:\{|Command\(\d+\):))"   # exclude `=> {GUID}` and `=> Command(N):` forms
+        r"\s*(.+?)"
+        r"(?=\s+\[|\s+->|\s+\(No File\)|\s*<====|\s*$)"
+        # Optional `[date] (company)` block. Company may contain nested parens
+        # (e.g. `Intel(R) Client Connectivity Division SW -> Intel Corporation`) —
+        # the closing `)` must be followed by valid trailing content, not just any `)`.
+        r"(?:\s+\[(.*?)\]\s*\((.*?)\)(?=\s*(?:->|<====|\(No File\)|\[File not signed\]|\(|$)))?"
+    )
+    group_map = {"clsid": 1, "filepath": 3, "date": 4, "company": 5}
     return extract_frst_entry(line, regexp, group_map, entry_type="scheduled_task")
 
 
 def extract_frst_startup(line):
-    regexp = r"Startup: (.+?)(?: \[([^\]]*)\])?\s*$"
+    # Trailing tokens FRST may append after the date bracket: `[File not signed]`,
+    # `<==== ATTENTION`, and the `(No File)` status marker. Anchoring all of them
+    # prevents `(.+?)` from swallowing them into the filepath.
+    regexp = (
+        r"Startup: (.+?)(?: \[([^\]]*)\])?"
+        r"\s*(?:\[File not signed\])?"
+        r"\s*(?:\(No File\))?"
+        r"\s*(?:<====.*)?$"
+    )
     group_map = {"filepath": 1, "date": 2}
     return extract_frst_entry(line, regexp, group_map, entry_type="startup")
 
@@ -243,8 +338,11 @@ _ONEMONTH_TS = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?"
 
 
 def extract_onemonth(line):
+    # FRST also emits these lines prefixed with "Found path already in " when
+    # reporting search results against the onemonth section — handle both forms.
     regexp = (
-        r"(" + _ONEMONTH_TS + r") - " + _ONEMONTH_TS +
+        r"(?:Found path already in\s+)?"
+        + r"(" + _ONEMONTH_TS + r") - " + _ONEMONTH_TS +
         r" - \d+ .{5} (\((.*)\) )?(\w:\\.*)"
     )
     group_map = {"date": 1, "company": 3, "filepath": 4}
@@ -316,8 +414,9 @@ def extract_firewall_rule(line):
 # Single source of truth for extractor order (first match wins) and membership.
 # Extractors that don't yield a meaningful filepath are excluded from path extraction.
 _NON_PATH_EXTRACTORS = frozenset({
-    extract_installed_software,      # group_map yields name + company only
-    extract_custom_appcompatflags,   # group_map yields clsid + name only
+    extract_installed_software,           # group_map yields name + company only
+    extract_custom_appcompatflags,        # group_map yields clsid + name only
+    extract_frst_scheduled_task_command,  # Command(N): tasks carry no real path
 })
 
 _ALL_EXTRACTORS = (
@@ -325,6 +424,7 @@ _ALL_EXTRACTORS = (
     extract_frst_runkey,
     extract_frst_activesetup,
     extract_frst_shortcut,
+    extract_frst_scheduled_task_command,
     extract_frst_scheduled_task,
     extract_frst_startup,
     extract_firewall_rule,

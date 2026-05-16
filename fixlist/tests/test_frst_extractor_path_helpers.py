@@ -139,12 +139,14 @@ class ExtractorRegistryTests(TestCase):
     or wiring up a path-eligible extractor that yields no filepath."""
 
     def test_all_extractors_count(self):
-        self.assertEqual(len(_ALL_EXTRACTORS), 19)
+        self.assertEqual(len(_ALL_EXTRACTORS), 20)
 
     def test_path_extractors_excludes_non_path_yielders(self):
+        from ..frst_extractors import extract_frst_scheduled_task_command
         self.assertNotIn(extract_installed_software, _PATH_EXTRACTORS)
         self.assertNotIn(extract_custom_appcompatflags, _PATH_EXTRACTORS)
-        self.assertEqual(len(_PATH_EXTRACTORS), len(_ALL_EXTRACTORS) - 2)
+        self.assertNotIn(extract_frst_scheduled_task_command, _PATH_EXTRACTORS)
+        self.assertEqual(len(_PATH_EXTRACTORS), len(_ALL_EXTRACTORS) - 3)
 
     def test_path_extractors_preserves_order(self):
         # _PATH_EXTRACTORS must be a strict subsequence of _ALL_EXTRACTORS so

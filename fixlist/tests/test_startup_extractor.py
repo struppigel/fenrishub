@@ -62,6 +62,48 @@ class ExtractFrstStartupTests(TestCase):
     def test_non_startup_line_returns_none(self):
         self.assertIsNone(extract_frst_startup(r"HKLM\...\Run: [TestApp] => C:\test.exe"))
 
+    def test_attention_marker_excluded_from_filepath(self):
+        line = (
+            r"Startup: C:\Users\Benjamin\AppData\Roaming\Microsoft\Windows"
+            r"\Start Menu\Programs\Startup\StackBroker_win64.lnk "
+            r"[2026-03-15] <==== ATTENTION"
+        )
+        entry = extract_frst_startup(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.filename, "StackBroker_win64.lnk")
+        self.assertEqual(entry.date, "2026-03-15")
+        self.assertNotIn("ATTENTION", entry.filepath)
+        self.assertNotIn("2026-03-15", entry.filepath)
+
+    def test_file_not_signed_marker_does_not_become_date(self):
+        line = (
+            r"Startup: C:\Program Files\Foo\foo.lnk "
+            r"[2026-01-01] [File not signed]"
+        )
+        entry = extract_frst_startup(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.date, "2026-01-01")
+        self.assertTrue(entry.file_not_signed)
+        self.assertNotIn("File not signed", entry.filepath)
+
+    def test_all_trailing_markers_combined(self):
+        line = (
+            r"Startup: C:\Program Files\Foo\foo.lnk "
+            r"[2026-01-01] [File not signed] <==== ATTENTION"
+        )
+        entry = extract_frst_startup(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.date, "2026-01-01")
+        self.assertTrue(entry.file_not_signed)
+        self.assertNotIn("ATTENTION", entry.filepath)
+
+    def test_no_file_marker_without_date(self):
+        line = r"Startup: C:\Program Files\Foo\foo.lnk (No File)"
+        entry = extract_frst_startup(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.filename, "foo.lnk")
+        self.assertNotIn("No File", entry.filepath)
+
     def test_empty_line_returns_none(self):
         self.assertIsNone(extract_frst_startup(""))
 

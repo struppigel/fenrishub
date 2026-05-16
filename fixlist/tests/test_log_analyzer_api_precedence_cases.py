@@ -103,11 +103,7 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(analyze_payload["lines"][0]["matcher"], "parsed_entry")
         self.assertEqual(analyze_payload["lines"][1]["matcher"], "filepath")
         self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
-        self.assertEqual(analyze_payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_UNKNOWN)
-        self.assertEqual(
-            analyze_payload["lines"][1]["filepath_highlight"]["status"],
-            ClassificationRule.STATUS_MALWARE,
-        )
+        self.assertEqual(analyze_payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_MALWARE)
 
     def test_parsed_fallback_filepath_respects_exclusion_list(self):
         self.client.login(username="analyzer", password="password123")
@@ -175,11 +171,7 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
 
         self.assertEqual(analyze_response.status_code, 200)
         self.assertEqual(analyze_payload["lines"][0]["matcher"], "filepath")
-        self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_UNKNOWN)
-        self.assertEqual(
-            analyze_payload["lines"][0]["filepath_highlight"]["status"],
-            ClassificationRule.STATUS_MALWARE,
-        )
+        self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
 
         inspection = inspect_line_matches(same_path_line)
         self.assertEqual(inspection["effective_matcher"], "filepath")
@@ -500,3 +492,37 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
         if overlap_conflicts:
             for match in overlap_conflicts[0]["matching_rules"]:
                 self.assertIn("match_type", match)
+
+    def test_onemonth_rule_matches_as_parsed_entry_not_filepath_only(self):
+        """Regression: onemonth lines are stored as parsed_entry rules by
+        `get_frst_entry`, but the analyzer's `PARSER_ORDER` originally omitted
+        `extract_onemonth` — so a freshly-analyzed onemonth line only matched via
+        the filepath fallback, leaving the verdict at `?` with a partial
+        filepath highlight instead of flipping the whole line."""
+        self.client.login(username="analyzer", password="password123")
+        line = (
+            r"2026-05-13 02:29 - 2023-05-22 18:29 - 000000000 ____D "
+            r"C:\Users\Owner\AppData\Roaming\RenPy"
+        )
+
+        parsed = parse_rule_line(line, ClassificationRule.STATUS_MALWARE, "test")
+        self.assertEqual(parsed["match_type"], ClassificationRule.MATCH_PARSED_ENTRY)
+        self.assertEqual(parsed["entry_type"], "onemonth")
+        ClassificationRule.objects.create(owner=self.user, **parsed)
+
+        analyze_response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": line}),
+            content_type="application/json",
+        )
+        payload = analyze_response.json()
+        self.assertEqual(analyze_response.status_code, 200)
+
+        line_result = payload["lines"][0]
+        self.assertEqual(line_result["matcher"], "parsed_entry")
+        self.assertEqual(
+            line_result["dominant_status"], ClassificationRule.STATUS_MALWARE
+        )
+        # When the parsed_entry rule wins, no filepath_highlight should be set —
+        # the whole line carries the verdict, not just the path substring.
+        self.assertIsNone(line_result.get("filepath_highlight"))

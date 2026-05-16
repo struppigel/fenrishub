@@ -34,9 +34,11 @@ PARSER_ORDER = [
     ex.extract_frst_activesetup,
     ex.extract_frst_service,
     ex.extract_frst_shortcut,
+    ex.extract_frst_scheduled_task_command,
     ex.extract_frst_scheduled_task,
     ex.extract_frst_startup,
     ex.extract_firewall_rule,
+    ex.extract_onemonth,
     ex.extract_process,
     ex.extract_installed_software,
     ex.extract_bho,
@@ -328,6 +330,9 @@ def _build_log_warnings(raw_log_text: str) -> list[dict]:
     return warnings
 
 
+_BARE_PATH_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/])")
+
+
 def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict | None:
     line = (raw_line or "").strip()
     if not line:
@@ -408,6 +413,16 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         rule_data["source_text"] = fallback_path
         rule_data["filepath"] = fallback_path
         rule_data["normalized_filepath"] = ex.normalize_path(fallback_path).lower().strip()
+        return rule_data
+
+    # Bare path (no FRST line shape): `C:\foo\bar` or `\\server\share\foo` — treat
+    # as a filepath rule so the import flow and the re-parse don't silently
+    # downgrade these to exact.
+    if _BARE_PATH_RE.match(core):
+        rule_data["match_type"] = ClassificationRule.MATCH_FILEPATH
+        rule_data["source_text"] = core
+        rule_data["filepath"] = core
+        rule_data["normalized_filepath"] = ex.normalize_path(core).lower().strip()
 
     return rule_data
 
@@ -479,6 +494,78 @@ def invalidate_rule_buckets_cache():
     global _rule_buckets_cache, _rule_buckets_cache_time
     _rule_buckets_cache = None
     _rule_buckets_cache_time = None
+
+
+REPARSE_FIELDS = (
+    "entry_type",
+    "clsid",
+    "name",
+    "filepath",
+    "normalized_filepath",
+    "filename",
+    "company",
+    "arguments",
+    "file_not_signed",
+)
+
+
+def reparse_rules(queryset, *, apply: bool = False):
+    """Re-parse each rule's `source_text` and report (or write) field diffs.
+
+    Never changes `match_type` — `parse_rule_line` defaults to EXACT when it
+    can't recognize a line, and silently flipping `parsed_entry` → `exact` would
+    destroy the rule's matching semantics. Rules whose re-parse yields a
+    different `match_type` are left untouched and counted under `match_type_skip`.
+
+    Returns a dict with counts and a list of per-rule diffs. Used by both the
+    `reparse_rules` management command and the admin action.
+    """
+    diffs = []
+    unchanged = 0
+    unparseable = 0
+    match_type_skip = 0
+
+    for rule in queryset.iterator():
+        parsed = parse_rule_line(rule.source_text, rule.status, rule.source_name)
+        if parsed is None:
+            unparseable += 1
+            continue
+
+        if parsed.get("match_type") != rule.match_type:
+            match_type_skip += 1
+            continue
+
+        per_field = {}
+        for field in REPARSE_FIELDS:
+            old_value = getattr(rule, field)
+            new_value = parsed.get(field)
+            if old_value != new_value:
+                per_field[field] = (old_value, new_value)
+
+        if not per_field:
+            unchanged += 1
+            continue
+
+        diffs.append({"rule": rule, "fields": per_field})
+
+        if apply:
+            from django.db import transaction as _txn
+
+            with _txn.atomic():
+                for field in REPARSE_FIELDS:
+                    setattr(rule, field, parsed.get(field))
+                rule.save(update_fields=[*REPARSE_FIELDS, "updated_at"])
+
+    if apply and diffs:
+        invalidate_rule_buckets_cache()
+
+    return {
+        "changed": len(diffs),
+        "unchanged": unchanged,
+        "unparseable": unparseable,
+        "match_type_skip": match_type_skip,
+        "diffs": diffs,
+    }
 
 
 def _get_cached_rule_buckets():
@@ -633,7 +720,8 @@ def _status_and_reason_from_matches(matches):
 
 
 _ONEMONTH_DATES_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?) - "
+    r"^(?:Found path already in\s+)?"
+    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?) - "
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?) - "
 )
 # Captures "YYYY-MM-DD" or "YYYY-MM-DD HH:MM(:SS)?" anywhere within a string.
@@ -698,22 +786,6 @@ def _build_line_result(
     }
 
 
-def _build_filepath_highlight_payload(line: str, status_codes: str) -> dict:
-    dominant_status = _dominant_status(status_codes)
-    payload = {
-        "status": dominant_status,
-        "css_class": STATUS_CSS_CLASS.get(dominant_status, "status-unknown"),
-    }
-    filepath_value = ex.extract_any_frst_path(line)
-    if not filepath_value:
-        return payload
-    pos = ex.find_value_position(filepath_value, line, "filepath")
-    if pos:
-        payload["start"] = pos[0]
-        payload["end"] = pos[1]
-    return payload
-
-
 _MATCHER_ENTRY_TYPE_LABELS = {
     "exact": "exactmatch",
     "filepath": "filepath",
@@ -754,20 +826,6 @@ def _analyze_single_line(line: str, buckets):
     status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(
         [(rule, reason) for rule, reason, _matcher in effective_matches]
     )
-
-    if all(matcher == "filepath" for _rule, _reason, matcher in effective_matches):
-        unknown_entry_type = parsed_entry.entry_type if parsed_entry else ""
-        return _build_line_result(
-            line,
-            "?",
-            unknown_entry_type,
-            reasons,
-            "filepath",
-            alert_descriptions,
-            dates=dates,
-            parsed_entry=parsed_entry,
-            filepath_highlight=_build_filepath_highlight_payload(line, status_codes),
-        )
 
     entry_type = _entry_type_for_winning_group(effective_matches, parsed_entry)
     return _build_line_result(

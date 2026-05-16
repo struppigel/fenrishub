@@ -1,0 +1,140 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+    .reparse-page .stats {
+        display: flex;
+        gap: 24px;
+        margin: 12px 0 18px;
+    }
+    .reparse-page .stats .stat {
+        padding: 8px 14px;
+        border: 1px solid var(--border-color, #ccc);
+        border-radius: 4px;
+        min-width: 120px;
+    }
+    .reparse-page .stat .label {
+        display: block;
+        font-size: 12px;
+        text-transform: uppercase;
+        opacity: 0.7;
+    }
+    .reparse-page .stat .value {
+        font-size: 22px;
+        font-weight: 600;
+    }
+    .reparse-page table.diff-preview {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 18px;
+    }
+    .reparse-page table.diff-preview th,
+    .reparse-page table.diff-preview td {
+        border-bottom: 1px solid var(--border-color, #ddd);
+        padding: 6px 10px;
+        vertical-align: top;
+        font-family: monospace;
+        font-size: 12px;
+        word-break: break-all;
+    }
+    .reparse-page table.diff-preview th {
+        text-align: left;
+        background: var(--darkened-bg, #f4f4f4);
+    }
+    .reparse-page .submit-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-top: 18px;
+    }
+    .reparse-page .submit-row input,
+    .reparse-page .submit-row .button {
+        min-width: 160px;
+        height: 34px;
+        padding: 0 14px;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        font-weight: 600;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main" class="reparse-page">
+    <h1>Re-parse all rules from source_text</h1>
+    <p>
+        Re-runs the current parser on every rule's <code>source_text</code> and
+        rewrites the stored parsed metadata (filepath, filename, company, clsid,
+        entry_type, arguments, file_not_signed) when it differs from the parser
+        output. <code>source_text</code> itself is never modified. Only rules with
+        <code>match_type = parsed_entry</code> or <code>filepath</code> are touched.
+    </p>
+
+    <div class="stats">
+        <div class="stat"><span class="label">Scanned</span><span class="value">{{ scanned }}</span></div>
+        <div class="stat"><span class="label">Would change</span><span class="value">{{ changed }}</span></div>
+        <div class="stat"><span class="label">Unchanged</span><span class="value">{{ unchanged }}</span></div>
+        <div class="stat" title="Rule was skipped because re-parsing would have changed its match_type (e.g. parsed_entry to exact). Stored fields left untouched."><span class="label">match_type skip</span><span class="value">{{ match_type_skip }}</span></div>
+        <div class="stat"><span class="label">Unparseable</span><span class="value">{{ unparseable }}</span></div>
+    </div>
+
+    {% if diff_preview %}
+    <h2>
+        Diff preview &mdash; page {{ page_obj.number }} of {{ paginator.num_pages }}
+        ({{ paginator.count }} rule{{ paginator.count|pluralize }} total)
+    </h2>
+    <table class="diff-preview">
+        <thead>
+            <tr><th>Rule</th><th>Field</th><th>Old</th><th>New</th></tr>
+        </thead>
+        <tbody>
+            {% for diff in diff_preview %}
+                {% for field in diff.fields %}
+                <tr>
+                    {% if forloop.first %}
+                    <td rowspan="{{ diff.fields|length }}">
+                        <a href="{% url 'admin:fixlist_classificationrule_change' diff.rule.pk %}">#{{ diff.rule.pk }}</a><br>
+                        <span style="opacity:0.7">status={{ diff.rule.status }}</span>
+                    </td>
+                    {% endif %}
+                    <td>{{ field.name }}</td>
+                    <td>{{ field.old }}</td>
+                    <td>{{ field.new }}</td>
+                </tr>
+                {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if paginator.num_pages > 1 %}
+    <div class="diff-pagination" style="margin:10px 0 20px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        {% if page_obj.has_previous %}
+        <a class="button" href="?page=1">&laquo; first</a>
+        <a class="button" href="?page={{ page_obj.previous_page_number }}">&lsaquo; prev</a>
+        {% endif %}
+        <span>page {{ page_obj.number }} / {{ paginator.num_pages }}</span>
+        {% if page_obj.has_next %}
+        <a class="button" href="?page={{ page_obj.next_page_number }}">next &rsaquo;</a>
+        <a class="button" href="?page={{ paginator.num_pages }}">last &raquo;</a>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="submit-row">
+            {% if changed %}
+            <input type="submit" value="Apply re-parse to {{ changed }} rule(s)" class="default">
+            {% else %}
+            <input type="submit" value="No changes to apply" class="default" disabled>
+            {% endif %}
+            <a href="{% url 'admin:fixlist_classificationrule_changelist' %}" class="button cancel-link">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

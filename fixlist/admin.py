@@ -6,7 +6,7 @@ from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 
-from .analyzer import import_rules_from_lines, invalidate_rule_buckets_cache
+from .analyzer import import_rules_from_lines, invalidate_rule_buckets_cache, reparse_rules
 from .models import (
     AccessLog,
     ClassificationRule,
@@ -91,7 +91,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
     list_filter = ('status', 'owner', 'match_type', 'entry_type', 'is_enabled', 'source_name')
     search_fields = ('source_text', 'description', 'name', 'filepath', 'clsid', 'company', 'owner__username')
     readonly_fields = ('created_at', 'updated_at')
-    actions = ['change_owner', 'strip_leading_case_insensitive_flag']
+    actions = ['change_owner', 'strip_leading_case_insensitive_flag', 'reparse_from_source_text']
 
     fieldsets = (
         (
@@ -133,6 +133,32 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         return obj.source_text[:77] + '...'
 
     short_source.short_description = 'source_text'
+
+    @admin.action(description='Re-parse selected rules from source_text')
+    def reparse_from_source_text(self, request, queryset):
+        result = reparse_rules(queryset, apply=True)
+        scanned = queryset.count()
+        if result["changed"]:
+            level = messages.SUCCESS
+            preview = '; '.join(
+                f"#{diff['rule'].id} ({', '.join(diff['fields'].keys())})"
+                for diff in result["diffs"][:5]
+            )
+            suffix = '' if len(result["diffs"]) <= 5 else ' (…)'
+            message = (
+                f"Re-parsed {result['changed']} of {scanned} rule(s). "
+                f"Unchanged: {result['unchanged']}. Unparseable: {result['unparseable']}. "
+                f"Updated: {preview}{suffix}"
+            )
+        else:
+            level = (
+                messages.WARNING if result["unparseable"] else messages.INFO
+            )
+            message = (
+                f"Scanned {scanned} rule(s). No parsed metadata differed from "
+                f"the current parser. Unparseable: {result['unparseable']}."
+            )
+        self.message_user(request, message, level=level)
 
     @admin.action(description='Strip leading "(?i)" from selected regex rules')
     def strip_leading_case_insensitive_flag(self, request, queryset):
@@ -269,9 +295,75 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                 'import-rules/',
                 self.admin_site.admin_view(self.import_rules_view),
                 name='fixlist_classificationrule_import_rules',
-            )
+            ),
+            path(
+                'reparse-all/',
+                self.admin_site.admin_view(self.reparse_all_view),
+                name='fixlist_classificationrule_reparse_all',
+            ),
         ]
         return custom_urls + urls
+
+    def reparse_all_view(self, request):
+        qs = ClassificationRule.objects.filter(
+            match_type__in=(
+                ClassificationRule.MATCH_PARSED_ENTRY,
+                ClassificationRule.MATCH_FILEPATH,
+            )
+        )
+        scanned = qs.count()
+
+        if request.method == 'POST':
+            result = reparse_rules(qs, apply=True)
+            self.message_user(
+                request,
+                (
+                    f"Re-parsed {result['changed']} of {scanned} rule(s). "
+                    f"Unchanged: {result['unchanged']}. "
+                    f"Skipped (match_type would change): {result['match_type_skip']}. "
+                    f"Unparseable: {result['unparseable']}."
+                ),
+                level=messages.SUCCESS if result['changed'] else messages.INFO,
+            )
+            return HttpResponseRedirect(
+                reverse('admin:fixlist_classificationrule_changelist')
+            )
+
+        from django.core.paginator import Paginator
+
+        preview = reparse_rules(qs, apply=False)
+        per_page = 50
+        paginator = Paginator(preview['diffs'], per_page)
+        page_number = request.GET.get('page') or 1
+        page_obj = paginator.get_page(page_number)
+        diff_preview = [
+            {
+                'rule': diff['rule'],
+                'fields': [
+                    {'name': name, 'old': old, 'new': new}
+                    for name, (old, new) in diff['fields'].items()
+                ],
+            }
+            for diff in page_obj.object_list
+        ]
+        context = {
+            **self.admin_site.each_context(request),
+            'opts': self.model._meta,
+            'title': 'Re-parse all rules from source_text',
+            'scanned': scanned,
+            'changed': preview['changed'],
+            'unchanged': preview['unchanged'],
+            'unparseable': preview['unparseable'],
+            'match_type_skip': preview['match_type_skip'],
+            'diff_preview': diff_preview,
+            'page_obj': page_obj,
+            'paginator': paginator,
+        }
+        return TemplateResponse(
+            request,
+            'admin/fixlist/classificationrule/reparse_all.html',
+            context,
+        )
 
     def import_rules_view(self, request):
         if request.method == 'POST':
