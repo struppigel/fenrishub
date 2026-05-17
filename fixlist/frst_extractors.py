@@ -5,6 +5,16 @@ from dataclasses import dataclass
 DESCRIPTION_SEP = "|||Description:"
 FIREFOX_PROFILE_RE = re.compile(r"(?i)(\\mozilla\\firefox\\profiles\\)[^\\]+")
 
+# Entry types whose CLSID/GUID is randomly assigned by Windows per machine
+# (firewall rule IDs, scheduled task IDs) rather than being a semantic COM
+# class ID. We intentionally don't store or compare these — they would
+# prevent any cross-system rule match.
+SYSTEM_SPECIFIC_CLSID_TYPES = frozenset({
+    "firewall",
+    "scheduled_task",
+    "scheduled_task_command",
+})
+
 
 @dataclass
 class FrstEntry:
@@ -26,8 +36,12 @@ class FrstEntry:
     def __eq__(self, other):
         if not isinstance(other, FrstEntry):
             return NotImplemented
+        compare_clsid = (
+            self.entry_type not in SYSTEM_SPECIFIC_CLSID_TYPES
+            and other.entry_type not in SYSTEM_SPECIFIC_CLSID_TYPES
+        )
         return (
-            self.clsid.lower() == other.clsid.lower()
+            (not compare_clsid or self.clsid.lower() == other.clsid.lower())
             and self.name == other.name
             and self.filepath.lower() == other.filepath.lower()
             and self.filename.lower() == other.filename.lower()
@@ -39,9 +53,13 @@ class FrstEntry:
         )
 
     def __hash__(self):
+        clsid_key = (
+            "" if self.entry_type in SYSTEM_SPECIFIC_CLSID_TYPES
+            else self.clsid.lower()
+        )
         return hash(
             (
-                self.clsid.lower(),
+                clsid_key,
                 self.name,
                 self.filepath.lower(),
                 self.filename.lower(),
@@ -204,7 +222,7 @@ def extract_frst_entry(line, regexp, group_map, entry_type=""):
         value = match.group(group_map.get(key))
         return (value or "").strip()
 
-    clsid = get_value("clsid")
+    clsid = "" if entry_type in SYSTEM_SPECIFIC_CLSID_TYPES else get_value("clsid")
     name = get_value("name")
     filepath = normalize_path(_strip_frst_filepath_markers(get_value("filepath")))
     arguments = get_value("arguments")
@@ -399,9 +417,6 @@ def extract_package(line):
     return extract_frst_entry(line, regexp, group_map, entry_type="package")
 
 
-_FIREWALL_CLSID_RE = re.compile(r'\{([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\}')
-
-
 def extract_firewall_rule(line):
     if not line.startswith("FirewallRules:"):
         return None
@@ -409,14 +424,7 @@ def extract_firewall_rule(line):
         return None
     regexp = r'FirewallRules: \[([^\]]+)\] => \((Allow|Block)\) ([^\(\n]+?)\s*(?:\(([^)]+)\s*->\s*([^)]+)\))?$'
     group_map = {"name": 2, "filepath": 3, "company": 5}
-    entry = extract_frst_entry(line, regexp, group_map, entry_type="firewall")
-    if entry:
-        bracket_content = re.match(r'FirewallRules: \[([^\]]+)\]', line)
-        if bracket_content:
-            clsid_match = _FIREWALL_CLSID_RE.search(bracket_content.group(1))
-            if clsid_match:
-                entry.clsid = clsid_match.group(1)
-    return entry
+    return extract_frst_entry(line, regexp, group_map, entry_type="firewall")
 
 
 # Single source of truth for extractor order (first match wins) and membership.

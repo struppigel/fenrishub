@@ -117,7 +117,7 @@ class ReparseRulesCommandTests(TestCase):
             match_type=ClassificationRule.MATCH_PARSED_ENTRY,
             source_text=other_line,
             entry_type="scheduled_task",
-            clsid="C44E3249-F34C-4259-A841-86818C1FE185",
+            clsid="",
             filepath=r"C:\Program Files\Google\Chrome\Application\helper.exe",
             normalized_filepath=r"c:\program files\google\chrome\application\helper.exe",
             filename="helper.exe",

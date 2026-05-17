@@ -17,7 +17,8 @@ class ExtractFirewallRuleTests(TestCase):
         entry = extract_firewall_rule(line)
         self.assertIsNotNone(entry)
         self.assertEqual(entry.entry_type, "firewall")
-        self.assertEqual(entry.clsid, "854C03D7-A445-4A50-AA06-CA6E5F44A529")
+        # Firewall rule GUIDs are per-system random — intentionally not captured.
+        self.assertEqual(entry.clsid, "")
         self.assertEqual(entry.name, "Allow")
         self.assertEqual(entry.filename, "msteams.exe")
         self.assertEqual(entry.company, "Microsoft Corporation")
@@ -50,7 +51,7 @@ class ExtractFirewallRuleTests(TestCase):
         entry = extract_firewall_rule(line)
         self.assertIsNotNone(entry)
         self.assertEqual(entry.entry_type, "firewall")
-        self.assertEqual(entry.clsid, "97B5CCE5-DCDD-48AB-B8B4-BBA31F8BB830")
+        self.assertEqual(entry.clsid, "")
         self.assertEqual(entry.name, "Block")
         self.assertEqual(entry.filename, "chromium.exe")
         self.assertEqual(entry.company, "The Chromium Authors")
@@ -65,7 +66,7 @@ class ExtractFirewallRuleTests(TestCase):
         entry = extract_firewall_rule(line)
         self.assertIsNotNone(entry)
         self.assertEqual(entry.entry_type, "firewall")
-        self.assertEqual(entry.clsid, "5B92B9E4-D93D-423F-83D1-BDFE276EC4B6")
+        self.assertEqual(entry.clsid, "")
         self.assertEqual(entry.name, "Allow")
         self.assertEqual(entry.company, "SatoshiLabs")
         self.assertEqual(entry.filename, "trezor suite.exe")
@@ -79,7 +80,7 @@ class ExtractFirewallRuleTests(TestCase):
         )
         entry = extract_firewall_rule(line)
         self.assertIsNotNone(entry)
-        self.assertEqual(entry.clsid, "E5B05654-6E4F-4B66-8974-20DE9BF68DDE")
+        self.assertEqual(entry.clsid, "")
         self.assertEqual(entry.name, "Block")
         self.assertEqual(entry.filename, "chromium.exe")
         self.assertEqual(entry.company, "")
@@ -162,7 +163,7 @@ class ExtractFirewallRuleTests(TestCase):
         self.assertIsNotNone(entry)
         self.assertEqual(entry.entry_type, "firewall")
         self.assertEqual(entry.filename, "chrome.exe")
-        self.assertEqual(entry.clsid, "5D364138-B5DA-4CEA-813D-837A47C26DF5")
+        self.assertEqual(entry.clsid, "")
         self.assertEqual(entry.name, "Allow")
 
     def test_get_frst_entry_skips_no_file(self):
@@ -172,3 +173,27 @@ class ExtractFirewallRuleTests(TestCase):
         )
         entry = get_frst_entry(line)
         self.assertIsNone(entry)
+
+    def test_equality_ignores_stored_clsid_for_firewall(self):
+        """A pre-existing rule still carrying a stored CLSID (from before this
+        change) must still match a freshly-parsed firewall entry whose CLSID is
+        now empty — otherwise the rescan-all step would become mandatory."""
+        from ..frst_extractors import FrstEntry
+
+        legacy_rule_entry = FrstEntry(
+            clsid="854C03D7-A445-4A50-AA06-CA6E5F44A529",
+            name="Allow",
+            filepath=r"C:\Program Files\foo.exe",
+            filename="foo.exe",
+            company="Corp",
+            entry_type="firewall",
+        )
+        freshly_parsed = FrstEntry(
+            clsid="",  # new extractor leaves this empty
+            name="Allow",
+            filepath=r"C:\Program Files\foo.exe",
+            filename="foo.exe",
+            company="Corp",
+            entry_type="firewall",
+        )
+        self.assertEqual(legacy_rule_entry, freshly_parsed)

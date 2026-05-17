@@ -40,7 +40,8 @@ class ScheduledTaskBinaryFormTests(TestCase):
         entry = extract_frst_scheduled_task(BINARY_LINE)
         self.assertIsNotNone(entry)
         self.assertEqual(entry.entry_type, "scheduled_task")
-        self.assertEqual(entry.clsid, "C44E3249-F34C-4259-A841-86818C1FE185")
+        # Scheduled-task GUIDs are per-system random — intentionally not captured.
+        self.assertEqual(entry.clsid, "")
         self.assertEqual(
             entry.filepath,
             r"C:\Program Files\Google\Chrome\Application\PlatformExperienceHelper"
@@ -267,7 +268,7 @@ class ScheduledTaskCommandFormTests(TestCase):
         entry = extract_frst_scheduled_task_command(COMMAND_LINE)
         self.assertIsNotNone(entry)
         self.assertEqual(entry.entry_type, "scheduled_task_command")
-        self.assertEqual(entry.clsid, "ECD68699-8BD3-4F53-9BB7-424185C713A4")
+        self.assertEqual(entry.clsid, "")
         self.assertEqual(entry.filepath, "")
         self.assertEqual(entry.filename, "")
         self.assertEqual(
