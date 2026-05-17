@@ -292,6 +292,7 @@ class ClassificationRule(models.Model):
     arguments = models.TextField(blank=True)
     file_not_signed = models.BooleanField(default=False)
     attributes = models.CharField(max_length=16, blank=True)
+    is_hidden = models.BooleanField(default=False)
 
     priority = models.PositiveSmallIntegerField(
         null=True,

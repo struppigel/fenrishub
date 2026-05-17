@@ -519,6 +519,7 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         "arguments": "",
         "file_not_signed": False,
         "attributes": "",
+        "is_hidden": False,
     }
 
     if core.startswith("EXACT:"):
@@ -560,6 +561,7 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         rule_data["arguments"] = parsed_entry.arguments
         rule_data["file_not_signed"] = parsed_entry.file_not_signed
         rule_data["attributes"] = parsed_entry.attributes
+        rule_data["is_hidden"] = parsed_entry.is_hidden
         if not rule_data["description"]:
             rule_data["description"] = parsed_entry.description
         return rule_data
@@ -618,6 +620,7 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
                 "arguments": parsed["arguments"],
                 "file_not_signed": parsed["file_not_signed"],
                 "attributes": parsed["attributes"],
+                "is_hidden": parsed["is_hidden"],
                 "is_enabled": True,
             }
             rule, is_created = ClassificationRule.objects.update_or_create(**lookup, defaults=defaults)
@@ -665,6 +668,7 @@ REPARSE_FIELDS = (
     "arguments",
     "file_not_signed",
     "attributes",
+    "is_hidden",
 )
 
 
@@ -757,6 +761,7 @@ def find_rule_duplicates(queryset):
                 (rule.filepath or "").lower(),
                 (rule.filename or "").lower(),
                 bool(rule.file_not_signed),
+                bool(rule.is_hidden),
                 rule.company or "",
                 rule.arguments or "",
                 rule.attributes or "",
@@ -842,6 +847,7 @@ def _load_rule_buckets():
                 file_not_signed=rule.file_not_signed,
                 entry_type=rule.entry_type,
                 attributes=rule.attributes,
+                is_hidden=rule.is_hidden,
             )
             buckets[ClassificationRule.MATCH_PARSED_ENTRY].append((rule, parsed_entry))
             continue

@@ -5,6 +5,11 @@ from dataclasses import dataclass
 DESCRIPTION_SEP = "|||Description:"
 FIREFOX_PROFILE_RE = re.compile(r"(?i)(\\mozilla\\firefox\\profiles\\)[^\\]+")
 
+# FRST's Installed Programs section appends ` Hidden` after the closing paren
+# for hidden products. Anchored to end of line so it cannot match arbitrary
+# occurrences of "Hidden" mid-string in other entry types.
+_HIDDEN_SUFFIX_RE = re.compile(r"\)\s+Hidden\s*$")
+
 # Entry types whose CLSID/GUID is randomly assigned by Windows per machine
 # (firewall rule IDs, scheduled task IDs) rather than being a semantic COM
 # class ID. We intentionally don't store or compare these — they would
@@ -32,6 +37,10 @@ class FrstEntry:
     # entry types that carry them — currently the "One month (created/modified)"
     # section. Empty for all other entry types and compares equal to empty.
     attributes: str = ""
+    # `Hidden` suffix used by FRST in the Installed Programs section to mark
+    # entries that wouldn't appear in Programs and Features (typically MSI
+    # components, runtime redistributables, or installer leftovers).
+    is_hidden: bool = False
 
     def __eq__(self, other):
         if not isinstance(other, FrstEntry):
@@ -46,6 +55,7 @@ class FrstEntry:
             and self.filepath.lower() == other.filepath.lower()
             and self.filename.lower() == other.filename.lower()
             and self.file_not_signed == other.file_not_signed
+            and self.is_hidden == other.is_hidden
             and self.company == other.company
             and self.entry_type == other.entry_type
             and self.arguments == other.arguments
@@ -65,6 +75,7 @@ class FrstEntry:
                 self.filename.lower(),
                 self.company,
                 self.file_not_signed,
+                self.is_hidden,
                 self.entry_type,
                 self.arguments,
                 self.attributes,
@@ -233,6 +244,13 @@ def extract_frst_entry(line, regexp, group_map, entry_type=""):
     company = get_value("company")
     attributes = get_value("attributes")
     file_not_signed = "[File not signed]" in line
+    # The Hidden suffix is currently only meaningful for the Installed Programs
+    # section. Scoped by entry_type so unrelated lines that happen to end with
+    # ") Hidden" can never flip the flag.
+    is_hidden = (
+        entry_type == "installed_software"
+        and bool(_HIDDEN_SUFFIX_RE.search(line))
+    )
     description = get_description(line)
 
     return FrstEntry(
@@ -247,6 +265,7 @@ def extract_frst_entry(line, regexp, group_map, entry_type=""):
         file_not_signed,
         entry_type,
         attributes,
+        is_hidden,
     )
 
 
@@ -364,8 +383,17 @@ def extract_frst_startup(line):
 
 
 def extract_installed_software(line):
-    regexp = r"(.*?)( - [\s\.\d\(\)x]*)?\(HK(LM|U)(-x32)?\\.*\((Version:.* - (.*))\)( Hidden)?"
-    group_map = {"name": 1, "company": 6}
+    # The uninstall key under HKLM\...\Uninstall\ is either an MSI Product Code
+    # GUID (stable across systems for a given product version) or a literal
+    # name like `Adobe AIR`. We capture only the GUID form into `clsid` so the
+    # two cases don't collapse into a single FrstEntry; non-GUID keys leave
+    # `clsid` empty and the rule is differentiated by `name`/`company`.
+    regexp = (
+        r"(.*?)( - [\s\.\d\(\)x]*)?"
+        r"\(HK(LM|U)(-x32)?\\.*?\\(?:\{([^}]+)\}|[^)]+)\)"
+        r"\s*\((Version:.* - (.*))\)( Hidden)?"
+    )
+    group_map = {"name": 1, "clsid": 5, "company": 7}
     return extract_frst_entry(line, regexp, group_map, entry_type="installed_software")
 
 
