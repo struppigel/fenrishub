@@ -291,6 +291,7 @@ class ClassificationRule(models.Model):
     company = models.CharField(max_length=512, blank=True)
     arguments = models.TextField(blank=True)
     file_not_signed = models.BooleanField(default=False)
+    attributes = models.CharField(max_length=16, blank=True)
 
     priority = models.PositiveSmallIntegerField(
         null=True,

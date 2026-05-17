@@ -518,6 +518,7 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         "company": "",
         "arguments": "",
         "file_not_signed": False,
+        "attributes": "",
     }
 
     if core.startswith("EXACT:"):
@@ -558,6 +559,7 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         rule_data["company"] = parsed_entry.company
         rule_data["arguments"] = parsed_entry.arguments
         rule_data["file_not_signed"] = parsed_entry.file_not_signed
+        rule_data["attributes"] = parsed_entry.attributes
         if not rule_data["description"]:
             rule_data["description"] = parsed_entry.description
         return rule_data
@@ -615,6 +617,7 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
                 "company": parsed["company"],
                 "arguments": parsed["arguments"],
                 "file_not_signed": parsed["file_not_signed"],
+                "attributes": parsed["attributes"],
                 "is_enabled": True,
             }
             rule, is_created = ClassificationRule.objects.update_or_create(**lookup, defaults=defaults)
@@ -661,6 +664,7 @@ REPARSE_FIELDS = (
     "company",
     "arguments",
     "file_not_signed",
+    "attributes",
 )
 
 
@@ -787,6 +791,7 @@ def _load_rule_buckets():
                 arguments=rule.arguments,
                 file_not_signed=rule.file_not_signed,
                 entry_type=rule.entry_type,
+                attributes=rule.attributes,
             )
             buckets[ClassificationRule.MATCH_PARSED_ENTRY].append((rule, parsed_entry))
             continue

@@ -18,6 +18,10 @@ class FrstEntry:
     arguments: str = ""
     file_not_signed: bool = False
     entry_type: str = ""
+    # FRST file-attribute flags (e.g. "____D" for directory). Only populated for
+    # entry types that carry them — currently the "One month (created/modified)"
+    # section. Empty for all other entry types and compares equal to empty.
+    attributes: str = ""
 
     def __eq__(self, other):
         if not isinstance(other, FrstEntry):
@@ -31,6 +35,7 @@ class FrstEntry:
             and self.company == other.company
             and self.entry_type == other.entry_type
             and self.arguments == other.arguments
+            and self.attributes == other.attributes
         )
 
     def __hash__(self):
@@ -44,6 +49,7 @@ class FrstEntry:
                 self.file_not_signed,
                 self.entry_type,
                 self.arguments,
+                self.attributes,
             )
         )
 
@@ -207,6 +213,7 @@ def extract_frst_entry(line, regexp, group_map, entry_type=""):
     filename = (ntpath.basename(filepath) or "").strip()
     date = get_value("date")
     company = get_value("company")
+    attributes = get_value("attributes")
     file_not_signed = "[File not signed]" in line
     description = get_description(line)
 
@@ -221,6 +228,7 @@ def extract_frst_entry(line, regexp, group_map, entry_type=""):
         arguments,
         file_not_signed,
         entry_type,
+        attributes,
     )
 
 
@@ -343,9 +351,9 @@ def extract_onemonth(line):
     regexp = (
         r"(?:Found path already in\s+)?"
         + r"(" + _ONEMONTH_TS + r") - " + _ONEMONTH_TS +
-        r" - \d+ .{5} (\((.*)\) )?(\w:\\.*)"
+        r" - \d+ (.{5}) (\((.*)\) )?(\w:\\.*)"
     )
-    group_map = {"date": 1, "company": 3, "filepath": 4}
+    group_map = {"date": 1, "attributes": 2, "company": 4, "filepath": 5}
     return extract_frst_entry(line, regexp, group_map, entry_type="onemonth")
 
 
