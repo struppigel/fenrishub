@@ -75,3 +75,26 @@ class ExtractOneMonthTests(TestCase):
         self.assertIsNotNone(dir_entry)
         self.assertIsNotNone(file_entry)
         self.assertNotEqual(dir_entry, file_entry)
+
+    def test_two_directory_onemonth_lines_with_different_timestamps_match(self):
+        """Date columns differ but everything compared by __eq__ matches —
+        the matcher's parsed_entry bucket must find these equal."""
+        log_line = (
+            r"2026-05-02 05:29 - 2020-03-22 01:30 - 000000000 ____D "
+            r"C:\Program Files (x86)\LightingService"
+        )
+        rule_source = (
+            r"2026-03-01 00:00 - 2020-03-22 01:30 - 000000000 ____D "
+            r"C:\Program Files (x86)\LightingService"
+        )
+        self.assertEqual(extract_onemonth(log_line), extract_onemonth(rule_source))
+
+    def test_hidden_directory_onemonth_line_matches_self(self):
+        line = (
+            r"2026-04-28 16:01 - 2022-09-02 11:09 - 000000000 ___HD "
+            r"C:\Program Files\Common Files\EAInstaller"
+        )
+        a = extract_onemonth(line)
+        b = extract_onemonth(line)
+        self.assertEqual(a, b)
+        self.assertEqual(a.attributes, "___HD")

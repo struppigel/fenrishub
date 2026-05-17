@@ -37,6 +37,8 @@ def _rule_defaults_from_parsed(parsed: dict) -> dict:
         'company': parsed['company'],
         'arguments': parsed['arguments'],
         'file_not_signed': parsed['file_not_signed'],
+        'attributes': parsed['attributes'],
+        'is_hidden': parsed['is_hidden'],
         'is_enabled': True,
     }
 
@@ -372,6 +374,8 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
                 'company': parsed.get('company', ''),
                 'arguments': parsed.get('arguments', ''),
                 'file_not_signed': parsed.get('file_not_signed', False),
+                'attributes': parsed.get('attributes', ''),
+                'is_hidden': parsed.get('is_hidden', False),
             }
         )
 
