@@ -27,6 +27,25 @@ HIDDEN_INSTALL_LINE = (
     r"Adobe AIR (HKLM-x32\...\{10E33ABF-D7FB-4F47-900A-7973854AB45A}) "
     r"(Version: 32.0.0.144 - Adobe) Hidden"
 )
+FIREWALL_LINE = (
+    r"FirewallRules: [{854C03D7-A445-4A50-AA06-CA6E5F44A529}] => (Allow) "
+    r"C:\Program Files\WindowsApps\MicrosoftTeams_24215.1105.3082.1600_x64__8wekyb3d8bbwe\msteams.exe "
+    r"(Microsoft Corporation -> Microsoft Corporation)"
+)
+SCHEDULED_TASK_LINE = (
+    r"Task: {CA037D06-C97D-49EF-BBBB-DF2B661CC4E6} - "
+    r"System32\Tasks\NetworkDiagnosticService => "
+    r"C:\Windows\system32\wscript.exe [181760 2025-05-14] "
+    r"(Microsoft Windows -> Microsoft Corporation) -> "
+    r'"%LOCALAPPDATA%\DiagnosticsNET\update.vbs"'
+)
+BHO_LINE = (
+    r"BHO: Test BHO -> {AE805869-2E5C-4ED4-8F7B-F1F7851A4497} -> "
+    r"C:\Program Files\Test\test.dll [12345 2024-01-01] (Test Vendor)"
+)
+NAMED_INSTALL_LINE = (
+    r"Some Tool (HKLM-x32\...\Some Tool) (Version: 1.2.3 - Vendor)"
+)
 
 
 class RuleDefaultsFromParsedTests(LogAnalyzerApiBaseTestCase):
@@ -96,6 +115,50 @@ class PersistPendingRuleChangesStoresParsedFieldsTests(LogAnalyzerApiBaseTestCas
         rule = ClassificationRule.objects.get(source_text=HIDDEN_INSTALL_LINE)
         self.assertEqual(rule.entry_type, "installed_software")
         self.assertTrue(rule.is_hidden)
+
+    def test_persist_firewall_rule_stores_empty_clsid(self):
+        """Firewall rule GUIDs are per-system random — must not be stored."""
+        self._persist(FIREWALL_LINE)
+        rule = ClassificationRule.objects.get(source_text=FIREWALL_LINE)
+        self.assertEqual(rule.entry_type, "firewall")
+        self.assertEqual(rule.clsid, "")
+
+    def test_persist_scheduled_task_stores_empty_clsid_and_task_path_in_name(self):
+        """Scheduled-task GUIDs are per-system random (clsid must be empty);
+        the task path goes into `name` so two tasks with different paths but
+        the same binary don't collapse."""
+        self._persist(SCHEDULED_TASK_LINE)
+        rule = ClassificationRule.objects.get(source_text=SCHEDULED_TASK_LINE)
+        self.assertEqual(rule.entry_type, "scheduled_task")
+        self.assertEqual(rule.clsid, "")
+        self.assertEqual(rule.name, r"System32\Tasks\NetworkDiagnosticService")
+        self.assertEqual(
+            rule.arguments,
+            r'"%LOCALAPPDATA%\DiagnosticsNET\update.vbs"',
+        )
+
+    def test_persist_installed_software_with_guid_stores_empty_clsid(self):
+        """MSI Product Codes are NOT captured into clsid — they may be per-
+        install for third-party / PUP installers and would silently break
+        cross-system matching."""
+        self._persist(HIDDEN_INSTALL_LINE)
+        rule = ClassificationRule.objects.get(source_text=HIDDEN_INSTALL_LINE)
+        self.assertEqual(rule.entry_type, "installed_software")
+        self.assertEqual(rule.clsid, "")
+
+    def test_persist_installed_software_with_named_key_stores_empty_clsid(self):
+        self._persist(NAMED_INSTALL_LINE)
+        rule = ClassificationRule.objects.get(source_text=NAMED_INSTALL_LINE)
+        self.assertEqual(rule.entry_type, "installed_software")
+        self.assertEqual(rule.clsid, "")
+
+    def test_persist_bho_rule_stores_semantic_clsid(self):
+        """COM class IDs ARE stable across systems — must be stored for entry
+        types where clsid is semantic (BHO, custom_clsid, etc.)."""
+        self._persist(BHO_LINE)
+        rule = ClassificationRule.objects.get(source_text=BHO_LINE)
+        self.assertEqual(rule.entry_type, "bho")
+        self.assertEqual(rule.clsid, "AE805869-2E5C-4ED4-8F7B-F1F7851A4497")
 
     def test_persisted_onemonth_rule_matches_via_parsed_entry(self):
         """The whole point of the bug fix: after persisting an onemonth rule,
