@@ -14,12 +14,16 @@ NAMED_LINE = (
 
 class ExtractInstalledSoftwareTests(TestCase):
 
-    def test_msi_product_code_captured_into_clsid(self):
+    def test_msi_product_code_not_captured_into_clsid(self):
+        """MSI Product Code GUIDs are intentionally NOT captured because third-
+        party / PUP installers often generate per-install GUIDs that would
+        break cross-system matching. Differentiation relies on is_hidden,
+        name, and company instead."""
         entry = extract_installed_software(GUID_LINE)
         self.assertIsNotNone(entry)
         self.assertEqual(entry.entry_type, "installed_software")
         self.assertEqual(entry.name, "Adobe AIR")
-        self.assertEqual(entry.clsid, "10E33ABF-D7FB-4F47-900A-7973854AB45A")
+        self.assertEqual(entry.clsid, "")
         self.assertEqual(entry.company, "Adobe")
 
     def test_hidden_suffix_sets_is_hidden_true(self):

@@ -383,17 +383,15 @@ def extract_frst_startup(line):
 
 
 def extract_installed_software(line):
-    # The uninstall key under HKLM\...\Uninstall\ is either an MSI Product Code
-    # GUID (stable across systems for a given product version) or a literal
-    # name like `Adobe AIR`. We capture only the GUID form into `clsid` so the
-    # two cases don't collapse into a single FrstEntry; non-GUID keys leave
-    # `clsid` empty and the rule is differentiated by `name`/`company`.
-    regexp = (
-        r"(.*?)( - [\s\.\d\(\)x]*)?"
-        r"\(HK(LM|U)(-x32)?\\.*?\\(?:\{([^}]+)\}|[^)]+)\)"
-        r"\s*\((Version:.* - (.*))\)( Hidden)?"
-    )
-    group_map = {"name": 1, "clsid": 5, "company": 7}
+    # The uninstall key under HKLM\...\Uninstall\ is sometimes an MSI Product
+    # Code GUID and sometimes a literal name. The GUID is only reliably stable
+    # across systems for well-known MSI installers; third-party / PUP installers
+    # often generate per-install GUIDs. We intentionally do NOT capture it into
+    # `clsid` — that would silently break cross-system rule matching for those
+    # installers. The Hidden flag and name/company are sufficient to tell e.g.
+    # the two Adobe AIR variants apart.
+    regexp = r"(.*?)( - [\s\.\d\(\)x]*)?\(HK(LM|U)(-x32)?\\.*\((Version:.* - (.*))\)( Hidden)?"
+    group_map = {"name": 1, "company": 6}
     return extract_frst_entry(line, regexp, group_map, entry_type="installed_software")
 
 
