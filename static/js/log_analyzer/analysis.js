@@ -822,7 +822,7 @@ function setupLineCopyMenu() {
 }
 
 const DATE_HIGHLIGHT_RE = /\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?/g;
-const CHROME_EXT_ID_RE = /(?<=\\Extensions\\)[a-p]{32}\b/g;
+const CHROME_EXT_ID_RE = /(?<=\\Extensions\\|\\Extension: \[)[a-p]{32}\b/g;
 
 const CHROME_EXT_MENU_ITEMS = [
     {
