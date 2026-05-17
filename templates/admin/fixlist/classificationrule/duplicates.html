@@ -1,0 +1,238 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+    .dup-page .stats {
+        display: flex;
+        gap: 24px;
+        margin: 12px 0 18px;
+    }
+    .dup-page .stats .stat {
+        padding: 8px 14px;
+        border: 1px solid var(--border-color, #ccc);
+        border-radius: 4px;
+        min-width: 120px;
+    }
+    .dup-page .stat .label {
+        display: block;
+        font-size: 12px;
+        text-transform: uppercase;
+        opacity: 0.7;
+    }
+    .dup-page .stat .value {
+        font-size: 22px;
+        font-weight: 600;
+    }
+    .dup-page .group {
+        border: 1px solid var(--border-color, #ccc);
+        border-radius: 4px;
+        margin-bottom: 18px;
+        padding: 10px 14px;
+    }
+    .dup-page .group-header {
+        font-family: monospace;
+        font-size: 12px;
+        margin-bottom: 8px;
+        word-break: break-all;
+    }
+    .dup-page .group-header .pair {
+        display: inline-block;
+        margin-right: 14px;
+    }
+    .dup-page .group-header .key {
+        opacity: 0.7;
+        text-transform: uppercase;
+        font-size: 10px;
+    }
+    .dup-page table.group-rules {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: monospace;
+        font-size: 12px;
+    }
+    .dup-page table.group-rules th,
+    .dup-page table.group-rules td {
+        border-bottom: 1px solid var(--border-color, #ddd);
+        padding: 6px 10px;
+        vertical-align: top;
+        word-break: break-all;
+    }
+    .dup-page table.group-rules th {
+        text-align: left;
+        background: var(--darkened-bg, #f4f4f4);
+    }
+    .dup-page .badge-disabled {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 3px;
+        background: #d33;
+        color: #fff;
+        font-size: 10px;
+    }
+    .dup-page .group-actions {
+        margin-top: 6px;
+    }
+    .dup-page .group-actions button {
+        font-size: 11px;
+        padding: 2px 8px;
+    }
+    .dup-page .submit-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-top: 18px;
+        position: sticky;
+        bottom: 0;
+        background: var(--body-bg, #fff);
+        padding: 10px 0;
+        border-top: 1px solid var(--border-color, #ccc);
+    }
+    .dup-page .submit-row input.default,
+    .dup-page .submit-row input.delete {
+        min-width: 220px;
+        height: 34px;
+    }
+    .dup-page .submit-row input.delete {
+        background: #ba2121;
+        color: #fff;
+        border: 0;
+        cursor: pointer;
+    }
+</style>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.dup-page .select-extras').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var group = btn.closest('.group');
+            var boxes = group.querySelectorAll('input[type="checkbox"][name="disable"]:not(:disabled)');
+            if (boxes.length === 0) return;
+            // Lowest-id checkbox stays unchecked; check all others.
+            var ids = Array.from(boxes).map(function (b) { return parseInt(b.value, 10); });
+            var keepId = Math.min.apply(null, ids);
+            boxes.forEach(function (b) {
+                b.checked = parseInt(b.value, 10) !== keepId;
+            });
+        });
+    });
+    document.querySelectorAll('.dup-page .clear-group').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            btn.closest('.group').querySelectorAll('input[type="checkbox"][name="disable"]').forEach(function (b) {
+                b.checked = false;
+            });
+        });
+    });
+    var deleteBtn = document.querySelector('.dup-page input.delete');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function (event) {
+            var checked = document.querySelectorAll('.dup-page input[type="checkbox"][name="disable"]:checked').length;
+            if (checked === 0) return;
+            var msg = 'Permanently delete ' + checked + ' rule(s)? This cannot be undone.';
+            if (!window.confirm(msg)) {
+                event.preventDefault();
+            }
+        });
+    }
+});
+</script>
+{% endblock %}
+
+{% block content %}
+<div id="content-main" class="dup-page">
+    <h1>Find duplicate rules</h1>
+    <p>
+        Rules whose matching identity is identical &mdash; same comparison fields
+        AND same status. Parsed-entry rules group on the <code>FrstEntry</code>
+        comparison fields (CLSID excluded for firewall and scheduled-task entries
+        since those GUIDs are per-system random). Filepath rules group on
+        <code>normalized_filepath</code>. Pick which rules to disable; the lowest-id
+        rule in a group is the natural "keep" candidate.
+    </p>
+
+    <div class="stats">
+        <div class="stat"><span class="label">Scanned</span><span class="value">{{ scanned }}</span></div>
+        <div class="stat"><span class="label">Duplicate groups</span><span class="value">{{ group_count }}</span></div>
+        <div class="stat"><span class="label">Duplicate rules</span><span class="value">{{ rule_count }}</span></div>
+    </div>
+
+    {% if group_page %}
+    <form method="post">
+        {% csrf_token %}
+        {% for group in group_page %}
+        <div class="group">
+            <div class="group-header">
+                <span class="pair"><span class="key">match_type</span> {{ group.0.match_type }}</span>
+                <span class="pair"><span class="key">status</span> {{ group.0.status }}</span>
+                {% if group.0.entry_type %}<span class="pair"><span class="key">entry_type</span> {{ group.0.entry_type }}</span>{% endif %}
+                {% if group.0.filepath %}<span class="pair"><span class="key">filepath</span> {{ group.0.filepath }}</span>{% endif %}
+                {% if group.0.filename %}<span class="pair"><span class="key">filename</span> {{ group.0.filename }}</span>{% endif %}
+                {% if group.0.name %}<span class="pair"><span class="key">name</span> {{ group.0.name }}</span>{% endif %}
+                {% if group.0.company %}<span class="pair"><span class="key">company</span> {{ group.0.company }}</span>{% endif %}
+                {% if group.0.arguments %}<span class="pair"><span class="key">args</span> {{ group.0.arguments }}</span>{% endif %}
+                {% if group.0.attributes %}<span class="pair"><span class="key">attrs</span> {{ group.0.attributes }}</span>{% endif %}
+                {% if group.0.file_not_signed %}<span class="pair"><span class="key">unsigned</span> yes</span>{% endif %}
+                {% if group.0.match_type == 'filepath' %}<span class="pair"><span class="key">normalized</span> {{ group.0.normalized_filepath }}</span>{% endif %}
+            </div>
+            <table class="group-rules">
+                <thead>
+                    <tr>
+                        <th style="width:30px"></th>
+                        <th style="width:80px">ID</th>
+                        <th style="width:120px">Owner</th>
+                        <th>source_text</th>
+                        <th>description</th>
+                        <th style="width:80px">Enabled</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for rule in group %}
+                    <tr>
+                        <td>
+                            <input type="checkbox" name="disable" value="{{ rule.id }}"
+                                {% if not rule.is_enabled %}disabled title="Already disabled"{% endif %}>
+                        </td>
+                        <td>
+                            <a href="{% url 'admin:fixlist_classificationrule_change' rule.pk %}">#{{ rule.id }}</a>
+                        </td>
+                        <td>{{ rule.owner.username }}</td>
+                        <td>{{ rule.source_text|truncatechars:120 }}</td>
+                        <td>{{ rule.description|default:"&mdash;"|truncatechars:80 }}</td>
+                        <td>
+                            {% if rule.is_enabled %}yes{% else %}<span class="badge-disabled">disabled</span>{% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            <div class="group-actions">
+                <button type="button" class="button select-extras">Select all but the lowest-id rule</button>
+                <button type="button" class="button clear-group">Clear group</button>
+            </div>
+        </div>
+        {% endfor %}
+
+        {% if paginator.num_pages > 1 %}
+        <div class="diff-pagination" style="margin:10px 0 20px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            {% if page_obj.has_previous %}
+            <a class="button" href="?page=1">&laquo; first</a>
+            <a class="button" href="?page={{ page_obj.previous_page_number }}">&lsaquo; prev</a>
+            {% endif %}
+            <span>page {{ page_obj.number }} / {{ paginator.num_pages }}</span>
+            {% if page_obj.has_next %}
+            <a class="button" href="?page={{ page_obj.next_page_number }}">next &rsaquo;</a>
+            <a class="button" href="?page={{ paginator.num_pages }}">last &raquo;</a>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="submit-row">
+            <input type="submit" name="action_disable" value="Disable selected rule(s)" class="default">
+            <input type="submit" name="action_delete" value="Delete selected rule(s)" class="delete">
+            <a href="{% url 'admin:fixlist_classificationrule_changelist' %}" class="button cancel-link">Back to rules</a>
+        </div>
+    </form>
+    {% else %}
+    <p><em>No duplicates found.</em></p>
+    {% endif %}
+</div>
+{% endblock %}

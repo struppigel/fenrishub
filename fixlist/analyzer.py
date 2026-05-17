@@ -727,6 +727,56 @@ def reparse_rules(queryset, *, apply: bool = False):
     }
 
 
+def find_rule_duplicates(queryset):
+    """Group rules whose comparison-relevant fields AND status are identical.
+
+    Returns a list of groups; each group is a list of >=2 ClassificationRule
+    objects sharing the same matching identity. Used by both the admin
+    "Find duplicates" view and the `find_duplicates` management command.
+
+    Parsed-entry rules group on the FrstEntry.__eq__ field set (with CLSID
+    omitted from the key for SYSTEM_SPECIFIC_CLSID_TYPES). Filepath rules
+    group on normalized_filepath alone. The two never collide because the
+    group key starts with match_type.
+    """
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for rule in queryset.iterator():
+        if rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
+            clsid = (
+                "" if rule.entry_type in ex.SYSTEM_SPECIFIC_CLSID_TYPES
+                else (rule.clsid or "").lower()
+            )
+            key = (
+                rule.match_type,
+                rule.status,
+                rule.entry_type or "",
+                clsid,
+                rule.name or "",
+                (rule.filepath or "").lower(),
+                (rule.filename or "").lower(),
+                bool(rule.file_not_signed),
+                rule.company or "",
+                rule.arguments or "",
+                rule.attributes or "",
+            )
+        elif rule.match_type == ClassificationRule.MATCH_FILEPATH:
+            normalized = (rule.normalized_filepath or "").strip().lower()
+            if not normalized:
+                continue
+            key = (rule.match_type, rule.status, normalized)
+        else:
+            continue
+        groups[key].append(rule)
+
+    return [
+        sorted(rules, key=lambda r: r.id)
+        for rules in groups.values()
+        if len(rules) >= 2
+    ]
+
+
 def _get_cached_rule_buckets():
     global _rule_buckets_cache, _rule_buckets_cache_time
     now = time.monotonic()

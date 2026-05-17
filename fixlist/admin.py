@@ -6,7 +6,12 @@ from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 
-from .analyzer import import_rules_from_lines, invalidate_rule_buckets_cache, reparse_rules
+from .analyzer import (
+    find_rule_duplicates,
+    import_rules_from_lines,
+    invalidate_rule_buckets_cache,
+    reparse_rules,
+)
 from .models import (
     AccessLog,
     ClassificationRule,
@@ -301,6 +306,11 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.reparse_all_view),
                 name='fixlist_classificationrule_reparse_all',
             ),
+            path(
+                'duplicates/',
+                self.admin_site.admin_view(self.duplicates_view),
+                name='fixlist_classificationrule_duplicates',
+            ),
         ]
         return custom_urls + urls
 
@@ -362,6 +372,67 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         return TemplateResponse(
             request,
             'admin/fixlist/classificationrule/reparse_all.html',
+            context,
+        )
+
+    def duplicates_view(self, request):
+        qs = ClassificationRule.objects.filter(
+            match_type__in=(
+                ClassificationRule.MATCH_PARSED_ENTRY,
+                ClassificationRule.MATCH_FILEPATH,
+            )
+        ).select_related('owner')
+
+        if request.method == 'POST':
+            raw_ids = request.POST.getlist('disable')
+            ids = []
+            for raw in raw_ids:
+                try:
+                    ids.append(int(raw))
+                except (TypeError, ValueError):
+                    continue
+            action = 'delete' if 'action_delete' in request.POST else 'disable'
+            count = 0
+            if ids:
+                if action == 'delete':
+                    count, _ = ClassificationRule.objects.filter(pk__in=ids).delete()
+                else:
+                    count = ClassificationRule.objects.filter(
+                        pk__in=ids, is_enabled=True
+                    ).update(is_enabled=False)
+                if count:
+                    invalidate_rule_buckets_cache()
+            verb = 'Deleted' if action == 'delete' else 'Disabled'
+            self.message_user(
+                request,
+                f"{verb} {count} rule(s).",
+                level=messages.SUCCESS if count else messages.INFO,
+            )
+            return HttpResponseRedirect(
+                reverse('admin:fixlist_classificationrule_duplicates')
+            )
+
+        groups = find_rule_duplicates(qs)
+        total_rules = sum(len(g) for g in groups)
+
+        from django.core.paginator import Paginator
+        paginator = Paginator(groups, 25)
+        page_obj = paginator.get_page(request.GET.get('page') or 1)
+
+        context = {
+            **self.admin_site.each_context(request),
+            'opts': self.model._meta,
+            'title': 'Find duplicate rules',
+            'scanned': qs.count(),
+            'group_count': len(groups),
+            'rule_count': total_rules,
+            'group_page': page_obj.object_list,
+            'page_obj': page_obj,
+            'paginator': paginator,
+        }
+        return TemplateResponse(
+            request,
+            'admin/fixlist/classificationrule/duplicates.html',
             context,
         )
 
