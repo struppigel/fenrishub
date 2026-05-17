@@ -118,6 +118,7 @@ class ReparseRulesCommandTests(TestCase):
             source_text=other_line,
             entry_type="scheduled_task",
             clsid="",
+            name=r"System32\Tasks\Google",
             filepath=r"C:\Program Files\Google\Chrome\Application\helper.exe",
             normalized_filepath=r"c:\program files\google\chrome\application\helper.exe",
             filename="helper.exe",

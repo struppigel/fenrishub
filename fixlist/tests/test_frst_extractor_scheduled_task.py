@@ -50,6 +50,39 @@ class ScheduledTaskBinaryFormTests(TestCase):
         self.assertEqual(entry.filename, "platform_experience_helper.exe")
         self.assertIn("Google LLC", entry.company)
 
+    def test_captures_task_path_into_name(self):
+        entry = extract_frst_scheduled_task(BINARY_LINE)
+        self.assertEqual(
+            entry.name,
+            r"System32\Tasks\GoogleUserPEH\RunPlatformExperienceHelper_Daily",
+        )
+
+    def test_two_tasks_with_different_paths_but_same_binary_are_unequal(self):
+        line_a = (
+            r"Task: {CA037D06-C97D-49EF-BBBB-DF2B661CC4E6} - "
+            r"System32\Tasks\NetworkDiagnosticService => "
+            r"C:\Windows\system32\wscript.exe [181760 2025-05-14] "
+            r"(Microsoft Windows -> Microsoft Corporation) -> "
+            r'"%LOCALAPPDATA%\DiagnosticsNET\update.vbs"'
+        )
+        line_b = (
+            r"Task: {5EC7F6AD-9140-467C-A0B3-2B87DACB5717} - "
+            r"System32\Tasks\SystemCacheMaintenance => "
+            r"C:\Windows\system32\wscript.exe [181760 2025-05-14] "
+            r"(Microsoft Windows -> Microsoft Corporation) -> "
+            r'"%LOCALAPPDATA%\DiagnosticsNET\updater.vbs"'
+        )
+        a = extract_frst_scheduled_task(line_a)
+        b = extract_frst_scheduled_task(line_b)
+        self.assertIsNotNone(a)
+        self.assertIsNotNone(b)
+        self.assertEqual(a.name, r"System32\Tasks\NetworkDiagnosticService")
+        self.assertEqual(b.name, r"System32\Tasks\SystemCacheMaintenance")
+        self.assertEqual(a.arguments, r'"%LOCALAPPDATA%\DiagnosticsNET\update.vbs"')
+        self.assertEqual(b.arguments, r'"%LOCALAPPDATA%\DiagnosticsNET\updater.vbs"')
+        # And critically — the two FrstEntry values must NOT compare equal.
+        self.assertNotEqual(a, b)
+
     def test_command_extractor_does_not_match(self):
         self.assertIsNone(extract_frst_scheduled_task_command(BINARY_LINE))
 
@@ -271,6 +304,10 @@ class ScheduledTaskCommandFormTests(TestCase):
         self.assertEqual(entry.clsid, "")
         self.assertEqual(entry.filepath, "")
         self.assertEqual(entry.filename, "")
+        self.assertEqual(
+            entry.name,
+            r"System32\Tasks\AVAST Software\Gaming mode Task Scheduler recovery",
+        )
         self.assertEqual(
             entry.arguments,
             r'schtasks.exe -> /Change /TN "\MicrosoftEdgeUpdateTaskMachineCore" /ENABLE',

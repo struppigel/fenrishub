@@ -313,21 +313,27 @@ def extract_frst_shortcut(line):
 
 
 def extract_frst_scheduled_task_command(line):
-    regexp = r"Task:\s*?\{(.*?)\}.*?=>\s*Command\(\d+\):\s*(.+?)\s*$"
-    group_map = {"clsid": 1, "arguments": 2}
+    # Capture the task path (e.g. `System32\Tasks\Foo`) into `name` so two
+    # tasks at different paths but running the same schtasks command don't
+    # collapse into a single FrstEntry under __eq__.
+    regexp = r"Task:\s*?\{(.*?)\}\s*(?:-\s*)?(.+?)\s*=>\s*Command\(\d+\):\s*(.+?)\s*$"
+    group_map = {"clsid": 1, "name": 2, "arguments": 3}
     return extract_frst_entry(line, regexp, group_map, entry_type="scheduled_task_command")
 
 
 def extract_frst_scheduled_task(line):
     # Binary form: `Task: {GUID} - <task path> => <filepath>` followed by any of:
     #   - `[<size date>] (<company>)`     (canonical FRST output)
-    #   - `-> <args>`                     (e.g. Opera/iTop autoupdate tasks)
+    #   - `-> <args>`                     (e.g. Opera/iTop autoupdate tasks, vbs droppers)
     #   - `<==== ATTENTION`               (FRST malware marker)
     #   - `[File not signed]` / end-of-line
     # The filepath ends at the first ` [`, ` ->`, ` <====`, or end-of-line — `(x86)`
     # in `C:\Program Files (x86)\...` and an empty `()` company both parse correctly.
+    # The task path (group 2) goes into `name`, and any trailing `-> args` goes into
+    # `arguments`. Both are needed in __eq__ so two tasks at different paths or with
+    # different vbs/exe arguments do not collapse into a single FrstEntry.
     regexp = (
-        r"Task:\s*?\{(.*?)\}(.*?)=>"
+        r"Task:\s*?\{(.*?)\}\s*(?:-\s*)?(.+?)\s*=>"
         r"(?!\s*(?:\{|Command\(\d+\):))"   # exclude `=> {GUID}` and `=> Command(N):` forms
         r"\s*(.+?)"
         r"(?=\s+\[|\s+->|\s+\(No File\)|\s*<====|\s*$)"
@@ -335,8 +341,11 @@ def extract_frst_scheduled_task(line):
         # (e.g. `Intel(R) Client Connectivity Division SW -> Intel Corporation`) —
         # the closing `)` must be followed by valid trailing content, not just any `)`.
         r"(?:\s+\[(.*?)\]\s*\((.*?)\)(?=\s*(?:->|<====|\(No File\)|\[File not signed\]|\(|$)))?"
+        # Optional `-> args` tail (e.g. `wscript.exe ... -> "%LOCALAPPDATA%\foo.vbs"`).
+        r"(?:\s*->\s*(.+?))?"
+        r"\s*(?:\[File not signed\])?\s*(?:<====.*)?\s*$"
     )
-    group_map = {"clsid": 1, "filepath": 3, "date": 4, "company": 5}
+    group_map = {"clsid": 1, "name": 2, "filepath": 3, "date": 4, "company": 5, "arguments": 6}
     return extract_frst_entry(line, regexp, group_map, entry_type="scheduled_task")
 
 
