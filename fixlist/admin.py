@@ -1,3 +1,7 @@
+import csv
+import io
+import re
+
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.auth.models import User
@@ -58,6 +62,37 @@ class RuleImportForm(forms.Form):
         if not rules_text and not rules_file:
             raise forms.ValidationError('Provide pasted rule text or upload a file.')
         return cleaned
+
+
+class ChromeExtensionBulkUploadForm(forms.Form):
+    csv_file = forms.FileField(
+        help_text=(
+            'CSV from mallorybowes/chrome-mal-ids '
+            '(columns EXTID, EXTID-NAME, STILL-ACTIVE).'
+        ),
+    )
+
+
+CHROME_EXT_ID_RE = re.compile(r'^[a-p]{32}$')
+CHROME_EXT_SOURCE_NAME = 'chrome-mal-ids'
+CHROME_EXT_SOURCE_URL = 'https://github.com/mallorybowes/chrome-mal-ids'
+CHROME_EXT_NAME_SKIP = {'unknown', 'see source/notes fields'}
+CHROME_EXT_CURLY_QUOTES = '“”‘’"\''
+
+
+def _normalize_chrome_ext_name(raw):
+    if not raw:
+        return ''
+    cleaned = raw.strip().strip(CHROME_EXT_CURLY_QUOTES).strip()
+    if cleaned.lower() in CHROME_EXT_NAME_SKIP:
+        return ''
+    return cleaned
+
+
+def _build_chrome_ext_description(name):
+    if name:
+        return f'{name} - {CHROME_EXT_SOURCE_URL}'
+    return CHROME_EXT_SOURCE_URL
 
 
 class ChangeRuleOwnerForm(forms.Form):
@@ -302,6 +337,11 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                 name='fixlist_classificationrule_import_rules',
             ),
             path(
+                'import-chrome-extensions/',
+                self.admin_site.admin_view(self.import_chrome_extensions_view),
+                name='fixlist_classificationrule_import_chrome_extensions',
+            ),
+            path(
                 'reparse-all/',
                 self.admin_site.admin_view(self.reparse_all_view),
                 name='fixlist_classificationrule_reparse_all',
@@ -492,6 +532,99 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             'form': form,
         }
         return TemplateResponse(request, 'admin/fixlist/classificationrule/import_rules.html', context)
+
+    def import_chrome_extensions_view(self, request):
+        if request.method == 'POST':
+            form = ChromeExtensionBulkUploadForm(request.POST, request.FILES)
+            if form.is_valid():
+                csv_file = form.cleaned_data['csv_file']
+                raw = csv_file.read().decode('utf-8', errors='ignore')
+                reader = csv.DictReader(io.StringIO(raw))
+
+                rows_scanned = 0
+                inactive_skipped = 0
+                invalid_skipped = 0
+                within_file_dupe_skipped = 0
+                collected = {}  # extid -> description
+
+                for row in reader:
+                    rows_scanned += 1
+                    extid = (row.get('EXTID') or '').strip()
+                    if not extid:
+                        continue
+                    if not CHROME_EXT_ID_RE.match(extid):
+                        invalid_skipped += 1
+                        continue
+                    still_active = (row.get('STILL-ACTIVE') or '').strip()
+                    if still_active == '0':
+                        inactive_skipped += 1
+                        continue
+                    if extid in collected:
+                        within_file_dupe_skipped += 1
+                        continue
+                    name = _normalize_chrome_ext_name(row.get('EXTID-NAME'))
+                    collected[extid] = _build_chrome_ext_description(name)
+
+                existing = set(
+                    ClassificationRule.objects.filter(
+                        status=ClassificationRule.STATUS_MALWARE,
+                        match_type=ClassificationRule.MATCH_SUBSTRING,
+                        source_text__in=list(collected.keys()),
+                    ).values_list('source_text', flat=True)
+                )
+
+                priority = ClassificationRule.default_priority_for(
+                    ClassificationRule.MATCH_SUBSTRING
+                )
+                to_create = [
+                    ClassificationRule(
+                        owner=request.user,
+                        status=ClassificationRule.STATUS_MALWARE,
+                        match_type=ClassificationRule.MATCH_SUBSTRING,
+                        source_text=extid,
+                        description=description,
+                        source_name=CHROME_EXT_SOURCE_NAME,
+                        priority=priority,
+                    )
+                    for extid, description in collected.items()
+                    if extid not in existing
+                ]
+                duplicate_skipped = len(collected) - len(to_create)
+
+                if to_create:
+                    ClassificationRule.objects.bulk_create(to_create)
+                    invalidate_rule_buckets_cache()
+
+                self.message_user(
+                    request,
+                    (
+                        f'Chrome extension import complete: '
+                        f'scanned={rows_scanned}, '
+                        f'created={len(to_create)}, '
+                        f'skipped_duplicate={duplicate_skipped}, '
+                        f'skipped_within_file={within_file_dupe_skipped}, '
+                        f'skipped_inactive={inactive_skipped}, '
+                        f'skipped_invalid={invalid_skipped}'
+                    ),
+                    level=messages.SUCCESS if to_create else messages.INFO,
+                )
+                return HttpResponseRedirect(
+                    reverse('admin:fixlist_classificationrule_changelist')
+                )
+        else:
+            form = ChromeExtensionBulkUploadForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            'opts': self.model._meta,
+            'title': 'Import malicious Chrome extension IDs',
+            'form': form,
+        }
+        return TemplateResponse(
+            request,
+            'admin/fixlist/classificationrule/import_chrome_extensions.html',
+            context,
+        )
 
 
 @admin.register(FixlistSnippet)
