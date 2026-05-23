@@ -59,6 +59,25 @@
         margin: 0;
     }
 
+    .import-rules-page .upstream-warning {
+        background: #fff8c4;
+        color: #333;
+        border-left: 3px solid #b08800;
+        padding: 8px 12px;
+        margin: 12px 0;
+    }
+
+    .import-rules-page .upstream-warning,
+    .import-rules-page .upstream-warning code,
+    .import-rules-page .upstream-warning a,
+    .import-rules-page .upstream-warning strong {
+        color: #333;
+    }
+
+    .import-rules-page .upstream-warning a {
+        text-decoration: underline;
+    }
+
     @media (max-width: 900px) {
         .import-rules-page .module.aligned .form-row {
             grid-template-columns: 1fr;
@@ -81,7 +100,7 @@
         Each EXTID becomes a substring rule with status&nbsp;B (Malware).
         Rows with <code>STILL-ACTIVE=0</code> are skipped, as are EXTIDs that already exist in the database.
     </p>
-    <p style="background: #fff8c4; border-left: 3px solid #b08800; padding: 8px 12px; margin: 12px 0;">
+    <p class="upstream-warning">
         <strong>Heads up:</strong> this importer is tied to the column structure of
         <a href="https://github.com/mallorybowes/chrome-mal-ids/blob/master/current-list-meta.csv" target="_blank" rel="noopener"><code>current-list-meta.csv</code></a>
         and reads the columns <code>EXTID</code>, <code>EXTID-NAME</code>, and <code>STILL-ACTIVE</code> by name.

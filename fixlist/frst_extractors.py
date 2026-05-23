@@ -4,6 +4,13 @@ from dataclasses import dataclass
 
 DESCRIPTION_SEP = "|||Description:"
 FIREFOX_PROFILE_RE = re.compile(r"(?i)(\\mozilla\\firefox\\profiles\\)[^\\]+")
+# Chromium-family browsers (Chrome, Edge, Brave, Vivaldi, Opera, ...) all keep
+# per-profile dirs under `\User Data\` with one of a fixed set of names. Anchor
+# on the trailing `\` so we never collapse `\User Data\` itself or non-profile
+# sibling dirs (Crashpad, GrShaderCache, etc.).
+CHROMIUM_PROFILE_RE = re.compile(
+    r"(?i)(\\User Data\\)(?:Default|Profile\s+\d+|Guest Profile|System Profile)(?=\\)"
+)
 
 # FRST's Installed Programs section appends ` Hidden` after the closing paren
 # for hidden products. Anchored to end of line so it cannot match arbitrary
@@ -99,20 +106,23 @@ def normalize_path(path):
     if len(path) >= 2 and path[1] == ":" and not path.startswith("C:"):
         path = "C:" + path[2:]
     path = re.sub(r"(?i)(C:\\Users\\)[^\\]+", r"\1" + default_username, path)
-    return FIREFOX_PROFILE_RE.sub(r"\1profile", path)
+    path = FIREFOX_PROFILE_RE.sub(r"\1profile", path)
+    return CHROMIUM_PROFILE_RE.sub(r"\1profile", path)
 
 
 _PATH_DRIVE_MARK = "\x00DRIVE\x00"
 _PATH_USER_MARK = "\x00USER\x00"
 _PATH_FFPROFILE_MARK = "\x00FFPROFILE\x00"
+_PATH_CHROMIUMPROFILE_MARK = "\x00CHROMIUMPROFILE\x00"
 
 
 def _denormalize_path_pattern(normalized_path):
     """Build a regex matching the original (un-normalized) form of a path.
 
-    normalize_path() rewrites three things; this reverses each as a wildcard:
-    drive letter (forced to C:), \\Users\\<user>\\ (forced to username), and
-    Firefox profile name (forced to "profile"). Other characters are matched
+    normalize_path() rewrites four things; this reverses each as a wildcard:
+    drive letter (forced to C:), \\Users\\<user>\\ (forced to username),
+    Firefox profile name (forced to "profile"), and Chromium profile dir
+    (forced to "profile" under \\User Data\\). Other characters are matched
     literally (case-insensitively).
     """
     if not normalized_path:
@@ -132,11 +142,17 @@ def _denormalize_path_pattern(normalized_path):
         r"\1" + _PATH_FFPROFILE_MARK,
         work,
     )
+    work = re.sub(
+        r"(?i)(\\User Data\\)profile(?=\\)",
+        r"\1" + _PATH_CHROMIUMPROFILE_MARK,
+        work,
+    )
 
     pattern = re.escape(work)
     pattern = pattern.replace(re.escape(_PATH_DRIVE_MARK), r"[A-Za-z]:")
     pattern = pattern.replace(re.escape(_PATH_USER_MARK), r"[^\\]+")
     pattern = pattern.replace(re.escape(_PATH_FFPROFILE_MARK), r"[^\\]+")
+    pattern = pattern.replace(re.escape(_PATH_CHROMIUMPROFILE_MARK), r"[^\\]+")
     return pattern
 
 

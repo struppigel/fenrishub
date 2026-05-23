@@ -314,7 +314,7 @@
 
     <p><strong>Regex</strong> - the line must match the regex. I recommend <a href="https://regex101.com/" target="_blank" rel="noopener">https://regex101.com/</a> for writing and testing regex. Change the flavor on regex101 to Python. If you want case insensitive patterns, prepend <code>(?i)</code> to the regex.</p>
 
-    <p><strong>File path</strong> - the line is a file path. The path will be normalized, e.g., drive letter and username and firefox profile are internally substituted for path comparisons that make sense. This is the main difference to Substring, where these normalizations would not happen.</p>
+    <p><strong>File path</strong> - the line is a file path. The path will be normalized, e.g., drive letter, username, Firefox profile, and Chromium-based browser profile (Chrome/Edge/Brave <code>User Data\Default</code>, <code>Profile 1</code>, ...) are internally substituted for path comparisons that make sense. This is the main difference to Substring, where these normalizations would not happen.</p>
 
     <p><strong>Parsed</strong> - Fenris automatically parses known log lines into components like file path, timestamp, company, name, clsid. When comparing parsed lines these lines must match for these components except the timestamp. Furthermore, file paths are extracted from parsed entries and matched by the analyzer with lowest priority (with hardcoded exceptions for execution environments like cmd, powershell).</p>
 

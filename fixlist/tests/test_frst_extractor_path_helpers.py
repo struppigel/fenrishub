@@ -92,6 +92,60 @@ class FindValuePositionDenormalizedTests(TestCase):
             r"C:\Users\Lucian\AppData\Roaming\Mozilla\Firefox\Profiles\abc123.default-release\extensions",
         )
 
+    def test_chromium_profile_normalization_matches_numbered_profile(self):
+        source = (
+            r"CHR Extension: (McAfee WebAdvisor) - "
+            r"C:\Users\jsnip\AppData\Local\Google\Chrome\User Data\Profile 2\Extensions\fheoggkfdfchfphceeifdbepaooicaho"
+        )
+        normalized = (
+            r"c:\users\username\appdata\local\google\chrome\user data\profile\extensions\fheoggkfdfchfphceeifdbepaooicaho"
+        )
+        result = find_value_position(normalized, source, field_name="filepath")
+        self.assertIsNotNone(result)
+        start, end = result
+        self.assertEqual(
+            source[start:end],
+            r"C:\Users\jsnip\AppData\Local\Google\Chrome\User Data\Profile 2\Extensions\fheoggkfdfchfphceeifdbepaooicaho",
+        )
+
+    def test_chromium_profile_normalization_matches_default_profile(self):
+        source = (
+            r"CHR Extension: (X) - "
+            r"C:\Users\jsnip\AppData\Local\Google\Chrome\User Data\Default\Extensions\fheoggkfdfchfphceeifdbepaooicaho"
+        )
+        normalized = (
+            r"c:\users\username\appdata\local\google\chrome\user data\profile\extensions\fheoggkfdfchfphceeifdbepaooicaho"
+        )
+        result = find_value_position(normalized, source, field_name="filepath")
+        self.assertIsNotNone(result)
+        start, end = result
+        self.assertEqual(
+            source[start:end],
+            r"C:\Users\jsnip\AppData\Local\Google\Chrome\User Data\Default\Extensions\fheoggkfdfchfphceeifdbepaooicaho",
+        )
+
+    def test_chromium_profile_normalization_matches_edge(self):
+        source = r"Edge Extension: (X) - C:\Users\jsnip\AppData\Local\Microsoft\Edge\User Data\Profile 1\Extensions\abc"
+        normalized = r"c:\users\username\appdata\local\microsoft\edge\user data\profile\extensions\abc"
+        result = find_value_position(normalized, source, field_name="filepath")
+        self.assertIsNotNone(result)
+        start, end = result
+        self.assertEqual(
+            source[start:end],
+            r"C:\Users\jsnip\AppData\Local\Microsoft\Edge\User Data\Profile 1\Extensions\abc",
+        )
+
+    def test_chromium_profile_normalization_matches_brave(self):
+        source = r"BRA Extension: (X) - C:\Users\jsnip\AppData\Local\BraveSoftware\Brave-Browser\User Data\Default\Extensions\abc"
+        normalized = r"c:\users\username\appdata\local\bravesoftware\brave-browser\user data\profile\extensions\abc"
+        result = find_value_position(normalized, source, field_name="filepath")
+        self.assertIsNotNone(result)
+        start, end = result
+        self.assertEqual(
+            source[start:end],
+            r"C:\Users\jsnip\AppData\Local\BraveSoftware\Brave-Browser\User Data\Default\Extensions\abc",
+        )
+
     def test_non_path_field_does_not_use_fuzzy_fallback(self):
         # `name` shouldn't be treated as a path; if literal misses, return None.
         source = "Some line with username Lucian on it"
@@ -132,6 +186,22 @@ class DenormalizePathPatternTests(TestCase):
         pattern = _denormalize_path_pattern(r"C:\Users\username\Raxec")
         # Any user, but the trailing component must still match literally.
         self.assertIsNone(re.search(pattern, r"C:\Users\Lucian\Different", re.IGNORECASE))
+
+    def test_pattern_matches_chromium_profile_variants(self):
+        import re
+        pattern = _denormalize_path_pattern(
+            r"c:\users\username\appdata\local\google\chrome\user data\profile\extensions\abc"
+        )
+        for original in (
+            r"C:\Users\jsnip\AppData\Local\Google\Chrome\User Data\Default\Extensions\abc",
+            r"C:\Users\jsnip\AppData\Local\Google\Chrome\User Data\Profile 2\Extensions\abc",
+            r"C:\Users\jsnip\AppData\Local\Google\Chrome\User Data\Profile 17\Extensions\abc",
+            r"C:\Users\jsnip\AppData\Local\Google\Chrome\User Data\Guest Profile\Extensions\abc",
+        ):
+            self.assertIsNotNone(
+                re.search(pattern, original, re.IGNORECASE),
+                f"pattern should match {original!r}",
+            )
 
 
 class ExtractorRegistryTests(TestCase):
