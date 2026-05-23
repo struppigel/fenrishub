@@ -762,6 +762,17 @@ function openLineCopyMenu(trigger, index) {
         }
     });
 
+    // Refanged URLs and bare domains detected in the line, so the user can paste
+    // the resolvable form directly without retyping (defanged "hxxp://..." → "http://...").
+    const seenLookups = new Set();
+    for (const span of findHighlightSpans(entry.line || '')) {
+        if (span.type !== 'url' && span.type !== 'domain') continue;
+        const value = span.type === 'url' ? refangUrl(span.text) : span.text;
+        if (seenLookups.has(value)) continue;
+        seenLookups.add(value);
+        items.push({ key: span.type, value });
+    }
+
     items.forEach(({ key, value }) => {
         const item = document.createElement('button');
         item.type = 'button';
@@ -823,21 +834,184 @@ function setupLineCopyMenu() {
 
 const DATE_HIGHLIGHT_RE = /\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?/g;
 const CHROME_EXT_ID_RE = /(?<=\\Extensions\\|\\Extension: \[)[a-p]{32}\b/g;
+const IPV4_RE = /\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/g;
+// IPv6 — moderately permissive; covers canonical and `::` shorthand forms.
+const IPV6_RE = new RegExp(
+    '(?<![\\w:.])(?:' +
+        '(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|' +
+        '(?:[0-9a-f]{1,4}:){1,7}:|' +
+        '(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|' +
+        '(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|' +
+        '(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|' +
+        '(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|' +
+        '(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|' +
+        '[0-9a-f]{1,4}:(?::[0-9a-f]{1,4}){1,6}|' +
+        ':(?::[0-9a-f]{1,4}){1,7}' +
+    ')(?![\\w:.])',
+    'gi',
+);
+// Matches both real URLs (http(s)://) and defanged forms (hxxp(s)://) common in
+// malware reports. The defanged form is refanged before being handed to lookup
+// services so VT/who.is/urlscan resolve the real URL.
+const URL_RE = /\b(?:https?|hxxps?):\/\/[^\s"'<>()\[\]]+/gi;
 
-const CHROME_EXT_MENU_ITEMS = [
-    {
-        key: 'crxplorer',
-        url: (id) => `https://crxplorer.com/extension/${id}`,
-    },
-    {
-        key: 'chrome web store',
-        url: (id) => `https://chromewebstore.google.com/detail/${id}`,
-    },
-    {
-        key: 'crxviewer',
-        url: (id) => `https://robwu.nl/crxviewer/?crx=${encodeURIComponent(`https://chromewebstore.google.com/detail/${id}`)}`,
-    },
+function refangUrl(v) {
+    return v.replace(/^hxxp(s?):\/\//i, 'http$1://');
+}
+// DNS contexts where a bare hostname follows the bracketed keyword.
+const DNS_DOMAIN_CTX_RE = /\[Dhcp(?:Domain(?:SearchList)?)\]\s*/g;
+const BARE_DOMAIN_RE = /\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b/gi;
+
+const IP_LOOKUP_ITEMS = [
+    { label: 'virustotal', url: (v) => `https://www.virustotal.com/gui/ip-address/${encodeURIComponent(v)}` },
+    { label: 'who.is', url: (v) => `https://who.is/whois-ip/ip-address/${encodeURIComponent(v)}` },
+    { label: 'abuseipdb', url: (v) => `https://www.abuseipdb.com/check/${encodeURIComponent(v)}` },
+    { label: 'urlscan.io', url: (v) => `https://urlscan.io/ip/${encodeURIComponent(v)}` },
 ];
+
+const LOOKUP_KINDS = {
+    'chrome-ext-id': {
+        title: (v) => `Chrome extension ID: ${v}`,
+        menuHeader: 'open extension id in',
+        items: [
+            { label: 'crxplorer', url: (v) => `https://crxplorer.com/extension/${v}` },
+            { label: 'chrome web store', url: (v) => `https://chromewebstore.google.com/detail/${v}` },
+            { label: 'crxviewer', url: (v) => `https://robwu.nl/crxviewer/?crx=${encodeURIComponent(`https://chromewebstore.google.com/detail/${v}`)}` },
+        ],
+    },
+    'ipv4': {
+        title: (v) => `IPv4 address: ${v}`,
+        menuHeader: 'open ip address in',
+        items: IP_LOOKUP_ITEMS,
+    },
+    'ipv6': {
+        title: (v) => `IPv6 address: ${v}`,
+        menuHeader: 'open ip address in',
+        items: IP_LOOKUP_ITEMS,
+    },
+    'url': {
+        title: (v) => `URL: ${v}`,
+        menuHeader: 'open url in',
+        items: [
+            { label: 'virustotal', url: (v) => `https://www.virustotal.com/gui/search?query=${encodeURIComponent(refangUrl(v))}` },
+            { label: 'who.is', url: (v) => {
+                const refanged = refangUrl(v);
+                let host = refanged;
+                try { host = new URL(refanged).hostname || refanged; } catch (e) { /* keep raw */ }
+                return `https://who.is/whois/${encodeURIComponent(host)}`;
+            } },
+            { label: 'urlscan.io', url: (v) => `https://urlscan.io/search/#${encodeURIComponent(refangUrl(v))}` },
+        ],
+    },
+    'domain': {
+        title: (v) => `domain: ${v}`,
+        menuHeader: 'open domain in',
+        items: [
+            { label: 'virustotal', url: (v) => `https://www.virustotal.com/gui/domain/${encodeURIComponent(v)}` },
+            { label: 'who.is', url: (v) => `https://who.is/whois/${encodeURIComponent(v)}` },
+            { label: 'urlscan.io', url: (v) => `https://urlscan.io/domain/${encodeURIComponent(v)}` },
+        ],
+    },
+};
+
+function collectRegexSpans(re, line, type) {
+    const out = [];
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(line)) !== null) {
+        out.push({
+            start: m.index,
+            end: m.index + m[0].length,
+            type,
+            text: m[0],
+        });
+    }
+    return out;
+}
+
+// FRST "Version: 1.0.3.11" entries have the same dotted-decimal shape as IPv4
+// — suppress them so clicks don't surface bogus VT/AbuseIPDB lookups.
+const VERSION_PREFIX_RE = /(?:^|[\s(\[])(?:File\s+Version|Product\s+Version|Version)\s*:?\s*$/i;
+// Installed Programs entries always carry a "(Version: ...)" segment and never
+// contain real IPs — bail on IPv4 detection for the whole line when seen.
+const INSTALLED_PROGRAM_LINE_RE = /\(Version:\s/i;
+
+function collectIpv4Spans(line) {
+    if (INSTALLED_PROGRAM_LINE_RE.test(line)) return [];
+
+    const out = [];
+    IPV4_RE.lastIndex = 0;
+    let m;
+    while ((m = IPV4_RE.exec(line)) !== null) {
+        const preceding = line.slice(Math.max(0, m.index - 32), m.index);
+        if (VERSION_PREFIX_RE.test(preceding)) continue;
+        // Version dirs inside a Windows path (e.g. ...\Drive File Stream\125.0.0.0\drivefsext.dll).
+        const prevChar = line.charAt(m.index - 1);
+        const nextChar = line.charAt(m.index + m[0].length);
+        if ((prevChar === '\\' || prevChar === '/') && (nextChar === '\\' || nextChar === '/')) continue;
+        out.push({
+            start: m.index,
+            end: m.index + m[0].length,
+            type: 'ipv4',
+            text: m[0],
+        });
+    }
+    return out;
+}
+
+// Hosts entries: optional "Hosts:" prefix, IPv4, whitespace, then one or more
+// hostnames (often IDN — must tolerate unicode chars). Comments after `#` are
+// ignored. We rely on the line shape rather than a domain regex so accented
+// labels like "activación.cyberlink.com" still get picked up.
+const HOSTS_LINE_PREFIX_RE = /^(\s*(?:Hosts:\s*)?)(\d{1,3}(?:\.\d{1,3}){3})(\s+)/;
+
+function collectHostsSpans(line) {
+    const prefix = HOSTS_LINE_PREFIX_RE.exec(line);
+    if (!prefix) return [];
+    const hostsStart = prefix[0].length;
+    const commentIdx = line.indexOf('#', hostsStart);
+    const hostsEnd = commentIdx === -1 ? line.length : commentIdx;
+    const out = [];
+    const tokenRe = /\S+/g;
+    const segment = line.slice(hostsStart, hostsEnd);
+    let tm;
+    while ((tm = tokenRe.exec(segment)) !== null) {
+        const token = tm[0];
+        if (!token.includes('.')) continue;
+        if (token.includes('*')) continue;
+        if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(token)) continue;
+        out.push({
+            start: hostsStart + tm.index,
+            end: hostsStart + tm.index + token.length,
+            type: 'domain',
+            text: token,
+        });
+    }
+    return out;
+}
+
+function collectDnsDomainSpans(line) {
+    const out = [];
+    DNS_DOMAIN_CTX_RE.lastIndex = 0;
+    let ctx;
+    while ((ctx = DNS_DOMAIN_CTX_RE.exec(line)) !== null) {
+        const segStart = ctx.index + ctx[0].length;
+        const nextBracket = line.indexOf('[', segStart);
+        const segEnd = nextBracket === -1 ? line.length : nextBracket;
+        const segment = line.slice(segStart, segEnd);
+        BARE_DOMAIN_RE.lastIndex = 0;
+        let m;
+        while ((m = BARE_DOMAIN_RE.exec(segment)) !== null) {
+            out.push({
+                start: segStart + m.index,
+                end: segStart + m.index + m[0].length,
+                type: 'domain',
+                text: m[0],
+            });
+        }
+    }
+    return out;
+}
 
 function findHighlightSpans(line) {
     const spans = [];
@@ -857,17 +1031,17 @@ function findHighlightSpans(line) {
         });
     }
 
-    CHROME_EXT_ID_RE.lastIndex = 0;
-    while ((match = CHROME_EXT_ID_RE.exec(line)) !== null) {
-        spans.push({
-            start: match.index,
-            end: match.index + match[0].length,
-            type: 'chrome-ext-id',
-            text: match[0],
-        });
-    }
+    spans.push(...collectRegexSpans(CHROME_EXT_ID_RE, line, 'chrome-ext-id'));
+    spans.push(...collectRegexSpans(URL_RE, line, 'url'));
+    spans.push(...collectIpv4Spans(line));
+    spans.push(...collectRegexSpans(IPV6_RE, line, 'ipv6'));
+    spans.push(...collectDnsDomainSpans(line));
+    spans.push(...collectHostsSpans(line));
 
-    spans.sort((a, b) => a.start - b.start);
+    spans.sort((a, b) => {
+        if (a.start !== b.start) return a.start - b.start;
+        return (b.end - b.start) - (a.end - a.start);
+    });
     const filtered = [];
     let lastEnd = -1;
     for (const span of spans) {
@@ -878,18 +1052,20 @@ function findHighlightSpans(line) {
     return filtered;
 }
 
-function createChromeExtIdTrigger(extId) {
+function createLookupTrigger(text, kind) {
+    const config = LOOKUP_KINDS[kind];
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'chrome-ext-id-trigger';
-    btn.textContent = extId;
-    btn.title = `Chrome extension ID: ${extId}`;
+    btn.className = `lookup-trigger lookup-trigger-${kind}`;
+    btn.textContent = text;
+    btn.title = config ? config.title(text) : text;
     btn.setAttribute('aria-haspopup', 'menu');
     btn.setAttribute('aria-expanded', 'false');
-    btn.dataset.extId = extId;
+    btn.dataset.lookupKind = kind;
+    btn.dataset.lookupValue = text;
     btn.addEventListener('click', (event) => {
         event.stopPropagation();
-        openChromeExtMenu(btn, extId);
+        openLookupMenu(btn, text, kind);
     });
     return btn;
 }
@@ -901,7 +1077,7 @@ function buildInnerHighlightNode(span) {
         el.textContent = span.text;
         return el;
     }
-    return createChromeExtIdTrigger(span.text);
+    return createLookupTrigger(span.text, span.type);
 }
 
 function appendLineTextWithDateHighlight(textEl, line, filepathHighlight = null) {
@@ -957,64 +1133,67 @@ function appendLineTextWithDateHighlight(textEl, line, filepathHighlight = null)
     }
 }
 
-let chromeExtMenuEl = null;
-let chromeExtMenuTrigger = null;
+let lookupMenuEl = null;
+let lookupMenuTrigger = null;
 
-function ensureChromeExtMenu() {
-    if (chromeExtMenuEl && document.body.contains(chromeExtMenuEl)) {
-        return chromeExtMenuEl;
+function ensureLookupMenu() {
+    if (lookupMenuEl && document.body.contains(lookupMenuEl)) {
+        return lookupMenuEl;
     }
     const menu = document.createElement('div');
-    menu.className = 'chrome-ext-menu';
+    menu.className = 'lookup-menu';
     menu.setAttribute('role', 'menu');
     menu.hidden = true;
     menu.addEventListener('click', (event) => event.stopPropagation());
     document.body.appendChild(menu);
-    chromeExtMenuEl = menu;
+    lookupMenuEl = menu;
     return menu;
 }
 
-function closeChromeExtMenu() {
-    if (chromeExtMenuTrigger) {
-        chromeExtMenuTrigger.setAttribute('aria-expanded', 'false');
-        chromeExtMenuTrigger = null;
+function closeLookupMenu() {
+    if (lookupMenuTrigger) {
+        lookupMenuTrigger.setAttribute('aria-expanded', 'false');
+        lookupMenuTrigger = null;
     }
-    if (chromeExtMenuEl) {
-        chromeExtMenuEl.hidden = true;
-        chromeExtMenuEl.innerHTML = '';
+    if (lookupMenuEl) {
+        lookupMenuEl.hidden = true;
+        lookupMenuEl.innerHTML = '';
     }
 }
 
-function openChromeExtMenu(trigger, extId) {
-    if (chromeExtMenuTrigger === trigger && chromeExtMenuEl && !chromeExtMenuEl.hidden) {
-        closeChromeExtMenu();
+function openLookupMenu(trigger, value, kind) {
+    if (lookupMenuTrigger === trigger && lookupMenuEl && !lookupMenuEl.hidden) {
+        closeLookupMenu();
         return;
     }
 
-    const menu = ensureChromeExtMenu();
+    const config = LOOKUP_KINDS[kind];
+    if (!config) return;
+
+    const menu = ensureLookupMenu();
     menu.innerHTML = '';
 
     const header = document.createElement('div');
-    header.className = 'chrome-ext-menu-header';
-    header.textContent = 'open extension id in';
+    header.className = 'lookup-menu-header';
+    header.textContent = config.menuHeader;
     menu.appendChild(header);
 
-    CHROME_EXT_MENU_ITEMS.forEach(({ key, url }) => {
+    config.items.forEach(({ label, url }) => {
         const link = document.createElement('a');
-        link.className = 'chrome-ext-menu-item';
+        link.className = 'lookup-menu-item';
         link.setAttribute('role', 'menuitem');
-        link.href = url(extId);
+        link.href = url(value);
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-        link.textContent = key;
-        link.addEventListener('click', () => closeChromeExtMenu());
+        link.textContent = label;
+        link.addEventListener('click', () => closeLookupMenu());
         menu.appendChild(link);
     });
 
-    if (chromeExtMenuTrigger && chromeExtMenuTrigger !== trigger) {
-        chromeExtMenuTrigger.setAttribute('aria-expanded', 'false');
+    if (lookupMenuTrigger && lookupMenuTrigger !== trigger) {
+        lookupMenuTrigger.setAttribute('aria-expanded', 'false');
     }
-    chromeExtMenuTrigger = trigger;
+    lookupMenuTrigger = trigger;
     trigger.setAttribute('aria-expanded', 'true');
 
     menu.hidden = false;
@@ -1034,13 +1213,13 @@ function openChromeExtMenu(trigger, extId) {
     menu.style.top = `${top + window.scrollY}px`;
 }
 
-function setupChromeExtMenu() {
-    document.addEventListener('click', () => closeChromeExtMenu());
+function setupLookupMenu() {
+    document.addEventListener('click', () => closeLookupMenu());
     document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') closeChromeExtMenu();
+        if (event.key === 'Escape') closeLookupMenu();
     });
-    window.addEventListener('resize', () => closeChromeExtMenu());
-    document.addEventListener('scroll', () => closeChromeExtMenu(), true);
+    window.addEventListener('resize', () => closeLookupMenu());
+    document.addEventListener('scroll', () => closeLookupMenu(), true);
 }
 
 function renderLogLines() {

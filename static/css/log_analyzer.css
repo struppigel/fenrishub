@@ -997,7 +997,7 @@ body.clean-cursor-mode .line-text {
 .filepath-highlight.status-j { color: var(--la-status-j); }
 .filepath-highlight.status-unknown { color: var(--la-status-unknown); }
 
-.chrome-ext-id-trigger {
+.lookup-trigger {
     display: inline;
     padding: 0;
     margin: 0;
@@ -1010,18 +1010,18 @@ body.clean-cursor-mode .line-text {
     cursor: pointer;
 }
 
-.chrome-ext-id-trigger:hover,
-.chrome-ext-id-trigger:focus-visible,
-.chrome-ext-id-trigger[aria-expanded="true"] {
+.lookup-trigger:hover,
+.lookup-trigger:focus-visible,
+.lookup-trigger[aria-expanded="true"] {
     text-decoration: underline;
 }
 
-.chrome-ext-id-trigger:focus-visible {
+.lookup-trigger:focus-visible {
     outline: 1px solid var(--la-focus);
     outline-offset: 1px;
 }
 
-.chrome-ext-menu {
+.lookup-menu {
     position: absolute;
     z-index: 200;
     min-width: 200px;
@@ -1033,14 +1033,14 @@ body.clean-cursor-mode .line-text {
     box-shadow: var(--la-shadow);
 }
 
-.chrome-ext-menu-header {
+.lookup-menu-header {
     padding: 4px 10px;
     color: var(--la-text-muted);
     border-bottom: 1px solid var(--la-border);
     user-select: text;
 }
 
-.chrome-ext-menu-item {
+.lookup-menu-item {
     display: block;
     padding: 4px 10px;
     color: var(--la-text-primary);
@@ -1048,11 +1048,11 @@ body.clean-cursor-mode .line-text {
     cursor: pointer;
 }
 
-.chrome-ext-menu-item:hover {
+.lookup-menu-item:hover {
     text-decoration: underline;
 }
 
-.chrome-ext-menu-item:focus-visible {
+.lookup-menu-item:focus-visible {
     outline: 1px solid var(--la-focus);
     outline-offset: -1px;
 }
