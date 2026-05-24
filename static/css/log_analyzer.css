@@ -501,6 +501,21 @@ body.clean-cursor-mode .line-text {
 .rule-candidate-item .status-badge.status-j { color: var(--la-status-j); }
 .rule-candidate-item .status-badge.status-unknown { color: var(--la-status-unknown); }
 
+.status-symbol {
+    font-weight: bold;
+}
+
+.status-symbol.status-b { color: var(--la-status-b); }
+.status-symbol.status-p { color: var(--la-status-p); }
+.status-symbol.status-c { color: var(--la-status-c); }
+.status-symbol.status-w { color: var(--la-status-w); }
+.status-symbol.status-a { color: var(--la-status-a); }
+.status-symbol.status-g { color: var(--la-status-g); }
+.status-symbol.status-s { color: var(--la-status-s); }
+.status-symbol.status-i { color: var(--la-status-i); }
+.status-symbol.status-j { color: var(--la-status-j); }
+.status-symbol.status-unknown { color: var(--la-status-unknown); }
+
 .rule-candidate-meta {
     color: var(--la-text-muted);
 }

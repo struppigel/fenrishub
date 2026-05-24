@@ -165,14 +165,22 @@ function toggleCleanCursorMode() {
     applyCleanCursorModeState();
 }
 
+function buildStatusSymbolNode(status) {
+    const span = document.createElement('span');
+    span.className = `status-symbol ${STATUS_CLASS_MAP[status] || 'status-unknown'}`;
+    span.textContent = status || '?';
+    return span;
+}
+
 function buildLineInspectorRows(parsedRule) {
     if (!parsedRule || typeof parsedRule !== 'object') {
         return [];
     }
 
     const rows = [
-        { key: 'status', value: `${parsedRule.status || '?'} (${STATUS_LABEL_MAP[parsedRule.status] || 'unknown'})` },
+        { key: 'status', value: parsedRule.status || '?', _isStatusSymbol: true },
         { key: 'match type', value: parsedRule.match_type },
+        { key: 'source text', value: parsedRule.source_text },
         { key: 'entry type', value: parsedRule.entry_type },
         { key: 'description', value: parsedRule.description },
         { key: 'clsid', value: parsedRule.clsid },
@@ -182,7 +190,9 @@ function buildLineInspectorRows(parsedRule) {
         { key: 'filename', value: parsedRule.filename },
         { key: 'company', value: parsedRule.company },
         { key: 'arguments', value: parsedRule.arguments },
+        { key: 'attributes', value: parsedRule.attributes },
         { key: 'file not signed', value: parsedRule.file_not_signed },
+        { key: 'is hidden', value: parsedRule.is_hidden },
     ];
 
     return rows.filter((row) => {
@@ -227,10 +237,14 @@ function renderLineInspector(detailsPayload, entry) {
     if (summaryEl) {
         const effectiveMatcher = inspection.effective_matcher || entry.matcher || 'unknown';
         const dominantStatus = inspection.dominant_status || entry.dominant_status || '?';
-        summaryEl.textContent =
-            `status: ${dominantStatus} (${STATUS_LABEL_MAP[dominantStatus] || 'unknown'}), ` +
+        summaryEl.innerHTML = '';
+        summaryEl.appendChild(document.createTextNode('status: '));
+        summaryEl.appendChild(buildStatusSymbolNode(dominantStatus));
+        summaryEl.appendChild(document.createTextNode(
+            ` (${STATUS_LABEL_MAP[dominantStatus] || 'unknown'}), ` +
             `matcher: ${effectiveMatcher}, ` +
-            `matches: ${effectiveMatches.length + shadowedMatches.length}`;
+            `matches: ${effectiveMatches.length + shadowedMatches.length}`,
+        ));
     }
 
     if (sourceEl) {
@@ -270,13 +284,14 @@ function renderLineInspector(detailsPayload, entry) {
                 if (componentClass) {
                     value.classList.add(componentClass);
                 }
-                if (row.key === 'status' && parsedRule && parsedRule.status) {
-                    const statusClass = STATUS_CLASS_MAP[parsedRule.status] || '';
-                    if (statusClass) {
-                        value.classList.add(statusClass);
-                    }
+                if (row._isStatusSymbol) {
+                    value.appendChild(buildStatusSymbolNode(row.value));
+                    value.appendChild(document.createTextNode(
+                        ` (${STATUS_LABEL_MAP[row.value] || 'unknown'})`,
+                    ));
+                } else {
+                    value.textContent = formatRuleDetailValue(row.value);
                 }
-                value.textContent = formatRuleDetailValue(row.value);
 
                 grid.appendChild(key);
                 grid.appendChild(value);
@@ -302,11 +317,17 @@ function renderLineInspector(detailsPayload, entry) {
                 const item = document.createElement('li');
                 const scopeLabel = match._scope === 'shadowed' ? 'shadowed' : 'effective';
                 const matcherText = match.matcher ? ` | matcher: ${match.matcher}` : '';
+                const priorityText = (match.priority !== undefined && match.priority !== null)
+                    ? ` | priority: ${match.priority}`
+                    : '';
                 const reasonText = match.reason ? ` | reason: ${match.reason}` : '';
-                const ownerText = match.owner_username ? ` | by ${match.owner_username}` : '';
-                item.textContent =
-                    `${scopeLabel} | #${match.id} | ${match.status} (${STATUS_LABEL_MAP[match.status] || 'unknown'}) | ` +
-                    `${match.match_type}${matcherText} | ${match.source_text}${reasonText}${ownerText}`;
+                const ownerText = ` | owner: ${match.owner_username || '—'}`;
+                item.appendChild(document.createTextNode(`${scopeLabel} | `));
+                item.appendChild(buildStatusSymbolNode(match.status));
+                item.appendChild(document.createTextNode(
+                    ` (${STATUS_LABEL_MAP[match.status] || 'unknown'}) | ` +
+                    `${match.match_type}${priorityText}${matcherText} | ${match.source_text}${reasonText}${ownerText}`,
+                ));
                 matchesListEl.appendChild(item);
             });
         }
@@ -833,7 +854,7 @@ function setupLineCopyMenu() {
 }
 
 const DATE_HIGHLIGHT_RE = /\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?/g;
-const CHROME_EXT_ID_RE = /(?<=\\Extensions\\|\\Extension: \[)[a-p]{32}\b/g;
+const CHROME_EXT_ID_RE = /(?<=\\Extensions\\|\\Extension: \[|\\User Data\\)[a-p]{32}\b/g;
 const IPV4_RE = /\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/g;
 // IPv6 — moderately permissive; covers canonical and `::` shorthand forms.
 const IPV6_RE = new RegExp(

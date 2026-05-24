@@ -1206,6 +1206,17 @@ def _dedupe_matches_by_rule(matches):
     return list(by_rule_id.values())
 
 
+def _match_precedence_sort_key(entry):
+    """Sort key for match tuples: stronger precedence first.
+
+    Order: effective priority desc, status precedence asc (B before P before
+    C...), rule.id asc as a stable tiebreaker.
+    """
+    rule, _reason, matcher = entry
+    status_rank = STATUS_PRECEDENCE.index(rule.status) if rule.status in STATUS_PRECEDENCE else len(STATUS_PRECEDENCE)
+    return (-_effective_match_priority(rule, matcher), status_rank, rule.id)
+
+
 def _collect_effective_and_shadowed_matches_for_line(line: str, buckets):
     groups = _collect_match_groups_for_line(line, buckets)
     flat = _dedupe_matches_by_rule(m for matches in groups.values() for m in matches)
@@ -1214,12 +1225,14 @@ def _collect_effective_and_shadowed_matches_for_line(line: str, buckets):
         return [], [], "unknown", None
 
     top_priority = max(_effective_match_priority(rule, matcher) for rule, _reason, matcher in flat)
-    effective_matches = [
-        m for m in flat if _effective_match_priority(m[0], m[2]) == top_priority
-    ]
-    shadowed_matches = [
-        m for m in flat if _effective_match_priority(m[0], m[2]) < top_priority
-    ]
+    effective_matches = sorted(
+        (m for m in flat if _effective_match_priority(m[0], m[2]) == top_priority),
+        key=_match_precedence_sort_key,
+    )
+    shadowed_matches = sorted(
+        (m for m in flat if _effective_match_priority(m[0], m[2]) < top_priority),
+        key=_match_precedence_sort_key,
+    )
 
     matchers = sorted({m[2] for m in effective_matches})
     effective_matcher = matchers[0] if len(matchers) == 1 else f"priority:{top_priority}"
