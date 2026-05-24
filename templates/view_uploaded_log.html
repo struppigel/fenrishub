@@ -127,12 +127,38 @@ function viewRawContent() {
     const url = URL.createObjectURL(blob);
     window.open(url, '_blank');
 }
+
+function copyAllContent(button) {
+    const content = document.getElementById('uploadedContent').value;
+    const originalText = button.textContent;
+    navigator.clipboard.writeText(content).then(function() {
+        button.textContent = 'copied';
+        setTimeout(() => { button.textContent = originalText; }, 1200);
+    });
+}
+
+function downloadContent() {
+    const content = document.getElementById('uploadedContent').value;
+    const rawName = "{{ uploaded_log.original_filename|escapejs }}" || "{{ uploaded_log.upload_id|escapejs }}.txt";
+    const safeName = rawName.replace(/[\\\/:*?"<>|]/g, '_').slice(0, 200) || "log.txt";
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = safeName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 </script>
 
 <form method="post">
     {% csrf_token %}
     <div class="button-group">
         <button type="button" onclick="viewRawContent()">view raw</button>
+        <button type="button" onclick="copyAllContent(this)">copy all</button>
+        <button type="button" onclick="downloadContent()">download</button>
         {% if uploaded_log.deleted_at %}
         {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == user %}
         <button type="submit" name="action" value="restore">restore</button>

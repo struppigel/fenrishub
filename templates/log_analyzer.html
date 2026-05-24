@@ -311,6 +311,7 @@ window.logAnalyzerConfig = {
     persistRuleChangesUrl: "{% url 'persist_pending_rule_changes_api' %}",
     createFixlistUrl: "{% url 'create_fixlist' %}",
     uploadedLogContentUrlTemplate: "{% url 'uploaded_log_content_api' '__UPLOAD_ID__' %}",
+    edgeAddonRedirectUrlTemplate: "{% url 'edge_addon_redirect' '__CRXID__' %}",
     initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
     snippetsApiUrl: "{% url 'snippets_api' %}",
     snippets: {{ snippets_json }},

@@ -855,10 +855,10 @@ function setupLineCopyMenu() {
 
 const DATE_HIGHLIGHT_RE = /\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?/g;
 const CHROME_EXT_ID_RE = /(?<=\\Extensions\\|\\Extension: \[|\\User Data\\)[a-p]{32}\b/g;
-const EDGE_EXT_LINE_RE = /^\s*Edge Extension:\s*\(/;
-// Capture group 1 is the parenthesized name; anchored on " - " before the path
-// so names that contain ")" (e.g. "(Beta)" suffixes) survive intact.
-const EDGE_EXT_NAME_RE = /^(\s*Edge Extension:\s*\()(.+?)(\) - )/;
+// Matches any FRST line whose platform prefix is "Edge " — covers
+// `Edge Extension:` (file-based), `Edge HKU\…`, `Edge HKLM\…` (registry-based)
+// and other Edge settings lines. \b after "Edge" prevents matching "Edges"/"Edgar".
+const EDGE_EXT_LINE_RE = /^\s*Edge\b/;
 const IPV4_RE = /\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/g;
 // IPv6 — moderately permissive; covers canonical and `::` shorthand forms.
 const IPV6_RE = new RegExp(
@@ -902,21 +902,19 @@ const LOOKUP_KINDS = {
             { label: 'crxplorer', url: (v) => `https://crxplorer.com/extension/${v}` },
             { label: 'chrome web store', url: (v) => `https://chromewebstore.google.com/detail/${v}` },
             { label: 'crxviewer', url: (v) => `https://robwu.nl/crxviewer/?crx=${encodeURIComponent(`https://chromewebstore.google.com/detail/${v}`)}` },
+            { label: 'copy id instead', copy: true },
         ],
     },
     'edge-ext-id': {
         title: (v) => `Edge extension ID: ${v}`,
         menuHeader: 'open extension id in',
         items: [
-            { label: 'crxplorer', url: (v) => `https://crxplorer.com/extension/${v}` },
+            { label: 'edge add-ons', url: (v) => {
+                const tmpl = (window.logAnalyzerConfig || {}).edgeAddonRedirectUrlTemplate || '';
+                return tmpl.replace('__CRXID__', encodeURIComponent(v));
+            } },
             { label: 'crxviewer', url: (v) => `https://robwu.nl/crxviewer/?crx=${encodeURIComponent(`https://microsoftedge.microsoft.com/addons/detail/${v}`)}` },
-        ],
-    },
-    'edge-ext-name': {
-        title: (v) => `Edge extension name: ${v}`,
-        menuHeader: 'open extension name in',
-        items: [
-            { label: 'edge add-ons', url: (v) => `https://microsoftedge.microsoft.com/addons/search/${encodeURIComponent(v)}` },
+            { label: 'copy id instead', copy: true },
         ],
     },
     'ipv4': {
@@ -999,20 +997,6 @@ function collectIpv4Spans(line) {
     return out;
 }
 
-function collectEdgeExtNameSpans(line) {
-    const m = EDGE_EXT_NAME_RE.exec(line);
-    if (!m) return [];
-    const start = m[1].length;
-    const end = start + m[2].length;
-    if (end <= start) return [];
-    return [{
-        start,
-        end,
-        type: 'edge-ext-name',
-        text: m[2],
-    }];
-}
-
 // Hosts entries: optional "Hosts:" prefix, IPv4, whitespace, then one or more
 // hostnames (often IDN — must tolerate unicode chars). Comments after `#` are
 // ignored. We rely on the line shape rather than a domain regex so accented
@@ -1087,7 +1071,6 @@ function findHighlightSpans(line) {
 
     const extIdKind = EDGE_EXT_LINE_RE.test(line) ? 'edge-ext-id' : 'chrome-ext-id';
     spans.push(...collectRegexSpans(CHROME_EXT_ID_RE, line, extIdKind));
-    spans.push(...collectEdgeExtNameSpans(line));
     spans.push(...collectRegexSpans(URL_RE, line, 'url'));
     spans.push(...collectIpv4Spans(line));
     spans.push(...collectRegexSpans(IPV6_RE, line, 'ipv6'));
@@ -1234,14 +1217,33 @@ function openLookupMenu(trigger, value, kind) {
     header.textContent = config.menuHeader;
     menu.appendChild(header);
 
-    config.items.forEach(({ label, url }) => {
+    config.items.forEach((item) => {
+        if (item.copy) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'lookup-menu-item';
+            btn.setAttribute('role', 'menuitem');
+            btn.textContent = item.label;
+            btn.addEventListener('click', (event) => {
+                event.preventDefault();
+                navigator.clipboard.writeText(value).then(() => {
+                    btn.textContent = 'copied';
+                    setTimeout(() => closeLookupMenu(), 600);
+                }, () => {
+                    btn.textContent = 'copy failed';
+                    setTimeout(() => closeLookupMenu(), 800);
+                });
+            });
+            menu.appendChild(btn);
+            return;
+        }
         const link = document.createElement('a');
         link.className = 'lookup-menu-item';
         link.setAttribute('role', 'menuitem');
-        link.href = url(value);
+        link.href = item.url(value);
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-        link.textContent = label;
+        link.textContent = item.label;
         link.addEventListener('click', () => closeLookupMenu());
         menu.appendChild(link);
     });

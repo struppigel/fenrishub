@@ -2,6 +2,7 @@ from django.urls import path
 from .views.analyzer import (
     analyze_line_details_api,
     analyze_log_api,
+    edge_addon_redirect_view,
     log_analyzer_view,
     persist_pending_rule_changes_api,
     preview_pending_rule_changes_api,
@@ -62,6 +63,7 @@ urlpatterns = [
     path('api/analyze-log/', analyze_log_api, name='analyze_log_api'),
     path('api/analyze-log/line-details/', analyze_line_details_api, name='analyze_line_details_api'),
     path('api/analyze-log/status/', update_analyzed_line_status_api, name='update_analyzed_line_status_api'),
+    path('api/edge-addon/<str:crxid>/', edge_addon_redirect_view, name='edge_addon_redirect'),
     path('api/fixlist/rules-preview/', preview_pending_rule_changes_api, name='preview_pending_rule_changes_api'),
     path('api/fixlist/rules-persist/', persist_pending_rule_changes_api, name='persist_pending_rule_changes_api'),
     path('fixlists/snippets/', snippets_view, name='snippets'),

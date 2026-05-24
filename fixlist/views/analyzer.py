@@ -5,11 +5,17 @@ Handles: analyzing logs, inspecting lines, previewing rules, persisting rule cha
 """
 
 import json
+import logging
+import re
+import urllib.error
+import urllib.request
+
+logger = logging.getLogger(__name__)
 
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
-from django.http import JsonResponse
+from django.http import HttpResponseBadRequest, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
 from django.utils.safestring import mark_safe
 
@@ -269,3 +275,42 @@ def update_analyzed_line_status_api(request):
             'source_text': parsed['source_text'],
         }
     )
+
+
+_EDGE_CRXID_RE = re.compile(r'^[a-p]{32}$')
+_EDGE_API_TEMPLATE = 'https://microsoftedge.microsoft.com/addons/getproductdetailsbycrxid/{crxid}'
+# Edge's SPA accepts any non-empty slug as long as the trailing crxid matches a
+# real Edge-store extension; '_' avoids the need to parse the API response.
+_EDGE_DETAIL_TEMPLATE = 'https://microsoftedge.microsoft.com/addons/detail/_/{crxid}'
+# Sideloaded-Chrome-extension fallback — many extensions in Edge logs were
+# originally installed from Chrome Web Store and aren't on the Edge store at
+# all, so an Edge 404 is more usefully redirected here than to a generic page.
+_CHROME_STORE_DETAIL_TEMPLATE = 'https://chromewebstore.google.com/detail/{crxid}'
+
+
+@guest_or_login_required
+@require_http_methods(["GET"])
+def edge_addon_redirect_view(request, crxid):
+    """Probe the Edge Add-ons API for `crxid` and redirect to its detail page.
+
+    On Edge-API 404 (extension was sideloaded from Chrome Web Store) or any
+    upstream failure, falls back to the Chrome Web Store detail page so the
+    user lands on the most likely source rather than a generic landing page.
+    """
+    if not _EDGE_CRXID_RE.match(crxid):
+        return HttpResponseBadRequest('invalid crxid')
+
+    api_url = _EDGE_API_TEMPLATE.format(crxid=crxid)
+    req = urllib.request.Request(api_url, headers={'User-Agent': 'FenrisHub'})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            if 200 <= response.status < 300:
+                return HttpResponseRedirect(_EDGE_DETAIL_TEMPLATE.format(crxid=crxid))
+            logger.warning('Edge addon probe for %s: unexpected status %s', crxid, response.status)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            logger.warning('Edge addon probe for %s: HTTPError %s', crxid, exc.code)
+    except (urllib.error.URLError, TimeoutError) as exc:
+        logger.warning('Edge addon probe for %s failed: %r', crxid, exc)
+
+    return HttpResponseRedirect(_CHROME_STORE_DETAIL_TEMPLATE.format(crxid=crxid))

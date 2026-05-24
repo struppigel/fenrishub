@@ -20,6 +20,22 @@ class UploadedLogDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'payload')
 
+    def test_detail_view_renders_copy_and_download_buttons(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='copyable-river',
+            reddit_username='reddit_name',
+            original_filename='x.txt',
+            content='payload',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '>copy all<')
+        self.assertContains(response, '>download<')
+        self.assertContains(response, 'copyAllContent(')
+        self.assertContains(response, 'downloadContent(')
+
     def test_detail_view_shows_detected_encoding_when_set(self):
         uploaded = UploadedLog.objects.create(
             upload_id='encoded-river',
