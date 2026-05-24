@@ -15,12 +15,16 @@ from ..models import UserProfile
 from .guest import guest_or_login_required
 
 
-DEFAULT_FRST_FIX_MESSAGE_TEMPLATE = """FRST  Fix
+DEFAULT_FRST_FIX_MESSAGE_TEMPLATE = """**FRST Fix**
 
-* Open the following link and press on the **Copy contents** button to copy the entire text: [fixlist]({FIXLISTLINK})
+* Open the following link and press on the **Copy contents** button to copy the entire text: [fixlist for {USERNAME}]({FIXLISTLINK})
 * Run **FRST64.exe** and click on **Fix**. Note: FRST reads the fixlist directly from your clipboard, so you don't need to paste or save it anywhere.
 * A log (Fixlog.txt) will open on your desktop.
-* Copy & paste the contents of the Fixlog.txt to [https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}](https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}) and press **\"save log\"**. Reply back with the keyword"""
+* Copy & paste the contents of the Fixlog.txt to [https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}](https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}) and press **\"save log\"**. Reply back with the keyword
+
+I have included the EmptyTemp: command. Note: This will remove cookies and may result in some websites (like banking) indicating they do not recognize your computer. It may be necessary to receive and apply a verification code.
+
+It is normal for your system to reboot as a result of the fix."""
 
 
 DEFAULT_ANALYZER_FIXLIST_TEMPLATE = """Start::

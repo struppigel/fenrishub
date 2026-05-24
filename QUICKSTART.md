@@ -78,9 +78,9 @@ Go to `/` and sign in with the account you created.
 
 Useful authenticated routes:
 
-- `/dashboard/`
+- `/fixlists/`
 - `/uploads/`
-- `/fixlists/analyze/`
+- `/analyze/`
 - `/rules/`
 - `/fixlists/snippets/`
 
@@ -115,7 +115,7 @@ From there you can:
 
 ## 7. Use the analyzer
 
-Open `/fixlists/analyze/`.
+Open `/analyze/`.
 
 The analyzer can:
 
@@ -133,7 +133,7 @@ Important behavior:
 
 ## 8. Create and share a fixlist
 
-Authenticated users can create fixlists at `/fixlists/create/` and manage them from `/dashboard/`.
+Authenticated users can create fixlists at `/fixlists/create/` and manage them from `/fixlists/`.
 
 Each fixlist:
 

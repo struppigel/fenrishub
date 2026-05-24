@@ -11,7 +11,13 @@
         display: block;
         font-size: 14px;
         font-weight: bold;
-        color: var(--la-text-main);
+        color: var(--la-text-primary);
+        margin-bottom: 6px;
+    }
+    .profile-form .field-help {
+        color: var(--la-text-muted);
+        font-size: 12px;
+        margin-top: -2px;
         margin-bottom: 6px;
     }
     .profile-form .checkbox-label {
@@ -25,30 +31,30 @@
     }
 </style>
 <div style="max-width: 820px; margin: 0 auto; padding: 8px 0;">
-    <h2>profile settings</h2>
+    <h2 style="color: var(--la-text-primary);">profile settings</h2>
 
     <form method="post" class="profile-form">
         {% csrf_token %}
 
         <div class="form-group">
             <label for="frst_fix_message">frst fix message</label>
+            <div class="field-help">Template posted as a reply when sharing a fixlist. Placeholders: <code>{USERNAME}</code>, <code>{HELPERNAME}</code>, <code>{FIXLISTLINK}</code>, <code>{FRSTPATH}</code>.</div>
             <textarea id="frst_fix_message" name="frst_fix_message" rows="14" style="color: var(--la-text-neutral);">{{ frst_fix_message }}</textarea>
-            <div class="muted" style="font-size: 12px; margin-top: 4px;">Template posted as a reply when sharing a fixlist. Placeholders: <code>{USERNAME}</code>, <code>{HELPERNAME}</code>, <code>{FIXLISTLINK}</code>, <code>{FRSTPATH}</code>.</div>
         </div>
 
         <div class="form-group">
             <label for="analyzer_fixlist_template">log analyzer fixlist starter</label>
+            <div class="field-help">Default text prefilled into the fixlist panel on the right side of the log analyzer.</div>
             <textarea id="analyzer_fixlist_template" name="analyzer_fixlist_template" rows="8" style="color: var(--la-text-neutral);">{{ analyzer_fixlist_template }}</textarea>
-            <div class="muted" style="font-size: 12px; margin-top: 4px;">Default text prefilled into the fixlist panel on the right side of the log analyzer.</div>
         </div>
 
         <div class="form-group">
             <div class="section-title">general settings</div>
+            <div class="field-help">When off, long lines in the log analyzer, log viewer, and fixlist viewer/editor scroll horizontally instead of wrapping.</div>
             <label class="checkbox-label">
                 <input type="checkbox" name="word_wrap" {% if profile_word_wrap %}checked{% endif %}>
                 <span>word wrap logs and fixlists</span>
             </label>
-            <div class="muted" style="font-size: 12px; margin-top: 4px;">When off, long lines in the log analyzer, log viewer, and fixlist viewer/editor scroll horizontally instead of wrapping.</div>
         </div>
 
         <div class="button-group">

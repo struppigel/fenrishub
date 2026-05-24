@@ -409,6 +409,11 @@ function bindAnalyzerControls() {
         });
     });
 
+    const selectedLinesTextarea = document.getElementById('selectedLines');
+    if (selectedLinesTextarea) {
+        selectedLinesTextarea.addEventListener('input', () => syncCopiedIndexesWithTextarea());
+    }
+
     bindLegendToggle();
 }
 
@@ -481,6 +486,7 @@ function exposeLegacyAnalyzerGlobals() {
         saveRulesAndRescan,
         saveStatusSelection,
         submitWithRulePersist,
+        syncCopiedIndexesWithTextarea,
         toggleQuestionCursorMode,
         toggleCleanCursorMode,
         toggleFixlistPanel,

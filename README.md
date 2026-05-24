@@ -30,7 +30,7 @@ Anonymous uploads are rate-limited by client IP.
 - Open a log by memorable upload ID
 - Compare two uploads side by side
 - Merge multiple uploads into a new combined upload
-- Run analyzer workflows from `/fixlists/analyze/`
+- Run analyzer workflows from `/analyze/`
 - Preview and optionally persist analyzer-derived rules
 - Create fixlists from analyzed content
 - Manage their own classification rules and snippets
@@ -219,9 +219,9 @@ When `DEBUG` is false, WhiteNoise is enabled for static file serving and secure 
 
 - `/` login page
 - `/upload/` public upload form
-- `/dashboard/` authenticated fixlist dashboard
+- `/fixlists/` authenticated fixlist dashboard
 - `/uploads/` uploaded log management
-- `/fixlists/analyze/` log analyzer UI
+- `/analyze/` log analyzer UI
 - `/rules/` classification rule management
 - `/fixlists/snippets/` snippet management
 - `/share/<token>/` public fixlist view

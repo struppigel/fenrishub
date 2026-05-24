@@ -359,6 +359,74 @@ function logLineDivAt(index) {
     );
 })();
 
+// insertAllStatus re-adds lines that were manually deleted from the textarea
+(function testInsertAllStatusReAddsManuallyDeleted() {
+    const entries = [
+        { line: 'junk1.dll', dominant_status: 'J', css_class: 'status-j' },
+        { line: 'junk2.dll', dominant_status: 'J', css_class: 'status-j' },
+    ];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    textarea.value = '';
+    textarea.selectionStart = textarea.selectionEnd = 0;
+    document.getElementById('bulkIgnoreFirewallRules').checked = false;
+
+    insertAllStatus('J');
+    assert(
+        'manual-delete: first bulk add inserted both J lines',
+        textarea.value.includes('junk1.dll') && textarea.value.includes('junk2.dll')
+    );
+
+    // Simulate the user wiping the textarea by hand and firing input.
+    textarea.value = '';
+    textarea.dispatchEvent(new Event('input'));
+    syncCopiedIndexesWithTextarea();
+
+    assert(
+        'manual-delete: copiedLineIndexes is cleared after textarea is emptied',
+        copiedLineIndexes.size === 0
+    );
+    assert(
+        'manual-delete: "copied" class removed from index 0',
+        logLineDivAt(0) && !logLineDivAt(0).classList.contains('copied')
+    );
+
+    insertAllStatus('J');
+    assert(
+        'manual-delete: second bulk add re-inserts both J lines',
+        textarea.value.includes('junk1.dll') && textarea.value.includes('junk2.dll')
+    );
+})();
+
+// syncCopiedIndexesWithTextarea: keeps indexes whose lines are still present
+(function testSyncKeepsPresentLines() {
+    const entries = [
+        { line: 'junk1.dll', dominant_status: 'J', css_class: 'status-j' },
+        { line: 'junk2.dll', dominant_status: 'J', css_class: 'status-j' },
+    ];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    textarea.value = '';
+    textarea.selectionStart = textarea.selectionEnd = 0;
+    document.getElementById('bulkIgnoreFirewallRules').checked = false;
+    insertAllStatus('J');
+
+    // Remove only junk1, keep junk2.
+    textarea.value = textarea.value.replace(/junk1\.dll\n?/, '');
+    syncCopiedIndexesWithTextarea();
+
+    assert(
+        'sync: stale index 0 dropped',
+        !copiedLineIndexes.has(0)
+    );
+    assert(
+        'sync: still-present index 1 retained',
+        copiedLineIndexes.has(1)
+    );
+})();
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
