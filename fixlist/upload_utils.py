@@ -1,12 +1,40 @@
 """Upload merge and soft-delete utilities."""
 import logging
+import threading
 
-from django.db import IntegrityError, transaction
+from django.conf import settings
+from django.db import IntegrityError, connections, transaction
 from django.utils import timezone
 
 from .models import UploadedLog
 
 logger = logging.getLogger(__name__)
+
+
+def _recalculate_analysis_stats_in_thread(upload_pk: int) -> None:
+    try:
+        upload = UploadedLog.objects.get(pk=upload_pk)
+        upload.recalculate_analysis_stats()
+    except Exception:
+        logger.exception('Background analysis_stats recalculation failed (upload_pk=%s)', upload_pk)
+    finally:
+        connections.close_all()
+
+
+def schedule_analysis_stats_recalc(upload: UploadedLog) -> None:
+    """Recalculate analysis stats off the request thread so the upload response
+    can return immediately. Runs synchronously under the test runner so existing
+    assertions about post-upload stat values remain valid."""
+    if getattr(settings, 'TESTING', False):
+        upload.recalculate_analysis_stats()
+        return
+    thread = threading.Thread(
+        target=_recalculate_analysis_stats_in_thread,
+        args=(upload.pk,),
+        name=f'analysis-stats-{upload.pk}',
+        daemon=True,
+    )
+    thread.start()
 
 
 def soft_delete_uploaded_log(log: UploadedLog) -> None:

@@ -19,7 +19,10 @@ from urllib.parse import urlencode
 from ..forms import UploadedLogForm
 from ..models import UploadedLog
 from ..permissions import user_can_delete_uploaded_log
-from ..upload_utils import soft_delete_uploaded_log, restore_uploaded_log, execute_merge
+from ..upload_utils import (
+    soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
+    schedule_analysis_stats_recalc,
+)
 from .guest import deny_guests
 from .upload_actions import (
     handle_delete_action, handle_assign_to_me_action, handle_unassign_to_general_action,
@@ -96,16 +99,7 @@ def upload_log_view(request, helper_username=None):
                 )
                 created_log.recalculate_log_type()
                 created_log.recalculate_scan_date()
-                try:
-                    created_log.recalculate_analysis_stats()
-                except Exception:
-                    logger.exception(
-                        'Failed to recalculate upload stats (upload_id=%s, filename=%r, helper=%r, recipient=%r)',
-                        created_log.upload_id,
-                        created_log.original_filename,
-                        helper_username,
-                        recipient_user.username if recipient_user else None,
-                    )
+                schedule_analysis_stats_recalc(created_log)
                 request.session['upload_success_id'] = created_log.upload_id
                 request.session['upload_success_filename'] = created_log.original_filename
                 request.session['upload_success_channel'] = recipient_user.username if recipient_user else 'general'

@@ -7,6 +7,7 @@ from .views.analyzer import (
     persist_pending_rule_changes_api,
     preview_pending_rule_changes_api,
     update_analyzed_line_status_api,
+    uploaded_log_cached_analysis_api,
 )
 from .views.auth import change_password_view, help_view, login_view, logout_view, profile_view
 from .views.fixlists import (
@@ -60,6 +61,7 @@ urlpatterns = [
     path('cases/<str:case_id>/delete/', infection_case_delete_view, name='infection_case_delete'),
     path('analyze/', log_analyzer_view, name='log_analyzer'),
     path('api/uploaded-logs/<str:upload_id>/content/', uploaded_log_content_api, name='uploaded_log_content_api'),
+    path('api/uploaded-logs/<str:upload_id>/cached-analysis/', uploaded_log_cached_analysis_api, name='uploaded_log_cached_analysis_api'),
     path('api/analyze-log/', analyze_log_api, name='analyze_log_api'),
     path('api/analyze-log/line-details/', analyze_line_details_api, name='analyze_line_details_api'),
     path('api/analyze-log/status/', update_analyzed_line_status_api, name='update_analyzed_line_status_api'),

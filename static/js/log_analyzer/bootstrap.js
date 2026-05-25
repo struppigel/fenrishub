@@ -20,6 +20,45 @@ function buildUploadedLogContentUrl(uploadId) {
     return template.replace('__UPLOAD_ID__', encodeURIComponent(uploadId));
 }
 
+function buildCachedAnalysisUrl(uploadId) {
+    const template = (window.logAnalyzerConfig && window.logAnalyzerConfig.cachedAnalysisUrlTemplate) || '';
+    if (!template || !uploadId) {
+        return '';
+    }
+    return template.replace('__UPLOAD_ID__', encodeURIComponent(uploadId));
+}
+
+async function fetchCachedAnalysisPayload(uploadId) {
+    const url = buildCachedAnalysisUrl(uploadId);
+    if (!url) {
+        return null;
+    }
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        if (!response.ok) {
+            return null;
+        }
+        const data = await response.json();
+        return data && data.has_cache ? data.payload : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+function showCachedAnalysisLayout() {
+    const logInputElement = document.getElementById('logInput');
+    const logLinesElement = document.getElementById('logLines');
+    const parseButton = document.getElementById('parseButton');
+    const resetButton = document.getElementById('resetButton');
+    if (logInputElement) logInputElement.style.display = 'none';
+    if (logLinesElement) logLinesElement.style.display = 'block';
+    if (parseButton) parseButton.style.display = 'none';
+    if (resetButton) resetButton.style.display = 'inline-flex';
+}
+
 async function loadSelectedUploadForAnalyzer() {
     const selectElement = document.getElementById('uploadSourceSelect');
     const statusElement = document.getElementById('uploadLoadStatus');
@@ -45,51 +84,57 @@ async function loadSelectedUploadForAnalyzer() {
 
     statusElement.textContent = 'loading...';
 
-    const cached = _uploadContentCache.get(uploadId);
-    if (cached) {
-        if (typeof resetToInput === 'function') {
-            resetToInput();
+    let contentPayload = _uploadContentCache.get(uploadId);
+    if (!contentPayload) {
+        try {
+            const response = await fetch(requestUrl, {
+                method: 'GET',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!response.ok) {
+                throw new Error(`Request failed: ${response.status}`);
+            }
+            contentPayload = await response.json();
+            _uploadContentCache.set(uploadId, contentPayload);
+        } catch (error) {
+            statusElement.textContent = 'failed to load upload';
+            return;
         }
-        logInputElement.value = cached.content || '';
-        statusElement.textContent = `loaded ${cached.upload_id}`;
-        const url = new URL(window.location);
-        url.searchParams.set('upload_id', uploadId);
-        window.history.replaceState(null, '', url);
-        logInputElement.focus();
-        if (typeof parseLogs === 'function' && logInputElement.value.trim()) {
-            await parseLogs();
-        }
-        return;
     }
 
-    try {
-        const response = await fetch(requestUrl, {
-            method: 'GET',
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest',
-            },
-        });
+    if (typeof resetToInput === 'function') {
+        resetToInput();
+    }
+    logInputElement.value = contentPayload.content || '';
+    const url = new URL(window.location);
+    url.searchParams.set('upload_id', uploadId);
+    window.history.replaceState(null, '', url);
+    logInputElement.focus();
 
-        if (!response.ok) {
-            throw new Error(`Request failed: ${response.status}`);
+    const hasContent = Boolean(logInputElement.value.trim());
+    let cachedAnalysisApplied = false;
+    if (hasContent && typeof applyAnalysisPayload === 'function') {
+        const cachedAnalysis = await fetchCachedAnalysisPayload(uploadId);
+        if (cachedAnalysis) {
+            applyAnalysisPayload(cachedAnalysis, { resetCopied: true });
+            showCachedAnalysisLayout();
+            statusElement.textContent = `loaded ${contentPayload.upload_id} — refreshing analysis…`;
+            cachedAnalysisApplied = true;
         }
+    }
 
-        const payload = await response.json();
-        _uploadContentCache.set(uploadId, payload);
-        if (typeof resetToInput === 'function') {
-            resetToInput();
-        }
-        logInputElement.value = payload.content || '';
-        statusElement.textContent = `loaded ${payload.upload_id}`;
-        const url = new URL(window.location);
-        url.searchParams.set('upload_id', uploadId);
-        window.history.replaceState(null, '', url);
-        logInputElement.focus();
-        if (typeof parseLogs === 'function' && logInputElement.value.trim()) {
+    if (!cachedAnalysisApplied) {
+        statusElement.textContent = `loaded ${contentPayload.upload_id}`;
+    }
+
+    if (hasContent && typeof parseLogs === 'function') {
+        try {
             await parseLogs();
+        } finally {
+            if (cachedAnalysisApplied) {
+                statusElement.textContent = `loaded ${contentPayload.upload_id}`;
+            }
         }
-    } catch (error) {
-        statusElement.textContent = 'failed to load upload';
     }
 }
 

@@ -504,11 +504,12 @@ class UploadedLog(models.Model):
     ANALYZED_LOG_TYPES = {'FRST', 'Addition', 'FRST&Addition'}
 
     def recalculate_analysis_stats(self):
+        analysis_payload = None
         if self.log_type in self.ANALYZED_LOG_TYPES:
             from .analyzer import analyze_log_text, _detect_incomplete_log_warning
             content = self.content or ''
-            analysis = analyze_log_text(content)
-            self.apply_analysis_summary(analysis.get('summary', {}))
+            analysis_payload = analyze_log_text(content)
+            self.apply_analysis_summary(analysis_payload.get('summary', {}))
             self.is_incomplete = _detect_incomplete_log_warning(content) is not None
             for field_name in self.FIXLOG_STAT_FIELDS:
                 setattr(self, field_name, 0)
@@ -524,6 +525,13 @@ class UploadedLog(models.Model):
                 for field_name in self.FIXLOG_STAT_FIELDS:
                     setattr(self, field_name, 0)
         self.save(update_fields=[*self.analysis_stat_update_fields(), 'is_incomplete'])
+        if analysis_payload is not None:
+            UploadedLogAnalysis.objects.update_or_create(
+                upload=self,
+                defaults={'payload': analysis_payload, 'source_content_hash': self.content_hash},
+            )
+        else:
+            UploadedLogAnalysis.objects.filter(upload=self).delete()
 
     def _compute_fixlog_stats(self, content):
         total = 0
@@ -571,6 +579,19 @@ class UploadedLog(models.Model):
                 return candidate
 
         raise ValidationError('Unable to generate a unique upload id.')
+
+
+class UploadedLogAnalysis(models.Model):
+    upload = models.OneToOneField(
+        UploadedLog, on_delete=models.CASCADE, related_name='cached_analysis'
+    )
+    payload = models.JSONField()
+    source_content_hash = models.CharField(max_length=32)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'cached analysis for {self.upload_id}'
 
 
 class FixlistSnippet(models.Model):

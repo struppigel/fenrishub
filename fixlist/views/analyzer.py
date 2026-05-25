@@ -23,7 +23,7 @@ from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
     VALID_STATUSES, invalidate_rule_buckets_cache,
 )
-from ..models import ClassificationRule, FixlistSnippet, UploadedLog
+from ..models import ClassificationRule, FixlistSnippet, UploadedLog, UploadedLogAnalysis
 from ..validators import PayloadValidator, BadJsonError, PayloadTooLargeError
 from ..rule_utils import (
     _normalize_pending_changes, _build_pending_rule_preview,
@@ -112,11 +112,41 @@ def analyze_log_api(request):
             try:
                 uploaded_log.apply_analysis_summary(analysis.get('summary', {}))
                 uploaded_log.save(update_fields=UploadedLog.analysis_stat_update_fields())
-            except Exception as e:
-                print(f"ERROR updating stats for {upload_id} during parse: {e}")
-                import traceback
-                traceback.print_exc()
+                UploadedLogAnalysis.objects.update_or_create(
+                    upload=uploaded_log,
+                    defaults={
+                        'payload': analysis,
+                        'source_content_hash': uploaded_log.content_hash,
+                    },
+                )
+            except Exception:
+                logger.exception('Failed to refresh cached analysis for upload_id=%s', upload_id)
     return JsonResponse(analysis)
+
+
+@deny_guests
+@login_required
+@require_http_methods(["GET"])
+def uploaded_log_cached_analysis_api(request, upload_id):
+    """Return the most recent cached analyzer payload for an upload, if any.
+
+    Lets the analyzer page render verdicts instantly while a background re-scan
+    runs. Marks the cache as missing when the upload's content has changed since
+    the cache was written, so callers never display verdicts for different text.
+    """
+    uploaded_log = get_object_or_404(
+        UploadedLog.objects.all(),
+        upload_id=upload_id,
+        deleted_at__isnull=True,
+    )
+    cached = UploadedLogAnalysis.objects.filter(upload=uploaded_log).first()
+    if cached is None or cached.source_content_hash != uploaded_log.content_hash:
+        return JsonResponse({'has_cache': False, 'payload': None, 'source_content_hash': None})
+    return JsonResponse({
+        'has_cache': True,
+        'payload': cached.payload,
+        'source_content_hash': cached.source_content_hash,
+    })
 
 
 @guest_or_login_required
