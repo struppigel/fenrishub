@@ -158,13 +158,15 @@ async function loadInitialUploadForAnalyzer() {
     }
 
     selectElement.value = initialUploadId;
-    await loadSelectedUploadForAnalyzer();
-    
-    // Show the upload source row if an initial upload was loaded
+
+    // Reveal the row up-front so the cached-analysis paint doesn't get
+    // pushed down by a late layout shift when the background re-scan finishes.
     const uploadSourceRow = document.getElementById('uploadSourceRow');
     if (uploadSourceRow) {
         uploadSourceRow.hidden = false;
     }
+
+    await loadSelectedUploadForAnalyzer();
 }
 
 function initializePendingStatusChanges() {
