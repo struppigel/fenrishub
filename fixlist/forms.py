@@ -170,10 +170,8 @@ class UploadedLogForm(forms.Form):
 
     def clean_log_text(self):
         log_text = self.cleaned_data.get('log_text') or ''
-        if self.INVALID_TEXT_CHAR_RE.search(log_text):
-            raise forms.ValidationError(
-                'Pasted log contains invalid control characters. Please remove binary/non-text characters and try again.'
-            )
+        log_text = log_text.replace('\x00', '')
+        log_text = self.INVALID_TEXT_CHAR_RE.sub('', log_text)
         return log_text
 
     def clean(self):

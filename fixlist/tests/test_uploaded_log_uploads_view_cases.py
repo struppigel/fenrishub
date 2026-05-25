@@ -312,19 +312,17 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
         self.assertNotIn('\x00', uploaded.content)
 
-    def test_uploaded_log_form_rejects_pasted_invalid_control_characters(self):
+    def test_uploaded_log_form_strips_pasted_invalid_control_characters(self):
+        # Tab/newline/CR must be preserved; SOH (\x01) and DEL (\x7f) must be stripped.
         form = UploadedLogForm(
             data={
                 'reddit_username': 'reddit_name',
-                'log_text': 'line1\x01line2',
+                'log_text': 'line1\x01\tline2\x7f\nline3',
             }
         )
 
-        self.assertFalse(form.is_valid())
-        self.assertIn(
-            'Pasted log contains invalid control characters. Please remove binary/non-text characters and try again.',
-            form.errors.get('log_text', []),
-        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['log_text'], 'line1\tline2\nline3')
 
     @override_settings(ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600)
 
