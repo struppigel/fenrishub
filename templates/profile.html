@@ -49,6 +49,19 @@
         </div>
 
         <div class="form-group">
+            <label for="rule_set_mode">rule set</label>
+            <div class="field-help">
+                <strong>shared</strong> — your rules are part of the global rule set used by every "shared" user; your assigned uploads are analyzed against that combined set.<br>
+                <strong>private</strong> — only your own rules apply to your assigned uploads, and your rules are excluded from the global shared rule set.
+            </div>
+            <select id="rule_set_mode" name="rule_set_mode">
+                {% for value, label in rule_set_mode_choices %}
+                    <option value="{{ value }}" {% if value == profile_rule_set_mode %}selected{% endif %}>{{ label|lower }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
             <div class="section-title">general settings</div>
             <div class="field-help">When off, long lines in the log analyzer, log viewer, and fixlist viewer/editor scroll horizontally instead of wrapping.</div>
             <label class="checkbox-label">

@@ -223,12 +223,12 @@ class DuplicatesAdminViewTests(TestCase):
         self.assertTrue(self.r1.is_enabled)
         self.assertTrue(self.r2.is_enabled)
 
-    @patch("fixlist.admin.invalidate_rule_buckets_cache")
+    @patch("fixlist.admin._invalidate_for_owner_ids")
     def test_post_invalidates_rule_buckets_cache_when_changes_applied(self, mock_invalidate):
         self.client.post(self.url, data={"disable": [str(self.r1.id)]}, follow=True)
         self.assertTrue(mock_invalidate.called)
 
-    @patch("fixlist.admin.invalidate_rule_buckets_cache")
+    @patch("fixlist.admin._invalidate_for_owner_ids")
     def test_post_does_not_invalidate_cache_when_nothing_changes(self, mock_invalidate):
         self.client.post(self.url, data={}, follow=True)
         self.assertFalse(mock_invalidate.called)

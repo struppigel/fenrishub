@@ -7,7 +7,10 @@ from django.utils import timezone
 
 from ..models import UploadedLog
 from ..permissions import user_can_delete_uploaded_log
-from ..upload_utils import soft_delete_uploaded_log, restore_uploaded_log, execute_merge
+from ..upload_utils import (
+    soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
+    schedule_analysis_stats_recalc,
+)
 from .utils import redirect_preserving_filters, _purge_old_trash, check_missing_ids
 
 
@@ -46,6 +49,9 @@ def handle_assign_to_me_action(request, upload_id: str, action_scope_uploads) ->
 
     uploaded_log.recipient_user = request.user
     uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
+    # Recipient changed — effective ruleset may have changed too. Refresh
+    # count_* + caches so the uploads listing reflects the assignee's view.
+    schedule_analysis_stats_recalc(uploaded_log)
     messages.success(request, f'Upload {upload_id} assigned to {request.user.username}.')
     return redirect_preserving_filters(request, 'uploaded_logs')
 
@@ -62,6 +68,7 @@ def handle_unassign_to_general_action(request, upload_id: str, action_scope_uplo
 
     uploaded_log.recipient_user = None
     uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
+    schedule_analysis_stats_recalc(uploaded_log)
     messages.success(request, f'{upload_id} was unassigned')
     return redirect_preserving_filters(request, 'uploaded_logs')
 
@@ -260,9 +267,11 @@ def handle_copy_to_me_action(request, upload_id: str, action_scope_uploads) -> H
         is_incomplete=uploaded_log.is_incomplete,
         scan_date=uploaded_log.scan_date,
     )
-    for field_name in UploadedLog.analysis_stat_fields():
-        setattr(copy, field_name, getattr(uploaded_log, field_name))
     copy.save()
+    # The new assignee may have a different effective rule set than the source's
+    # assignee. Run analysis for the copy so count_*, cached payloads, and the
+    # stats snapshot all reflect the new recipient's view.
+    schedule_analysis_stats_recalc(copy)
     messages.success(request, f'Copied {upload_id} as {copy.upload_id} assigned to {request.user.username}.')
     return redirect_preserving_filters(request, 'uploaded_logs')
 

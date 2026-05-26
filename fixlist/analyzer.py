@@ -8,8 +8,11 @@ try:
 except ImportError:
     _re2 = None
 
+from django.db.models import Q
+
 from . import frst_extractors as ex
 from .models import ClassificationRule, ParsedFilepathExclusion, get_default_rule_owner_id, detect_log_type
+from .rule_sets import SHARED_RULE_SET_KEY, parse_rule_set_key
 from .status_types import (
     STATUS_PRECEDENCE,
     VALID_STATUSES,
@@ -646,15 +649,20 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
     }
 
 
-_rule_buckets_cache = None
-_rule_buckets_cache_time = None
+_rule_buckets_cache: dict = {}
 _RULE_BUCKETS_CACHE_TTL = 60
 
 
-def invalidate_rule_buckets_cache():
-    global _rule_buckets_cache, _rule_buckets_cache_time
-    _rule_buckets_cache = None
-    _rule_buckets_cache_time = None
+def invalidate_rule_buckets_cache(rule_set_key: str | None = None) -> None:
+    """Drop one cached bucket set, or all of them when `rule_set_key` is None.
+
+    Clears the dict in place so that callers holding a reference to the module
+    attribute (e.g. tests) observe the change.
+    """
+    if rule_set_key is None:
+        _rule_buckets_cache.clear()
+    else:
+        _rule_buckets_cache.pop(rule_set_key, None)
 
 
 REPARSE_FIELDS = (
@@ -782,18 +790,29 @@ def find_rule_duplicates(queryset):
     ]
 
 
-def _get_cached_rule_buckets():
-    global _rule_buckets_cache, _rule_buckets_cache_time
+def _get_cached_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
     now = time.monotonic()
-    if _rule_buckets_cache is not None and (now - _rule_buckets_cache_time) < _RULE_BUCKETS_CACHE_TTL:
-        return _rule_buckets_cache
-    _rule_buckets_cache = _load_rule_buckets()
-    _rule_buckets_cache_time = now
-    return _rule_buckets_cache
+    entry = _rule_buckets_cache.get(rule_set_key)
+    if entry is not None and (now - entry[1]) < _RULE_BUCKETS_CACHE_TTL:
+        return entry[0]
+    buckets = _load_rule_buckets(rule_set_key)
+    _rule_buckets_cache[rule_set_key] = (buckets, now)
+    return buckets
 
 
-def _load_rule_buckets():
-    rules = ClassificationRule.objects.filter(is_enabled=True).select_related('owner')
+def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
+    qs = ClassificationRule.objects.filter(is_enabled=True).select_related('owner')
+    scope, scope_user_id = parse_rule_set_key(rule_set_key)
+    if scope == 'private':
+        qs = qs.filter(owner_id=scope_user_id)
+    else:
+        # Include rules from users in shared mode and users with no profile row
+        # (covers the rule_owner_fallback system user and any historical accounts).
+        qs = qs.filter(
+            Q(owner__fenris_profile__rule_set_mode=SHARED_RULE_SET_KEY)
+            | Q(owner__fenris_profile__isnull=True)
+        )
+    rules = qs
     parsed_filepath_exclusions = {
         (path or "").strip().lower()
         for path in ParsedFilepathExclusion.objects.filter(is_enabled=True).values_list(
@@ -1280,7 +1299,7 @@ def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]
     return serialized_matches, reasons
 
 
-def inspect_line_matches(line: str, buckets=None) -> dict:
+def inspect_line_matches(line: str, buckets=None, rule_set_key: str = SHARED_RULE_SET_KEY) -> dict:
     line_value = (line or "").strip()
     if not line_value:
         return {
@@ -1291,7 +1310,7 @@ def inspect_line_matches(line: str, buckets=None) -> dict:
             "matches": [],
         }
 
-    active_buckets = buckets or _get_cached_rule_buckets()
+    active_buckets = buckets or _get_cached_rule_buckets(rule_set_key)
     (
         effective_matches,
         shadowed_matches,
@@ -1317,8 +1336,8 @@ def inspect_line_matches(line: str, buckets=None) -> dict:
     }
 
 
-def analyze_log_text(raw_log_text: str) -> dict:
-    buckets = _get_cached_rule_buckets()
+def analyze_log_text(raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY) -> dict:
+    buckets = _get_cached_rule_buckets(rule_set_key)
     analyzed_lines = []
     warnings = _build_log_warnings(raw_log_text or "")
 

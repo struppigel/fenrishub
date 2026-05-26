@@ -94,6 +94,7 @@
             <li><a href="#snippets">Snippets</a></li>
             <li><a href="#rules">Rules</a>
                 <ul>
+                    <li><a href="#rule-sets">Rule sets (shared vs private)</a></li>
                     <li><a href="#rule-components">Rule components</a></li>
                     <li><a href="#rule-priorities">Rule priorities</a></li>
                     <li><a href="#match-types">Match types</a></li>
@@ -284,7 +285,20 @@
 
     <p>Rules decide about the verdict of a log line. Rules are probably the most complicated part of Fenris. You don't need the rules as a beginner, you can choose to never use this view. But if you ever want more flexibility when adjusting how log lines are parsed, this is a way to do it.</p>
 
-    <p>Currently all users share all rules equally. That means your rules affect all others as well, so be mindful of changes. This will likely change in the future, but needs feature updates.</p>
+    <h3 id="rule-sets">Rule sets (shared vs private)</h3>
+
+    <p>Each user picks a <strong>rule set</strong> in profile settings that decides which rules are applied to logs assigned to them, and whether their own rules contribute to the global pool. There are two modes:</p>
+
+    <ul>
+        <li><strong>shared</strong> (default) - your rules are part of the global rule set used by every other &quot;shared&quot; user. Logs assigned to you are analyzed against that combined pool.</li>
+        <li><strong>private</strong> - only your own rules apply to logs assigned to you. Your rules are also <em>excluded</em> from the global shared pool, so they won't affect anyone else's analyses.</li>
+    </ul>
+
+    <p>Unassigned logs (general upload channel) always use the shared rule set. When a log gets assigned to you, it's re-analyzed against your effective rule set, and the counts in the uploads list switch to your view. The statistics page always reflects the shared rule set, regardless of who an upload is assigned to.</p>
+
+    <p>The rules list itself shows all rules from all users regardless of mode - private just means &quot;don't include my rules in the shared pool and don't apply other people's rules to my logs.&quot;</p>
+
+    <p>After switching modes, cached analyses are dropped and re-computed the next time you open the analyzer for a log. You may briefly see a &quot;refreshing analysis...&quot; status while it rebuilds.</p>
 
     <h3 id="rule-components">Rule components</h3>
 

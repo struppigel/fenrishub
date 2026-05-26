@@ -17,7 +17,6 @@ from django.db.models import Q, Case, When
 
 from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
-    invalidate_rule_buckets_cache,
 )
 from ..models import (
     ClassificationRule,
@@ -26,6 +25,7 @@ from ..models import (
     PRIORITY_MAX,
     PRIORITY_MIN,
 )
+from ..rule_sets import invalidate_for_rule_owner
 from ..rule_test_service import build_rule_test_results
 
 
@@ -125,7 +125,7 @@ def rules_view(request):
                 skipped = [pattern for pattern in patterns if pattern in existing]
                 if to_create:
                     ClassificationRule.objects.bulk_create(to_create)
-                    invalidate_rule_buckets_cache()
+                    invalidate_for_rule_owner(request.user)
                     n = len(to_create)
                     messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
                     if skipped:
@@ -174,7 +174,7 @@ def rules_view(request):
                         'status', 'match_type', 'source_text', 'description',
                         'is_enabled', 'priority', 'updated_at',
                     ])
-                    invalidate_rule_buckets_cache()
+                    invalidate_for_rule_owner(request.user)
                     messages.success(request, 'Rule updated.')
             return_q = request.POST.get('return_q', '').strip()
             if return_q:
@@ -187,7 +187,7 @@ def rules_view(request):
             pk = request.POST.get('pk', '').strip()
             rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
             rule.delete()
-            invalidate_rule_buckets_cache()
+            invalidate_for_rule_owner(request.user)
             messages.success(request, 'Rule deleted.')
             return_q = request.POST.get('return_q', '').strip()
             if return_q:
@@ -201,7 +201,7 @@ def rules_view(request):
             rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
             rule.is_enabled = not rule.is_enabled
             rule.save(update_fields=['is_enabled', 'updated_at'])
-            invalidate_rule_buckets_cache()
+            invalidate_for_rule_owner(request.user)
             label = 'enabled' if rule.is_enabled else 'disabled'
             messages.success(request, f'Rule {label}.')
             return redirect('rules')
@@ -355,7 +355,7 @@ def add_rule_view(request):
 
             if to_create:
                 ClassificationRule.objects.bulk_create(to_create)
-                invalidate_rule_buckets_cache()
+                invalidate_for_rule_owner(request.user)
                 n = len(to_create)
                 messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
                 if skipped:

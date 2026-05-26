@@ -66,6 +66,8 @@
     .upload-stats .stat-j { color: var(--la-status-j); }
     .upload-stats .stat-u { color: var(--la-status-u); }
 
+    .upload-stats .rule-set-tag { color: var(--la-text-muted); }
+
     .toggle-switch {
         position: relative;
         display: inline-block;
@@ -222,6 +224,9 @@
                         {% else %}
                             <span class="stat-match">-> 0% known</span>
                         {% endif %}
+                    {% endwith %}
+                    {% with rule_set_label=uploaded_log.effective_rule_set_label %}
+                    | <span class="rule-set-tag rule-set-tag-{{ rule_set_label }}" title="stats above were computed using the {{ rule_set_label }} rule set">{{ rule_set_label }} rules</span>
                     {% endwith %}
                     {% elif uploaded_log.log_type == 'Fixlog' %}
                     | {{ uploaded_log.fixlog_total }} ops |

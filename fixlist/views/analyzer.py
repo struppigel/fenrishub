@@ -21,9 +21,14 @@ from django.utils.safestring import mark_safe
 
 from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
-    VALID_STATUSES, invalidate_rule_buckets_cache,
+    VALID_STATUSES,
 )
 from ..models import ClassificationRule, FixlistSnippet, UploadedLog, UploadedLogAnalysis
+from ..rule_sets import (
+    SHARED_RULE_SET_KEY,
+    resolve_effective_rule_set_key,
+    resolve_user_rule_set_key,
+)
 from ..validators import PayloadValidator, BadJsonError, PayloadTooLargeError
 from ..rule_utils import (
     _normalize_pending_changes, _build_pending_rule_preview,
@@ -105,20 +110,30 @@ def analyze_log_api(request):
         return PayloadValidator.error_response('Field "upload_id" must be a string when provided.')
     upload_id = upload_id.strip()
 
-    analysis = analyze_log_text(log_text)
+    if is_guest_request(request):
+        viewer_key = SHARED_RULE_SET_KEY
+    else:
+        viewer_key = resolve_user_rule_set_key(request.user)
+
+    analysis = analyze_log_text(log_text, viewer_key)
     if upload_id and not is_guest_request(request):
         uploaded_log = get_updatable_uploads(request.user).filter(upload_id=upload_id).first()
         if uploaded_log:
             try:
-                uploaded_log.apply_analysis_summary(analysis.get('summary', {}))
-                uploaded_log.save(update_fields=UploadedLog.analysis_stat_update_fields())
                 UploadedLogAnalysis.objects.update_or_create(
                     upload=uploaded_log,
+                    rule_set_key=viewer_key,
                     defaults={
                         'payload': analysis,
                         'source_content_hash': uploaded_log.content_hash,
                     },
                 )
+                # Only update count_* when this viewer's ruleset matches the upload's
+                # effective ruleset — otherwise the listing would show counts that
+                # don't belong to the assigned helper's view.
+                if viewer_key == resolve_effective_rule_set_key(uploaded_log):
+                    uploaded_log.apply_analysis_summary(analysis.get('summary', {}))
+                    uploaded_log.save(update_fields=UploadedLog.analysis_stat_update_fields())
             except Exception:
                 logger.exception('Failed to refresh cached analysis for upload_id=%s', upload_id)
     return JsonResponse(analysis)
@@ -139,7 +154,10 @@ def uploaded_log_cached_analysis_api(request, upload_id):
         upload_id=upload_id,
         deleted_at__isnull=True,
     )
-    cached = UploadedLogAnalysis.objects.filter(upload=uploaded_log).first()
+    viewer_key = resolve_user_rule_set_key(request.user)
+    cached = UploadedLogAnalysis.objects.filter(
+        upload=uploaded_log, rule_set_key=viewer_key,
+    ).first()
     if cached is None or cached.source_content_hash != uploaded_log.content_hash:
         return JsonResponse({'has_cache': False, 'payload': None, 'source_content_hash': None})
     return JsonResponse({
@@ -247,7 +265,8 @@ def persist_pending_rule_changes_api(request):
         owner=request.user,
     )
 
-    invalidate_rule_buckets_cache()
+    from ..rule_sets import invalidate_for_rule_owner
+    invalidate_for_rule_owner(request.user)
 
     return JsonResponse({'ok': True, **result})
 

@@ -13,9 +13,17 @@ from django.urls import path, reverse
 from .analyzer import (
     find_rule_duplicates,
     import_rules_from_lines,
-    invalidate_rule_buckets_cache,
     reparse_rules,
 )
+from .rule_sets import invalidate_for_rule_owner
+
+
+def _invalidate_for_owner_ids(owner_ids):
+    """Invalidate caches for each unique owner referenced in `owner_ids`."""
+    if not owner_ids:
+        return
+    for owner in User.objects.filter(pk__in=owner_ids).select_related('fenris_profile'):
+        invalidate_for_rule_owner(owner)
 from .models import (
     AccessLog,
     ClassificationRule,
@@ -215,6 +223,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         updated = 0
         skipped_conflicts = []
         skipped_empty = 0
+        touched_owner_ids = set()
 
         for rule in candidates.iterator():
             new_source = rule.source_text[len(prefix):]
@@ -226,11 +235,13 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                     rule.source_text = new_source
                     rule.save(update_fields=['source_text', 'updated_at'])
                 updated += 1
+                if rule.owner_id is not None:
+                    touched_owner_ids.add(rule.owner_id)
             except IntegrityError:
                 skipped_conflicts.append(rule)
 
         if updated:
-            invalidate_rule_buckets_cache()
+            _invalidate_for_owner_ids(touched_owner_ids)
 
         parts = [f'Stripped "(?i)" prefix from {updated} regex rule(s).']
         if skipped_non_regex:
@@ -437,6 +448,11 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             action = 'delete' if 'action_delete' in request.POST else 'disable'
             count = 0
             if ids:
+                touched_owner_ids = set(
+                    ClassificationRule.objects.filter(pk__in=ids)
+                    .exclude(owner_id__isnull=True)
+                    .values_list('owner_id', flat=True)
+                )
                 if action == 'delete':
                     count, _ = ClassificationRule.objects.filter(pk__in=ids).delete()
                 else:
@@ -444,7 +460,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                         pk__in=ids, is_enabled=True
                     ).update(is_enabled=False)
                 if count:
-                    invalidate_rule_buckets_cache()
+                    _invalidate_for_owner_ids(touched_owner_ids)
             verb = 'Deleted' if action == 'delete' else 'Disabled'
             self.message_user(
                 request,
@@ -596,7 +612,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
 
                 if to_create:
                     ClassificationRule.objects.bulk_create(to_create)
-                    invalidate_rule_buckets_cache()
+                    invalidate_for_rule_owner(request.user)
 
                 self.message_user(
                     request,

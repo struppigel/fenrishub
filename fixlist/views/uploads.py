@@ -201,7 +201,9 @@ def uploaded_logs_view(request):
     page_obj = listing_context['page_obj']
     list_visible_uploads = listing_context.pop('_list_visible_uploads')
 
-    trash_count = UploadedLog.objects.filter(deleted_at__isnull=False).count()
+    trash_count = UploadedLog.objects.filter(
+        recipient_user=request.user, deleted_at__isnull=False,
+    ).count()
     page_content_hashes = {
         uploaded_log.content_hash
         for uploaded_log in page_obj.object_list
@@ -253,7 +255,11 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     )
 
     deleted_filter = {'deleted_at__isnull': not deleted}
-    uploads = list_visible_uploads.filter(**deleted_filter).select_related('recipient_user').defer('content')
+    uploads = (
+        list_visible_uploads.filter(**deleted_filter)
+        .select_related('recipient_user', 'recipient_user__fenris_profile')
+        .defer('content')
+    )
     if username_filter:
         uploads = uploads.filter(reddit_username=username_filter)
     if search_query:

@@ -12,6 +12,7 @@ from django.contrib.auth.forms import PasswordChangeForm
 from django.views.decorators.http import require_http_methods
 
 from ..models import UserProfile
+from ..rule_sets import on_user_rule_set_mode_changed
 from .guest import guest_or_login_required
 
 
@@ -82,7 +83,16 @@ def profile_view(request):
         profile.frst_fix_message = request.POST.get('frst_fix_message', '')
         profile.word_wrap = 'word_wrap' in request.POST
         profile.analyzer_fixlist_template = request.POST.get('analyzer_fixlist_template', '')
-        profile.save(update_fields=['frst_fix_message', 'word_wrap', 'analyzer_fixlist_template'])
+        old_rule_set_mode = profile.rule_set_mode
+        new_rule_set_mode = request.POST.get('rule_set_mode', UserProfile.RULE_SET_MODE_SHARED)
+        if new_rule_set_mode not in dict(UserProfile.RULE_SET_MODE_CHOICES):
+            new_rule_set_mode = UserProfile.RULE_SET_MODE_SHARED
+        profile.rule_set_mode = new_rule_set_mode
+        profile.save(update_fields=[
+            'frst_fix_message', 'word_wrap', 'analyzer_fixlist_template', 'rule_set_mode',
+        ])
+        if old_rule_set_mode != new_rule_set_mode:
+            on_user_rule_set_mode_changed(request.user, old_rule_set_mode, new_rule_set_mode)
         messages.success(request, 'Profile settings updated successfully.')
         return redirect('profile')
 
@@ -98,6 +108,8 @@ def profile_view(request):
             'analyzer_fixlist_template': effective_analyzer_fixlist_template,
             'default_analyzer_fixlist_template': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
             'profile_word_wrap': profile.word_wrap,
+            'profile_rule_set_mode': profile.rule_set_mode,
+            'rule_set_mode_choices': UserProfile.RULE_SET_MODE_CHOICES,
         },
     )
 

@@ -1,6 +1,6 @@
 from django.db import IntegrityError, models
 from django.db.models import Q
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_delete
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -91,11 +91,23 @@ class Fixlist(models.Model):
 
 
 class UserProfile(models.Model):
+    RULE_SET_MODE_SHARED = 'shared'
+    RULE_SET_MODE_PRIVATE = 'private'
+    RULE_SET_MODE_CHOICES = [
+        (RULE_SET_MODE_SHARED, 'Shared'),
+        (RULE_SET_MODE_PRIVATE, 'Private'),
+    ]
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='fenris_profile')
     frst_fix_message = models.TextField(blank=True, default='')
     word_wrap = models.BooleanField(default=False)
     analyzer_fixlist_template = models.TextField(blank=True, default='')
     last_seen = models.DateTimeField(null=True, blank=True, db_index=True)
+    rule_set_mode = models.CharField(
+        max_length=16,
+        choices=RULE_SET_MODE_CHOICES,
+        default=RULE_SET_MODE_SHARED,
+    )
 
     def __str__(self):
         return f'Profile for {self.user.username}'
@@ -483,6 +495,17 @@ class UploadedLog(models.Model):
 
         raise IntegrityError('Could not persist UploadedLog after upload_id collision retries.')
 
+    @property
+    def effective_rule_set_label(self):
+        """Short label for the rule set that `count_*` reflects ('shared' or 'private').
+
+        Used by the uploads listing to show which rule set the displayed stats
+        belong to. To avoid N+1 queries, callers should `select_related`
+        `recipient_user__fenris_profile` on the queryset.
+        """
+        from .rule_sets import SHARED_RULE_SET_KEY, resolve_effective_rule_set_key
+        return 'shared' if resolve_effective_rule_set_key(self) == SHARED_RULE_SET_KEY else 'private'
+
     @classmethod
     def analysis_stat_fields(cls):
         return ['total_line_count', *cls.ANALYSIS_STATUS_FIELD_MAP.values(), *cls.FIXLOG_STAT_FIELDS]
@@ -504,12 +527,20 @@ class UploadedLog(models.Model):
     ANALYZED_LOG_TYPES = {'FRST', 'Addition', 'FRST&Addition'}
 
     def recalculate_analysis_stats(self):
-        analysis_payload = None
+        from .rule_sets import SHARED_RULE_SET_KEY, resolve_effective_rule_set_key
+
+        effective_key = resolve_effective_rule_set_key(self)
+        shared_payload = None
+        effective_payload = None
         if self.log_type in self.ANALYZED_LOG_TYPES:
             from .analyzer import analyze_log_text, _detect_incomplete_log_warning
             content = self.content or ''
-            analysis_payload = analyze_log_text(content)
-            self.apply_analysis_summary(analysis_payload.get('summary', {}))
+            shared_payload = analyze_log_text(content, SHARED_RULE_SET_KEY)
+            if effective_key == SHARED_RULE_SET_KEY:
+                effective_payload = shared_payload
+            else:
+                effective_payload = analyze_log_text(content, effective_key)
+            self.apply_analysis_summary(effective_payload.get('summary', {}))
             self.is_incomplete = _detect_incomplete_log_warning(content) is not None
             for field_name in self.FIXLOG_STAT_FIELDS:
                 setattr(self, field_name, 0)
@@ -525,13 +556,23 @@ class UploadedLog(models.Model):
                 for field_name in self.FIXLOG_STAT_FIELDS:
                     setattr(self, field_name, 0)
         self.save(update_fields=[*self.analysis_stat_update_fields(), 'is_incomplete'])
-        if analysis_payload is not None:
+
+        if shared_payload is not None:
             UploadedLogAnalysis.objects.update_or_create(
                 upload=self,
-                defaults={'payload': analysis_payload, 'source_content_hash': self.content_hash},
+                rule_set_key=SHARED_RULE_SET_KEY,
+                defaults={'payload': shared_payload, 'source_content_hash': self.content_hash},
             )
-        else:
+        if effective_payload is not None and effective_key != SHARED_RULE_SET_KEY:
+            UploadedLogAnalysis.objects.update_or_create(
+                upload=self,
+                rule_set_key=effective_key,
+                defaults={'payload': effective_payload, 'source_content_hash': self.content_hash},
+            )
+        if shared_payload is None and effective_payload is None:
             UploadedLogAnalysis.objects.filter(upload=self).delete()
+
+        update_uploaded_log_stat_snapshot(self, shared_payload)
 
     def _compute_fixlog_stats(self, content):
         total = 0
@@ -582,16 +623,25 @@ class UploadedLog(models.Model):
 
 
 class UploadedLogAnalysis(models.Model):
-    upload = models.OneToOneField(
-        UploadedLog, on_delete=models.CASCADE, related_name='cached_analysis'
+    upload = models.ForeignKey(
+        UploadedLog, on_delete=models.CASCADE, related_name='cached_analyses'
     )
+    rule_set_key = models.CharField(max_length=64, db_index=True, default='shared')
     payload = models.JSONField()
     source_content_hash = models.CharField(max_length=32)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['upload', 'rule_set_key'],
+                name='uploaded_log_analysis_unique_per_key',
+            ),
+        ]
+
     def __str__(self):
-        return f'cached analysis for {self.upload_id}'
+        return f'cached analysis for {self.upload_id} [{self.rule_set_key}]'
 
 
 class FixlistSnippet(models.Model):
@@ -800,17 +850,41 @@ class FixlistStat(models.Model):
         return f'FixlistStat(source_id={self.source_id})'
 
 
-def _uploaded_log_stat_defaults(instance):
-    defaults = {
+def _uploaded_log_stat_metadata(instance):
+    """Snapshot fields that don't depend on which ruleset analyzed the log."""
+    return {
         'owner_id': instance.created_by_id,
         'owner_username': instance.created_by.username if instance.created_by_id else '',
         'recipient_username': instance.recipient_user.username if instance.recipient_user_id else '',
         'log_type': instance.log_type,
         'created_at': instance.created_at,
+        # Fixlog stats are computed from log text, not from any ruleset.
+        **{f: getattr(instance, f) for f in UploadedLog.FIXLOG_STAT_FIELDS},
     }
-    for field_name in UploadedLog.analysis_stat_fields():
-        defaults[field_name] = getattr(instance, field_name)
-    return defaults
+
+
+def update_uploaded_log_stat_snapshot(instance, shared_payload):
+    """Populate the historical stats snapshot from the SHARED analysis payload.
+
+    Called explicitly from `UploadedLog.recalculate_analysis_stats` after the
+    shared pass runs. The /stats/ view always reads this snapshot, so it must
+    reflect the global ruleset regardless of which user owns the upload.
+    """
+    if instance.pk is None or instance.created_at is None:
+        return
+    defaults = _uploaded_log_stat_metadata(instance)
+    summary = (shared_payload or {}).get('summary') if isinstance(shared_payload, dict) else None
+    status_counts = (summary or {}).get('status_counts', {}) if isinstance(summary, dict) else {}
+    if not isinstance(status_counts, dict):
+        status_counts = {}
+    defaults['total_line_count'] = max(0, int((summary or {}).get('total_lines', 0) or 0)) if summary else instance.total_line_count
+    for status_code, field_name in UploadedLog.ANALYSIS_STATUS_FIELD_MAP.items():
+        if summary is None:
+            # Non-analyzable log types (Fixlog, Unknown) — count_* fields stay zero.
+            defaults[field_name] = 0
+        else:
+            defaults[field_name] = max(0, int(status_counts.get(status_code, 0) or 0))
+    UploadedLogStat.objects.update_or_create(source_id=instance.pk, defaults=defaults)
 
 
 def _fixlist_stat_defaults(instance):
@@ -824,12 +898,28 @@ def _fixlist_stat_defaults(instance):
 
 @receiver(post_save, sender=UploadedLog)
 def _snapshot_uploaded_log_stats(sender, instance, raw=False, **kwargs):
+    """Keep the per-upload stats snapshot's metadata in sync on every save.
+
+    Count fields (count_*, total_line_count) are NOT written here — they reflect
+    the SHARED ruleset and are populated explicitly by `recalculate_analysis_stats`
+    via `update_uploaded_log_stat_snapshot`. Writing them from `instance` here
+    would leak the EFFECTIVE-ruleset values into /stats/.
+    """
     if raw or instance.created_at is None:
         return
-    UploadedLogStat.objects.update_or_create(
-        source_id=instance.pk,
-        defaults=_uploaded_log_stat_defaults(instance),
-    )
+    existing = UploadedLogStat.objects.filter(source_id=instance.pk).first()
+    metadata = _uploaded_log_stat_metadata(instance)
+    if existing is None:
+        # First save: create the row with zeroed counts; recalc will fill them in.
+        defaults = dict(metadata)
+        defaults['total_line_count'] = 0
+        for field_name in UploadedLog.ANALYSIS_STATUS_FIELD_MAP.values():
+            defaults[field_name] = 0
+        UploadedLogStat.objects.create(source_id=instance.pk, **defaults)
+    else:
+        for field_name, value in metadata.items():
+            setattr(existing, field_name, value)
+        existing.save(update_fields=list(metadata.keys()))
 
 
 @receiver(post_save, sender='fixlist.Fixlist')
@@ -840,6 +930,19 @@ def _snapshot_fixlist_stats(sender, instance, raw=False, **kwargs):
         source_id=instance.pk,
         defaults=_fixlist_stat_defaults(instance),
     )
+
+
+@receiver(pre_delete, sender=User)
+def _drop_rule_set_caches_on_user_delete(sender, instance, **kwargs):
+    """A deleted user's rules cascade away; flush per-key caches so analyses recompute.
+
+    Their `private:<id>` cached analyses become orphaned (no rules left in that
+    key); shared callers also need a refresh because the user's contribution to
+    the shared bucket is gone.
+    """
+    from .analyzer import invalidate_rule_buckets_cache
+    invalidate_rule_buckets_cache(None)
+    UploadedLogAnalysis.objects.filter(rule_set_key=f'private:{instance.id}').delete()
 
 
 @receiver(post_save, sender=UploadedLog)
