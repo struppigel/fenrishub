@@ -202,7 +202,7 @@
                     {% endif %}
                 </div>
                 <div class="fixlist-meta">
-                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if not is_trash and uploaded_log.content_hash %} | <span class="content-hash{% if uploaded_log.content_hash in duplicate_hashes %} duplicate-hash{% endif %}" title="{{ uploaded_log.content_hash }}">{{ uploaded_log.content_hash|truncatechars:11 }}</span>{% endif %}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}{% if is_trash and uploaded_log.deleted_at %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}{% endif %}
+                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}{% if not is_trash and uploaded_log.content_hash %} | <span class="content-hash{% if uploaded_log.is_hash_duplicate %} duplicate-hash{% endif %}" title="{{ uploaded_log.content_hash }}">{{ uploaded_log.content_hash|truncatechars:11 }}</span>{% endif %}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}{% if is_trash and uploaded_log.deleted_at %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}{% endif %}
                 </div>
                 <div class="fixlist-meta upload-stats">
                     lines {{ uploaded_log.total_line_count }}

@@ -199,30 +199,37 @@ def uploaded_logs_view(request):
 
     listing_context = _build_uploads_listing_context(request, deleted=False)
     page_obj = listing_context['page_obj']
-    list_visible_uploads = listing_context.pop('_list_visible_uploads')
 
     trash_count = UploadedLog.objects.filter(
         recipient_user=request.user, deleted_at__isnull=False,
     ).count()
+    # Only flag a hash as duplicate when multiple uploads share BOTH the hash
+    # and the same recipient_user — same hash assigned to different helpers
+    # isn't really a duplicate from any one helper's perspective.
     page_content_hashes = {
         uploaded_log.content_hash
         for uploaded_log in page_obj.object_list
         if uploaded_log.content_hash
     }
-    duplicate_hashes = set()
+    duplicate_keys = set()
     if page_content_hashes:
-        duplicate_hashes = set(
-            list_visible_uploads.filter(deleted_at__isnull=True, content_hash__in=page_content_hashes)
-            .values('content_hash')
+        duplicate_keys = set(
+            UploadedLog.objects
+            .filter(deleted_at__isnull=True, content_hash__in=page_content_hashes)
+            .values('content_hash', 'recipient_user_id')
             .annotate(cnt=Count('id'))
             .filter(cnt__gt=1)
-            .values_list('content_hash', flat=True)
+            .values_list('content_hash', 'recipient_user_id')
+        )
+    for uploaded_log in page_obj.object_list:
+        uploaded_log.is_hash_duplicate = (
+            bool(uploaded_log.content_hash)
+            and (uploaded_log.content_hash, uploaded_log.recipient_user_id) in duplicate_keys
         )
     helper_upload_url = request.build_absolute_uri(reverse('upload_log_for_helper', args=[request.user.username]))
     return render(request, 'uploaded_logs.html', {
         **listing_context,
         'trash_count': trash_count,
-        'duplicate_hashes': duplicate_hashes,
         'helper_upload_url': helper_upload_url,
         'is_trash': False,
         'submit_url_name': 'uploaded_logs',
@@ -235,12 +242,8 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
 
     Used by both the live uploads view and the trash view. Reads `q`, `u`,
     `show_all`, and `page` from request.GET; flips between active and trashed
-    records via the `deleted` keyword.
-
-    The returned dict is suitable for direct splatting into a render() context.
-    It also carries a private `_list_visible_uploads` queryset so callers can
-    derive related data (e.g. duplicate-hash detection) without rebuilding the
-    base filter chain.
+    records via the `deleted` keyword. The returned dict is suitable for direct
+    splatting into a render() context.
     """
     from django.db.models import Q
 
@@ -296,7 +299,6 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         'show_all': show_all,
         'search_query': search_query,
         'pagination_query': urlencode(pagination_params),
-        '_list_visible_uploads': list_visible_uploads,
     }
 
 
@@ -488,7 +490,6 @@ def uploads_trash_view(request):
         return redirect('uploads_trash')
 
     listing_context = _build_uploads_listing_context(request, deleted=True)
-    listing_context.pop('_list_visible_uploads', None)
     return render(request, 'uploaded_logs.html', {
         **listing_context,
         'is_trash': True,

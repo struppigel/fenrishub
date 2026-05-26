@@ -184,6 +184,29 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
 
         self.assertIn('content-hash duplicate-hash', html)
 
+    def test_uploads_list_does_not_flag_duplicates_across_recipients(self):
+        """Same content hash assigned to different helpers is not a duplicate."""
+        UploadedLog.objects.create(
+            upload_id='mine',
+            reddit_username='test_user',
+            original_filename='a.txt',
+            content='same content',
+            recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='theirs',
+            reddit_username='test_user',
+            original_filename='b.txt',
+            content='same content',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'show_all': '1'})
+        html = response.content.decode()
+
+        self.assertNotIn('content-hash duplicate-hash', html)
+
     def test_uploads_list_no_duplicate_class_for_unique_hashes(self):
         UploadedLog.objects.create(
             upload_id='unique-one',
