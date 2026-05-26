@@ -18,7 +18,7 @@ class CachedAnalysisApiViewerScopedTests(TestCase):
         UserProfile.objects.create(user=self.private_user, rule_set_mode='private')
 
         self.log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content='Scan result of Farbar Recovery Scan Tool',
             log_type='FRST',

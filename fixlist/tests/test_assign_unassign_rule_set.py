@@ -40,7 +40,7 @@ class AssignToPrivateUserRefreshesCountsTests(TestCase):
         _add_rule(self.bob, 'private-only-line')
 
         self.log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content=LOG_CONTENT,
             log_type='FRST',

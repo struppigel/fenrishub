@@ -94,7 +94,7 @@
 {% endif %}
 
 <form method="get" action="{% url submit_url_name %}" class="search-filter-form">
-    {% include "partials/search_filter_inputs.html" with search_placeholder="search by reddit user or token" all_users_label="all reddit users" %}
+    {% include "partials/search_filter_inputs.html" with search_placeholder="search by forum user or token" all_users_label="all forum users" %}
     {% if search_query or username_filter %}
     <a href="{% url submit_url_name %}" class="search-filter-clear">clear</a>
     {% endif %}
@@ -132,7 +132,7 @@
         <div style="display: flex; align-items: flex-start; gap: 10px; flex: 1;">
             <input class="fixlist-select" form="bulkFixlistForm" type="checkbox" name="selected_pks" value="{{ fixlist.pk }}" aria-label="select fixlist {{ fixlist.username }}">
             <div>
-                <div class="fixlist-title">u/{{ fixlist.username }}</div>
+                <div class="fixlist-title">{{ fixlist.username }}</div>
                 <div class="fixlist-meta">
                     created {{ fixlist.created_at|date:"Y-m-d H:i" }} | token {{ fixlist.share_token }}{% if not is_trash %} |
                     {% if fixlist.is_public %}

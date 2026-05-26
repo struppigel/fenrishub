@@ -1,4 +1,4 @@
-﻿from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.test import override_settings
 from django.urls import reverse
@@ -19,7 +19,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         with patch('fixlist.forms.from_bytes') as mocked_from_bytes:
             mocked_from_bytes.return_value.best.return_value = _DetectedText()
             form = UploadedLogForm(
-                data={'reddit_username': 'reddit_name'},
+                data={'forum_username': 'forum_user'},
                 files={'log_file': SimpleUploadedFile('sample.txt', b'\x81\x82\x83', content_type='text/plain')},
             )
 
@@ -37,7 +37,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         with patch('fixlist.forms.from_bytes') as mocked_from_bytes:
             mocked_from_bytes.return_value.best.return_value = _DetectedInvalidText()
             form = UploadedLogForm(
-                data={'reddit_username': 'reddit_name'},
+                data={'forum_username': 'forum_user'},
                 files={'log_file': SimpleUploadedFile('Addition.txt', payload, content_type='text/plain')},
             )
 
@@ -55,7 +55,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         with patch('fixlist.forms.from_bytes') as mocked_from_bytes:
             mocked_from_bytes.return_value.best.return_value = _DetectedMojibakeText()
             form = UploadedLogForm(
-                data={'reddit_username': 'reddit_name'},
+                data={'forum_username': 'forum_user'},
                 files={
                     'log_file': SimpleUploadedFile(
                         'Addition.txt',
@@ -72,7 +72,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         source_text = 'Additional scan result of Farbar Recovery Scan Tool\n\x0cRan by nickl'
         payload = source_text.encode('utf-8')
         form = UploadedLogForm(
-            data={'reddit_username': 'reddit_name'},
+            data={'forum_username': 'forum_user'},
             files={
                 'log_file': SimpleUploadedFile(
                     'Addition.txt', payload, content_type='text/plain',
@@ -91,7 +91,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         payload = source_text.encode('utf-16-le')
 
         form = UploadedLogForm(
-            data={'reddit_username': 'reddit_name'},
+            data={'forum_username': 'forum_user'},
             files={'log_file': SimpleUploadedFile('Sample.txt', payload, content_type='text/plain')},
         )
 
@@ -109,13 +109,13 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('Sample.txt', payload, content_type='text/plain'),
             },
         )
 
         self.assertEqual(response.status_code, 302)
-        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        uploaded = UploadedLog.objects.get(forum_username='forum_user')
         self.assertEqual(uploaded.detected_encoding, 'utf-16-le')
         self.assertEqual(uploaded.content, source_text)
 
@@ -123,13 +123,13 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_text': 'Scan result of Farbar Recovery Scan Tool\nRan by nickl',
             },
         )
 
         self.assertEqual(response.status_code, 302)
-        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        uploaded = UploadedLog.objects.get(forum_username='forum_user')
         self.assertEqual(uploaded.detected_encoding, '')
 
     def test_upload_log_view_logs_context_on_unhandled_exception(self):
@@ -141,7 +141,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
                 self.client.post(
                     reverse('upload_log'),
                     {
-                        'reddit_username': 'reddit_name',
+                        'forum_username': 'forum_user',
                         'log_file': SimpleUploadedFile('Addition.txt', b'line-a\nline-b', content_type='text/plain'),
                     },
                     REMOTE_ADDR='203.0.113.10',
@@ -153,12 +153,12 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('sample.txt', b'line-a\nline-b', content_type='text/plain'),
             },
         )
 
-        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        uploaded = UploadedLog.objects.get(forum_username='forum_user')
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse('upload_log'))
         self.assertEqual(uploaded.original_filename, 'sample.txt')
@@ -175,70 +175,70 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(uploaded.total_line_count, 2)
         self.assertEqual(uploaded.count_unknown, 0)  # Unknown type logs are not analyzed
 
-    def test_upload_with_u_slash_prefix_strips_prefix_and_succeeds(self):
+    def test_upload_with_special_chars_in_username_succeeds(self):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'u/reddit_name',
+                'forum_username': 'Some.User Name!',
                 'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
             },
         )
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(UploadedLog.objects.filter(reddit_username='reddit_name').exists())
+        self.assertTrue(UploadedLog.objects.filter(forum_username='Some.User Name!').exists())
 
-    def test_upload_with_slash_u_slash_prefix_strips_prefix_and_succeeds(self):
+    def test_upload_with_single_char_username_succeeds(self):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': '/u/reddit_name',
+                'forum_username': 'x',
                 'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
             },
         )
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(UploadedLog.objects.filter(reddit_username='reddit_name').exists())
+        self.assertTrue(UploadedLog.objects.filter(forum_username='x').exists())
 
     def test_upload_with_hyphenated_username_succeeds(self):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'Dazzling-Substance57',
+                'forum_username': 'Dazzling-Substance57',
                 'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
             },
         )
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(UploadedLog.objects.filter(reddit_username='Dazzling-Substance57').exists())
+        self.assertTrue(UploadedLog.objects.filter(forum_username='Dazzling-Substance57').exists())
 
     def test_upload_to_helper_url_assigns_recipient_channel(self):
         response = self.client.post(
             reverse('upload_log_for_helper', args=['alice']),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
             },
         )
 
         self.assertEqual(response.status_code, 302)
-        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        uploaded = UploadedLog.objects.get(forum_username='forum_user')
         self.assertEqual(uploaded.recipient_user, self.user)
 
     def test_upload_to_unknown_helper_url_falls_back_to_general_channel(self):
         response = self.client.post(
             reverse('upload_log_for_helper', args=['missing_helper']),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
             },
         )
 
         self.assertEqual(response.status_code, 302)
-        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        uploaded = UploadedLog.objects.get(forum_username='forum_user')
         self.assertIsNone(uploaded.recipient_user)
 
     def test_upload_to_unknown_helper_url_shows_general_fallback_message(self):
         response = self.client.post(
             reverse('upload_log_for_helper', args=['missing_helper']),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
             },
             follow=True,
@@ -247,35 +247,33 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Upload was saved to the general channel')
 
-    def test_upload_with_special_chars_in_username_shows_form_error(self):
+    def test_upload_with_too_long_username_shows_form_error(self):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'some user!',
+                'forum_username': 'a' * 101,
                 'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '3-20 letters, numbers, underscores, or hyphens')
         self.assertEqual(UploadedLog.objects.count(), 0)
 
-    def test_upload_with_too_short_username_shows_form_error(self):
+    def test_upload_with_empty_username_shows_form_error(self):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'ab',
+                'forum_username': '',
                 'log_file': SimpleUploadedFile('a.txt', b'data', content_type='text/plain'),
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '3-20 letters, numbers, underscores, or hyphens')
         self.assertEqual(UploadedLog.objects.count(), 0)
 
     def test_upload_log_view_rejects_unsupported_extension(self):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('sample.csv', b'line-a', content_type='text/plain'),
             },
         )
@@ -288,14 +286,14 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('sample.log', b'line-a\nline-b', content_type='text/plain'),
             },
         )
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse('upload_log'))
-        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        uploaded = UploadedLog.objects.get(forum_username='forum_user')
         self.assertEqual(uploaded.original_filename, 'sample.log')
 
     def test_upload_log_view_allows_utf16le_without_bom(self):
@@ -303,20 +301,20 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         response = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('Addition.txt', utf16le_content, content_type='text/plain'),
             },
         )
 
         self.assertEqual(response.status_code, 302)
-        uploaded = UploadedLog.objects.get(reddit_username='reddit_name')
+        uploaded = UploadedLog.objects.get(forum_username='forum_user')
         self.assertNotIn('\x00', uploaded.content)
 
     def test_uploaded_log_form_strips_pasted_invalid_control_characters(self):
         # Tab/newline/CR must be preserved; SOH (\x01) and DEL (\x7f) must be stripped.
         form = UploadedLogForm(
             data={
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_text': 'line1\x01\tline2\x7f\nline3',
             }
         )
@@ -331,7 +329,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         first = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('first.txt', b'line-a', content_type='text/plain'),
             },
             REMOTE_ADDR='203.0.113.10',
@@ -339,7 +337,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         second = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('second.txt', b'line-b', content_type='text/plain'),
             },
             REMOTE_ADDR='203.0.113.10',
@@ -359,7 +357,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         first = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('first.txt', b'line-a', content_type='text/plain'),
             },
             REMOTE_ADDR='203.0.113.10',
@@ -367,7 +365,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         second = self.client.post(
             reverse('upload_log'),
             {
-                'reddit_username': 'reddit_name',
+                'forum_username': 'forum_user',
                 'log_file': SimpleUploadedFile('second.txt', b'line-b', content_type='text/plain'),
             },
             REMOTE_ADDR='203.0.113.10',
@@ -380,7 +378,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_upload_detail_shows_content_hash(self):
         uploaded = UploadedLog.objects.create(
             upload_id='hash-detail',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='x.txt',
             content='payload',
         )
@@ -393,7 +391,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_upload_id_link_has_log_type_class(self):
         UploadedLog.objects.create(
             upload_id='bright-fox',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='frst.txt',
             log_type='FRST',
             content='Scan result of Farbar Recovery Scan Tool\nline',
@@ -418,7 +416,7 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
             with self.subTest(log_type=log_type):
                 UploadedLog.objects.create(
                     upload_id=f'test-log-{i}',
-                    reddit_username='test_user',
+                    forum_username='test_user',
                     original_filename='log.txt',
                     log_type=log_type,
                     content='content',

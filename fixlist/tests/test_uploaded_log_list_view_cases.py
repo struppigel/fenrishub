@@ -1,4 +1,4 @@
-﻿from django.test import TestCase
+from django.test import TestCase
 from django.urls import reverse
 
 from ..models import ClassificationRule, UploadedLog
@@ -15,14 +15,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_uploaded_logs_list_shows_assign_only_for_unassigned_in_show_all_mode(self):
         UploadedLog.objects.create(
             upload_id='assign-visible-general',
-            reddit_username='general_user',
+            forum_username='general_user',
             original_filename='g.txt',
             content='payload',
             recipient_user=None,
         )
         UploadedLog.objects.create(
             upload_id='assign-hidden-owned',
-            reddit_username='alice_user',
+            forum_username='alice_user',
             original_filename='a.txt',
             content='payload',
             recipient_user=self.user,
@@ -36,21 +36,21 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_uploaded_logs_list_shows_own_channel_only_by_default(self):
         UploadedLog.objects.create(
             upload_id='general-log',
-            reddit_username='general_user',
+            forum_username='general_user',
             original_filename='g.txt',
             content='payload',
             recipient_user=None,
         )
         UploadedLog.objects.create(
             upload_id='alice-log',
-            reddit_username='alice_user',
+            forum_username='alice_user',
             original_filename='a.txt',
             content='payload',
             recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='bob-log',
-            reddit_username='bob_user',
+            forum_username='bob_user',
             original_filename='b.txt',
             content='payload',
             recipient_user=self.other_user,
@@ -66,21 +66,21 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_uploaded_logs_list_show_all_includes_other_helpers_uploads(self):
         UploadedLog.objects.create(
             upload_id='general-log-all',
-            reddit_username='general_user',
+            forum_username='general_user',
             original_filename='g.txt',
             content='payload',
             recipient_user=None,
         )
         UploadedLog.objects.create(
             upload_id='alice-log-all',
-            reddit_username='alice_user',
+            forum_username='alice_user',
             original_filename='a.txt',
             content='payload',
             recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='bob-log-all',
-            reddit_username='bob_user',
+            forum_username='bob_user',
             original_filename='b.txt',
             content='payload',
             recipient_user=self.other_user,
@@ -98,7 +98,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         for index in range(9):
             UploadedLog.objects.create(
                 upload_id=f'page-log-{index}',
-                reddit_username='paged_user',
+                forum_username='paged_user',
                 original_filename='x.txt',
                 content='payload',
                 recipient_user=self.user,
@@ -125,14 +125,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         for index in range(9):
             UploadedLog.objects.create(
                 upload_id=f'alice-page-log-{index}',
-                reddit_username='alice_user',
+                forum_username='alice_user',
                 original_filename='x.txt',
                 content='payload',
                 recipient_user=self.user,
             )
         UploadedLog.objects.create(
             upload_id='bob-page-log',
-            reddit_username='bob_user',
+            forum_username='bob_user',
             original_filename='x.txt',
             content='payload',
             recipient_user=self.other_user,
@@ -151,7 +151,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_uploads_list_shows_content_hash(self):
         uploaded = UploadedLog.objects.create(
             upload_id='hash-list',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='x.txt',
             content='payload',
             recipient_user=self.user,
@@ -165,14 +165,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_uploads_list_highlights_duplicate_hashes(self):
         UploadedLog.objects.create(
             upload_id='dup-one',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='a.txt',
             content='duplicate content',
             recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='dup-two',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='b.txt',
             content='duplicate content',
             recipient_user=self.user,
@@ -188,14 +188,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         """Same content hash assigned to different helpers is not a duplicate."""
         UploadedLog.objects.create(
             upload_id='mine',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='a.txt',
             content='same content',
             recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='theirs',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='b.txt',
             content='same content',
             recipient_user=self.other_user,
@@ -210,13 +210,13 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_uploads_list_no_duplicate_class_for_unique_hashes(self):
         UploadedLog.objects.create(
             upload_id='unique-one',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='a.txt',
             content='completely unique content alpha',
         )
         UploadedLog.objects.create(
             upload_id='unique-two',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='b.txt',
             content='completely unique content beta',
         )
@@ -230,13 +230,13 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_merge_selected_uploads_creates_new_record(self):
         first = UploadedLog.objects.create(
             upload_id='amber-meadow',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='first.txt',
             content='aaa',
         )
         second = UploadedLog.objects.create(
             upload_id='azure-harbor',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='second.txt',
             content='bbb',
         )
@@ -261,13 +261,13 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_merge_retains_first_upload_id_and_deletes_originals(self):
         first = UploadedLog.objects.create(
             upload_id='amber-meadow',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='first.txt',
             content='aaa',
         )
         second = UploadedLog.objects.create(
             upload_id='azure-harbor',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='second.txt',
             content='bbb',
         )
@@ -289,7 +289,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_merge_requires_at_least_two_uploads(self):
         only = UploadedLog.objects.create(
             upload_id='mellow-garden',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='single.txt',
             content='payload',
         )
@@ -310,13 +310,13 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_merge_with_different_usernames_renders_selection_page(self):
         first = UploadedLog.objects.create(
             upload_id='opal-ridge',
-            reddit_username='user_one',
+            forum_username='user_one',
             original_filename='first.txt',
             content='aaa',
         )
         second = UploadedLog.objects.create(
             upload_id='onyx-basin',
-            reddit_username='user_two',
+            forum_username='user_two',
             original_filename='second.txt',
             content='bbb',
         )
@@ -339,13 +339,13 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_confirm_merge_with_selected_username_merges_and_redirects_to_list(self):
         first = UploadedLog.objects.create(
             upload_id='opal-ridge',
-            reddit_username='user_one',
+            forum_username='user_one',
             original_filename='first.txt',
             content='aaa',
         )
         second = UploadedLog.objects.create(
             upload_id='onyx-basin',
-            reddit_username='user_two',
+            forum_username='user_two',
             original_filename='second.txt',
             content='bbb',
         )
@@ -363,19 +363,19 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse('uploaded_logs'))
         merged = UploadedLog.objects.get(upload_id='opal-ridge')
-        self.assertEqual(merged.reddit_username, 'user_two')
+        self.assertEqual(merged.forum_username, 'user_two')
         self.assertEqual(merged.content, 'aaa\nbbb')
 
     def test_mergealyze_merges_and_redirects_to_analyzer(self):
         first = UploadedLog.objects.create(
             upload_id='amber-meadow',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='first.txt',
             content='aaa',
         )
         second = UploadedLog.objects.create(
             upload_id='azure-harbor',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='second.txt',
             content='bbb',
         )
@@ -401,7 +401,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_mergealyze_requires_at_least_two_uploads(self):
         only = UploadedLog.objects.create(
             upload_id='mellow-garden',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='single.txt',
             content='payload',
         )
@@ -422,13 +422,13 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_mergealyze_with_different_usernames_renders_selection_page_with_confirm_mergealyze(self):
         first = UploadedLog.objects.create(
             upload_id='opal-ridge',
-            reddit_username='user_one',
+            forum_username='user_one',
             original_filename='first.txt',
             content='aaa',
         )
         second = UploadedLog.objects.create(
             upload_id='onyx-basin',
-            reddit_username='user_two',
+            forum_username='user_two',
             original_filename='second.txt',
             content='bbb',
         )
@@ -450,13 +450,13 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_confirm_mergealyze_with_selected_username_merges_and_redirects_to_analyzer(self):
         first = UploadedLog.objects.create(
             upload_id='opal-ridge',
-            reddit_username='user_one',
+            forum_username='user_one',
             original_filename='first.txt',
             content='aaa',
         )
         second = UploadedLog.objects.create(
             upload_id='onyx-basin',
-            reddit_username='user_two',
+            forum_username='user_two',
             original_filename='second.txt',
             content='bbb',
         )
@@ -477,26 +477,26 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
             f"{reverse('log_analyzer')}?upload_id=opal-ridge",
         )
         merged = UploadedLog.objects.get(upload_id='opal-ridge')
-        self.assertEqual(merged.reddit_username, 'user_two')
+        self.assertEqual(merged.forum_username, 'user_two')
         self.assertEqual(merged.content, 'aaa\nbbb')
         self.assertEqual(merged.recipient_user, self.user)
 
     def test_delete_selected_uploads_moves_selected_to_trash(self):
         first = UploadedLog.objects.create(
             upload_id='drift-spark',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='first.txt',
             content='aaa',
         )
         second = UploadedLog.objects.create(
             upload_id='echo-meadow',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='second.txt',
             content='bbb',
         )
         keep = UploadedLog.objects.create(
             upload_id='frost-cove',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='keep.txt',
             content='ccc',
         )
@@ -522,7 +522,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_delete_selected_uploads_requires_selection(self):
         existing = UploadedLog.objects.create(
             upload_id='glint-grove',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='only.txt',
             content='payload',
         )
@@ -543,14 +543,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_delete_selected_uploads_rejects_other_helpers_assigned_uploads(self):
         own = UploadedLog.objects.create(
             upload_id='delete-selected-own',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='own.txt',
             content='aaa',
             recipient_user=self.user,
         )
         other = UploadedLog.objects.create(
             upload_id='delete-selected-foreign',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='foreign.txt',
             content='bbb',
             recipient_user=self.other_user,
@@ -577,14 +577,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_bulk_rescan_recalculates_stats_for_selected_uploads(self):
         first = UploadedLog.objects.create(
             upload_id='silent-river',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='first.txt',
             log_type='FRST',
             content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE\nOTHER-LINE',
         )
         second = UploadedLog.objects.create(
             upload_id='rapid-harbor',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='second.txt',
             log_type='FRST',
             content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE',
@@ -620,14 +620,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_bulk_rescan_only_rescans_selected_uploads(self):
         first = UploadedLog.objects.create(
             upload_id='silent-river',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='first.txt',
             log_type='FRST',
             content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE\nOTHER-LINE',
         )
         second = UploadedLog.objects.create(
             upload_id='rapid-harbor',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='second.txt',
             log_type='FRST',
             content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE',
@@ -657,14 +657,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_username_filter_shows_only_matching_uploads(self):
         UploadedLog.objects.create(
             upload_id='amber-wolf',
-            reddit_username='alice_user',
+            forum_username='alice_user',
             original_filename='a.txt',
             content='aaa',
             recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='azure-bear',
-            reddit_username='bob_user',
+            forum_username='bob_user',
             original_filename='b.txt',
             content='bbb',
             recipient_user=self.user,
@@ -680,14 +680,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_username_filter_empty_shows_all_uploads(self):
         UploadedLog.objects.create(
             upload_id='amber-wolf',
-            reddit_username='alice_user',
+            forum_username='alice_user',
             original_filename='a.txt',
             content='aaa',
             recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='azure-bear',
-            reddit_username='bob_user',
+            forum_username='bob_user',
             original_filename='b.txt',
             content='bbb',
             recipient_user=self.user,
@@ -703,14 +703,14 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_all_usernames_passed_to_context(self):
         UploadedLog.objects.create(
             upload_id='amber-wolf',
-            reddit_username='alice_user',
+            forum_username='alice_user',
             original_filename='a.txt',
             content='aaa',
             recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='azure-bear',
-            reddit_username='bob_user',
+            forum_username='bob_user',
             original_filename='b.txt',
             content='bbb',
             recipient_user=self.user,
@@ -724,11 +724,11 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
 
     def test_search_filters_by_upload_id(self):
         UploadedLog.objects.create(
-            upload_id='amber-wolf', reddit_username='user1',
+            upload_id='amber-wolf', forum_username='user1',
             original_filename='a.txt', content='aaa', recipient_user=self.user,
         )
         UploadedLog.objects.create(
-            upload_id='azure-bear', reddit_username='user2',
+            upload_id='azure-bear', forum_username='user2',
             original_filename='b.txt', content='bbb', recipient_user=self.user,
         )
         self.client.login(username='alice', password='password123')
@@ -738,13 +738,13 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'amber-wolf')
         self.assertNotContains(response, 'azure-bear')
 
-    def test_search_filters_by_reddit_username(self):
+    def test_search_filters_by_forum_username(self):
         UploadedLog.objects.create(
-            upload_id='amber-wolf', reddit_username='alice_user',
+            upload_id='amber-wolf', forum_username='alice_user',
             original_filename='a.txt', content='aaa', recipient_user=self.user,
         )
         UploadedLog.objects.create(
-            upload_id='azure-bear', reddit_username='bob_user',
+            upload_id='azure-bear', forum_username='bob_user',
             original_filename='b.txt', content='bbb', recipient_user=self.user,
         )
         self.client.login(username='alice', password='password123')
@@ -756,11 +756,11 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
 
     def test_search_filters_by_assignee_username(self):
         UploadedLog.objects.create(
-            upload_id='amber-wolf', reddit_username='user1',
+            upload_id='amber-wolf', forum_username='user1',
             original_filename='a.txt', content='aaa', recipient_user=self.user,
         )
         UploadedLog.objects.create(
-            upload_id='azure-bear', reddit_username='user2',
+            upload_id='azure-bear', forum_username='user2',
             original_filename='b.txt', content='bbb', recipient_user=self.other_user,
         )
         self.client.login(username='alice', password='password123')

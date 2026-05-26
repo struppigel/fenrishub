@@ -98,7 +98,7 @@ After submission, the app stores the content as an `UploadedLog`, detects the lo
 Notes:
 
 - anonymous uploads are rate-limited by IP
-- usernames are expected in Reddit-style format without the `u/` prefix
+- forum usernames are 1-100 characters
 - uploads can be FRST, Addition, combined FRST+Addition, Fixlog, or Unknown
 
 ## 6. Review uploaded logs
@@ -108,7 +108,7 @@ As an authenticated user, go to `/uploads/`.
 From there you can:
 
 - open a single upload
-- rename the stored Reddit username on an upload
+- rename the stored forum username on an upload
 - select multiple uploads and merge them
 - compare two uploads with the diff view
 - move uploads to trash and restore them later

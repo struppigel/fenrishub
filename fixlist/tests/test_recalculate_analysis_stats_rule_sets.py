@@ -40,7 +40,7 @@ class RecalcCreatesBothCachesForPrivateRecipientTests(TestCase):
 
     def test_private_recipient_writes_two_cache_rows_and_effective_counts(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content=LOG_CONTENT,
             log_type='FRST',
@@ -78,7 +78,7 @@ class RecalcSharedRecipientWritesSingleCacheRowTests(TestCase):
 
     def test_shared_recipient_only_writes_shared_cache(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content=LOG_CONTENT,
             log_type='FRST',
@@ -95,7 +95,7 @@ class RecalcSharedRecipientWritesSingleCacheRowTests(TestCase):
 class StatsSnapshotZeroForNonAnalyzableTests(TestCase):
     def test_unknown_log_has_zero_malware_counts(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='unknown.txt',
             content='not an FRST log',
             log_type='Unknown',

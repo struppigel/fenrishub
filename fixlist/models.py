@@ -395,7 +395,7 @@ class UploadedLog(models.Model):
     ]
 
     upload_id = models.CharField(max_length=64, unique=True, db_index=True)
-    reddit_username = models.CharField(max_length=20, db_index=True)
+    forum_username = models.CharField(max_length=100, db_index=True)
     original_filename = models.CharField(max_length=255)
     log_type = models.CharField(max_length=16, choices=LOG_TYPE_CHOICES, default='Unknown')
     is_incomplete = models.BooleanField(default=False)
@@ -453,15 +453,15 @@ class UploadedLog(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f'{self.upload_id} ({self.reddit_username})'
+        return f'{self.upload_id} ({self.forum_username})'
 
     def clean(self):
-        username = (self.reddit_username or '').strip()
-        if not re.fullmatch(r'[A-Za-z0-9_-]{3,20}', username):
-            raise ValidationError({'reddit_username': 'Use 3-20 letters, numbers, underscores, or hyphens.'})
+        username = (self.forum_username or '').strip()
+        if not (1 <= len(username) <= 100):
+            raise ValidationError({'forum_username': 'Username must be 1-100 characters.'})
         if not (self.content or '').strip():
             raise ValidationError({'content': 'Uploaded content cannot be empty.'})
-        self.reddit_username = username
+        self.forum_username = username
 
     @staticmethod
     def compute_content_hash(content: str) -> str:
@@ -953,7 +953,7 @@ def _auto_assign_new_uploaded_log_to_infection_cases(sender, instance, created, 
         return
 
     candidate_cases = InfectionCase.objects.filter(
-        username=instance.reddit_username,
+        username=instance.forum_username,
         auto_assign_new_items=True,
         is_training=False,
         status=InfectionCase.STATUS_OPEN,

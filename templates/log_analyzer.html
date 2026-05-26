@@ -178,7 +178,7 @@
     <select id="uploadSourceSelect">
         <option value="">select upload id</option>
         {% for uploaded_log in uploaded_logs %}
-        <option value="{{ uploaded_log.upload_id }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }}</option>
+        <option value="{{ uploaded_log.upload_id }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }}</option>
         {% endfor %}
     </select>
     <span id="uploadLoadStatus" class="muted" aria-live="polite"></span>

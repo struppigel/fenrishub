@@ -21,7 +21,7 @@ class StatSnapshotSignalTests(TestCase):
         helper = User.objects.create_user(username='alice', password='pw')
 
         log = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='log.txt',
             content='line one',
             created_by=helper,
@@ -34,7 +34,7 @@ class StatSnapshotSignalTests(TestCase):
 
     def test_anonymous_upload_snapshot_has_blank_owner(self):
         log = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='log.txt',
             content='content',
         )
@@ -44,7 +44,7 @@ class StatSnapshotSignalTests(TestCase):
 
     def test_fixlog_recalculation_updates_snapshot(self):
         log = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='fixlog.txt',
             content=_make_fixlog_content(success=3, not_found=1, error=2),
             log_type='Fixlog',
@@ -61,7 +61,7 @@ class StatSnapshotSignalTests(TestCase):
     def test_snapshot_survives_uploaded_log_hard_delete(self):
         helper = User.objects.create_user(username='alice', password='pw')
         log = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='log.txt',
             content='line',
             created_by=helper,
@@ -118,7 +118,7 @@ class StatisticsViewTests(TestCase):
 
     def test_view_aggregates_within_default_window(self):
         UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='a.txt',
             content='x',
             created_by=self.helper,
@@ -140,7 +140,7 @@ class StatisticsViewTests(TestCase):
 
     def test_date_range_filter_excludes_old_data(self):
         log = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='a.txt',
             content='x',
             created_by=self.helper,
@@ -166,19 +166,19 @@ class StatisticsViewTests(TestCase):
     def test_logs_grouped_by_assigned_helper(self):
         bob = User.objects.create_user(username='bob', password='pw')
         UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='a.txt',
             content='x',
             recipient_user=self.helper,
         )
         UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='b.txt',
             content='x',
             recipient_user=self.helper,
         )
         UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='c.txt',
             content='x',
             recipient_user=bob,
@@ -193,13 +193,13 @@ class StatisticsViewTests(TestCase):
     def test_logs_per_helper_series_is_per_day_with_zero_fill(self):
         bob = User.objects.create_user(username='bob', password='pw')
         log_a = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='a.txt',
             content='x',
             recipient_user=self.helper,
         )
         log_b = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='b.txt',
             content='x',
             recipient_user=bob,
@@ -227,7 +227,7 @@ class StatisticsViewTests(TestCase):
 
     def test_unassigned_uploads_bucketed(self):
         UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='a.txt',
             content='x',
         )
@@ -238,7 +238,7 @@ class StatisticsViewTests(TestCase):
 
     def test_fixlog_summary_sums_success(self):
         UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='fixlog.txt',
             content=_make_fixlog_content(success=5, not_found=2, error=1),
             created_by=self.helper,
@@ -258,7 +258,7 @@ class StatisticsViewTests(TestCase):
         # Three FRST logs with known%/unknown% of 100/0, 50/50, 0/100 → mean known = 50.
         for i, (total, unknown) in enumerate([(10, 0), (10, 5), (10, 10)]):
             log = UploadedLog.objects.create(
-                reddit_username='redditor',
+                forum_username='forumuser',
                 original_filename=f'frst-{i}.txt',
                 content='x',
                 created_by=self.helper,
@@ -270,7 +270,7 @@ class StatisticsViewTests(TestCase):
 
         # A non-analyzed Fixlog should be ignored.
         fixlog_log = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='fixlog.txt',
             content='x',
             created_by=self.helper,
@@ -282,7 +282,7 @@ class StatisticsViewTests(TestCase):
 
         # An analyzed log with zero total_line_count must not divide by zero.
         empty_log = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='empty.txt',
             content='x',
             created_by=self.helper,
@@ -309,7 +309,7 @@ class StatisticsViewTests(TestCase):
 
     def test_uploads_per_day_series_covers_full_range_with_zero_fill(self):
         log = UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='a.txt',
             content='x',
             created_by=self.helper,
@@ -336,14 +336,14 @@ class StatisticsViewTests(TestCase):
     def test_malware_by_log_type_returns_percentage(self):
         for i in range(3):
             UploadedLog.objects.create(
-                reddit_username='redditor',
+                forum_username='forumuser',
                 original_filename=f'frst-{i}.txt',
                 content='x',
                 created_by=self.helper,
                 log_type='FRST',
             )
         UploadedLog.objects.create(
-            reddit_username='redditor',
+            forum_username='forumuser',
             original_filename='addition.txt',
             content='x',
             created_by=self.helper,

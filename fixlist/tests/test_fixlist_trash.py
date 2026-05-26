@@ -572,7 +572,7 @@ class FixlistPurgeOldTrashTests(TestCase):
     def test_trashing_fixlist_also_purges_old_upload_trash(self):
         old_upload = UploadedLog.objects.create(
             upload_id="old-trash",
-            reddit_username="test_user",
+            forum_username="test_user",
             original_filename="x.txt",
             content="payload",
             deleted_at=self._old_deleted_at(),
@@ -626,7 +626,7 @@ class FixlistPurgeOldTrashTests(TestCase):
     def test_purge_command_hard_deletes_uploads_older_than_30_days(self):
         old_upload = UploadedLog.objects.create(
             upload_id="ancient-upload",
-            reddit_username="test_user",
+            forum_username="test_user",
             original_filename="x.txt",
             content="payload",
         )

@@ -15,7 +15,7 @@ def make_superuser(username="admin", password="password123"):
 def make_uploaded_log(upload_id="test-log", **overrides):
     defaults = dict(
         upload_id=upload_id,
-        reddit_username="reddit_name",
+        forum_username="forum_user",
         original_filename="log.txt",
         content="payload",
     )

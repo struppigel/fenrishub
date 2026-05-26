@@ -67,17 +67,17 @@
     <div>{{ uploaded_log.upload_id }}</div>
     <div class="meta-key">filename</div>
     <div>{{ uploaded_log.original_filename }}</div>
-    <div class="meta-key">reddit</div>
+    <div class="meta-key">forum user</div>
     <div style="display: flex; align-items: center; gap: 6px;">
-        <span id="redditDisplay">u/{{ uploaded_log.reddit_username }}</span>
+        <span id="forumUserDisplay">{{ uploaded_log.forum_username }}</span>
         {% if not uploaded_log.deleted_at %}
-        <button type="button" id="redditEditButton" style="padding: 2px 8px;" onclick="document.getElementById('redditDisplay').hidden=true;this.hidden=true;document.getElementById('redditEditForm').style.display='flex';document.getElementById('redditInput').focus();">edit</button>
-        <form method="post" id="redditEditForm" style="display: none; align-items: center; gap: 6px; margin: 0;">
+        <button type="button" id="forumUserEditButton" style="padding: 2px 8px;" onclick="document.getElementById('forumUserDisplay').hidden=true;this.hidden=true;document.getElementById('forumUserEditForm').style.display='flex';document.getElementById('forumUserInput').focus();">edit</button>
+        <form method="post" id="forumUserEditForm" style="display: none; align-items: center; gap: 6px; margin: 0;">
             {% csrf_token %}
-            <input type="hidden" name="action" value="rename_reddit">
-            <span>u/</span><input type="text" id="redditInput" name="reddit_username" value="{{ uploaded_log.reddit_username }}" style="background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); padding: 2px 6px; font-family: inherit; font-size: inherit; width: 160px;">
+            <input type="hidden" name="action" value="rename_forum_username">
+            <input type="text" id="forumUserInput" name="forum_username" maxlength="100" value="{{ uploaded_log.forum_username }}" style="background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); padding: 2px 6px; font-family: inherit; font-size: inherit; width: 160px;">
             <button type="submit" style="padding: 2px 8px;">save</button>
-            <button type="button" style="padding: 2px 8px;" onclick="document.getElementById('redditEditForm').style.display='none';document.getElementById('redditDisplay').hidden=false;document.getElementById('redditEditButton').hidden=false;">cancel</button>
+            <button type="button" style="padding: 2px 8px;" onclick="document.getElementById('forumUserEditForm').style.display='none';document.getElementById('forumUserDisplay').hidden=false;document.getElementById('forumUserEditButton').hidden=false;">cancel</button>
         </form>
         {% endif %}
     </div>

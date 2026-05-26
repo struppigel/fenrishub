@@ -6,17 +6,17 @@
 
 {% block content %}
 <p style="margin-bottom: 12px; font-size: 12px; color: var(--la-text-primary);">
-    Some selected items use another username. To keep one username per case, they will be changed to <strong>u/{{ infection_case.username }}</strong>.
+    Some selected items use another username. To keep one username per case, they will be changed to <strong>{{ infection_case.username }}</strong>.
 </p>
 
 <div class="warning-box">
     <strong>selected items with mismatched username</strong>
     <ul style="margin-left: 20px; margin-top: 8px; font-size: 12px; color: var(--la-text-primary);">
         {% for log in mismatched_logs %}
-        <li>LOG {{ log.upload_id }} | u/{{ log.reddit_username }}</li>
+        <li>LOG {{ log.upload_id }} | {{ log.forum_username }}</li>
         {% endfor %}
         {% for fixlist in mismatched_fixlists %}
-        <li>FIXLIST #{{ fixlist.pk }} | u/{{ fixlist.username }}</li>
+        <li>FIXLIST #{{ fixlist.pk }} | {{ fixlist.username }}</li>
         {% endfor %}
     </ul>
 </div>

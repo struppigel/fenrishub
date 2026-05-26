@@ -1,4 +1,4 @@
-﻿from django.test import TestCase
+from django.test import TestCase
 from django.urls import reverse
 
 from ..models import UploadedLog
@@ -15,13 +15,13 @@ class UploadedLogDiffViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_diff_view_returns_200_for_two_valid_uploads(self):
         log1 = UploadedLog.objects.create(
             upload_id='haze-north',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='a.txt',
             content='line1\nline2\nline3',
         )
         log2 = UploadedLog.objects.create(
             upload_id='haze-south',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='b.txt',
             content='line1\nchanged\nline3',
         )
@@ -36,13 +36,13 @@ class UploadedLogDiffViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_diff_view_marks_changed_and_equal_rows(self):
         log1 = UploadedLog.objects.create(
             upload_id='iron-peak',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='a.txt',
             content='same\nold line\nsame',
         )
         log2 = UploadedLog.objects.create(
             upload_id='iron-vale',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='b.txt',
             content='same\nnew line\nsame',
         )
@@ -59,13 +59,13 @@ class UploadedLogDiffViewTests(UploadedLogSharedSetupMixin, TestCase):
     def test_diff_view_identical_logs_show_zero_changed(self):
         log1 = UploadedLog.objects.create(
             upload_id='jade-ridge',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='a.txt',
             content='identical\ncontent',
         )
         log2 = UploadedLog.objects.create(
             upload_id='jade-coast',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='b.txt',
             content='identical\ncontent',
         )

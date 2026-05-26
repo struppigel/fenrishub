@@ -201,10 +201,10 @@ def create_fixlist_view(request):
             source_uploaded_log = UploadedLog.objects.filter(
                 upload_id=source_upload_id,
                 deleted_at__isnull=True,
-            ).only('id', 'reddit_username').first()
+            ).only('id', 'forum_username').first()
 
-        if not username and source_uploaded_log and source_uploaded_log.reddit_username:
-            username = source_uploaded_log.reddit_username
+        if not username and source_uploaded_log and source_uploaded_log.forum_username:
+            username = source_uploaded_log.forum_username
         if not username:
             username = 'Unknown'
 
@@ -219,16 +219,16 @@ def create_fixlist_view(request):
 
         return redirect('view_fixlist', pk=fixlist.pk)
 
-    prefill_username = (request.session.pop('analyzer_last_reddit_username', '') or '').strip()
+    prefill_username = (request.session.pop('analyzer_last_forum_username', '') or '').strip()
     prefill_upload_id = (request.session.pop('analyzer_last_upload_id', '') or '').strip()
 
     if not prefill_username and prefill_upload_id:
         prefill_upload = UploadedLog.objects.filter(
             upload_id=prefill_upload_id,
             deleted_at__isnull=True,
-        ).only('reddit_username').first()
-        if prefill_upload and prefill_upload.reddit_username:
-            prefill_username = prefill_upload.reddit_username
+        ).only('forum_username').first()
+        if prefill_upload and prefill_upload.forum_username:
+            prefill_username = prefill_upload.forum_username
 
     return render(request, 'create_fixlist.html', {
         'prefill_username': prefill_username,

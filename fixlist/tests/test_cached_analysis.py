@@ -13,7 +13,7 @@ FRST_LOG_CONTENT = 'Scan result of Farbar Recovery Scan Tool\nrandom-line\nanoth
 class RecalculateAnalysisStatsCacheTests(TestCase):
     def test_creates_cache_row_for_analyzable_log(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content=FRST_LOG_CONTENT,
             log_type='FRST',
@@ -29,7 +29,7 @@ class RecalculateAnalysisStatsCacheTests(TestCase):
 
     def test_overwrites_existing_cache_row(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content=FRST_LOG_CONTENT,
             log_type='FRST',
@@ -44,7 +44,7 @@ class RecalculateAnalysisStatsCacheTests(TestCase):
 
     def test_skips_cache_for_non_analyzable_log(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='unknown.txt',
             content='not an FRST log',
             log_type='Unknown',
@@ -55,7 +55,7 @@ class RecalculateAnalysisStatsCacheTests(TestCase):
 
     def test_removes_stale_cache_when_type_becomes_non_analyzable(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content=FRST_LOG_CONTENT,
             log_type='FRST',
@@ -71,7 +71,7 @@ class RecalculateAnalysisStatsCacheTests(TestCase):
 
     def test_cascade_delete_with_uploaded_log(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content=FRST_LOG_CONTENT,
             log_type='FRST',
@@ -89,7 +89,7 @@ class UploadedLogCachedAnalysisApiTests(TestCase):
 
     def _make_cached_log(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content=FRST_LOG_CONTENT,
             log_type='FRST',
@@ -121,7 +121,7 @@ class UploadedLogCachedAnalysisApiTests(TestCase):
 
     def test_reports_no_cache_when_row_missing(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='unknown.txt',
             content='just text',
         )
@@ -165,7 +165,7 @@ class AnalyzeLogApiCacheWriteTests(TestCase):
 
     def test_analyze_api_upserts_cache_for_known_upload(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content=FRST_LOG_CONTENT,
             log_type='FRST',

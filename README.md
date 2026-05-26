@@ -48,7 +48,7 @@ Audit record for public fixlist access, including timestamp, IP address, and use
 
 ### UploadedLog
 
-Stored raw log content with Reddit username, original filename, memorable `upload_id`, content hash, detected log type, incomplete-log flag, and cached analysis counters.
+Stored raw log content with forum username, original filename, memorable `upload_id`, content hash, detected log type, incomplete-log flag, and cached analysis counters.
 
 ### ClassificationRule
 

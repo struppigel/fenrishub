@@ -39,7 +39,7 @@ class FixlistCrudViewTests(TestCase):
     def test_create_fixlist_links_source_upload_when_present(self):
         upload = UploadedLog.objects.create(
             upload_id="linked-log",
-            reddit_username="linked_user",
+            forum_username="linked_user",
             original_filename="FRST.txt",
             content="line-1",
         )
@@ -61,7 +61,7 @@ class FixlistCrudViewTests(TestCase):
     def test_create_fixlist_derives_username_from_source_upload(self):
         upload = UploadedLog.objects.create(
             upload_id="derive-username",
-            reddit_username="derived_user",
+            forum_username="derived_user",
             original_filename="FRST.txt",
             content="line-1",
         )
@@ -220,7 +220,7 @@ class FixlistCrudViewTests(TestCase):
     def test_view_fixlist_context_includes_guest_preview_url(self):
         upload = UploadedLog.objects.create(
             upload_id="preview-source",
-            reddit_username="preview_user",
+            forum_username="preview_user",
             original_filename="FRST.txt",
             content="Running from C:\\Users\\George\\Desktop\\FRST64.exe\nline-1",
         )
@@ -251,7 +251,7 @@ class FixlistCrudViewTests(TestCase):
     def test_view_fixlist_context_uses_empty_frst_run_path_when_header_missing(self):
         upload = UploadedLog.objects.create(
             upload_id="preview-no-path",
-            reddit_username="preview_user",
+            forum_username="preview_user",
             original_filename="FRST.txt",
             content="line-1",
         )
@@ -311,7 +311,7 @@ class FixlistCrudViewTests(TestCase):
     def test_create_fixlist_prefills_username_from_last_loaded_upload_session(self):
         upload = UploadedLog.objects.create(
             upload_id="amber-raven",
-            reddit_username="session_user",
+            forum_username="session_user",
             original_filename="FRST.txt",
             content="line-1",
         )

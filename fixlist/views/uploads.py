@@ -91,7 +91,7 @@ def upload_log_view(request, helper_username=None):
                     )
                     content = content.replace('\x00', '')
                 created_log = UploadedLog.objects.create(
-                    reddit_username=form.cleaned_data['reddit_username'],
+                    forum_username=form.cleaned_data['forum_username'],
                     original_filename=filename,
                     content=content,
                     recipient_user=recipient_user,
@@ -132,7 +132,7 @@ def upload_log_view(request, helper_username=None):
             raise
     else:
         prefill = request.GET.get('u', '')
-        form = UploadedLogForm(initial={'reddit_username': prefill} if prefill else None)
+        form = UploadedLogForm(initial={'forum_username': prefill} if prefill else None)
 
     uploaded_log_id = request.session.pop('upload_success_id', None)
     uploaded_original_filename = request.session.pop('upload_success_filename', None)
@@ -264,11 +264,11 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         .defer('content')
     )
     if username_filter:
-        uploads = uploads.filter(reddit_username=username_filter)
+        uploads = uploads.filter(forum_username=username_filter)
     if search_query:
         uploads = uploads.filter(
             Q(upload_id__icontains=search_query)
-            | Q(reddit_username__icontains=search_query)
+            | Q(forum_username__icontains=search_query)
             | Q(recipient_user__username__icontains=search_query)
         )
     if deleted:
@@ -286,9 +286,9 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
 
     all_usernames = (
         list_visible_uploads.filter(**deleted_filter)
-        .values_list('reddit_username', flat=True)
+        .values_list('forum_username', flat=True)
         .distinct()
-        .order_by('reddit_username')
+        .order_by('forum_username')
     )
 
     return {
@@ -334,11 +334,11 @@ def view_uploaded_log(request, upload_id):
             messages.success(request, f'Upload {upload_id} restored.')
             return redirect('view_uploaded_log', upload_id=upload_id)
 
-        if action == 'rename_reddit':
-            new_username = request.POST.get('reddit_username', '').strip()
+        if action == 'rename_forum_username':
+            new_username = request.POST.get('forum_username', '').strip()
             if new_username:
-                uploaded_log.reddit_username = new_username
-                uploaded_log.save(update_fields=['reddit_username'])
+                uploaded_log.forum_username = new_username
+                uploaded_log.save(update_fields=['forum_username'])
             return redirect('view_uploaded_log', upload_id=upload_id)
 
         if action == 'assign_to_me':
@@ -510,13 +510,13 @@ def uploaded_log_content_api(request, upload_id):
     )
 
     request.session['analyzer_last_upload_id'] = uploaded_log.upload_id
-    request.session['analyzer_last_reddit_username'] = uploaded_log.reddit_username
+    request.session['analyzer_last_forum_username'] = uploaded_log.forum_username
 
     return JsonResponse(
         {
             'upload_id': uploaded_log.upload_id,
             'content': uploaded_log.content,
             'original_filename': uploaded_log.original_filename,
-            'reddit_username': uploaded_log.reddit_username,
+            'forum_username': uploaded_log.forum_username,
         }
     )

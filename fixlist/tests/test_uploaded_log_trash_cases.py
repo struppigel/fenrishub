@@ -24,7 +24,7 @@ class TrashViewTests(TestCase):
             kwargs['recipient_user'] = self.user
         return UploadedLog.objects.create(
             upload_id=upload_id,
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='x.txt',
             content='payload',
             **kwargs,
@@ -316,35 +316,35 @@ class TrashViewTests(TestCase):
         self.assertContains(response, 'amber-meadow')
         self.assertNotContains(response, 'quiet-forest')
 
-    def test_trash_search_filters_by_reddit_username(self):
+    def test_trash_search_filters_by_forum_username(self):
         from django.utils import timezone as tz
         UploadedLog.objects.create(
-            upload_id='hit-by-reddit',
-            reddit_username='alice_redditor',
+            upload_id='hit-by-forum',
+            forum_username='alice_user',
             original_filename='x.txt',
             content='payload',
             recipient_user=self.user,
             deleted_at=tz.now(),
         )
         UploadedLog.objects.create(
-            upload_id='miss-by-reddit',
-            reddit_username='someone_else',
+            upload_id='miss-by-forum',
+            forum_username='someone_else',
             original_filename='x.txt',
             content='payload',
             recipient_user=self.user,
             deleted_at=tz.now(),
         )
 
-        response = self.client.get(reverse('uploads_trash'), {'q': 'alice_redditor'})
+        response = self.client.get(reverse('uploads_trash'), {'q': 'alice_user'})
 
-        self.assertContains(response, 'hit-by-reddit')
-        self.assertNotContains(response, 'miss-by-reddit')
+        self.assertContains(response, 'hit-by-forum')
+        self.assertNotContains(response, 'miss-by-forum')
 
-    def test_trash_user_dropdown_filters_by_reddit_username(self):
+    def test_trash_user_dropdown_filters_by_forum_username(self):
         from django.utils import timezone as tz
         UploadedLog.objects.create(
             upload_id='for-zed',
-            reddit_username='zed',
+            forum_username='zed',
             original_filename='x.txt',
             content='payload',
             recipient_user=self.user,
@@ -352,7 +352,7 @@ class TrashViewTests(TestCase):
         )
         UploadedLog.objects.create(
             upload_id='for-yan',
-            reddit_username='yan',
+            forum_username='yan',
             original_filename='x.txt',
             content='payload',
             recipient_user=self.user,
@@ -446,14 +446,14 @@ class TrashViewTests(TestCase):
         from django.utils import timezone as tz
         active = UploadedLog.objects.create(
             upload_id='active-frst',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='a.txt',
             log_type='FRST',
             content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE',
         )
         trashed = UploadedLog.objects.create(
             upload_id='trashed-frst',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='b.txt',
             log_type='FRST',
             content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE',
@@ -485,7 +485,7 @@ class PurgeOldTrashTests(TestCase):
     def _make_log(self, upload_id, **kwargs):
         return UploadedLog.objects.create(
             upload_id=upload_id,
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='x.txt',
             content='payload',
             **kwargs,

@@ -44,7 +44,7 @@ class InfectionCaseViewTests(TestCase):
 
         created_log = UploadedLog.objects.create(
             upload_id='auto-link-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='auto.txt',
             content='content',
             recipient_user=self.user,
@@ -59,7 +59,7 @@ class InfectionCaseViewTests(TestCase):
 
         created_log = UploadedLog.objects.create(
             upload_id='auto-link-unassigned-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='auto-unassigned.txt',
             content='content',
             recipient_user=None,
@@ -75,7 +75,7 @@ class InfectionCaseViewTests(TestCase):
 
         created_log = UploadedLog.objects.create(
             upload_id='auto-link-unassigned-ambiguous-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='auto-unassigned-ambiguous.txt',
             content='content',
             recipient_user=None,
@@ -91,7 +91,7 @@ class InfectionCaseViewTests(TestCase):
 
         created_log = UploadedLog.objects.create(
             upload_id='auto-link-off-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='auto-off.txt',
             content='content',
             recipient_user=self.user,
@@ -111,7 +111,7 @@ class InfectionCaseViewTests(TestCase):
 
         created_log = UploadedLog.objects.create(
             upload_id='auto-link-closed-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='auto-closed.txt',
             content='content',
             recipient_user=self.user,
@@ -124,21 +124,21 @@ class InfectionCaseViewTests(TestCase):
     def test_create_case_view_lists_usernames_from_scoped_uploaded_logs(self):
         UploadedLog.objects.create(
             upload_id='username-choice-own',
-            reddit_username='own_user',
+            forum_username='own_user',
             original_filename='own.txt',
             content='content',
             recipient_user=self.user,
         )
         UploadedLog.objects.create(
             upload_id='username-choice-general',
-            reddit_username='general_user',
+            forum_username='general_user',
             original_filename='general.txt',
             content='content',
             recipient_user=None,
         )
         UploadedLog.objects.create(
             upload_id='username-choice-other-helper',
-            reddit_username='other_helper_user',
+            forum_username='other_helper_user',
             original_filename='other.txt',
             content='content',
             recipient_user=self.other_user,
@@ -160,21 +160,21 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         in_scope_log = UploadedLog.objects.create(
             upload_id='seed-log-owned',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='owned.txt',
             content='content',
             recipient_user=self.user,
         )
         general_log = UploadedLog.objects.create(
             upload_id='seed-log-general',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='general.txt',
             content='content',
             recipient_user=None,
         )
         UploadedLog.objects.create(
             upload_id='seed-log-other-helper',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='other.txt',
             content='content',
             recipient_user=self.other_user,
@@ -198,7 +198,7 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         general_log = UploadedLog.objects.create(
             upload_id='seed-general-assign',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='general.txt',
             content='content',
             recipient_user=None,
@@ -216,14 +216,14 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         unassigned_log = UploadedLog.objects.create(
             upload_id='unassigned-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='log.txt',
             content='content',
             recipient_user=None,
         )
         assigned_log = UploadedLog.objects.create(
             upload_id='assigned-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='log2.txt',
             content='content',
             recipient_user=self.user,
@@ -243,7 +243,7 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         mismatched_log = UploadedLog.objects.create(
             upload_id='confirm-log',
-            reddit_username='other_name',
+            forum_username='other_name',
             original_filename='x.txt',
             content='content',
             recipient_user=self.user,
@@ -265,14 +265,14 @@ class InfectionCaseViewTests(TestCase):
 
         self.assertEqual(confirm_response.status_code, 302)
         mismatched_log.refresh_from_db()
-        self.assertEqual(mismatched_log.reddit_username, 'target_user')
+        self.assertEqual(mismatched_log.forum_username, 'target_user')
         self.assertTrue(InfectionCaseLog.objects.filter(case=case, uploaded_log=mismatched_log).exists())
 
     def test_case_timeline_is_sorted_by_item_creation_time(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         uploaded_log = UploadedLog.objects.create(
             upload_id='timeline-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='log.txt',
             content='content',
             recipient_user=self.user,
@@ -323,7 +323,7 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         uploaded_log = UploadedLog.objects.create(
             upload_id='unlink-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='unlink.txt',
             content='content',
             recipient_user=self.user,
@@ -363,7 +363,7 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         uploaded_log = UploadedLog.objects.create(
             upload_id='delete-case-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='delete-log.txt',
             content='content',
             recipient_user=self.user,
@@ -386,7 +386,7 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         uploaded_log = UploadedLog.objects.create(
             upload_id='delete-case-trash-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='delete-trash-log.txt',
             content='content',
             recipient_user=self.user,
@@ -412,14 +412,14 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         log_early = UploadedLog.objects.create(
             upload_id='anchor-early',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='early.txt',
             content='content',
             recipient_user=self.user,
         )
         log_late = UploadedLog.objects.create(
             upload_id='anchor-late',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='late.txt',
             content='content',
             recipient_user=self.user,
@@ -465,7 +465,7 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         uploaded_log = UploadedLog.objects.create(
             upload_id='post-anchor-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='pa.txt',
             content='content',
             recipient_user=self.user,
@@ -494,14 +494,14 @@ class InfectionCaseViewTests(TestCase):
 
         visible_log = UploadedLog.objects.create(
             upload_id='case-list-visible-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='visible-log.txt',
             content='content',
             recipient_user=self.user,
         )
         hidden_log = UploadedLog.objects.create(
             upload_id='case-list-hidden-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='hidden-log.txt',
             content='content',
             recipient_user=self.user,
@@ -540,14 +540,14 @@ class InfectionCaseViewTests(TestCase):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         visible_log = UploadedLog.objects.create(
             upload_id='timeline-visible-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='visible-log.txt',
             content='content',
             recipient_user=self.user,
         )
         hidden_log = UploadedLog.objects.create(
             upload_id='timeline-hidden-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='hidden-log.txt',
             content='content',
             recipient_user=self.user,
@@ -723,7 +723,7 @@ class InfectionCaseTrainingModeTests(TestCase):
 
         created_log = UploadedLog.objects.create(
             upload_id='training-signal-log',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='signal.txt',
             content='content',
             recipient_user=None,
@@ -752,7 +752,7 @@ class InfectionCaseTrainingModeTests(TestCase):
         )
         unassigned_log = UploadedLog.objects.create(
             upload_id='training-unassigned',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='log.txt',
             content='content',
             recipient_user=None,
@@ -775,7 +775,7 @@ class InfectionCaseTrainingModeTests(TestCase):
         )
         mismatched_log = UploadedLog.objects.create(
             upload_id='training-mismatch',
-            reddit_username='other_name',
+            forum_username='other_name',
             original_filename='x.txt',
             content='content',
             recipient_user=self.user,
@@ -788,7 +788,7 @@ class InfectionCaseTrainingModeTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         mismatched_log.refresh_from_db()
-        self.assertEqual(mismatched_log.reddit_username, 'other_name')
+        self.assertEqual(mismatched_log.forum_username, 'other_name')
         self.assertTrue(InfectionCaseLog.objects.filter(case=case, uploaded_log=mismatched_log).exists())
 
     def test_training_case_seed_includes_other_helper_logs(self):
@@ -799,7 +799,7 @@ class InfectionCaseTrainingModeTests(TestCase):
         )
         other_helper_log = UploadedLog.objects.create(
             upload_id='training-other-helper',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='other.txt',
             content='content',
             recipient_user=self.other_user,
@@ -822,7 +822,7 @@ class InfectionCaseTrainingModeTests(TestCase):
         )
         other_helper_log = UploadedLog.objects.create(
             upload_id='training-selectable-other',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='other.txt',
             content='content',
             recipient_user=self.other_user,
@@ -841,7 +841,7 @@ class InfectionCaseTrainingModeTests(TestCase):
         )
         UploadedLog.objects.create(
             upload_id='normal-other-helper',
-            reddit_username='target_user',
+            forum_username='target_user',
             original_filename='other.txt',
             content='content',
             recipient_user=self.other_user,

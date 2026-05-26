@@ -318,7 +318,7 @@
     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="margin-left: auto;">
         {% csrf_token %}
         <input type="hidden" name="action" value="seed_username_items">
-        <button type="submit">add all items for u/{{ infection_case.username }}</button>
+        <button type="submit">add all items for {{ infection_case.username }}</button>
     </form>
 </div>
 
@@ -333,7 +333,7 @@
         <div class="fixlist-item">
             <div style="flex: 1;">
                 <div class="fixlist-title"><span class="timeline-type-badge fixlist">META</span>{{ infection_case.case_id }}</div>
-                <div class="fixlist-meta">u/{{ infection_case.username }} | status {{ infection_case.get_status_display|lower }}{% if infection_case.is_training %} | <span style="color: var(--la-status-i);">observe</span>{% else %} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %}{% endif %} | Metadata</div>
+                <div class="fixlist-meta">{{ infection_case.username }} | status {{ infection_case.get_status_display|lower }}{% if infection_case.is_training %} | <span style="color: var(--la-status-i);">observe</span>{% else %} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %}{% endif %} | Metadata</div>
                 <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word; color: var(--la-text-muted);">{{ infection_case.symptom_description|default:'-' }}</div>
                 <div class="fixlist-meta">{% if infection_case.reference_url %}<a href="{{ infection_case.reference_url }}" target="_blank" rel="noopener noreferrer">{{ infection_case.reference_url|truncatechars:120 }}</a>{% else %}-{% endif %}</div>
                 <div class="button-group inline-unlink">
@@ -346,7 +346,7 @@
     <div class="timeline-entry metadata">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title"><span class="timeline-type-badge fixlist">META</span>{{ infection_case.case_id }} | u/{{ infection_case.username }}</div>
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">META</span>{{ infection_case.case_id }} | {{ infection_case.username }}</div>
                 <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="margin-top: 10px;">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="update_case">
@@ -400,7 +400,7 @@
             <div style="flex: 1;">
                 <div class="fixlist-title"><span class="timeline-type-badge log">LOG</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a></div>
                 <div class="fixlist-meta">
-                    {{ uploaded_log.original_filename }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}
+                    {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}
                 </div>
                 <div class="fixlist-meta upload-stats">
                     lines {{ uploaded_log.total_line_count }}
@@ -522,7 +522,7 @@
         <div class="fixlist-item">
             <div style="flex: 1;">
                 <div class="fixlist-title"><span class="timeline-type-badge fixlist">FIXLIST</span><a href="{% url 'view_fixlist' fixlist.pk %}">{{ fixlist.share_token }}</a></div>
-                <div class="fixlist-meta">Fixlist.txt | u/{{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }} | Fixlist</div>
+                <div class="fixlist-meta">Fixlist.txt | {{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }} | Fixlist</div>
                 <div class="fixlist-meta">lines {{ item.line_count }}</div>
                 <div class="button-group inline-unlink">
                     <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note">+</button>
@@ -571,17 +571,17 @@
             {% csrf_token %}
             <div class="add-items-list" id="addItemsList">
                 {% for uploaded_log in selectable_uploads %}
-                <label class="add-items-row" data-search="{{ uploaded_log.upload_id }} {{ uploaded_log.reddit_username }} {{ uploaded_log.log_type }} {{ uploaded_log.original_filename }}">
+                <label class="add-items-row" data-search="{{ uploaded_log.upload_id }} {{ uploaded_log.forum_username }} {{ uploaded_log.log_type }} {{ uploaded_log.original_filename }}">
                     <input type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}">
                     <span class="timeline-type-badge log">{{ uploaded_log.log_type }}</span>
-                    <span class="add-items-row-details">{{ uploaded_log.upload_id }} | u/{{ uploaded_log.reddit_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}</span>
+                    <span class="add-items-row-details">{{ uploaded_log.upload_id }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}</span>
                 </label>
                 {% endfor %}
                 {% for fixlist in selectable_fixlists %}
                 <label class="add-items-row" data-search="{{ fixlist.share_token }} {{ fixlist.username }} fixlist">
                     <input type="checkbox" name="selected_fixlist_ids" value="{{ fixlist.pk }}">
                     <span class="timeline-type-badge fixlist">FIXLIST</span>
-                    <span class="add-items-row-details">{{ fixlist.share_token }} | u/{{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }}</span>
+                    <span class="add-items-row-details">{{ fixlist.share_token }} | {{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }}</span>
                 </label>
                 {% endfor %}
             </div>

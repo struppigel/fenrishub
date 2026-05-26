@@ -26,9 +26,9 @@ def _available_case_usernames_for_user(user):
     return list(
         get_action_scoped_uploads(user)
         .filter(deleted_at__isnull=True)
-        .values_list('reddit_username', flat=True)
+        .values_list('forum_username', flat=True)
         .distinct()
-        .order_by('reddit_username')
+        .order_by('forum_username')
     )
 
 
@@ -158,7 +158,7 @@ def _selected_items_for_case_request(request, case):
     logs = list(scoped_uploads)
     fixlists = list(scoped_fixlists)
 
-    mismatched_logs = [log for log in logs if log.reddit_username != case.username]
+    mismatched_logs = [log for log in logs if log.forum_username != case.username]
     mismatched_fixlists = [fixlist for fixlist in fixlists if fixlist.username != case.username]
 
     return {
@@ -218,9 +218,9 @@ def create_infection_case_view(request):
     username_choices = _available_case_usernames_for_user(request.user)
     all_username_choices = list(
         UploadedLog.objects.filter(deleted_at__isnull=True)
-        .values_list('reddit_username', flat=True)
+        .values_list('forum_username', flat=True)
         .distinct()
-        .order_by('reddit_username')
+        .order_by('forum_username')
     )
 
     if request.method == 'POST':
@@ -307,14 +307,14 @@ def view_infection_case(request, case_id):
                 scoped_logs = list(
                     UploadedLog.objects.filter(
                         deleted_at__isnull=True,
-                        reddit_username=infection_case.username,
+                        forum_username=infection_case.username,
                     ).defer('content')
                 )
             else:
                 scoped_logs = list(
                     get_action_scoped_uploads(request.user).filter(
                         deleted_at__isnull=True,
-                        reddit_username=infection_case.username,
+                        forum_username=infection_case.username,
                     ).defer('content')
                 )
             owned_fixlists = list(
@@ -508,8 +508,8 @@ def infection_case_confirm_username_change_view(request, case_id):
 
     with transaction.atomic():
         for uploaded_log in selection['mismatched_logs']:
-            uploaded_log.reddit_username = infection_case.username
-            uploaded_log.save(update_fields=['reddit_username', 'updated_at'])
+            uploaded_log.forum_username = infection_case.username
+            uploaded_log.save(update_fields=['forum_username', 'updated_at'])
 
         for fixlist in selection['mismatched_fixlists']:
             fixlist.username = infection_case.username

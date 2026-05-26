@@ -38,7 +38,7 @@ class FixlistModelTests(TestCase):
 class UploadedLogModelTests(TestCase):
     def test_upload_id_defaults_to_two_words(self):
         uploaded = UploadedLog.objects.create(
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='log.txt',
             content='line-1',
         )
@@ -50,14 +50,14 @@ class UploadedLogModelTests(TestCase):
     def test_upload_id_adds_suffix_on_collision(self):
         UploadedLog.objects.create(
             upload_id='amber-otter',
-            reddit_username='first_user',
+            forum_username='first_user',
             original_filename='a.txt',
             content='aaa',
         )
 
         with patch('fixlist.models.generate_memorable_upload_id', return_value='amber-otter'):
             uploaded = UploadedLog.objects.create(
-                reddit_username='second_user',
+                forum_username='second_user',
                 original_filename='b.txt',
                 content='bbb',
             )
@@ -67,7 +67,7 @@ class UploadedLogModelTests(TestCase):
     def test_save_retries_when_generated_upload_id_hits_unique_race(self):
         UploadedLog.objects.create(
             upload_id='amber-otter',
-            reddit_username='first_user',
+            forum_username='first_user',
             original_filename='a.txt',
             content='aaa',
         )
@@ -84,7 +84,7 @@ class UploadedLogModelTests(TestCase):
             patch('django.db.models.base.Model.save', autospec=True, side_effect=first_insert_collides_then_retry),
         ):
             uploaded = UploadedLog.objects.create(
-                reddit_username='second_user',
+                forum_username='second_user',
                 original_filename='b.txt',
                 content='bbb',
             )
@@ -94,7 +94,7 @@ class UploadedLogModelTests(TestCase):
     def test_log_type_defaults_to_unknown(self):
         uploaded = UploadedLog.objects.create(
             upload_id='quiet-plain',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='log.txt',
             content='some random content',
         )
@@ -103,7 +103,7 @@ class UploadedLogModelTests(TestCase):
     def test_recalculate_log_type_persists_detected_type(self):
         uploaded = UploadedLog.objects.create(
             upload_id='bright-hill',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='frst.txt',
             content='Scan result of Farbar Recovery Scan Tool\nsome content',
         )
@@ -114,7 +114,7 @@ class UploadedLogModelTests(TestCase):
     def test_apply_analysis_summary_sets_all_stat_fields(self):
         uploaded = UploadedLog.objects.create(
             upload_id='mellow-valley',
-            reddit_username='stats_user',
+            forum_username='stats_user',
             original_filename='stats.txt',
             content='placeholder',
         )
@@ -163,7 +163,7 @@ _ADDITION_CONTENT = 'Additional scan result of Farbar Recovery Scan Tool\nconten
 class ContentHashTests(TestCase):
     def test_content_hash_populated_on_create(self):
         uploaded = UploadedLog.objects.create(
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='log.txt',
             content='hello world',
         )
@@ -173,13 +173,13 @@ class ContentHashTests(TestCase):
     def test_content_hash_is_deterministic(self):
         a = UploadedLog.objects.create(
             upload_id='hash-a',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='a.txt',
             content='same content',
         )
         b = UploadedLog.objects.create(
             upload_id='hash-b',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='b.txt',
             content='same content',
         )
@@ -188,13 +188,13 @@ class ContentHashTests(TestCase):
     def test_content_hash_differs_for_different_content(self):
         a = UploadedLog.objects.create(
             upload_id='diff-a',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='a.txt',
             content='content A',
         )
         b = UploadedLog.objects.create(
             upload_id='diff-b',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='b.txt',
             content='content B',
         )
@@ -203,7 +203,7 @@ class ContentHashTests(TestCase):
     def test_content_hash_updates_on_content_change(self):
         uploaded = UploadedLog.objects.create(
             upload_id='hash-update',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='log.txt',
             content='original',
         )
@@ -223,7 +223,7 @@ class IncompleteLogFlagTests(TestCase):
     def _make_log(self, upload_id, log_type, content):
         return UploadedLog.objects.create(
             upload_id=upload_id,
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='log.txt',
             log_type=log_type,
             content=content,
@@ -270,7 +270,7 @@ class FixlogStatsTests(TestCase):
     def _make_fixlog(self, content):
         log = UploadedLog.objects.create(
             upload_id='test-fixlog-stats',
-            reddit_username='test_user',
+            forum_username='test_user',
             original_filename='fixlog.txt',
             log_type='Fixlog',
             content=content,

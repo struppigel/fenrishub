@@ -11,7 +11,7 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
     def test_endpoints_require_login(self):
         uploaded = UploadedLog.objects.create(
             upload_id='rapid-trail',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='content.txt',
             content='line-1',
         )
@@ -37,7 +37,7 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
         self.client.login(username='analyzer', password='password123')
         uploaded = UploadedLog.objects.create(
             upload_id='rapid-trail',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='content.txt',
             content='line-1\nline-2',
         )
@@ -48,7 +48,7 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload['upload_id'], 'rapid-trail')
         self.assertEqual(payload['original_filename'], 'content.txt')
-        self.assertEqual(payload['reddit_username'], 'reddit_name')
+        self.assertEqual(payload['forum_username'], 'forum_user')
         self.assertEqual(payload['content'], 'line-1\nline-2')
 
     def test_uploaded_log_content_api_allows_viewing_other_helper_channel_upload(self):
@@ -56,7 +56,7 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
         self.client.login(username='analyzer', password='password123')
         uploaded = UploadedLog.objects.create(
             upload_id='private-rapid-trail',
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='content.txt',
             content='line-1\nline-2',
             recipient_user=self.other_user,
@@ -173,13 +173,13 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
         )
         selected_upload = UploadedLog.objects.create(
             upload_id='swift-river',
-            reddit_username='stats_user',
+            forum_username='stats_user',
             original_filename='one.txt',
             content='placeholder',
         )
         other_upload = UploadedLog.objects.create(
             upload_id='quiet-harbor',
-            reddit_username='stats_user',
+            forum_username='stats_user',
             original_filename='two.txt',
             content='placeholder',
         )
@@ -204,7 +204,7 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
         self.client.login(username="analyzer", password="password123")
         uploaded = UploadedLog.objects.create(
             upload_id='blocked-update',
-            reddit_username='stats_user',
+            forum_username='stats_user',
             original_filename='blocked.txt',
             log_type='FRST',
             content='Scan result of Farbar Recovery Scan Tool\nMAL-LINE',

@@ -9,7 +9,7 @@
     <strong style="color: var(--la-text-primary);">uploads to merge:</strong>
     <ul style="margin-left: 20px; margin-top: 8px; font-size: 12px; color: var(--la-text-primary);">
         {% for log in selected_logs %}
-        <li>{{ log.upload_id }} | {{ log.original_filename }} | u/{{ log.reddit_username }}</li>
+        <li>{{ log.upload_id }} | {{ log.original_filename }} | {{ log.forum_username }}</li>
         {% endfor %}
     </ul>
 </div>
@@ -30,7 +30,7 @@
         <div style="margin-bottom: 8px;">
             <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 0; color: var(--la-text-primary);">
                 <input type="radio" name="selected_username" value="{{ username }}" {% if forloop.first %}checked{% endif %}>
-                <span style="font-size: 12px; color: var(--la-text-primary);">u/{{ username }}</span>
+                <span style="font-size: 12px; color: var(--la-text-primary);">{{ username }}</span>
             </label>
         </div>
         {% endfor %}

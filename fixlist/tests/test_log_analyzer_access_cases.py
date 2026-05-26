@@ -29,21 +29,21 @@ class UploadedLogAccessTests(TestCase):
         # Create logs with different assignments
         self.alice_log = UploadedLog.objects.create(
             upload_id='alice-channel-log',
-            reddit_username='user_a',
+            forum_username='user_a',
             original_filename='alice.txt',
             content='Alice content',
             recipient_user=self.alice,
         )
         self.bob_log = UploadedLog.objects.create(
             upload_id='bob-channel-log',
-            reddit_username='user_b',
+            forum_username='user_b',
             original_filename='bob.txt',
             content='Bob content',
             recipient_user=self.bob,
         )
         self.general_log = UploadedLog.objects.create(
             upload_id='general-channel-log',
-            reddit_username='user_c',
+            forum_username='user_c',
             original_filename='general.txt',
             content='General content',
             recipient_user=None,

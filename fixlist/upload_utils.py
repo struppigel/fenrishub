@@ -81,7 +81,7 @@ def _unique_trash_upload_id(original_id: str) -> str:
 
 def execute_merge(
     ordered_logs: list[UploadedLog],
-    reddit_username: str,
+    forum_username: str,
     recipient_user,
     created_by=None,
 ) -> UploadedLog:
@@ -110,7 +110,7 @@ def execute_merge(
 
         merged_log = UploadedLog.objects.create(
             upload_id=retained_id,
-            reddit_username=reddit_username,
+            forum_username=forum_username,
             original_filename='merged-logs.txt',
             content=merged_content,
             created_by=created_by,

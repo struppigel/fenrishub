@@ -164,7 +164,7 @@ def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer:
         return redirect_preserving_filters(request, 'uploaded_logs')
 
     ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
-    usernames = list(set(log.reddit_username for log in ordered_logs))
+    usernames = list(set(log.forum_username for log in ordered_logs))
 
     if len(usernames) > 1:
         confirm_action = 'confirm_mergealyze' if to_analyzer else 'confirm_merge'
@@ -181,7 +181,7 @@ def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer:
 
     merged_upload = execute_merge(
         ordered_logs=ordered_logs,
-        reddit_username=usernames[0],
+        forum_username=usernames[0],
         recipient_user=request.user,
         created_by=request.user,
     )
@@ -210,14 +210,14 @@ def _confirm_merge(request, selected_ids: list, action_scope_uploads, to_analyze
 
     ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
 
-    available_usernames = set(log.reddit_username for log in ordered_logs)
+    available_usernames = set(log.forum_username for log in ordered_logs)
     if selected_username not in available_usernames:
         messages.error(request, 'Invalid username selection.')
         return redirect_preserving_filters(request, 'uploaded_logs')
 
     merged_upload = execute_merge(
         ordered_logs=ordered_logs,
-        reddit_username=selected_username,
+        forum_username=selected_username,
         recipient_user=request.user,
         created_by=request.user,
     )
@@ -257,7 +257,7 @@ def handle_copy_to_me_action(request, upload_id: str, action_scope_uploads) -> H
         return redirect_preserving_filters(request, 'uploaded_logs')
 
     copy = UploadedLog(
-        reddit_username=uploaded_log.reddit_username,
+        forum_username=uploaded_log.forum_username,
         original_filename=uploaded_log.original_filename,
         content=uploaded_log.content,
         detected_encoding=uploaded_log.detected_encoding,

@@ -28,7 +28,7 @@ class FixlistForm(forms.ModelForm):
 
 
 class UploadedLogForm(forms.Form):
-    reddit_username = forms.CharField(max_length=20, required=True)
+    forum_username = forms.CharField(max_length=100, required=True)
     log_file = forms.FileField(required=False)
     log_text = forms.CharField(required=False, widget=forms.Textarea)
     INVALID_TEXT_CHAR_RE = re.compile(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]')
@@ -93,17 +93,10 @@ class UploadedLogForm(forms.Form):
         base = base.strip().lower().replace('_', '-')
         return f'{base}{sep}{suffix}' if sep else base
 
-    def clean_reddit_username(self):
-        username = (self.cleaned_data.get('reddit_username') or '').strip()
-        if not username:
-            raise forms.ValidationError('Reddit username is required.')
-        # Strip leading "u/" or "/u/" that users often include
-        username = re.sub(r'^/?u/', '', username)
-        if not re.fullmatch(r'[A-Za-z0-9_-]{3,20}', username):
-            raise forms.ValidationError(
-                'Enter just the username (3-20 letters, numbers, underscores, or hyphens). '
-                'No need for the u/ prefix.'
-            )
+    def clean_forum_username(self):
+        username = (self.cleaned_data.get('forum_username') or '').strip()
+        if not (1 <= len(username) <= 100):
+            raise forms.ValidationError('Username must be 1-100 characters.')
         return username
 
     def clean_log_file(self):

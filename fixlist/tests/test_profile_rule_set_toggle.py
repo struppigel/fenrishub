@@ -32,7 +32,7 @@ class ProfileToggleInvalidationTests(TestCase):
 
         # Seed cached analyses for shared + private:user.id
         self.log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content='Scan result of Farbar Recovery Scan Tool\nmalware-line',
             log_type='FRST',

@@ -15,7 +15,7 @@ from ..models import (
 def _seed_cache_rows(user):
     """Create two UploadedLogAnalysis rows (shared + private:user.id) for a log."""
     log = UploadedLog.objects.create(
-        reddit_username='reddit_name',
+        forum_username='forum_user',
         original_filename='frst.txt',
         content='Scan result of Farbar Recovery Scan Tool\nrandom-line',
         log_type='FRST',

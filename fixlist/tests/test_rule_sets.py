@@ -39,7 +39,7 @@ class ResolveUserRuleSetKeyTests(TestCase):
 class ResolveEffectiveRuleSetKeyTests(TestCase):
     def test_unassigned_log_resolves_to_shared(self):
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content='line',
         )
@@ -49,7 +49,7 @@ class ResolveEffectiveRuleSetKeyTests(TestCase):
         user = User.objects.create_user(username='shared_user', password='pw')
         UserProfile.objects.create(user=user, rule_set_mode='shared')
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content='line',
             recipient_user=user,
@@ -60,7 +60,7 @@ class ResolveEffectiveRuleSetKeyTests(TestCase):
         user = User.objects.create_user(username='private_user', password='pw')
         UserProfile.objects.create(user=user, rule_set_mode='private')
         log = UploadedLog.objects.create(
-            reddit_username='reddit_name',
+            forum_username='forum_user',
             original_filename='frst.txt',
             content='line',
             recipient_user=user,
