@@ -62,14 +62,6 @@
         word-break: break-all;
         font-size: 11px;
     }
-    .ltr-builtin-note {
-        font-size: 11px;
-        color: var(--la-warning-text);
-        background-color: var(--la-warning-bg);
-        border: 1px solid var(--la-warning-border);
-        padding: 6px 8px;
-        margin-bottom: 10px;
-    }
     .ltr-checkbox-row {
         display: flex;
         align-items: center;
@@ -86,11 +78,6 @@
 <div class="ltr-form-top">
     <div class="ltr-form-panel">
         <h2>{% if editing %}edit{% else %}add{% endif %} log type rule</h2>
-        {% if editing and form.is_builtin %}
-        <div class="ltr-builtin-note">
-            This is a built-in rule. You can edit its pattern, scope, priority or disable it, but it cannot be deleted.
-        </div>
-        {% endif %}
         <form method="post">
             {% csrf_token %}
             <input type="hidden" name="pk" value="{{ form.pk }}">
