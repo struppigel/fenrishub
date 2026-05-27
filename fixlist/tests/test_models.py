@@ -257,6 +257,19 @@ class IncompleteLogFlagTests(TestCase):
              'addition content\n'
              f'{FRST_END_OF_ADDITION}Scan result of Farbar Recovery Scan Tool (x64)',
              False),
+            # Localized end markers ("Ende von FRST.txt", "Fin de FRST.txt", etc.)
+            # must count as complete even though the localized word differs.
+            ('german_frst_complete', 'FRST',
+             'Untersuchungsergebnis von Farbar Recovery Scan Tool (FRST)\ninhalt\n'
+             '==================== Ende von FRST.txt ========================', False),
+            ('spanish_addition_complete', 'Addition',
+             'Resultados del Análisis Adicional de Farbar Recovery Scan Tool\ncontenido\n'
+             '==================== Final de Addition.txt =======================', False),
+            ('chinese_frst_complete', 'FRST',
+             '关于...的扫描结果 Farbar Recovery Scan Tool (FRST)\n内容\n'
+             '==================== 结束 在 FRST.txt ========================', False),
+            ('german_frst_incomplete_without_marker', 'FRST',
+             'Untersuchungsergebnis von Farbar Recovery Scan Tool (FRST)\ninhalt', True),
         ]
         for label, log_type, content, expected in cases:
             with self.subTest(label=label):

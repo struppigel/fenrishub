@@ -22,6 +22,10 @@ from .status_types import (
 
 FRST_END_OF_ADDITION = "==================== End of Addition.txt ======================="
 FRST_END_OF_LOG = "==================== End of FRST.txt ========================"
+# End markers are localized (e.g. "Ende von FRST.txt", "Fin de FRST.txt", "结束 在 FRST.txt"),
+# but always wrap the literal file name in '=' delimiters. Match on that structure.
+FRST_END_OF_LOG_RE = re.compile(r'={3,}[^\n]*?FRST\.txt[^\n]*?={3,}')
+FRST_END_OF_ADDITION_RE = re.compile(r'={3,}[^\n]*?Addition\.txt[^\n]*?={3,}')
 FRST_CONTEXT_MARKERS = (
     "Farbar Recovery Scan Tool",
     "Addition.txt",
@@ -125,8 +129,8 @@ def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
     if detected_type not in {"FRST", "Addition", "FRST&Addition"}:
         return None
 
-    end_of_addition_found = FRST_END_OF_ADDITION in raw_log_text
-    end_of_frst_found = FRST_END_OF_LOG in raw_log_text
+    end_of_addition_found = bool(FRST_END_OF_ADDITION_RE.search(raw_log_text))
+    end_of_frst_found = bool(FRST_END_OF_LOG_RE.search(raw_log_text))
 
     if detected_type == "FRST":
         is_complete = end_of_frst_found
