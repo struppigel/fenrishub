@@ -39,7 +39,8 @@
         display: inline;
     }
 
-    .fixlist-actions .delete-btn {
+    .fixlist-actions .delete-btn,
+    .merge-controls .delete-btn {
         background-color: var(--la-error-bg);
         color: var(--la-error-text);
         border-color: var(--la-error-border);
@@ -166,7 +167,7 @@
         <button type="submit" form="mergeUploadsForm" name="action" value="merge" onclick="return confirmMerge();" title="merge selected uploads into one log assigned to you">merge</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="mergealyze" onclick="return confirmMergealyze();" title="merge selected uploads, assign to you, and open in log analyzer">mergealyze</button>
         <button type="button" onclick="confirmDiff();" title="show a side-by-side diff of exactly two selected uploads">diff</button>
-        <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" onclick="return confirmDeleteSelected();" title="move the selected uploads to trash">delete</button>
+        <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" class="delete-btn" onclick="return confirmDeleteSelected();" title="move the selected uploads to trash">delete</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="rescan_selected" onclick="return confirmRescan();" title="re-run the analyzer on the selected uploads to refresh stats">rescan</button>
         {% endif %}
         <span id="selectionIndicator" class="muted" hidden style="font-size: 12px;">
@@ -240,6 +241,7 @@
         <div class="fixlist-actions">
             {% if is_trash %}
             <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn" title="open this upload's detail page">view</a>
+            <a href="{% url 'download_uploaded_log' uploaded_log.upload_id %}" class="action-btn" title="download this upload as a text file">download</a>
             {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == request.user %}
             <form method="post" action="{% url 'uploads_trash' %}">
                 {% csrf_token %}
@@ -288,6 +290,7 @@
             {% endif %}
             <a href="{% url 'view_uploaded_log' uploaded_log.upload_id %}" class="action-btn" title="open this upload's detail page">view</a>
             <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}" class="action-btn" title="open this upload in the log analyzer">analyze</a>
+            <a href="{% url 'download_uploaded_log' uploaded_log.upload_id %}" class="action-btn" title="download this upload as a text file">download</a>
             {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == request.user %}
             <form method="post" action="{% url 'uploaded_logs' %}">
                 {% csrf_token %}

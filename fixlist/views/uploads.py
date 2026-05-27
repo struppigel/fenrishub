@@ -6,12 +6,13 @@ Handles: uploading logs, viewing, diffing, merging, trashing, restoring, and man
 
 import difflib
 import logging
+import re
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 from django.core.paginator import Paginator
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from django.db.models import Count
 from urllib.parse import urlencode
@@ -496,6 +497,21 @@ def uploads_trash_view(request):
         'submit_url_name': 'uploads_trash',
         'selection_storage_key': 'fenrishub_selected_trash_ids',
     })
+
+
+@deny_guests
+@login_required
+@require_http_methods(["GET"])
+def download_uploaded_log(request, upload_id):
+    """Download the raw content of an uploaded log as a text attachment."""
+    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
+
+    raw_name = uploaded_log.original_filename or f'{uploaded_log.upload_id}.txt'
+    safe_name = re.sub(r'[\\/:*?"<>|\r\n]', '_', raw_name)[:200] or 'log.txt'
+
+    response = HttpResponse(uploaded_log.content, content_type='text/plain; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="{safe_name}"'
+    return response
 
 
 @deny_guests

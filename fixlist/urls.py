@@ -32,6 +32,7 @@ from .views.snippets import snippets_api, snippets_toggle_analyzer_api, snippets
 from .views.statistics import statistics_view
 from .views.uploads import (
     diff_uploaded_logs_view,
+    download_uploaded_log,
     upload_log_view,
     uploaded_log_content_api,
     uploaded_logs_view,
@@ -50,6 +51,7 @@ urlpatterns = [
     path('uploads/', uploaded_logs_view, name='uploaded_logs'),
     path('uploads/trash/', uploads_trash_view, name='uploads_trash'),
     path('uploads/<str:upload_id>/', view_uploaded_log, name='view_uploaded_log'),
+    path('uploads/<str:upload_id>/download/', download_uploaded_log, name='download_uploaded_log'),
     path('uploads/diff/<str:id1>/<str:id2>/', diff_uploaded_logs_view, name='diff_uploaded_logs'),
     path('fixlists/trash/', fixlists_trash_view, name='fixlists_trash'),
     path('fixlists/create/', create_fixlist_view, name='create_fixlist'),
