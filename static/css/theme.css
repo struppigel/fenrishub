@@ -69,11 +69,9 @@
     --la-status-j: #8a8a8a;
     --la-status-unknown: #ffffff;
 
-    --la-log-type-frst: #8eb6d8;
-    --la-log-type-addition: #d8b26e;
-    --la-log-type-frst-addition: #e8e8e8;
-    --la-log-type-fixlog: #d38cff;
-    --la-log-type-unknown: #7a7a7a;
+    /* Per-log-type colors are emitted dynamically by base.html from the
+       LogTypeBadge table. Edit colors via /log-types/ or the LogTypeBadge admin. */
+    --la-log-type-default: #cccccc;
 }
 
 /* Global scrollbar styling */
@@ -122,8 +120,5 @@
     font-weight: 600;
 }
 
-.upload-id-link.log-type-frst { color: var(--la-log-type-frst) !important; }
-.upload-id-link.log-type-addition { color: var(--la-log-type-addition) !important; }
-.upload-id-link.log-type-frstaddition { color: var(--la-log-type-frst-addition) !important; }
-.upload-id-link.log-type-fixlog { color: var(--la-log-type-fixlog) !important; }
-.upload-id-link.log-type-unknown { color: var(--la-log-type-unknown) !important; }
+/* .upload-id-link.log-type-X and .timeline-type-badge.log.log-type-X rules
+   are emitted dynamically by base.html from the LogTypeBadge table. */

@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+
+{% block title %}Log Type Rules - Fenris{% endblock %}
+
+{% block page_context_label %}log types{% endblock %}
+
+{% block extra_css %}
+<style>
+    .ltr-toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+    .ltr-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+    }
+    .ltr-table th,
+    .ltr-table td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--la-border-muted);
+        vertical-align: top;
+    }
+    .ltr-table th {
+        color: var(--la-text-muted);
+        font-weight: 600;
+        text-transform: lowercase;
+        letter-spacing: 0.04em;
+    }
+    .ltr-table tbody tr:nth-child(odd) {
+        background-color: var(--la-bg-2);
+    }
+    .ltr-table tbody tr.disabled {
+        opacity: 0.5;
+    }
+    .ltr-pattern {
+        font-family: Consolas, 'Liberation Mono', Menlo, monospace;
+        color: var(--la-text-neutral);
+        word-break: break-all;
+        max-width: 380px;
+    }
+    .ltr-meta-badge {
+        display: inline-block;
+        font-size: 10px;
+        padding: 1px 5px;
+        border: 1px solid var(--la-border);
+        color: var(--la-text-muted);
+        margin-right: 4px;
+    }
+    .ltr-meta-badge.builtin {
+        color: var(--la-status-s);
+        border-color: var(--la-status-s);
+    }
+    .ltr-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex-wrap: nowrap;
+        white-space: nowrap;
+    }
+    .ltr-actions form {
+        margin: 0;
+        display: flex;
+    }
+    .ltr-actions button,
+    .ltr-actions .ltr-btn {
+        padding: 3px 7px;
+        font-size: 11px;
+        line-height: 1.2;
+        display: inline-block;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h2>log type detection rules</h2>
+<p class="muted" style="margin-bottom: 12px;">
+    Regex rules that decide which log_type is assigned to each upload. Built-in rules cannot be deleted but can be disabled.
+    Composite logic: a log whose content matches both an FRST rule and an Addition rule is labeled <code>FRST&amp;Addition</code>.
+</p>
+
+<div class="ltr-toolbar">
+    <a href="{% url 'add_log_type_rule' %}"><button type="button">+ add rule</button></a>
+    <form method="get" class="search-filter-form" style="margin: 0;">
+        <input type="text" name="q" value="{{ search_q }}" class="search-filter-input" placeholder="search name, log type, or pattern">
+        <button type="submit">search</button>
+        {% if search_q %}<a href="{% url 'log_type_rules' %}" class="search-filter-clear">clear</a>{% endif %}
+    </form>
+</div>
+
+{% if rules %}
+<div class="muted" style="margin-bottom: 8px;">{{ page_obj.paginator.count }} rule{{ page_obj.paginator.count|pluralize }}{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
+<table class="ltr-table">
+    <thead>
+        <tr>
+            <th>updated</th>
+            <th>rule name</th>
+            <th>log type</th>
+            <th>scope</th>
+            <th>regex</th>
+            <th>actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in rules %}
+        <tr {% if not item.rule.is_enabled %}class="disabled"{% endif %}>
+            <td>{{ item.rule.updated_at|date:"Y-m-d H:i" }}</td>
+            <td>{{ item.rule.name }}</td>
+            <td><span class="timeline-type-badge log log-type-{{ item.rule.log_type|lower|cut:'&'|cut:' ' }}">{{ item.rule.log_type }}</span></td>
+            <td>{{ item.rule.get_scope_display }}</td>
+            <td class="ltr-pattern">{{ item.rule.pattern }}</td>
+            <td>
+                <div class="ltr-actions">
+                    <a class="ltr-btn" href="{% url 'edit_log_type_rule' item.rule.pk %}" style="background-color: var(--la-bg-1); color: var(--la-text-primary); border: 1px solid var(--la-border); text-decoration: none;">edit</a>
+                    <form method="post" action="{% url 'toggle_log_type_rule' item.rule.pk %}">
+                        {% csrf_token %}
+                        <button type="submit">{% if item.rule.is_enabled %}disable{% else %}enable{% endif %}</button>
+                    </form>
+                    <form method="post" action="{% url 'delete_log_type_rule' item.rule.pk %}" onsubmit="return confirm('Delete this rule?');">
+                        {% csrf_token %}
+                        <button type="submit">delete</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% if page_obj.paginator.num_pages > 1 %}
+<div class="pagination">
+    {% if page_obj.has_previous %}<a href="?{% if search_q %}q={{ search_q|urlencode }}&{% endif %}page={{ page_obj.previous_page_number }}">prev</a>{% endif %}
+    {% for num in page_obj.paginator.page_range %}
+        {% if num == page_obj.number %}
+            <span class="current-page">{{ num }}</span>
+        {% elif num == 1 or num == page_obj.paginator.num_pages or num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
+            <a href="?{% if search_q %}q={{ search_q|urlencode }}&{% endif %}page={{ num }}">{{ num }}</a>
+        {% elif num == 2 or num == page_obj.paginator.num_pages|add:"-1" %}
+            <span class="ellipsis">&hellip;</span>
+        {% endif %}
+    {% endfor %}
+    {% if page_obj.has_next %}<a href="?{% if search_q %}q={{ search_q|urlencode }}&{% endif %}page={{ page_obj.next_page_number }}">next</a>{% endif %}
+</div>
+{% endif %}
+{% else %}
+<p class="muted">No rules configured.</p>
+{% endif %}
+{% endblock %}

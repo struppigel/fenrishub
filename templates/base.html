@@ -365,7 +365,7 @@
         }
 
         .timeline-type-badge.log {
-            color: var(--la-log-type-frst);
+            color: var(--la-log-type-default);
             min-width: 90px;
             text-align: center;
             box-sizing: border-box;
@@ -699,6 +699,11 @@
             }
         }
     </style>
+    <style id="log-type-badge-colors">
+    {% for badge in log_type_badges %}.upload-id-link.log-type-{{ badge.slug }} { color: {{ badge.color }} !important; }
+    .timeline-type-badge.log.log-type-{{ badge.slug }} { color: {{ badge.color }}; border-color: {{ badge.color }}; }
+    {% endfor %}
+    </style>
     {% block extra_css %}{% endblock %}
 </head>
 <body{% if not word_wrap %} class="no-word-wrap"{% endif %}>
@@ -720,6 +725,7 @@
                                 <a href="{% url 'change_password' %}">change password</a>
                                 <a href="{% url 'statistics' %}">stats</a>
                                 <a href="{% url 'help' %}">help</a>
+                                {% if is_moderator %}<a href="{% url 'log_type_rules' %}">log type rules</a>{% endif %}
                                 <form method="post" action="{% url 'logout' %}">
                                     {% csrf_token %}
                                     <button type="submit">logout</button>
@@ -740,6 +746,7 @@
                     <a href="{% url 'log_analyzer' %}">analyze</a>
                     <a href="{% url 'snippets' %}">snippets</a>
                     <a href="{% url 'rules' %}">rules</a>
+                    {% if is_moderator %}<a href="{% url 'log_type_rules' %}">log types</a>{% endif %}
                     <a href="{% url 'uploaded_logs' %}">uploads</a>
                 </div>
                 <div class="nav-right" style="display: flex; gap: 8px; align-items: center;">

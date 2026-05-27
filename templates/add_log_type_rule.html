@@ -1,0 +1,234 @@
+{% extends 'base.html' %}
+
+{% block title %}{% if editing %}Edit{% else %}Add{% endif %} Log Type Rule - Fenris{% endblock %}
+
+{% block page_context_label %}log types / {% if editing %}edit{% else %}add{% endif %}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .ltr-form-top {
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        gap: 14px;
+        margin-bottom: 14px;
+    }
+    @media (max-width: 900px) {
+        .ltr-form-top {
+            grid-template-columns: 1fr;
+        }
+    }
+    .ltr-form-panel {
+        min-width: 0;
+    }
+    .ltr-form-panel textarea {
+        min-height: 80px;
+        font-family: Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    .ltr-test-panel {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .ltr-test-panel textarea {
+        min-height: 200px;
+        flex: 1;
+    }
+    .ltr-result {
+        margin-top: 8px;
+        padding: 8px;
+        font-size: 12px;
+        border: 1px solid var(--la-border-muted);
+        background-color: var(--la-bg-1);
+    }
+    .ltr-result.match {
+        border-color: var(--la-success-border);
+        background-color: var(--la-success-bg);
+        color: var(--la-success-text);
+    }
+    .ltr-result.nomatch {
+        color: var(--la-text-muted);
+    }
+    .ltr-result.err {
+        border-color: var(--la-error-border);
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+    }
+    .ltr-result .ltr-sample {
+        font-family: Consolas, 'Liberation Mono', Menlo, monospace;
+        background-color: var(--la-bg-0);
+        padding: 4px 6px;
+        margin-top: 4px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        font-size: 11px;
+    }
+    .ltr-builtin-note {
+        font-size: 11px;
+        color: var(--la-warning-text);
+        background-color: var(--la-warning-bg);
+        border: 1px solid var(--la-warning-border);
+        padding: 6px 8px;
+        margin-bottom: 10px;
+    }
+    .ltr-checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 12px;
+    }
+    .ltr-checkbox-row input[type="checkbox"] {
+        width: auto;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ltr-form-top">
+    <div class="ltr-form-panel">
+        <h2>{% if editing %}edit{% else %}add{% endif %} log type rule</h2>
+        {% if editing and form.is_builtin %}
+        <div class="ltr-builtin-note">
+            This is a built-in rule. You can edit its pattern, scope, priority or disable it, but it cannot be deleted.
+        </div>
+        {% endif %}
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="pk" value="{{ form.pk }}">
+
+            <div class="form-group">
+                <label for="ltrName">rule name</label>
+                <input type="text" id="ltrName" name="name" value="{{ form.name }}" required maxlength="120" placeholder="e.g. FRST (Italian)">
+                <div style="font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">
+                    Human label for this specific rule. Used only here in the rules list.
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="ltrLogType">log type (type a new name to create one)</label>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <input type="text" id="ltrLogType" name="log_type" value="{{ form.log_type }}" list="ltrLogTypeOptions" required maxlength="32" placeholder="e.g. FRST, Kaspersky, SymantecScan" style="flex: 1;">
+                    <input type="color" id="ltrColor" name="color" value="{{ form.color }}" title="badge color" style="width: 48px; height: 32px; padding: 0; border: 1px solid var(--la-border); background: transparent; cursor: pointer;">
+                </div>
+                <datalist id="ltrLogTypeOptions">
+                    {% for name in existing_log_types %}<option value="{{ name }}"></option>{% endfor %}
+                </datalist>
+                <div style="font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">
+                    The label that gets stamped onto every upload this rule matches.
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="ltrScope">scope</label>
+                <select id="ltrScope" name="scope" required>
+                    {% for code, label in scope_choices %}
+                    <option value="{{ code }}" {% if form.scope == code %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="ltrPriority">priority (lower runs first)</label>
+                <input type="number" id="ltrPriority" name="priority" value="{{ form.priority }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="ltrPattern">regex</label>
+                <textarea id="ltrPattern" name="pattern" required spellcheck="false">{{ form.pattern }}</textarea>
+            </div>
+
+            <div class="form-group">
+                <label for="ltrNotes">notes (optional)</label>
+                <textarea id="ltrNotes" name="notes" style="min-height: 50px;">{{ form.notes }}</textarea>
+            </div>
+
+            <div class="ltr-checkbox-row">
+                <input type="checkbox" id="ltrEnabled" name="is_enabled" {% if form.is_enabled %}checked{% endif %}>
+                <label for="ltrEnabled" style="margin: 0;">enabled</label>
+            </div>
+
+            <div class="button-group">
+                <button type="submit">{% if editing %}save{% else %}create{% endif %}</button>
+                <a href="{% url 'log_type_rules' %}"><button type="button">cancel</button></a>
+            </div>
+        </form>
+    </div>
+
+    <div class="ltr-test-panel">
+        <h2>test against sample content</h2>
+        <div class="form-group" style="flex: 1; display: flex; flex-direction: column;">
+            <label for="ltrSampleContent">paste log content (the whole header is enough)</label>
+            <textarea id="ltrSampleContent" placeholder="Paste a sample log here..." spellcheck="false"></textarea>
+        </div>
+        <div id="ltrResult" class="ltr-result nomatch">Type a regex and paste sample content to test.</div>
+    </div>
+</div>
+
+<script>
+(function () {
+    const TEST_URL = "{% url 'test_log_type_api' %}";
+    const patternInput = document.getElementById('ltrPattern');
+    const scopeInput = document.getElementById('ltrScope');
+    const contentInput = document.getElementById('ltrSampleContent');
+    const result = document.getElementById('ltrResult');
+    let debounceTimer = null;
+    let controller = null;
+
+    function getCsrfToken() {
+        const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/);
+        return m ? decodeURIComponent(m[1]) : '';
+    }
+
+    function setResult(cls, text, sample) {
+        result.className = 'ltr-result ' + cls;
+        result.textContent = text;
+        if (sample) {
+            const pre = document.createElement('div');
+            pre.className = 'ltr-sample';
+            pre.textContent = sample;
+            result.appendChild(pre);
+        }
+    }
+
+    async function runTest() {
+        const pattern = patternInput.value;
+        const content = contentInput.value;
+        if (!pattern.trim() || !content) {
+            setResult('nomatch', 'Type a regex and paste sample content to test.');
+            return;
+        }
+        if (controller) controller.abort();
+        controller = new AbortController();
+        try {
+            const resp = await fetch(TEST_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                body: JSON.stringify({ pattern: pattern, content: content, scope: scopeInput.value }),
+                signal: controller.signal,
+            });
+            const data = await resp.json();
+            if (data.error) {
+                setResult('err', data.error);
+                return;
+            }
+            if (data.matches) {
+                setResult('match', 'Pattern matches. Detected log type for this content (using current saved rules): ' + data.detected_log_type, data.sample);
+            } else {
+                setResult('nomatch', 'Pattern does not match. Detected log type for this content (using current saved rules): ' + data.detected_log_type);
+            }
+        } catch (e) {
+            if (e.name === 'AbortError') return;
+            setResult('err', 'Request failed: ' + e.message);
+        }
+    }
+
+    function schedule() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(runTest, 300);
+    }
+
+    patternInput.addEventListener('input', schedule);
+    contentInput.addEventListener('input', schedule);
+    scopeInput.addEventListener('change', schedule);
+})();
+</script>
+{% endblock %}

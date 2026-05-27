@@ -416,7 +416,7 @@
         <div class="timeline-entry log">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title">{% if can_edit %}<input class="log-merge-select merge-select-checkbox" form="mergeCaseLogsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">{% endif %}<span class="timeline-type-badge log">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a></div>
+                <div class="fixlist-title">{% if can_edit %}<input class="log-merge-select merge-select-checkbox" form="mergeCaseLogsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">{% endif %}<span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a></div>
                 <div class="fixlist-meta">
                     {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}
                 </div>
@@ -605,7 +605,7 @@
                 {% for uploaded_log in selectable_uploads %}
                 <label class="add-items-row" data-search="{{ uploaded_log.upload_id }} {{ uploaded_log.forum_username }} {{ uploaded_log.log_type }} {{ uploaded_log.original_filename }}">
                     <input type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}">
-                    <span class="timeline-type-badge log">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span>
+                    <span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span>
                     <span class="add-items-row-details">{{ uploaded_log.upload_id }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}</span>
                 </label>
                 {% endfor %}

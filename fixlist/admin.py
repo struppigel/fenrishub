@@ -33,6 +33,7 @@ from .models import (
     InfectionCaseFixlist,
     InfectionCaseLog,
     InfectionCaseNote,
+    LogTypeDetectionRule,
     ParsedFilepathExclusion,
     SiteConfig,
     UploadedLog,
@@ -680,6 +681,23 @@ class UploadedLogAdmin(admin.ModelAdmin):
         }),
         ('Timestamps', {'fields': ('created_at', 'updated_at', 'deleted_at')}),
     )
+
+
+@admin.register(LogTypeDetectionRule)
+class LogTypeDetectionRuleAdmin(admin.ModelAdmin):
+    list_display = ('name', 'log_type', 'scope', 'priority', 'is_enabled', 'is_builtin', 'updated_at')
+    list_filter = ('log_type', 'is_enabled', 'is_builtin', 'scope')
+    search_fields = ('name', 'pattern', 'notes')
+    readonly_fields = ('created_at', 'updated_at', 'created_by')
+    fieldsets = (
+        (None, {'fields': ('name', 'log_type', 'pattern', 'scope', 'priority', 'is_enabled', 'is_builtin', 'notes')}),
+        ('Audit', {'fields': ('created_by', 'created_at', 'updated_at')}),
+    )
+
+    def save_model(self, request, obj, form, change):
+        if not change and not obj.created_by_id:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
 
 
 class InfectionCaseLogInline(admin.TabularInline):

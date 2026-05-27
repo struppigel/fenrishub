@@ -64,6 +64,8 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'fixlist.context_processors.user_display_prefs',
                 'fixlist.context_processors.online_users',
+                'fixlist.context_processors.moderator_status',
+                'fixlist.context_processors.log_type_badges',
             ],
         },
     },

@@ -27,6 +27,14 @@ from .views.infection_cases import (
     infection_cases_view,
     view_infection_case,
 )
+from .views.log_type_rules import (
+    add_log_type_rule_view,
+    delete_log_type_rule_view,
+    edit_log_type_rule_view,
+    log_type_rules_view,
+    test_log_type_api,
+    toggle_log_type_rule_view,
+)
 from .views.rules import add_rule_view, rules_view, test_rule_api
 from .views.snippets import snippets_api, snippets_toggle_analyzer_api, snippets_view
 from .views.statistics import statistics_view
@@ -74,6 +82,12 @@ urlpatterns = [
     path('rules/', rules_view, name='rules'),
     path('rules/add/', add_rule_view, name='add_rule'),
     path('api/rules/test/', test_rule_api, name='test_rule_api'),
+    path('log-types/', log_type_rules_view, name='log_type_rules'),
+    path('log-types/add/', add_log_type_rule_view, name='add_log_type_rule'),
+    path('log-types/<int:pk>/edit/', edit_log_type_rule_view, name='edit_log_type_rule'),
+    path('log-types/<int:pk>/delete/', delete_log_type_rule_view, name='delete_log_type_rule'),
+    path('log-types/<int:pk>/toggle/', toggle_log_type_rule_view, name='toggle_log_type_rule'),
+    path('api/log-types/test/', test_log_type_api, name='test_log_type_api'),
     path('api/snippets/', snippets_api, name='snippets_api'),
     path('api/snippets/toggle-analyzer/', snippets_toggle_analyzer_api, name='snippets_toggle_analyzer_api'),
     path('fixlist/<int:pk>/', view_fixlist, name='view_fixlist'),

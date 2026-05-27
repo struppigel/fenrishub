@@ -2,8 +2,8 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from .models import UserProfile
-from .views.guest import is_guest_request
+from .models import LogTypeBadge, UserProfile, log_type_css_slug
+from .views.guest import is_guest_request, is_moderator
 
 ONLINE_WINDOW_MINUTES = 5
 
@@ -25,6 +25,27 @@ def user_display_prefs(request):
         'is_guest': False,
         'guest_token': '',
     }
+
+
+def moderator_status(request):
+    user = getattr(request, 'user', None)
+    return {'is_moderator': is_moderator(user)}
+
+
+def log_type_badges(request):
+    """Provide all log-type → CSS-slug → color mappings for dynamic badge styling.
+
+    De-dupes by css_slug so two names that collapse to the same slug don't fight.
+    """
+    seen = {}
+    try:
+        for name, color in LogTypeBadge.objects.values_list('name', 'color'):
+            slug = log_type_css_slug(name)
+            if slug and slug not in seen:
+                seen[slug] = color
+    except Exception:
+        return {'log_type_badges': []}
+    return {'log_type_badges': [{'slug': s, 'color': c} for s, c in sorted(seen.items())]}
 
 
 def online_users(request):

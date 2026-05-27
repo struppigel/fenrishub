@@ -348,23 +348,74 @@ class ClassificationRule(models.Model):
         return f"{self.status} [{self.match_type}] p{self.priority} {self.source_text[:80]} ({owner_name})"
 
 
-_FRST_MARKER = 'Scan result of Farbar Recovery Scan Tool'
-_ADDITION_MARKER = 'Additional scan result of Farbar Recovery Scan Tool'
-_FIXLIST_MARKER = 'Fix result of Farbar Recovery Scan Tool'
+LOG_TYPE_UNKNOWN = 'Unknown'
+LOG_TYPE_FRST = 'FRST'
+LOG_TYPE_ADDITION = 'Addition'
+LOG_TYPE_FRST_AND_ADDITION = 'FRST&Addition'
+
+_HEADER_WINDOW_CHARS = 4096
+_PATTERN_CACHE = {'version': None, 'rules': []}
+
+
+def _current_logtype_rules_version():
+    """A signature of the active rule set: (enabled_count, max_updated_at_iso)."""
+    from django.db.models import Count, Max
+    try:
+        agg = LogTypeDetectionRule.objects.filter(is_enabled=True).aggregate(
+            n=Count('id'), m=Max('updated_at'),
+        )
+    except Exception:
+        return None
+    return (agg['n'] or 0, agg['m'].isoformat() if agg['m'] else '')
+
+
+def _bump_logtype_rules_version():
+    """No-op kept for backwards compatibility — version is derived live from DB."""
+    _PATTERN_CACHE['version'] = None
+
+
+def _load_compiled_logtype_rules():
+    """Return [(rule, compiled_pattern), ...] sorted by priority. Cached per rule-set signature."""
+    version = _current_logtype_rules_version()
+    if version is None:
+        return []
+    if _PATTERN_CACHE['version'] == version:
+        return _PATTERN_CACHE['rules']
+    compiled = []
+    try:
+        qs = LogTypeDetectionRule.objects.filter(is_enabled=True).order_by('priority', 'id')
+    except Exception:
+        return []
+    for rule in qs:
+        try:
+            compiled.append((rule, re.compile(rule.pattern)))
+        except re.error:
+            continue
+    _PATTERN_CACHE['version'] = version
+    _PATTERN_CACHE['rules'] = compiled
+    return compiled
 
 
 def detect_log_type(content: str) -> str:
-    has_frst = _FRST_MARKER in content
-    has_addition = _ADDITION_MARKER in content
-    if has_frst and has_addition:
-        return 'FRST&Addition'
-    if has_frst:
-        return 'FRST'
-    if has_addition:
-        return 'Addition'
-    if content.lstrip().startswith(_FIXLIST_MARKER):
-        return 'Fixlog'
-    return 'Unknown'
+    if not content:
+        return LOG_TYPE_UNKNOWN
+    compiled = _load_compiled_logtype_rules()
+    if not compiled:
+        return LOG_TYPE_UNKNOWN
+    head = content.lstrip()[:_HEADER_WINDOW_CHARS]
+    matched_types = set()
+    first_match_type = None
+    for rule, pat in compiled:
+        target = head if rule.scope == LogTypeDetectionRule.SCOPE_START else content
+        if pat.search(target):
+            matched_types.add(rule.log_type)
+            if first_match_type is None:
+                first_match_type = rule.log_type
+    if LOG_TYPE_FRST in matched_types and LOG_TYPE_ADDITION in matched_types:
+        return LOG_TYPE_FRST_AND_ADDITION
+    if first_match_type:
+        return first_match_type
+    return LOG_TYPE_UNKNOWN
 
 
 _SCAN_DATE_RE = re.compile(r'Ran by .+\((\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})\)')
@@ -385,19 +436,113 @@ def extract_scan_date(content: str):
     return None
 
 
-class UploadedLog(models.Model):
-    LOG_TYPE_CHOICES = [
-        ('FRST', 'FRST'),
-        ('Addition', 'Addition'),
-        ('FRST&Addition', 'FRST&Addition'),
-        ('Fixlog', 'Fixlog'),
-        ('Unknown', 'Unknown'),
+LOG_TYPE_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9 &._-]{0,31}$')
+LOG_TYPE_COLOR_RE = re.compile(r'^#[0-9A-Fa-f]{6}$')
+DEFAULT_LOG_TYPE_COLOR = '#cccccc'
+RESERVED_LOG_TYPE_NAMES = {'unknown'}
+
+
+def log_type_css_slug(name: str) -> str:
+    """Map a log_type name to its CSS class slug. Keeps backward compatibility
+    with the existing convention used in templates (lowercased, '&' and spaces stripped)."""
+    return (name or '').lower().replace('&', '').replace(' ', '')
+
+
+class LogTypeBadge(models.Model):
+    """User-defined visual label + color for a log_type. One row per distinct log_type name.
+    Existence of a row is not required for detection — it only governs the badge color."""
+
+    name = models.CharField(max_length=32, unique=True)
+    color = models.CharField(max_length=7, default=DEFAULT_LOG_TYPE_COLOR)
+    is_builtin = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} ({self.color})"
+
+    @property
+    def css_slug(self) -> str:
+        return log_type_css_slug(self.name)
+
+    def clean(self):
+        super().clean()
+        if not self.name or not LOG_TYPE_NAME_RE.match(self.name):
+            raise ValidationError({'name': 'Name must start with a letter or digit and contain only letters, digits, spaces, &, ., _ or - (max 32 chars).'})
+        if self.name.lower() in RESERVED_LOG_TYPE_NAMES:
+            raise ValidationError({'name': f'"{self.name}" is reserved.'})
+        if not LOG_TYPE_COLOR_RE.match(self.color or ''):
+            raise ValidationError({'color': 'Color must be a 6-digit hex like #aabbcc.'})
+
+
+class LogTypeDetectionRule(models.Model):
+    SCOPE_FULL = 'full'
+    SCOPE_START = 'start'
+    SCOPE_CHOICES = [
+        (SCOPE_FULL, 'Anywhere in content'),
+        (SCOPE_START, 'Header (first 4KB)'),
     ]
+
+    name = models.CharField(max_length=120)
+    log_type = models.CharField(max_length=32)
+    pattern = models.TextField()
+    scope = models.CharField(max_length=8, choices=SCOPE_CHOICES, default=SCOPE_START)
+    is_enabled = models.BooleanField(default=True, db_index=True)
+    is_builtin = models.BooleanField(default=False)
+    priority = models.IntegerField(default=100)
+    notes = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='created_log_type_rules',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['priority', 'id']
+        indexes = [models.Index(fields=['is_enabled', 'priority'])]
+
+    def __str__(self):
+        return f"{self.name} → {self.log_type} (p{self.priority})"
+
+    def clean(self):
+        super().clean()
+        if not self.log_type or not LOG_TYPE_NAME_RE.match(self.log_type):
+            raise ValidationError({'log_type': 'Invalid log_type name.'})
+        if self.log_type.lower() in RESERVED_LOG_TYPE_NAMES:
+            raise ValidationError({'log_type': f'"{self.log_type}" is reserved.'})
+        if not self.pattern or not self.pattern.strip():
+            raise ValidationError({'pattern': 'Pattern is required.'})
+        try:
+            re.compile(self.pattern)
+        except re.error as exc:
+            raise ValidationError({'pattern': f'Invalid regex: {exc}'})
+
+
+@receiver(post_save, sender=LogTypeDetectionRule)
+def _logtype_rule_saved(sender, instance, **kwargs):
+    _bump_logtype_rules_version()
+
+
+@receiver(pre_delete, sender=LogTypeDetectionRule)
+def _logtype_rule_deleted(sender, instance, **kwargs):
+    _bump_logtype_rules_version()
+
+
+class UploadedLog(models.Model):
+    # Kept as a hint for code that wants the canonical built-in names; not enforced.
+    KNOWN_LOG_TYPES = (
+        'FRST', 'Addition', 'FRST&Addition', 'Fixlog', 'Shortcut',
+        'ESET', 'AdwCleaner', 'HitmanPro', 'Emsisoft', 'Malwarebytes', 'Unknown',
+    )
 
     upload_id = models.CharField(max_length=64, unique=True, db_index=True)
     forum_username = models.CharField(max_length=100, db_index=True)
     original_filename = models.CharField(max_length=255)
-    log_type = models.CharField(max_length=16, choices=LOG_TYPE_CHOICES, default='Unknown')
+    log_type = models.CharField(max_length=32, default='Unknown')
     is_incomplete = models.BooleanField(default=False)
     content = models.TextField()
     content_hash = models.CharField(max_length=32, blank=True, db_index=True)
@@ -811,7 +956,7 @@ class UploadedLogStat(models.Model):
     owner_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
     owner_username = models.CharField(max_length=150, blank=True, default='', db_index=True)
     recipient_username = models.CharField(max_length=150, blank=True, default='')
-    log_type = models.CharField(max_length=16, choices=UploadedLog.LOG_TYPE_CHOICES, default='Unknown', db_index=True)
+    log_type = models.CharField(max_length=32, default='Unknown', db_index=True)
     created_at = models.DateTimeField(db_index=True)
     total_line_count = models.PositiveIntegerField(default=0)
     count_malware = models.PositiveIntegerField(default=0)

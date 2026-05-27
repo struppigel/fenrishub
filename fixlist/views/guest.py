@@ -11,8 +11,11 @@ from functools import wraps
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponseForbidden
+from django.shortcuts import redirect
 
 from ..models import SiteConfig
+
+MODERATOR_GROUP_NAME = 'moderator'
 
 
 def _request_guest_token(request) -> str:
@@ -53,6 +56,30 @@ def deny_guests(view_func):
     def _wrapped(request, *args, **kwargs):
         if is_guest_request(request):
             return HttpResponseForbidden('Guest access is read-only.')
+        return view_func(request, *args, **kwargs)
+
+    return _wrapped
+
+
+def is_moderator(user) -> bool:
+    """True if the user is a superuser or a member of the moderator Group."""
+    if user is None or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    return user.groups.filter(name=MODERATOR_GROUP_NAME).exists()
+
+
+def moderator_required(view_func):
+    """Allow only superusers and members of the moderator Group."""
+
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        user = getattr(request, 'user', None)
+        if user is None or not user.is_authenticated:
+            return redirect('login')
+        if not is_moderator(user):
+            return HttpResponseForbidden('Moderator access required.')
         return view_func(request, *args, **kwargs)
 
     return _wrapped
