@@ -9,7 +9,7 @@ from ..models import UploadedLog
 from ..permissions import user_can_delete_uploaded_log
 from ..upload_utils import (
     soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
-    schedule_analysis_stats_recalc,
+    resolve_ordered_logs_for_merge, schedule_analysis_stats_recalc,
 )
 from .utils import redirect_preserving_filters, _purge_old_trash, check_missing_ids
 
@@ -152,27 +152,23 @@ def _redirect_after_merge(request, merged_upload: UploadedLog, to_analyzer: bool
 
 
 def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer: bool) -> HttpResponse:
-    if len(selected_ids) < 2:
-        messages.error(request, 'Select at least two uploads to merge.')
+    ordered_logs, error_message = resolve_ordered_logs_for_merge(selected_ids, action_scope_uploads)
+    if error_message:
+        messages.error(request, error_message)
         return redirect_preserving_filters(request, 'uploaded_logs')
 
-    selected_logs = list(action_scope_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
-    logs_by_id = {entry.upload_id: entry for entry in selected_logs}
-    missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
-    if missing_ids:
-        messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
-        return redirect_preserving_filters(request, 'uploaded_logs')
-
-    ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
     usernames = list(set(log.forum_username for log in ordered_logs))
 
     if len(usernames) > 1:
         confirm_action = 'confirm_mergealyze' if to_analyzer else 'confirm_merge'
+        uploaded_logs_url = reverse('uploaded_logs')
         context = {
             'selected_logs': ordered_logs,
             'selected_upload_ids': selected_ids,
             'usernames': sorted(usernames),
             'confirm_action': confirm_action,
+            'submit_url': uploaded_logs_url,
+            'cancel_url': uploaded_logs_url,
             'show_all': (request.POST.get('show_all') or '').strip().lower() in {'1', 'true', 'on', 'yes'},
             'username_filter': (request.POST.get('u') or '').strip(),
             'search_query': (request.POST.get('q') or '').strip(),
@@ -193,22 +189,14 @@ def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer:
 def _confirm_merge(request, selected_ids: list, action_scope_uploads, to_analyzer: bool) -> HttpResponse:
     selected_username = request.POST.get('selected_username', '').strip()
 
-    if len(selected_ids) < 2:
-        messages.error(request, 'Select at least two uploads to merge.')
-        return redirect_preserving_filters(request, 'uploaded_logs')
-
     if not selected_username:
         messages.error(request, 'Please select a username.')
         return redirect_preserving_filters(request, 'uploaded_logs')
 
-    selected_logs = list(action_scope_uploads.filter(upload_id__in=selected_ids, deleted_at__isnull=True))
-    logs_by_id = {entry.upload_id: entry for entry in selected_logs}
-    missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
-    if missing_ids:
-        messages.error(request, f'Unable to find upload(s): {", ".join(missing_ids)}.')
+    ordered_logs, error_message = resolve_ordered_logs_for_merge(selected_ids, action_scope_uploads)
+    if error_message:
+        messages.error(request, error_message)
         return redirect_preserving_filters(request, 'uploaded_logs')
-
-    ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
 
     available_usernames = set(log.forum_username for log in ordered_logs)
     if selected_username not in available_usernames:

@@ -49,6 +49,28 @@ def restore_uploaded_log(log: UploadedLog) -> None:
     log.save(update_fields=['deleted_at'])
 
 
+def resolve_ordered_logs_for_merge(selected_ids: list[str], scoped_qs):
+    """Validate a merge selection and return logs in the order they were selected.
+
+    Returns (ordered_logs, error_message). ordered_logs is empty when an error
+    occurred. Shared by the uploads list and the case detail view so both
+    surface identical error messages.
+    """
+    if len(selected_ids) < 2:
+        return [], 'Select at least two uploads to merge.'
+
+    selected_logs = list(
+        scoped_qs.filter(upload_id__in=selected_ids, deleted_at__isnull=True)
+    )
+    logs_by_id = {entry.upload_id: entry for entry in selected_logs}
+    missing_ids = [upload_id for upload_id in selected_ids if upload_id not in logs_by_id]
+    if missing_ids:
+        return [], f'Unable to find upload(s): {", ".join(missing_ids)}.'
+
+    ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
+    return ordered_logs, None
+
+
 def merge_log_content(logs: list[UploadedLog]) -> str:
     """Merge content from multiple UploadedLog objects."""
     merged_parts = []

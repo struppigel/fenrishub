@@ -854,7 +854,7 @@ function setupLineCopyMenu() {
 }
 
 const DATE_HIGHLIGHT_RE = /\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?/g;
-const CHROME_EXT_ID_RE = /(?<=\\Extensions\\|\\Extension: \[|\\User Data\\)[a-p]{32}\b/g;
+const CHROME_EXT_ID_RE = /(?<=\\Extensions\\|\\Extension: \[|\\User Data\\|_crx_|--app-id=)[a-p]{32}\b/g;
 // Matches any FRST line whose platform prefix is "Edge " — covers
 // `Edge Extension:` (file-based), `Edge HKU\…`, `Edge HKLM\…` (registry-based)
 // and other Edge settings lines. \b after "Edge" prevents matching "Edges"/"Edgar".
@@ -901,7 +901,9 @@ const LOOKUP_KINDS = {
         items: [
             { label: 'crxplorer', url: (v) => `https://crxplorer.com/extension/${v}` },
             { label: 'chrome web store', url: (v) => `https://chromewebstore.google.com/detail/${v}` },
+            { label: 'chrome-stats', url: (v) => `https://chrome-stats.com/d/${v}` },
             { label: 'crxviewer', url: (v) => `https://robwu.nl/crxviewer/?crx=${encodeURIComponent(`https://chromewebstore.google.com/detail/${v}`)}` },
+            { label: 'google search', url: (v) => `https://www.google.com/search?q=${encodeURIComponent(v)}` },
             { label: 'copy id instead', copy: true },
         ],
     },
@@ -914,6 +916,7 @@ const LOOKUP_KINDS = {
                 return tmpl.replace('__CRXID__', encodeURIComponent(v));
             } },
             { label: 'crxviewer', url: (v) => `https://robwu.nl/crxviewer/?crx=${encodeURIComponent(`https://microsoftedge.microsoft.com/addons/detail/${v}`)}` },
+            { label: 'google search', url: (v) => `https://www.google.com/search?q=${encodeURIComponent(v)}` },
             { label: 'copy id instead', copy: true },
         ],
     },

@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
@@ -15,7 +16,8 @@ from ..models import (
     InfectionCaseNote,
     UploadedLog,
 )
-from .utils import get_action_scoped_uploads
+from ..upload_utils import execute_merge, resolve_ordered_logs_for_merge
+from .utils import _purge_old_trash, get_action_scoped_uploads
 
 
 def _case_queryset_for_user(user):
@@ -133,6 +135,32 @@ def _link_case_items(case, logs, fixlists, added_by):
         unassigned_log_pks = [log.pk for log in logs if log.recipient_user_id is None]
         if unassigned_log_pks:
             UploadedLog.objects.filter(pk__in=unassigned_log_pks).update(recipient_user=case.owner)
+
+
+def _case_log_queryset(case):
+    """Logs currently linked to `case` and not soft-deleted. Used as the
+    scope queryset for merge actions launched from the case detail view."""
+    return UploadedLog.objects.filter(
+        infection_case_links__case=case,
+        deleted_at__isnull=True,
+    )
+
+
+def _execute_case_merge(case, ordered_logs, forum_username, user):
+    """Run a merge for logs linked to `case` and ensure the result lands on the timeline."""
+    merged_log = execute_merge(
+        ordered_logs=ordered_logs,
+        forum_username=forum_username,
+        recipient_user=case.owner,
+        created_by=user,
+    )
+    InfectionCaseLog.objects.get_or_create(
+        case=case,
+        uploaded_log=merged_log,
+        defaults={'added_by': user},
+    )
+    _purge_old_trash()
+    return merged_log
 
 
 def _selected_items_for_case_request(request, case):
@@ -278,10 +306,19 @@ def create_infection_case_view(request):
 @login_required
 @require_http_methods(['GET', 'POST'])
 def view_infection_case(request, case_id):
-    infection_case = get_object_or_404(_case_queryset_for_user(request.user), case_id=case_id)
-    show_metadata_edit = (request.GET.get('edit_meta') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+    # Any authenticated helper holding the link can read a case; only the owner
+    # can mutate. Soft-deleted cases stay hidden from non-owners.
+    infection_case = get_object_or_404(
+        InfectionCase.objects.filter(deleted_at__isnull=True),
+        case_id=case_id,
+    )
+    can_edit = infection_case.owner_id == request.user.id
+    show_metadata_edit = can_edit and (request.GET.get('edit_meta') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
 
     if request.method == 'POST':
+        if not can_edit:
+            messages.error(request, 'Only the owner of this case can modify it.')
+            return redirect('view_infection_case', case_id=infection_case.case_id)
         action = (request.POST.get('action') or '').strip()
 
         if action == 'update_case':
@@ -404,6 +441,59 @@ def view_infection_case(request, case_id):
                 messages.error(request, 'The selected note does not exist or has already been deleted.')
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
+        if action in {'merge_logs', 'confirm_merge_logs'}:
+            selected_ids = []
+            seen_ids = set()
+            for upload_id in request.POST.getlist('selected_upload_ids'):
+                normalized_id = str(upload_id).strip()
+                if not normalized_id or normalized_id in seen_ids:
+                    continue
+                seen_ids.add(normalized_id)
+                selected_ids.append(normalized_id)
+
+            case_logs_qs = _case_log_queryset(infection_case)
+            ordered_logs, error_message = resolve_ordered_logs_for_merge(selected_ids, case_logs_qs)
+            if error_message:
+                messages.error(request, error_message)
+                return redirect('view_infection_case', case_id=infection_case.case_id)
+
+            case_url = reverse('view_infection_case', args=[infection_case.case_id])
+
+            if action == 'merge_logs':
+                usernames = sorted({log.forum_username for log in ordered_logs})
+                if len(usernames) > 1:
+                    return render(
+                        request,
+                        'merge_username_selection.html',
+                        {
+                            'selected_logs': ordered_logs,
+                            'selected_upload_ids': selected_ids,
+                            'usernames': usernames,
+                            'confirm_action': 'confirm_merge_logs',
+                            'submit_url': case_url,
+                            'cancel_url': case_url,
+                        },
+                    )
+                merged_log = _execute_case_merge(
+                    infection_case, ordered_logs, usernames[0], request.user,
+                )
+                messages.success(request, f'Merged log created with id {merged_log.upload_id}.')
+                return redirect('view_infection_case', case_id=infection_case.case_id)
+
+            selected_username = (request.POST.get('selected_username') or '').strip()
+            if not selected_username:
+                messages.error(request, 'Please select a username.')
+                return redirect('view_infection_case', case_id=infection_case.case_id)
+            available_usernames = {log.forum_username for log in ordered_logs}
+            if selected_username not in available_usernames:
+                messages.error(request, 'Invalid username selection.')
+                return redirect('view_infection_case', case_id=infection_case.case_id)
+            merged_log = _execute_case_merge(
+                infection_case, ordered_logs, selected_username, request.user,
+            )
+            messages.success(request, f'Merged log created with id {merged_log.upload_id}.')
+            return redirect('view_infection_case', case_id=infection_case.case_id)
+
         if action == 'delete_note':
             note_id = (request.POST.get('note_id') or '').strip()
             try:
@@ -440,17 +530,20 @@ def view_infection_case(request, case_id):
 
     timeline_items = _build_case_timeline(infection_case)
 
-    if infection_case.is_training:
-        available_uploads = UploadedLog.objects.filter(deleted_at__isnull=True).defer('content')
-    else:
-        available_uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True).defer('content')
-    available_fixlists = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True).defer('content')
+    selectable_uploads = UploadedLog.objects.none()
+    selectable_fixlists = Fixlist.objects.none()
+    if can_edit:
+        if infection_case.is_training:
+            available_uploads = UploadedLog.objects.filter(deleted_at__isnull=True).defer('content')
+        else:
+            available_uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True).defer('content')
+        available_fixlists = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True).defer('content')
 
-    linked_upload_ids = {uploaded_log.upload_id for uploaded_log in linked_logs}
-    linked_fixlist_ids = {fixlist.pk for fixlist in linked_fixlists}
+        linked_upload_ids = {uploaded_log.upload_id for uploaded_log in linked_logs}
+        linked_fixlist_ids = {fixlist.pk for fixlist in linked_fixlists}
 
-    selectable_uploads = available_uploads.exclude(upload_id__in=linked_upload_ids)
-    selectable_fixlists = available_fixlists.exclude(pk__in=linked_fixlist_ids)
+        selectable_uploads = available_uploads.exclude(upload_id__in=linked_upload_ids)
+        selectable_fixlists = available_fixlists.exclude(pk__in=linked_fixlist_ids)
 
     return render(
         request,
@@ -462,6 +555,7 @@ def view_infection_case(request, case_id):
             'selectable_fixlists': selectable_fixlists,
             'case_status_choices': InfectionCase.STATUS_CHOICES,
             'show_metadata_edit': show_metadata_edit,
+            'can_edit': can_edit,
         },
     )
 

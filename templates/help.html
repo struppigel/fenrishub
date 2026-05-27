@@ -104,6 +104,9 @@
             <li><a href="#cases">Cases</a>
                 <ul>
                     <li><a href="#creating-cases">Creating cases</a></li>
+                    <li><a href="#case-merge-logs">Merging logs from inside a case</a></li>
+                    <li><a href="#case-open-in-analyzer">Opening a log in the analyzer</a></li>
+                    <li><a href="#case-sharing">Sharing a case with other helpers</a></li>
                 </ul>
             </li>
         </ul>
@@ -387,5 +390,19 @@
     <p>To prevent cases from auto-assigning logs or just to mark them as done for yourself, press the small pencil on the META entry. Then change the status to closed.</p>
 
     <img src="{% static 'images/help/16-case-edit-meta.png' %}" alt="Edit case meta to closed" loading="lazy">
+
+    <h3 id="case-merge-logs">Merging logs from inside a case</h3>
+
+    <p>Each log row in a case has a checkbox on the left of the type badge. Tick two or more of them and press the <strong>merge</strong> button in the top action bar to combine the selected logs into a single merged log. The sources are moved to trash, the first selection's upload id is retained, and the merged log is linked to the case automatically. This works the same way as the merge button in the uploads view, but limited to the logs that are already part of this case.</p>
+
+    <p>If the selected logs belong to different forum usernames, you'll be asked which username to use for the merged log before the merge runs.</p>
+
+    <h3 id="case-open-in-analyzer">Opening a log in the analyzer</h3>
+
+    <p>Each log entry now has a small magnifying glass icon next to the action buttons. Clicking it opens that log in the analyzer in a single step, so you don't have to leave the case view and locate the log in the uploads list first.</p>
+
+    <h3 id="case-sharing">Sharing a case with other helpers</h3>
+
+    <p>Any logged-in helper holding the link to a case can open it in read-only mode &mdash; just copy the URL from the address bar and send it. They will see the timeline, notes, metadata and stats, but cannot add notes, merge, unlink, edit metadata, or delete. A small "view-only &mdash; owned by &lt;owner&gt;" hint appears in the top bar for shared viewers. Only the case owner can mutate the case.</p>
 </div>
 {% endblock %}

@@ -13,29 +13,25 @@
     margin-bottom: 12px;
 }
 
+.case-action-bar button {
+    min-width: 0;
+}
+
+.log-merge-select {
+    margin-right: 8px;
+}
+
+.timeline-entry.log .fixlist-title .timeline-type-badge,
+.timeline-entry.log .fixlist-title .upload-id-link {
+    vertical-align: middle;
+}
+
 .timeline-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 10px;
     margin-bottom: 10px;
-}
-
-.timeline-type-badge {
-    display: inline-block;
-    font-size: 10px;
-    padding: 1px 6px;
-    border: 1px solid var(--la-border);
-    color: var(--la-text-muted);
-    margin-right: 8px;
-}
-
-.timeline-type-badge.log {
-    color: var(--la-log-type-frst);
-}
-
-.timeline-type-badge.fixlist {
-    color: var(--la-status-s);
 }
 
 .timeline-entry {
@@ -167,6 +163,15 @@
     color: var(--la-text-primary);
     border-color: color-mix(in srgb, var(--la-text-primary) 60%, var(--la-border));
     background: color-mix(in srgb, var(--la-text-primary) 12%, var(--la-bg-1));
+}
+
+.analyzer-link-button {
+    text-decoration: none;
+}
+
+.analyzer-link-button:hover,
+.analyzer-link-button:focus-visible {
+    text-decoration: none;
 }
 
 .note-form-wrapper {
@@ -312,14 +317,25 @@
 {% endblock %}
 
 {% block content %}
-<div class="button-group" style="margin-bottom: 10px;">
+{% if can_edit %}
+<form id="mergeCaseLogsForm" method="post" action="{% url 'view_infection_case' infection_case.case_id %}">
+    {% csrf_token %}
+</form>
+{% endif %}
+
+<div class="button-group case-action-bar" style="margin-bottom: 10px;">
     <a href="{% url 'infection_cases' %}"><button type="button">back to cases</button></a>
+    {% if can_edit %}
     <button type="button" onclick="document.getElementById('addItemsModal').classList.add('show')">add items</button>
+    <button type="submit" form="mergeCaseLogsForm" name="action" value="merge_logs" onclick="return confirmMergeCaseLogs();" title="merge the selected logs into a single log linked to this case">merge</button>
     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="margin-left: auto;">
         {% csrf_token %}
         <input type="hidden" name="action" value="seed_username_items">
         <button type="submit">add all items for {{ infection_case.username }}</button>
     </form>
+    {% else %}
+    <span class="muted" style="margin-left: auto; font-size: 12px;">view-only &mdash; owned by {{ infection_case.owner.username }}</span>
+    {% endif %}
 </div>
 
 <div class="case-card">
@@ -332,13 +348,15 @@
     <div class="timeline-entry metadata is-preview">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title"><span class="timeline-type-badge fixlist">META</span>{{ infection_case.case_id }}</div>
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">Meta</span>{{ infection_case.case_id }}</div>
                 <div class="fixlist-meta">{{ infection_case.username }} | status {{ infection_case.get_status_display|lower }}{% if infection_case.is_training %} | <span style="color: var(--la-status-i);">observe</span>{% else %} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %}{% endif %} | Metadata</div>
                 <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word; color: var(--la-text-muted);">{{ infection_case.symptom_description|default:'-' }}</div>
                 <div class="fixlist-meta">{% if infection_case.reference_url %}<a href="{{ infection_case.reference_url }}" target="_blank" rel="noopener noreferrer">{{ infection_case.reference_url|truncatechars:120 }}</a>{% else %}-{% endif %}</div>
+                {% if can_edit %}
                 <div class="button-group inline-unlink">
                     <a href="{% url 'view_infection_case' infection_case.case_id %}?edit_meta=1"><button type="button" class="add-note-button" title="edit">&#9998;</button></a>
                 </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -346,7 +364,7 @@
     <div class="timeline-entry metadata">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title"><span class="timeline-type-badge fixlist">META</span>{{ infection_case.case_id }} | {{ infection_case.username }}</div>
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">Meta</span>{{ infection_case.case_id }} | {{ infection_case.username }}</div>
                 <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="margin-top: 10px;">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="update_case">
@@ -398,9 +416,9 @@
         <div class="timeline-entry log">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title"><span class="timeline-type-badge log">LOG</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a></div>
+                <div class="fixlist-title">{% if can_edit %}<input class="log-merge-select merge-select-checkbox" form="mergeCaseLogsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">{% endif %}<span class="timeline-type-badge log">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|lower|cut:'&'|cut:' ' }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a></div>
                 <div class="fixlist-meta">
-                    {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }} | {{ uploaded_log.log_type }}
+                    {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}
                 </div>
                 <div class="fixlist-meta upload-stats">
                     lines {{ uploaded_log.total_line_count }}
@@ -431,6 +449,8 @@
                     {% endif %}
                 </div>
                 <div class="button-group inline-unlink">
+                    <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}" class="add-note-button analyzer-link-button" title="open this log in the analyzer" aria-label="open in analyzer"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg></a>
+                    {% if can_edit %}
                     <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note anchored to {{ uploaded_log.upload_id }}">+</button>
                     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                         {% csrf_token %}
@@ -438,10 +458,12 @@
                         <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                         <button type="submit" class="unlink-x-button" aria-label="unlink log" title="unlink log">&times;</button>
                     </form>
+                    {% endif %}
                 </div>
             </div>
         </div>
         </div>
+        {% if can_edit %}
         <div class="note-form-wrapper">
             <div class="timeline-entry fixlist">
                 <div class="fixlist-item">
@@ -461,6 +483,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
         {% endwith %}
         {% elif item.item_type == 'note' %}
         {% with note=item.note %}
@@ -483,6 +506,7 @@
                         </div>
                     </form>
                 </div>
+                {% if can_edit %}
                 <div class="button-group inline-unlink">
                     <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note">+</button>
                     <button type="button" class="add-note-button" onclick="toggleEditNote('{{ note.pk }}')" title="edit note">&#9998;</button>
@@ -493,9 +517,11 @@
                         <button type="submit" class="unlink-x-button" aria-label="delete note" title="delete note" onclick="return confirm('Delete this note?')">&times;</button>
                     </form>
                 </div>
+                {% endif %}
             </div>
         </div>
         </div>
+        {% if can_edit %}
         <div class="note-form-wrapper">
             <div class="timeline-entry fixlist">
                 <div class="fixlist-item">
@@ -515,15 +541,17 @@
                 </div>
             </div>
         </div>
+        {% endif %}
         {% endwith %}
         {% else %}
         {% with fixlist=item.fixlist %}
         <div class="timeline-entry fixlist">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title"><span class="timeline-type-badge fixlist">FIXLIST</span><a href="{% url 'view_fixlist' fixlist.pk %}">{{ fixlist.share_token }}</a></div>
-                <div class="fixlist-meta">Fixlist.txt | {{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }} | Fixlist</div>
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">Fixlist</span><a href="{% url 'view_fixlist' fixlist.pk %}">{{ fixlist.share_token }}</a></div>
+                <div class="fixlist-meta">Fixlist.txt | {{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }}</div>
                 <div class="fixlist-meta">lines {{ item.line_count }}</div>
+                {% if can_edit %}
                 <div class="button-group inline-unlink">
                     <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note">+</button>
                     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
@@ -533,9 +561,11 @@
                         <button type="submit" class="unlink-x-button" aria-label="unlink fixlist" title="unlink fixlist">&times;</button>
                     </form>
                 </div>
+                {% endif %}
             </div>
         </div>
         </div>
+        {% if can_edit %}
         <div class="note-form-wrapper">
             <div class="timeline-entry fixlist">
                 <div class="fixlist-item">
@@ -554,6 +584,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
         {% endwith %}
         {% endif %}
         {% endfor %}
@@ -562,6 +593,7 @@
     {% endif %}
 </div>
 
+{% if can_edit %}
 <div id="addItemsModal" class="add-items-backdrop" role="dialog" aria-modal="true" aria-label="Add items">
     <div class="add-items-modal">
         <h3>add items to case</h3>
@@ -573,14 +605,14 @@
                 {% for uploaded_log in selectable_uploads %}
                 <label class="add-items-row" data-search="{{ uploaded_log.upload_id }} {{ uploaded_log.forum_username }} {{ uploaded_log.log_type }} {{ uploaded_log.original_filename }}">
                     <input type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}">
-                    <span class="timeline-type-badge log">{{ uploaded_log.log_type }}</span>
+                    <span class="timeline-type-badge log">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span>
                     <span class="add-items-row-details">{{ uploaded_log.upload_id }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}</span>
                 </label>
                 {% endfor %}
                 {% for fixlist in selectable_fixlists %}
                 <label class="add-items-row" data-search="{{ fixlist.share_token }} {{ fixlist.username }} fixlist">
                     <input type="checkbox" name="selected_fixlist_ids" value="{{ fixlist.pk }}">
-                    <span class="timeline-type-badge fixlist">FIXLIST</span>
+                    <span class="timeline-type-badge fixlist">Fixlist</span>
                     <span class="add-items-row-details">{{ fixlist.share_token }} | {{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }}</span>
                 </label>
                 {% endfor %}
@@ -592,8 +624,18 @@
         </form>
     </div>
 </div>
+{% endif %}
 
 <script>
+function confirmMergeCaseLogs() {
+    var checked = document.querySelectorAll('.log-merge-select:checked').length;
+    if (checked < 2) {
+        alert('Select at least two logs to merge.');
+        return false;
+    }
+    return confirm('Merge ' + checked + ' selected log(s)?');
+}
+
 function toggleNoteForm(button) {
     const timelineEntry = button.closest('.timeline-entry');
     const formWrapper = timelineEntry.nextElementSibling;
@@ -642,6 +684,7 @@ document.addEventListener('click', function(event) {
     }
 });
 
+{% if can_edit %}
 document.getElementById('addItemsModal').addEventListener('click', function(e) {
     if (e.target === this) this.classList.remove('show');
 });
@@ -676,5 +719,6 @@ document.getElementById('addItemsModal').addEventListener('click', function(e) {
 
     updateCount();
 })();
+{% endif %}
 </script>
 {% endblock %}

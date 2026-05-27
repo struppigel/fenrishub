@@ -354,6 +354,69 @@
             min-width: 120px;
         }
 
+        .timeline-type-badge {
+            display: inline-block;
+            font-size: 10px;
+            padding: 1px 6px;
+            border: 1px solid var(--la-border);
+            color: var(--la-text-muted);
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        .timeline-type-badge.log {
+            color: var(--la-log-type-frst);
+            min-width: 90px;
+            text-align: center;
+            box-sizing: border-box;
+        }
+
+        .timeline-type-badge.fixlist {
+            color: var(--la-status-s);
+        }
+
+        .merge-select-checkbox {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 13px;
+            height: 13px;
+            padding: 0;
+            background: var(--la-bg-1);
+            border: 1px solid var(--la-border);
+            border-radius: 2px;
+            cursor: pointer;
+            display: inline-block;
+            vertical-align: middle;
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .merge-select-checkbox:hover {
+            border-color: var(--la-text-muted);
+        }
+
+        .merge-select-checkbox:focus-visible {
+            outline: 1px solid var(--la-text-primary);
+            outline-offset: 1px;
+        }
+
+        .merge-select-checkbox:checked {
+            background: var(--la-text-primary);
+            border-color: var(--la-text-primary);
+        }
+
+        .merge-select-checkbox:checked::after {
+            content: '';
+            position: absolute;
+            left: 3px;
+            top: 0;
+            width: 3px;
+            height: 7px;
+            border: solid var(--la-bg-0);
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+
         .search-filter-form {
             margin-bottom: 10px;
             display: flex;

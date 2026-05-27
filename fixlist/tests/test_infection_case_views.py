@@ -672,16 +672,159 @@ class InfectionCaseViewTests(TestCase):
         note.refresh_from_db()
         self.assertIsNotNone(note.deleted_at)
 
-    def test_other_user_cannot_view_or_delete_case_they_do_not_own(self):
+    def test_other_helper_can_view_case_read_only(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         self.client.logout()
         self.client.login(username='bob', password='password123')
 
-        view_response = self.client.get(reverse('view_infection_case', args=[case.case_id]))
+        response = self.client.get(reverse('view_infection_case', args=[case.case_id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['can_edit'])
+        self.assertContains(response, 'view-only')
+        self.assertContains(response, self.user.username)
+
+    def test_other_helper_cannot_post_mutations_to_shared_case(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        self.client.logout()
+        self.client.login(username='bob', password='password123')
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'add_note', 'note_content': 'sneaky'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(InfectionCaseNote.objects.filter(case=case).count(), 0)
+
+    def test_other_helper_cannot_delete_case_they_do_not_own(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        self.client.logout()
+        self.client.login(username='bob', password='password123')
+
         delete_response = self.client.post(reverse('infection_case_delete', args=[case.case_id]))
 
-        self.assertEqual(view_response.status_code, 404)
         self.assertEqual(delete_response.status_code, 404)
+        case.refresh_from_db()
+        self.assertIsNone(case.deleted_at)
+
+    def test_soft_deleted_case_is_404_for_non_owner(self):
+        case = InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            auto_assign_new_items=False,
+            deleted_at=timezone.now(),
+        )
+        self.client.logout()
+        self.client.login(username='bob', password='password123')
+
+        response = self.client.get(reverse('view_infection_case', args=[case.case_id]))
+
+        self.assertEqual(response.status_code, 404)
+
+
+class InfectionCaseMergeLogsTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='alice', password='password123')
+        self.other_user = User.objects.create_user(username='bob', password='password123')
+        self.client.login(username='alice', password='password123')
+        self.case = InfectionCase.objects.create(
+            owner=self.user, username='target_user', auto_assign_new_items=False,
+        )
+
+    def _link_log(self, *, upload_id, forum_username='target_user', content='content', filename=None):
+        log = UploadedLog.objects.create(
+            upload_id=upload_id,
+            forum_username=forum_username,
+            original_filename=filename or f'{upload_id}.txt',
+            content=content,
+            recipient_user=self.user,
+        )
+        InfectionCaseLog.objects.create(case=self.case, uploaded_log=log, added_by=self.user)
+        return log
+
+    def test_merge_logs_in_case_combines_and_links_merged_log(self):
+        log_a = self._link_log(upload_id='merge-case-a', content='AAA\n')
+        log_b = self._link_log(upload_id='merge-case-b', content='BBB\n')
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[self.case.case_id]),
+            {'action': 'merge_logs', 'selected_upload_ids': [log_a.upload_id, log_b.upload_id]},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        merged = UploadedLog.objects.get(upload_id='merge-case-a', deleted_at__isnull=True)
+        self.assertIn('AAA', merged.content)
+        self.assertIn('BBB', merged.content)
+        # Sources were renamed and soft-deleted.
+        self.assertFalse(UploadedLog.objects.filter(upload_id='merge-case-b', deleted_at__isnull=True).exists())
+        self.assertTrue(UploadedLog.objects.filter(upload_id='merge-case-b-trsh', deleted_at__isnull=False).exists())
+        # Merged log is on the case timeline.
+        self.assertTrue(InfectionCaseLog.objects.filter(case=self.case, uploaded_log=merged).exists())
+
+    def test_merge_logs_requires_two_selected(self):
+        log_a = self._link_log(upload_id='merge-too-few-a')
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[self.case.case_id]),
+            {'action': 'merge_logs', 'selected_upload_ids': [log_a.upload_id]},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        log_a.refresh_from_db()
+        self.assertIsNone(log_a.deleted_at)
+
+    def test_merge_logs_with_different_usernames_renders_confirmation(self):
+        log_a = self._link_log(upload_id='merge-multi-a', forum_username='alpha', content='AAA\n')
+        log_b = self._link_log(upload_id='merge-multi-b', forum_username='beta', content='BBB\n')
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[self.case.case_id]),
+            {'action': 'merge_logs', 'selected_upload_ids': [log_a.upload_id, log_b.upload_id]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'choose a username')
+        self.assertContains(response, 'value="alpha"')
+        self.assertContains(response, 'value="beta"')
+        # No merge yet — both sources still active.
+        self.assertIsNone(UploadedLog.objects.get(pk=log_a.pk).deleted_at)
+        self.assertIsNone(UploadedLog.objects.get(pk=log_b.pk).deleted_at)
+
+        confirm_response = self.client.post(
+            reverse('view_infection_case', args=[self.case.case_id]),
+            {
+                'action': 'confirm_merge_logs',
+                'selected_upload_ids': [log_a.upload_id, log_b.upload_id],
+                'selected_username': 'beta',
+            },
+        )
+
+        self.assertEqual(confirm_response.status_code, 302)
+        merged = UploadedLog.objects.get(upload_id='merge-multi-a', deleted_at__isnull=True)
+        self.assertEqual(merged.forum_username, 'beta')
+        self.assertTrue(InfectionCaseLog.objects.filter(case=self.case, uploaded_log=merged).exists())
+
+    def test_merge_logs_rejects_logs_not_in_case(self):
+        in_case = self._link_log(upload_id='merge-scoped-in')
+        outside = UploadedLog.objects.create(
+            upload_id='merge-scoped-outside',
+            forum_username='target_user',
+            original_filename='outside.txt',
+            content='ZZZ\n',
+            recipient_user=self.user,
+        )
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[self.case.case_id]),
+            {'action': 'merge_logs', 'selected_upload_ids': [in_case.upload_id, outside.upload_id]},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        in_case.refresh_from_db()
+        outside.refresh_from_db()
+        self.assertIsNone(in_case.deleted_at)
+        self.assertIsNone(outside.deleted_at)
 
 
 class InfectionCaseTrainingModeTests(TestCase):
