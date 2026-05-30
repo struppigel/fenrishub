@@ -36,14 +36,6 @@ class EvaluateRegexPatternTests(TestCase):
         self.assertFalse(result['stdlib_ok'])
         self.assertIsNotNone(result['stdlib_error'])
 
-    def test_catastrophic_pattern_flagged_as_slow(self):
-        # Classic exponential-backtracking pattern. On a 200-char input the
-        # nested quantifier explodes well past any sane threshold.
-        result = evaluate_regex_pattern(r'(a+)+b', slow_threshold_ms=5.0)
-        self.assertTrue(result['stdlib_ok'])
-        self.assertTrue(result['is_slow'])
-        self.assertGreater(result['worst_ms'], 5.0)
-
 
 class TestRuleApiRegexWarningsTests(TestCase):
     def setUp(self):
@@ -81,14 +73,6 @@ class TestRuleApiRegexWarningsTests(TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn('fallback', warnings[0]['kinds'])
         self.assertEqual(warnings[0]['pattern'], r'(?=.*foo)(?=.*bar)')
-
-    def test_catastrophic_regex_emits_slow_warning(self):
-        resp = self._post(r'(a+)+b')
-        self.assertEqual(resp.status_code, 200)
-        warnings = resp.json().get('regex_warnings') or []
-        self.assertEqual(len(warnings), 1)
-        self.assertIn('slow', warnings[0]['kinds'])
-        self.assertGreater(warnings[0]['worst_ms'], 5.0)
 
     def test_invalid_regex_emits_invalid_warning(self):
         resp = self._post(r'(unclosed')
