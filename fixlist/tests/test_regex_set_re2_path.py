@@ -117,7 +117,10 @@ class AnalyzeLogTextNoMatchTests(TestCase):
             'neither does this one',
             'or this one',
         ])
+        # Before the fix, Set.Match() returned None for non-matching lines and
+        # the analyzer iterated it without coercion -> TypeError. This call
+        # must complete without raising.
         result = analyzer.analyze_log_text(log_text, 'shared')
-        self.assertEqual(len(result['analyzed_lines']), 3)
-        for entry in result['analyzed_lines']:
+        self.assertEqual(len(result['lines']), 3)
+        for entry in result['lines']:
             self.assertEqual(entry['dominant_status'], '?')
