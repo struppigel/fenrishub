@@ -117,7 +117,16 @@ def analyze_log_api(request):
 
     analysis = analyze_log_text(log_text, viewer_key)
     if upload_id and not is_guest_request(request):
-        uploaded_log = get_updatable_uploads(request.user).filter(upload_id=upload_id).first()
+        # Cache row is per-(upload, rule_set_key), so populating it for an
+        # arbitrary viewer's key can't step on the recipient's row. Look the
+        # upload up by id directly rather than via the updatable-uploads
+        # filter — otherwise viewers who aren't the assigned recipient never
+        # get a cache row of their own and re-pay the full analysis cost on
+        # every visit. Read access to the cached payload is already permitted
+        # for any authenticated user by uploaded_log_cached_analysis_api.
+        uploaded_log = UploadedLog.objects.filter(
+            upload_id=upload_id, deleted_at__isnull=True,
+        ).first()
         if uploaded_log:
             try:
                 UploadedLogAnalysis.objects.update_or_create(
@@ -128,10 +137,15 @@ def analyze_log_api(request):
                         'source_content_hash': uploaded_log.content_hash,
                     },
                 )
-                # Only update count_* when this viewer's ruleset matches the upload's
-                # effective ruleset — otherwise the listing would show counts that
-                # don't belong to the assigned helper's view.
-                if viewer_key == resolve_effective_rule_set_key(uploaded_log):
+                # count_* on the upload reflects the assigned recipient's view.
+                # Only update it when this viewer's ruleset matches the
+                # upload's effective ruleset AND the viewer is the recipient
+                # (or the upload is unassigned). Otherwise an uninvolved
+                # viewer would overwrite the recipient's listing stats.
+                if (
+                    viewer_key == resolve_effective_rule_set_key(uploaded_log)
+                    and get_updatable_uploads(request.user).filter(pk=uploaded_log.pk).exists()
+                ):
                     uploaded_log.apply_analysis_summary(analysis.get('summary', {}))
                     uploaded_log.save(update_fields=UploadedLog.analysis_stat_update_fields())
             except Exception:
