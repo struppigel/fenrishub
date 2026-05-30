@@ -50,7 +50,7 @@ class ProfileToggleInvalidationTests(TestCase):
             source_content_hash=self.log.content_hash,
         )
 
-    def test_toggle_to_private_deletes_affected_cache_rows(self):
+    def test_toggle_to_private_keeps_cache_rows(self):
         self.client.login(username='alice', password='pw')
         response = self.client.post(reverse('profile'), data={
             'frst_fix_message': '',
@@ -61,10 +61,11 @@ class ProfileToggleInvalidationTests(TestCase):
 
         self.profile.refresh_from_db()
         self.assertEqual(self.profile.rule_set_mode, 'private')
-        # Both 'shared' and 'private:N' caches deleted
+        # Persistent cache rows survive the toggle — they're served as an
+        # instant (briefly stale) payload while the analyzer re-runs.
         self.assertEqual(
             UploadedLogAnalysis.objects.filter(upload=self.log).count(),
-            0,
+            2,
         )
 
     def test_no_toggle_keeps_cache_rows(self):
