@@ -881,6 +881,86 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
     return buckets
 
 
+REGEX_ADVERSARIAL_INPUTS = (
+    ('a200',     'a' * 200),
+    ('a200_X',   'a' * 200 + 'X'),
+    ('ab100',    'ab' * 100),
+    ('ab100_X',  'ab' * 100 + 'X'),
+    ('slash200', ('\\' + 'a') * 100),
+    ('space200', 'a ' * 100),
+    ('digit200', '1' * 200),
+    ('path200',  'C:\\Users\\' + 'a' * 180 + '\\file.exe'),
+    ('mixed200', 'aA1\\ ' * 50),
+)
+
+REGEX_SLOW_THRESHOLD_MS = 5.0
+
+
+def evaluate_regex_pattern(pattern: str, slow_threshold_ms: float = REGEX_SLOW_THRESHOLD_MS) -> dict:
+    """Validate and benchmark a single regex pattern.
+
+    Returns a dict with:
+      - ``re2_ok``: True if google-re2 accepted the pattern (would land in the
+        fast set in production).
+      - ``re2_error``: error message if re2 rejected it (typically lookahead,
+        lookbehind, or backreferences). None when re2_ok is True or re2 is
+        unavailable.
+      - ``stdlib_ok``: True if stdlib ``re.compile`` accepted the pattern.
+      - ``stdlib_error``: error message if stdlib re rejected it. When this is
+        non-None the rule cannot run at all.
+      - ``worst_ms``: highest wall-clock time across the adversarial inputs
+        (stdlib re), in milliseconds.
+      - ``worst_input``: label of the input that triggered ``worst_ms``.
+      - ``is_slow``: True iff ``worst_ms`` exceeds ``slow_threshold_ms``.
+
+    Bench inputs are short (~200 chars) so even a catastrophic pattern
+    completes in seconds, not minutes. Safe to call from a request cycle.
+    """
+    result = {
+        're2_ok': False,
+        're2_error': None,
+        'stdlib_ok': False,
+        'stdlib_error': None,
+        'worst_ms': 0.0,
+        'worst_input': '',
+        'is_slow': False,
+    }
+
+    if _re2 is not None:
+        try:
+            _re2.compile(pattern)
+            result['re2_ok'] = True
+        except Exception as exc:
+            result['re2_error'] = str(exc)
+    else:
+        result['re2_error'] = 're2 binding unavailable'
+
+    try:
+        compiled = re.compile(pattern)
+        result['stdlib_ok'] = True
+    except re.error as exc:
+        result['stdlib_error'] = str(exc)
+        return result
+
+    worst = 0.0
+    worst_label = ''
+    threshold_s = slow_threshold_ms / 1000.0
+    for label, payload in REGEX_ADVERSARIAL_INPUTS:
+        start = time.perf_counter()
+        try:
+            compiled.search(payload)
+        except re.error:
+            pass
+        elapsed = time.perf_counter() - start
+        if elapsed > worst:
+            worst = elapsed
+            worst_label = label
+    result['worst_ms'] = worst * 1000.0
+    result['worst_input'] = worst_label
+    result['is_slow'] = worst >= threshold_s
+    return result
+
+
 def _build_regex_matchers(buckets, regex_rules):
     """Compile regex rules into a re2.Set for one-pass multi-pattern matching.
 
@@ -1177,7 +1257,8 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
             matched_indices = regex_set.Match(line)
         except Exception:
             matched_indices = ()
-        for idx in matched_indices:
+        # google-re2's Set.Match returns None (not []) when nothing matched.
+        for idx in matched_indices or ():
             rule = set_rules[idx]
             groups["regex"].append((rule, f'found regex match for "{rule.source_text}"', "regex"))
 

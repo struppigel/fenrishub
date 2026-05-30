@@ -204,6 +204,33 @@
         margin-top: 2px;
     }
 
+    .regex-warning {
+        font-size: 12px;
+        padding: 6px 10px;
+        margin-bottom: 8px;
+        color: var(--la-warning-text);
+        background-color: var(--la-warning-bg);
+        border: 1px solid var(--la-warning-border);
+    }
+    .regex-warning.error {
+        color: var(--la-error-text);
+        background-color: var(--la-error-bg);
+        border-color: var(--la-error-border);
+    }
+    .regex-warning .pattern {
+        font-family: monospace;
+        font-size: 11px;
+        word-break: break-all;
+        display: block;
+        margin-top: 2px;
+        opacity: 0.85;
+    }
+    .regex-warning ul {
+        margin: 4px 0 0 18px;
+        padding: 0;
+    }
+    .regex-warning li { margin: 1px 0; }
+
     .color-legend {
         display: flex;
         gap: 10px;
@@ -292,6 +319,7 @@
         <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-company)"></span>company</div>
         <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-arguments)"></span>arguments</div>
     </div>
+    <div id="regexWarnings"></div>
     <div class="match-count" id="matchCount"></div>
     <div class="preview-output" id="previewOutput"></div>
 </div>
@@ -487,6 +515,58 @@
         document.getElementById('previewOutput').innerHTML = '';
         document.getElementById('matchCount').textContent = '';
         document.getElementById('colorLegend').style.display = 'none';
+        clearRegexWarnings();
+    }
+
+    function clearRegexWarnings() {
+        document.getElementById('regexWarnings').innerHTML = '';
+    }
+
+    function renderRegexWarnings(warnings) {
+        const container = document.getElementById('regexWarnings');
+        container.innerHTML = '';
+        if (!warnings || !warnings.length) return;
+
+        warnings.forEach(function (w) {
+            const div = document.createElement('div');
+            const isError = (w.kinds || []).indexOf('invalid') !== -1;
+            div.className = 'regex-warning' + (isError ? ' error' : '');
+
+            const header = document.createElement('strong');
+            if (isError) {
+                header.textContent = 'Invalid regex — this rule will not match anything:';
+            } else {
+                const labels = [];
+                if ((w.kinds || []).indexOf('fallback') !== -1) {
+                    labels.push('this rule was rejected by re2, it will significantly slow down analysis for all logs. Try to avoid ignorecase, lookahead, lookbehind, or backreferences');
+                }
+                if ((w.kinds || []).indexOf('slow') !== -1) {
+                    labels.push('slow on adversarial input (' + w.worst_ms + ' ms on ' + w.worst_input + ' — possible catastrophic backtracking)');
+                }
+                header.textContent = 'Regex warning: ' + labels.join('; ');
+            }
+            div.appendChild(header);
+
+            const pat = document.createElement('span');
+            pat.className = 'pattern';
+            pat.textContent = w.pattern;
+            div.appendChild(pat);
+
+            if (w.stdlib_error) {
+                const ul = document.createElement('ul');
+                const li = document.createElement('li');
+                li.textContent = w.stdlib_error;
+                ul.appendChild(li);
+                div.appendChild(ul);
+            } else if (w.re2_error && (w.kinds || []).indexOf('fallback') !== -1) {
+                const ul = document.createElement('ul');
+                const li = document.createElement('li');
+                li.textContent = 're2 error: ' + w.re2_error;
+                ul.appendChild(li);
+                div.appendChild(ul);
+            }
+            container.appendChild(div);
+        });
     }
 
     /* ── server-side preview (all match types) ── */
@@ -517,6 +597,7 @@
             }
 
             container.innerHTML = '';
+            renderRegexWarnings(data.regex_warnings);
             let matchCount = 0;
             const statusLabels = data.status_labels || {};
             const showLegend = matchType === 'parsed';
@@ -616,7 +697,10 @@
         const logText = document.getElementById('logLinesInput').value.replace(/\r\n/g, '\n');
         const lines = logText.split('\n').filter(function (l) { return l.trim().length > 0; });
 
-        if (!sourceText || !lines.length) { clearPreview(); return; }
+        if (!sourceText) { clearPreview(); return; }
+        // Regex needs warnings even before the user pastes test lines, so still
+        // call the API. Other match types stay silent until there are lines.
+        if (!lines.length && matchType !== 'regex') { clearPreview(); return; }
 
         document.getElementById('colorLegend').style.display = 'none';
         var status = document.getElementById('ruleStatus').value;

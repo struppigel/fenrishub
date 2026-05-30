@@ -17,6 +17,7 @@ from django.db.models import Q, Case, When
 
 from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
+    evaluate_regex_pattern,
 )
 from ..models import (
     ClassificationRule,
@@ -454,4 +455,30 @@ def test_rule_api(request):
 
     response_payload = dict(first_payload)
     response_payload['results'] = aggregated_results
+
+    if match_type == ClassificationRule.MATCH_REGEX:
+        regex_warnings = []
+        for pattern in patterns:
+            evaluation = evaluate_regex_pattern(pattern)
+            warning_kinds = []
+            if not evaluation['stdlib_ok']:
+                warning_kinds.append('invalid')
+            else:
+                if not evaluation['re2_ok']:
+                    warning_kinds.append('fallback')
+                if evaluation['is_slow']:
+                    warning_kinds.append('slow')
+            if not warning_kinds:
+                continue
+            regex_warnings.append({
+                'pattern': pattern,
+                'kinds': warning_kinds,
+                're2_error': evaluation['re2_error'],
+                'stdlib_error': evaluation['stdlib_error'],
+                'worst_ms': round(evaluation['worst_ms'], 2),
+                'worst_input': evaluation['worst_input'],
+            })
+        if regex_warnings:
+            response_payload['regex_warnings'] = regex_warnings
+
     return JsonResponse(response_payload)
