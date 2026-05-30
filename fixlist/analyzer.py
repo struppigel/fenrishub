@@ -907,7 +907,7 @@ def _build_regex_matchers(buckets, regex_rules):
     try:
         options = _re2.Options()
         options.max_mem = 64 * 1024 * 1024
-        regex_set = _re2.Set(options, _re2.Anchor.UNANCHORED)
+        regex_set = _re2.Set(_re2._Anchor.UNANCHORED, options)
     except Exception:
         for rule in regex_rules:
             _add_to_fallback(rule)
@@ -916,7 +916,7 @@ def _build_regex_matchers(buckets, regex_rules):
     set_rules = []
     for rule in regex_rules:
         try:
-            regex_set.add(rule.source_text)
+            regex_set.Add(rule.source_text)
         except Exception:
             _add_to_fallback(rule)
             continue
@@ -926,7 +926,7 @@ def _build_regex_matchers(buckets, regex_rules):
         return
 
     try:
-        regex_set.compile()
+        regex_set.Compile()
     except Exception:
         for rule in set_rules:
             _add_to_fallback(rule)
@@ -1174,7 +1174,7 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
     if regex_set is not None:
         set_rules = buckets["__regex_set_rules"]
         try:
-            matched_indices = regex_set.match(line)
+            matched_indices = regex_set.Match(line)
         except Exception:
             matched_indices = ()
         for idx in matched_indices:
