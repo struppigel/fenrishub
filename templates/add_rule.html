@@ -212,11 +212,6 @@
         background-color: var(--la-warning-bg);
         border: 1px solid var(--la-warning-border);
     }
-    .regex-warning.error {
-        color: var(--la-error-text);
-        background-color: var(--la-error-bg);
-        border-color: var(--la-error-border);
-    }
     .regex-warning .pattern {
         font-family: monospace;
         font-size: 11px;
@@ -529,22 +524,17 @@
 
         warnings.forEach(function (w) {
             const div = document.createElement('div');
-            const isError = (w.kinds || []).indexOf('invalid') !== -1;
-            div.className = 'regex-warning' + (isError ? ' error' : '');
+            div.className = 'regex-warning';
 
             const header = document.createElement('strong');
-            if (isError) {
-                header.textContent = 'Invalid regex — this rule will not match anything:';
-            } else {
-                const labels = [];
-                if ((w.kinds || []).indexOf('fallback') !== -1) {
-                    labels.push('this rule was rejected by re2, it will significantly slow down analysis for all logs. Try to avoid ignorecase, lookahead, lookbehind, or backreferences');
-                }
-                if ((w.kinds || []).indexOf('slow') !== -1) {
-                    labels.push('slow on adversarial input (' + w.worst_ms + ' ms on ' + w.worst_input + ' — possible catastrophic backtracking)');
-                }
-                header.textContent = 'Regex warning: ' + labels.join('; ');
+            const labels = [];
+            if ((w.kinds || []).indexOf('fallback') !== -1) {
+                labels.push('this rule was rejected by re2, it will significantly slow down analysis for all logs. Try to avoid ignorecase, lookahead, lookbehind, or backreferences');
             }
+            if ((w.kinds || []).indexOf('slow') !== -1) {
+                labels.push('slow on adversarial input (' + w.worst_ms + ' ms on ' + w.worst_input + ' — possible catastrophic backtracking)');
+            }
+            header.textContent = 'Regex warning: ' + labels.join('; ');
             div.appendChild(header);
 
             const pat = document.createElement('span');
@@ -552,13 +542,7 @@
             pat.textContent = w.pattern;
             div.appendChild(pat);
 
-            if (w.stdlib_error) {
-                const ul = document.createElement('ul');
-                const li = document.createElement('li');
-                li.textContent = w.stdlib_error;
-                ul.appendChild(li);
-                div.appendChild(ul);
-            } else if (w.re2_error && (w.kinds || []).indexOf('fallback') !== -1) {
+            if (w.re2_error && (w.kinds || []).indexOf('fallback') !== -1) {
                 const ul = document.createElement('ul');
                 const li = document.createElement('li');
                 li.textContent = 're2 error: ' + w.re2_error;

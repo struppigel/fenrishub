@@ -457,24 +457,24 @@ def test_rule_api(request):
     response_payload['results'] = aggregated_results
 
     if match_type == ClassificationRule.MATCH_REGEX:
+        # Invalid patterns are already rejected with HTTP 400 by
+        # build_rule_test_results, so by the time we get here every pattern
+        # compiles in stdlib re. Warnings only cover the "valid but suspect"
+        # cases: rejected by re2 (fallback), or slow on adversarial input.
         regex_warnings = []
         for pattern in patterns:
             evaluation = evaluate_regex_pattern(pattern)
             warning_kinds = []
-            if not evaluation['stdlib_ok']:
-                warning_kinds.append('invalid')
-            else:
-                if not evaluation['re2_ok']:
-                    warning_kinds.append('fallback')
-                if evaluation['is_slow']:
-                    warning_kinds.append('slow')
+            if not evaluation['re2_ok']:
+                warning_kinds.append('fallback')
+            if evaluation['is_slow']:
+                warning_kinds.append('slow')
             if not warning_kinds:
                 continue
             regex_warnings.append({
                 'pattern': pattern,
                 'kinds': warning_kinds,
                 're2_error': evaluation['re2_error'],
-                'stdlib_error': evaluation['stdlib_error'],
                 'worst_ms': round(evaluation['worst_ms'], 2),
                 'worst_input': evaluation['worst_input'],
             })

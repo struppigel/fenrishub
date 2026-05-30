@@ -74,13 +74,12 @@ class TestRuleApiRegexWarningsTests(TestCase):
         self.assertIn('fallback', warnings[0]['kinds'])
         self.assertEqual(warnings[0]['pattern'], r'(?=.*foo)(?=.*bar)')
 
-    def test_invalid_regex_emits_invalid_warning(self):
+    def test_invalid_regex_is_rejected_before_warnings(self):
+        # Invalid regex is caught by build_rule_test_results and returned as
+        # HTTP 400 — the warnings code never runs for it.
         resp = self._post(r'(unclosed')
-        self.assertEqual(resp.status_code, 200)
-        warnings = resp.json().get('regex_warnings') or []
-        self.assertEqual(len(warnings), 1)
-        self.assertEqual(warnings[0]['kinds'], ['invalid'])
-        self.assertIsNotNone(warnings[0]['stdlib_error'])
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('Invalid regex', resp.json().get('error', ''))
 
     def test_warnings_only_emitted_for_regex_match_type(self):
         # A pattern that would trigger a warning if treated as regex, but as
