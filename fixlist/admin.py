@@ -366,6 +366,11 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.duplicates_view),
                 name='fixlist_classificationrule_duplicates',
             ),
+            path(
+                'bad-regex/',
+                self.admin_site.admin_view(self.bad_regex_view),
+                name='fixlist_classificationrule_bad_regex',
+            ),
         ]
         return custom_urls + urls
 
@@ -493,6 +498,133 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         return TemplateResponse(
             request,
             'admin/fixlist/classificationrule/duplicates.html',
+            context,
+        )
+
+    def bad_regex_view(self, request):
+        import time
+        from . import analyzer as _analyzer
+        from .rule_sets import SHARED_RULE_SET_KEY
+
+        # Short adversarial inputs. Catastrophic patterns blow up at small
+        # sizes, so bounding the input bounds the worst-case wall time of
+        # this view (important since it runs in-request).
+        adversarial_inputs = [
+            ('a200',     'a' * 200),
+            ('a200_X',   'a' * 200 + 'X'),
+            ('ab100',    'ab' * 100),
+            ('ab100_X',  'ab' * 100 + 'X'),
+            ('slash200', ('\\' + 'a') * 100),
+            ('space200', 'a ' * 100),
+            ('digit200', '1' * 200),
+            ('path200',  'C:\\Users\\' + 'a' * 180 + '\\file.exe'),
+            ('mixed200', 'aA1\\ ' * 50),
+        ]
+
+        threshold_ms_raw = request.GET.get('threshold_ms')
+        try:
+            threshold_ms = float(threshold_ms_raw) if threshold_ms_raw else 50.0
+        except (TypeError, ValueError):
+            threshold_ms = 50.0
+        threshold_s = threshold_ms / 1000.0
+
+        buckets = _analyzer._get_cached_rule_buckets(SHARED_RULE_SET_KEY)
+        fallback = buckets[ClassificationRule.MATCH_REGEX]
+        re2_rules = buckets.get('__regex_set_rules') or []
+        total_regex_rules = ClassificationRule.objects.filter(
+            match_type=ClassificationRule.MATCH_REGEX,
+            is_enabled=True,
+        ).count()
+
+        results = []
+        for rule, compiled in fallback:
+            worst_label = ''
+            worst_time = 0.0
+            total_time = 0.0
+            for label, payload in adversarial_inputs:
+                start = time.perf_counter()
+                try:
+                    compiled.search(payload)
+                except re.error:
+                    pass
+                elapsed = time.perf_counter() - start
+                total_time += elapsed
+                if elapsed > worst_time:
+                    worst_time = elapsed
+                    worst_label = label
+            results.append({
+                'rule': rule,
+                'worst_ms': worst_time * 1000.0,
+                'worst_label': worst_label,
+                'total_ms': total_time * 1000.0,
+                'is_slow': worst_time >= threshold_s,
+            })
+
+        results.sort(key=lambda r: -r['worst_ms'])
+
+        upload_id = (request.GET.get('upload_id') or '').strip()
+        upload_results = []
+        upload_log = None
+        upload_error = ''
+        upload_line_count = 0
+        if upload_id:
+            try:
+                upload_log = UploadedLog.objects.get(upload_id=upload_id)
+            except UploadedLog.DoesNotExist:
+                upload_error = f'No upload with upload_id "{upload_id}".'
+            else:
+                lines = [
+                    ln.strip()
+                    for ln in (upload_log.content or '').splitlines()
+                    if ln.strip()
+                ]
+                upload_line_count = len(lines)
+                for rule, compiled in fallback:
+                    start_total = time.perf_counter()
+                    worst_line_time = 0.0
+                    worst_line = ''
+                    for ln in lines:
+                        start = time.perf_counter()
+                        try:
+                            compiled.search(ln)
+                        except re.error:
+                            pass
+                        elapsed = time.perf_counter() - start
+                        if elapsed > worst_line_time:
+                            worst_line_time = elapsed
+                            worst_line = ln
+                    total_elapsed = time.perf_counter() - start_total
+                    upload_results.append({
+                        'rule': rule,
+                        'total_ms': total_elapsed * 1000.0,
+                        'worst_line_ms': worst_line_time * 1000.0,
+                        'worst_line': worst_line[:200],
+                        'is_slow': worst_line_time >= threshold_s,
+                    })
+                upload_results.sort(key=lambda r: -r['total_ms'])
+
+        slow_count = sum(1 for r in results if r['is_slow'])
+        context = {
+            **self.admin_site.each_context(request),
+            'opts': self.model._meta,
+            'title': 'Bad regex rules (catastrophic backtracking candidates)',
+            'total_regex_rules': total_regex_rules,
+            're2_count': len(re2_rules),
+            'fallback_count': len(fallback),
+            'threshold_ms': threshold_ms,
+            'results': results[:50],
+            'slow_count': slow_count,
+            'has_more': len(results) > 50,
+            'total_results': len(results),
+            'upload_id': upload_id,
+            'upload_log': upload_log,
+            'upload_error': upload_error,
+            'upload_line_count': upload_line_count,
+            'upload_results': upload_results[:50],
+        }
+        return TemplateResponse(
+            request,
+            'admin/fixlist/classificationrule/bad_regex.html',
             context,
         )
 

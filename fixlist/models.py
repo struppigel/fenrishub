@@ -424,15 +424,19 @@ _SCAN_DATE_RE = re.compile(r'Ran by .+\((\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})\)'
 def extract_scan_date(content: str):
     """Extract the scan datetime from a FRST/Addition/Fixlog header.
 
-    Returns a datetime object or None.
+    Returns a timezone-aware datetime (in the project's current timezone)
+    or None. The FRST timestamp itself carries no tz info, so we treat it
+    as wall-clock in TIME_ZONE.
     """
     from datetime import datetime as dt
+    from django.utils import timezone
     m = _SCAN_DATE_RE.search(content)
     if m:
         try:
-            return dt.strptime(m.group(1), '%d-%m-%Y %H:%M:%S')
+            naive = dt.strptime(m.group(1), '%d-%m-%Y %H:%M:%S')
         except ValueError:
             return None
+        return timezone.make_aware(naive, timezone.get_current_timezone())
     return None
 
 

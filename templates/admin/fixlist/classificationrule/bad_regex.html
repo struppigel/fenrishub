@@ -1,0 +1,217 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+    .bad-regex-page .stats { display: flex; gap: 24px; margin: 12px 0 18px; flex-wrap: wrap; }
+    .bad-regex-page .stat {
+        padding: 8px 14px;
+        border: 1px solid var(--border-color, #ccc);
+        border-radius: 4px;
+        min-width: 140px;
+    }
+    .bad-regex-page .stat .label {
+        display: block;
+        font-size: 12px;
+        text-transform: uppercase;
+        opacity: 0.7;
+    }
+    .bad-regex-page .stat .value {
+        font-size: 22px;
+        font-weight: 600;
+    }
+    .bad-regex-page .stat.warn .value { color: #ba2121; }
+    .bad-regex-page table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: monospace;
+        font-size: 12px;
+        margin-bottom: 24px;
+    }
+    .bad-regex-page table th,
+    .bad-regex-page table td {
+        border-bottom: 1px solid var(--border-color, #ddd);
+        padding: 6px 10px;
+        vertical-align: top;
+        word-break: break-all;
+    }
+    .bad-regex-page table th {
+        text-align: left;
+        background: var(--darkened-bg, #f4f4f4);
+        font-family: sans-serif;
+    }
+    .bad-regex-page .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .bad-regex-page tr.slow td { background: rgba(186, 33, 33, 0.08); }
+    .bad-regex-page .slow-badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 3px;
+        background: #ba2121;
+        color: #fff;
+        font-size: 10px;
+        font-family: sans-serif;
+    }
+    .bad-regex-page .filter-form {
+        margin: 12px 0;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    .bad-regex-page .filter-form label { font-size: 12px; opacity: 0.8; }
+    .bad-regex-page .help {
+        background: var(--darkened-bg, #f4f4f4);
+        padding: 10px 14px;
+        border-radius: 4px;
+        margin-bottom: 16px;
+        font-size: 13px;
+    }
+    .bad-regex-page .worst-line {
+        font-size: 11px;
+        opacity: 0.8;
+        margin-top: 4px;
+        white-space: pre-wrap;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main" class="bad-regex-page">
+    <h1>Bad regex rules</h1>
+
+    <div class="help">
+        Regex rules accepted by <code>re2</code> are evaluated in linear time and
+        cannot backtrack &mdash; they are safe. The danger zone is the
+        <strong>fallback bucket</strong>: rules whose pattern <code>re2</code> rejected
+        (backreferences, lookaround, unsupported syntax) get compiled with stdlib
+        <code>re</code> and evaluated one-by-one. Those are the only patterns that can
+        hang a Gunicorn worker on a large log.
+        <br><br>
+        Each fallback rule below is timed against 9 short adversarial inputs (long
+        repetitions, mixed chars, fake paths). A rule that takes more than a few
+        milliseconds on a 200-character input is almost certainly catastrophic.
+    </div>
+
+    <div class="stats">
+        <div class="stat">
+            <span class="label">Enabled regex rules</span>
+            <span class="value">{{ total_regex_rules }}</span>
+        </div>
+        <div class="stat">
+            <span class="label">In re2 fast set</span>
+            <span class="value">{{ re2_count }}</span>
+        </div>
+        <div class="stat {% if fallback_count %}warn{% endif %}">
+            <span class="label">Fallback to stdlib re</span>
+            <span class="value">{{ fallback_count }}</span>
+        </div>
+        <div class="stat {% if slow_count %}warn{% endif %}">
+            <span class="label">Slow (&gt; {{ threshold_ms }} ms)</span>
+            <span class="value">{{ slow_count }}</span>
+        </div>
+    </div>
+
+    <form class="filter-form" method="get">
+        <label>
+            Threshold (ms):
+            <input type="number" name="threshold_ms" value="{{ threshold_ms }}" step="1" min="1" style="width:80px">
+        </label>
+        <label>
+            Replay against upload_id:
+            <input type="text" name="upload_id" value="{{ upload_id }}" placeholder="two-word" style="width:200px">
+        </label>
+        <button type="submit" class="button">Apply</button>
+        {% if upload_id %}
+        <a class="button" href="?threshold_ms={{ threshold_ms }}">Clear upload</a>
+        {% endif %}
+    </form>
+
+    {% if fallback_count == 0 %}
+        <p><em>No fallback rules. Every regex rule uses re2; catastrophic backtracking
+        from rule patterns is impossible. If a worker still times out, the cause is
+        elsewhere (log size, parser, etc.).</em></p>
+    {% else %}
+
+    <h2>Top slowest fallback patterns (synthetic inputs)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th class="num">Worst ms</th>
+                <th>Worst input</th>
+                <th class="num">Total ms</th>
+                <th class="num">ID</th>
+                <th>Status</th>
+                <th>Pattern</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in results %}
+            <tr {% if r.is_slow %}class="slow"{% endif %}>
+                <td class="num">{{ r.worst_ms|floatformat:2 }}</td>
+                <td>{{ r.worst_label }}</td>
+                <td class="num">{{ r.total_ms|floatformat:2 }}</td>
+                <td class="num">
+                    <a href="{% url 'admin:fixlist_classificationrule_change' r.rule.pk %}">#{{ r.rule.id }}</a>
+                </td>
+                <td>{{ r.rule.status }}</td>
+                <td>{{ r.rule.source_text|truncatechars:140 }}</td>
+                <td>{% if r.is_slow %}<span class="slow-badge">SLOW</span>{% endif %}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="7"><em>No results.</em></td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% if has_more %}
+    <p><em>Showing top 50 of {{ total_results }} fallback rule(s).</em></p>
+    {% endif %}
+
+    {% if upload_id %}
+    <h2>Replay against upload_id <code>{{ upload_id }}</code></h2>
+    {% if upload_error %}
+        <p class="errornote">{{ upload_error }}</p>
+    {% else %}
+        <p>
+            Log has <strong>{{ upload_line_count }}</strong> non-empty line(s).
+            Per-rule total = wall time spent in <code>compiled.search()</code> across all lines.
+        </p>
+        <table>
+            <thead>
+                <tr>
+                    <th class="num">Total ms</th>
+                    <th class="num">Worst line ms</th>
+                    <th class="num">ID</th>
+                    <th>Pattern</th>
+                    <th>Worst line (truncated)</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for r in upload_results %}
+                <tr {% if r.is_slow %}class="slow"{% endif %}>
+                    <td class="num">{{ r.total_ms|floatformat:1 }}</td>
+                    <td class="num">{{ r.worst_line_ms|floatformat:2 }}</td>
+                    <td class="num">
+                        <a href="{% url 'admin:fixlist_classificationrule_change' r.rule.pk %}">#{{ r.rule.id }}</a>
+                    </td>
+                    <td>{{ r.rule.source_text|truncatechars:100 }}</td>
+                    <td>
+                        {{ r.worst_line|truncatechars:140 }}
+                        {% if r.is_slow %}<div class="worst-line">{{ r.worst_line }}</div>{% endif %}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="5"><em>No results.</em></td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+    {% endif %}
+
+    {% endif %}
+
+    <p style="margin-top:24px;">
+        <a class="button" href="{% url 'admin:fixlist_classificationrule_changelist' %}">Back to rules</a>
+    </p>
+</div>
+{% endblock %}

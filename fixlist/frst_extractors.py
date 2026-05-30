@@ -384,6 +384,22 @@ def extract_frst_scheduled_task(line):
     return extract_frst_entry(line, regexp, group_map, entry_type="scheduled_task")
 
 
+def extract_frst_scheduled_task_job(line):
+    # Classic Windows AT-style scheduled tasks (.job format, pre-Vista, but FRST
+    # still surfaces them on modern systems for legacy installers like X-Rite or
+    # EPSON Scan). Shape: `Task: <path>.job => <binary>` with no GUID. The
+    # `<binary>` sometimes has raw bytes from the .job file appended directly
+    # with no whitespace separator (description blob, machine name, etc.) — the
+    # non-greedy capture truncates at the first executable extension so that
+    # trailing noise is dropped.
+    regexp = (
+        r'Task:\s+(.+?\.job)\s*=>\s*'
+        r'"?(.+?\.(?:' + _BINARY_PATH_ENDINGS + r'))"?'
+    )
+    group_map = {"name": 1, "filepath": 2}
+    return extract_frst_entry(line, regexp, group_map, entry_type="scheduled_task")
+
+
 def extract_frst_startup(line):
     # Trailing tokens FRST may append after the date bracket: `[File not signed]`,
     # `<==== ATTENTION`, and the `(No File)` status marker. Anchoring all of them
@@ -493,6 +509,7 @@ _ALL_EXTRACTORS = (
     extract_frst_shortcut,
     extract_frst_scheduled_task_command,
     extract_frst_scheduled_task,
+    extract_frst_scheduled_task_job,
     extract_frst_startup,
     extract_firewall_rule,
     extract_onemonth,

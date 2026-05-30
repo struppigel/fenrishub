@@ -16,6 +16,7 @@ from ..frst_extractors import (
     extract_any_frst_path,
     extract_frst_scheduled_task,
     extract_frst_scheduled_task_command,
+    extract_frst_scheduled_task_job,
     get_frst_entry,
 )
 
@@ -294,6 +295,79 @@ class ScheduledTaskTriggeredFormTests(TestCase):
 
     def test_triggered_form_yields_no_path(self):
         self.assertIsNone(extract_any_frst_path(self.LINE))
+
+
+class ScheduledTaskJobFormTests(TestCase):
+    """Classic AT-style `.job` scheduled tasks (no GUID). FRST emits these as
+    `Task: C:\\Windows\\Tasks\\<name>.job => <binary>` for legacy installers like
+    X-Rite Device Services and EPSON Scan. The trailing portion after the binary
+    can contain raw bytes from the .job file (description, machine name, ...)
+    with no separator — the extractor must truncate at the executable extension."""
+
+    XRITE_LINE = (
+        r"Task: C:\Windows\Tasks\X-Rite Device Services Software Updater.job => "
+        r"C:\Program Files (x86)\X-Rite\Devices\Services\XRD Software Update.exe"
+    )
+
+    EPSON_LINE = (
+        r"Task: C:\Windows\Tasks\EPSON FF-680W Update.job => "
+        r"C:\Program Files (x86)\epson\Epson Scan 2\Update\e_dtsksd.exe"
+        "0/EXE_S:EPSON FF-680W,ES0170.DAT /F:UpdateDESKTOP-NM9SJCD\\pablo"
+        "ĊSearches for EPSON software updates, and notifies you when "
+        "updates are available."
+    )
+
+    def test_xrite_extracts_job_path_and_binary(self):
+        entry = extract_frst_scheduled_task_job(self.XRITE_LINE)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.entry_type, "scheduled_task")
+        self.assertEqual(
+            entry.name,
+            r"C:\Windows\Tasks\X-Rite Device Services Software Updater.job",
+        )
+        self.assertEqual(
+            entry.filepath,
+            r"C:\Program Files (x86)\X-Rite\Devices\Services\XRD Software Update.exe",
+        )
+        self.assertEqual(entry.filename, "XRD Software Update.exe")
+
+    def test_epson_truncates_trailing_job_blob(self):
+        entry = extract_frst_scheduled_task_job(self.EPSON_LINE)
+        self.assertIsNotNone(entry)
+        self.assertEqual(
+            entry.name,
+            r"C:\Windows\Tasks\EPSON FF-680W Update.job",
+        )
+        self.assertEqual(
+            entry.filepath,
+            r"C:\Program Files (x86)\epson\Epson Scan 2\Update\e_dtsksd.exe",
+        )
+        self.assertEqual(entry.filename, "e_dtsksd.exe")
+        self.assertNotIn("EXE_S", entry.filepath)
+        self.assertNotIn("EPSON FF-680W", entry.filepath)
+
+    def test_guid_extractor_does_not_match_job_form(self):
+        self.assertIsNone(extract_frst_scheduled_task(self.XRITE_LINE))
+        self.assertIsNone(extract_frst_scheduled_task(self.EPSON_LINE))
+
+    def test_get_frst_entry_returns_job_entry(self):
+        entry = get_frst_entry(self.XRITE_LINE)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.entry_type, "scheduled_task")
+        self.assertEqual(
+            entry.filepath,
+            r"C:\Program Files (x86)\X-Rite\Devices\Services\XRD Software Update.exe",
+        )
+
+    def test_extract_any_frst_path_returns_binary(self):
+        self.assertEqual(
+            extract_any_frst_path(self.XRITE_LINE),
+            r"C:\Program Files (x86)\X-Rite\Devices\Services\XRD Software Update.exe",
+        )
+        self.assertEqual(
+            extract_any_frst_path(self.EPSON_LINE),
+            r"C:\Program Files (x86)\epson\Epson Scan 2\Update\e_dtsksd.exe",
+        )
 
 
 class ScheduledTaskCommandFormTests(TestCase):

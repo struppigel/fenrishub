@@ -209,7 +209,7 @@ class ExtractorRegistryTests(TestCase):
     or wiring up a path-eligible extractor that yields no filepath."""
 
     def test_all_extractors_count(self):
-        self.assertEqual(len(_ALL_EXTRACTORS), 20)
+        self.assertEqual(len(_ALL_EXTRACTORS), 21)
 
     def test_path_extractors_excludes_non_path_yielders(self):
         from ..frst_extractors import extract_frst_scheduled_task_command
