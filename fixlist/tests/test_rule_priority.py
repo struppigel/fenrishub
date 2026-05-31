@@ -419,5 +419,6 @@ class PriorityMigrationTests(TestCase):
             "parsed": 15,
             "filepath": 11,
             "substring": 7,
+            "script": 3,
             "regex": 3,
         })

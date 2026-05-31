@@ -266,7 +266,7 @@
             <div class="form-group">
                 <label for="ruleMatchType">match type</label>
                 <select id="ruleMatchType" name="match_type" required>
-                    {% for code, label in match_type_choices %}
+                    {% for code, label in creatable_match_type_choices %}
                     <option value="{{ code }}" {% if form_match_type == code %}selected{% endif %}>{{ label }}</option>
                     {% endfor %}
                 </select>
@@ -282,8 +282,11 @@
                 <div style="font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">only change this if there is a problem</div>
             </div>
             <div class="form-group">
-                <label for="ruleSourceText">match line or pattern (one per line &mdash; each line creates a separate rule)</label>
+                <label for="ruleSourceText" id="ruleSourceTextLabel">match line or pattern (one per line &mdash; each line creates a separate rule)</label>
                 <textarea id="ruleSourceText" name="source_text" placeholder="One pattern per line. All lines share the status, match type, priority, and description above." required>{{ form_source_text }}</textarea>
+                <div id="ruleScriptHelp" style="display: none; font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">
+                    Python snippet (one rule). <code>line</code> holds the log line as a string and the <code>re</code> module is available; set <code>result</code> to a truthy value or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.
+                </div>
             </div>
             <div class="form-group">
                 <label for="ruleDescription">description (optional)</label>
@@ -675,6 +678,26 @@
         }
     }
 
+    function syncSourceTextMode() {
+        const isScript = document.getElementById('ruleMatchType').value === 'script';
+        const label = document.getElementById('ruleSourceTextLabel');
+        const textarea = document.getElementById('ruleSourceText');
+        const help = document.getElementById('ruleScriptHelp');
+        if (isScript) {
+            label.textContent = 'python script (one rule)';
+            textarea.placeholder = 'result = "evil" in line.lower()';
+            textarea.style.fontFamily = 'var(--la-font-mono, monospace)';
+            textarea.style.minHeight = '160px';
+            help.style.display = '';
+        } else {
+            label.innerHTML = 'match line or pattern (one per line &mdash; each line creates a separate rule)';
+            textarea.placeholder = 'One pattern per line. All lines share the status, match type, priority, and description above.';
+            textarea.style.fontFamily = '';
+            textarea.style.minHeight = '';
+            help.style.display = 'none';
+        }
+    }
+
     function updatePreview() {
         const sourceText = document.getElementById('ruleSourceText').value.trim();
         const matchType = document.getElementById('ruleMatchType').value;
@@ -701,6 +724,7 @@
     document.getElementById('ruleSourceText').addEventListener('input', schedulePreviewUpdate);
     document.getElementById('ruleMatchType').addEventListener('change', function () {
         syncPriorityPlaceholder();
+        syncSourceTextMode();
         schedulePreviewUpdate();
     });
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
@@ -715,6 +739,7 @@
         document.getElementById('rulePriority').dataset.userTouched = 'true';
     }
     syncPriorityPlaceholder();
+    syncSourceTextMode();
 })();
 </script>
 {% endblock %}

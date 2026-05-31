@@ -22,6 +22,7 @@ DEFAULT_PRIORITY_BY_MATCH_TYPE = {
     'parsed': 15,
     'filepath': 11,
     'substring': 7,
+    'script': 3,
     'regex': 3,
 }
 PRIORITY_DEFAULT_LABELS = {
@@ -29,7 +30,8 @@ PRIORITY_DEFAULT_LABELS = {
     DEFAULT_PRIORITY_BY_MATCH_TYPE['parsed']: 'parsed entries',
     DEFAULT_PRIORITY_BY_MATCH_TYPE['filepath']: 'filepath',
     DEFAULT_PRIORITY_BY_MATCH_TYPE['substring']: 'substring',
-    DEFAULT_PRIORITY_BY_MATCH_TYPE['regex']: 'regex',
+    # script and regex share the same default priority.
+    DEFAULT_PRIORITY_BY_MATCH_TYPE['regex']: 'regex / script',
 }
 
 
@@ -271,6 +273,7 @@ class ClassificationRule(models.Model):
     MATCH_REGEX = 'regex'
     MATCH_FILEPATH = 'filepath'
     MATCH_PARSED_ENTRY = 'parsed'
+    MATCH_SCRIPT = 'script'
 
     MATCH_TYPE_CHOICES = [
         (MATCH_EXACT, 'Exact line'),
@@ -278,6 +281,7 @@ class ClassificationRule(models.Model):
         (MATCH_REGEX, 'Regex'),
         (MATCH_FILEPATH, 'File path'),
         (MATCH_PARSED_ENTRY, 'Parsed'),
+        (MATCH_SCRIPT, 'Python script'),
     ]
 
     status = models.CharField(max_length=1, choices=STATUS_CHOICES)

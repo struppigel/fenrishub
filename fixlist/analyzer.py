@@ -11,6 +11,7 @@ except ImportError:
 from django.db.models import Q
 
 from . import frst_extractors as ex
+from . import script_matcher
 from .models import ClassificationRule, ParsedFilepathExclusion, get_default_rule_owner_id, detect_log_type
 from .rule_sets import SHARED_RULE_SET_KEY, parse_rule_set_key
 from .status_types import (
@@ -831,6 +832,7 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
         ClassificationRule.MATCH_REGEX: [],
         ClassificationRule.MATCH_FILEPATH: [],
         ClassificationRule.MATCH_PARSED_ENTRY: [],
+        ClassificationRule.MATCH_SCRIPT: [],
         "__filepath_any": [],
         "__parsed_filepath_exclusions": parsed_filepath_exclusions,
         "__regex_set": None,
@@ -857,6 +859,15 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
 
         if rule.match_type == ClassificationRule.MATCH_REGEX:
             pending_regex_rules.append(rule)
+            continue
+
+        if rule.match_type == ClassificationRule.MATCH_SCRIPT:
+            try:
+                code = script_matcher.compile_script(rule.source_text)
+            except ValueError:
+                # Skip rules that no longer compile (consistent with invalid regex).
+                continue
+            buckets[ClassificationRule.MATCH_SCRIPT].append((rule, code))
             continue
 
         if rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
@@ -1214,6 +1225,7 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
         "parsed_entry": [],
         "filepath": [],
         "substring": [],
+        "script": [],
         "regex": [],
     }
 
@@ -1250,6 +1262,11 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
         if rule.source_text and rule.source_text in line:
             groups["substring"].append((rule, f'found substring "{rule.source_text}"', "substring"))
 
+    for rule, code in buckets[ClassificationRule.MATCH_SCRIPT]:
+        matched, _error = script_matcher.run_script(code, line)
+        if matched:
+            groups["script"].append((rule, "matched script", "script"))
+
     regex_set = buckets.get("__regex_set")
     if regex_set is not None:
         set_rules = buckets["__regex_set_rules"]
@@ -1274,6 +1291,7 @@ _MATCH_TYPE_TO_PRIMARY_MATCHER = {
     ClassificationRule.MATCH_PARSED_ENTRY: "parsed_entry",
     ClassificationRule.MATCH_FILEPATH: "filepath",
     ClassificationRule.MATCH_SUBSTRING: "substring",
+    ClassificationRule.MATCH_SCRIPT: "script",
     ClassificationRule.MATCH_REGEX: "regex",
 }
 

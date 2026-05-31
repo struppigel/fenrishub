@@ -8,3 +8,4 @@ mmh3>=5.2,<6
 charset-normalizer>=3.3,<4
 google-re2>=1.1
 tblib>=3.0,<4
+RestrictedPython>=7.0,<9

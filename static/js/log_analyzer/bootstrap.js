@@ -12,6 +12,33 @@ function bindAnalyzerButton(elementId, handler) {
 
 const _uploadContentCache = new Map();
 
+// Console-style loading indicator. Braille frames render in any modern
+// monospace font and give the analyzer status line a familiar CLI feel.
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+function startStatusSpinner(element, baseText) {
+    if (!element) {
+        return () => {};
+    }
+    // The spinner glyph is hidden from screen readers — it ticks ~12 times
+    // per second and would spam any aria-live attribute on the parent.
+    element.textContent = '';
+    const baseSpan = document.createElement('span');
+    baseSpan.textContent = baseText;
+    const spinSpan = document.createElement('span');
+    spinSpan.setAttribute('aria-hidden', 'true');
+    spinSpan.textContent = ` ${SPINNER_FRAMES[0]}`;
+    element.appendChild(baseSpan);
+    element.appendChild(spinSpan);
+
+    let i = 1;
+    const id = setInterval(() => {
+        spinSpan.textContent = ` ${SPINNER_FRAMES[i % SPINNER_FRAMES.length]}`;
+        i += 1;
+    }, 80);
+    return () => clearInterval(id);
+}
+
 function buildUploadedLogContentUrl(uploadId) {
     const template = (window.logAnalyzerConfig && window.logAnalyzerConfig.uploadedLogContentUrlTemplate) || '';
     if (!template || !uploadId) {
@@ -82,7 +109,7 @@ async function loadSelectedUploadForAnalyzer() {
         return;
     }
 
-    statusElement.textContent = 'loading...';
+    let stopSpinner = startStatusSpinner(statusElement, 'loading');
 
     let contentPayload = _uploadContentCache.get(uploadId);
     if (!contentPayload) {
@@ -97,9 +124,26 @@ async function loadSelectedUploadForAnalyzer() {
             contentPayload = await response.json();
             _uploadContentCache.set(uploadId, contentPayload);
         } catch (error) {
+            stopSpinner();
             statusElement.textContent = 'failed to load upload';
             return;
         }
+    }
+
+    // For uploads the user doesn't normally have in their dropdown (e.g.
+    // another helper's log loaded by direct URL), loadInitialUploadForAnalyzer
+    // injects a placeholder option with " | loading...". Update it now that
+    // we know the upload's metadata, so it doesn't say "loading" forever.
+    const placeholderOption = [...selectElement.options].find(
+        (option) => option.value === uploadId,
+    );
+    if (placeholderOption) {
+        const parts = [
+            contentPayload.upload_id || uploadId,
+            contentPayload.original_filename,
+            contentPayload.forum_username,
+        ].filter((part) => part && String(part).trim().length > 0);
+        placeholderOption.textContent = parts.join(' | ');
     }
 
     if (typeof resetToInput === 'function') {
@@ -118,12 +162,18 @@ async function loadSelectedUploadForAnalyzer() {
         if (cachedAnalysis) {
             applyAnalysisPayload(cachedAnalysis, { resetCopied: true });
             showCachedAnalysisLayout();
-            statusElement.textContent = `loaded ${contentPayload.upload_id} — refreshing analysis…`;
+            stopSpinner();
+            stopSpinner = startStatusSpinner(
+                statusElement,
+                `loaded ${contentPayload.upload_id} — refreshing analysis`,
+            );
             cachedAnalysisApplied = true;
         }
     }
 
     if (!cachedAnalysisApplied) {
+        stopSpinner();
+        stopSpinner = () => {};
         statusElement.textContent = `loaded ${contentPayload.upload_id}`;
     }
 
@@ -131,10 +181,11 @@ async function loadSelectedUploadForAnalyzer() {
         try {
             await parseLogs();
         } finally {
-            if (cachedAnalysisApplied) {
-                statusElement.textContent = `loaded ${contentPayload.upload_id}`;
-            }
+            stopSpinner();
+            statusElement.textContent = `loaded ${contentPayload.upload_id}`;
         }
+    } else {
+        stopSpinner();
     }
 }
 

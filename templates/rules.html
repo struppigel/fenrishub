@@ -313,7 +313,7 @@
             <div class="form-group">
                 <label for="editMatchType">match type</label>
                 <select id="editMatchType" name="match_type" required>
-                    {% for code, label in match_type_choices %}
+                    {% for code, label in creatable_match_type_choices %}
                     <option value="{{ code }}">{{ label }}</option>
                     {% endfor %}
                 </select>
@@ -327,8 +327,11 @@
                 </select>
             </div>
             <div class="form-group">
-                <label for="editSourceText">source text</label>
+                <label for="editSourceText" id="editSourceTextLabel">source text</label>
                 <textarea id="editSourceText" name="source_text" required></textarea>
+                <div id="editScriptHelp" style="display: none; font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">
+                    Python snippet. <code>line</code> holds the log line and the <code>re</code> module is available; set <code>result</code> to truthy or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.
+                </div>
             </div>
             <div class="form-group">
                 <label for="editDescription">description</label>
@@ -441,6 +444,24 @@
 <script>
 const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
 
+function syncEditSourceTextMode() {
+    const isScript = document.getElementById('editMatchType').value === 'script';
+    const label = document.getElementById('editSourceTextLabel');
+    const textarea = document.getElementById('editSourceText');
+    const help = document.getElementById('editScriptHelp');
+    if (isScript) {
+        label.textContent = 'python script';
+        textarea.style.fontFamily = 'var(--la-font-mono, monospace)';
+        textarea.style.minHeight = '160px';
+        help.style.display = '';
+    } else {
+        label.textContent = 'source text';
+        textarea.style.fontFamily = '';
+        textarea.style.minHeight = '';
+        help.style.display = 'none';
+    }
+}
+
 function startEdit(pk, status, matchType, sourceText, description, isEnabled, priority) {
     document.getElementById('editPk').value = pk;
     document.getElementById('editStatus').value = status;
@@ -451,6 +472,7 @@ function startEdit(pk, status, matchType, sourceText, description, isEnabled, pr
     document.getElementById('editPriority').value = String(priority);
     document.getElementById('editPriority').dataset.userTouched = 'true';
     document.getElementById('editSection').style.display = 'block';
+    syncEditSourceTextMode();
     document.getElementById('editSourceText').focus();
 }
 
@@ -462,6 +484,7 @@ document.getElementById('editMatchType').addEventListener('change', function () 
             priorityInput.value = String(fallback);
         }
     }
+    syncEditSourceTextMode();
 });
 
 document.getElementById('editPriority').addEventListener('change', function () {

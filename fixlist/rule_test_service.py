@@ -3,6 +3,7 @@
 import re
 
 from . import frst_extractors as ex
+from . import script_matcher
 from .analyzer import STATUS_LABELS, STATUS_PRECEDENCE, _load_rule_buckets, inspect_line_matches, parse_rule_line
 from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
 
@@ -24,6 +25,11 @@ def build_rule_test_results(
             raise ValueError(f'Invalid regex: {exc}') from exc
     else:
         compiled = None
+
+    script_code = None
+    if match_type == 'script':
+        # Raises ValueError on syntax/restriction errors -> HTTP 400 in the view.
+        script_code = script_matcher.compile_script(source_text)
 
     # Pre-compute match-type-specific state once.
     rule_entry = None
@@ -47,7 +53,7 @@ def build_rule_test_results(
             rule_norm_path = ex.normalize_path(parsed_rule['filepath']).lower().strip()
         else:
             rule_norm_path = ex.normalize_path(source_text).lower().strip()
-    elif match_type not in ('exact', 'substring', 'regex'):
+    elif match_type not in ('exact', 'substring', 'regex', 'script'):
         raise ValueError(f'Unsupported match_type: {match_type}')
 
     if priority is None:
@@ -106,6 +112,12 @@ def build_rule_test_results(
                 line_norm = ex.normalize_path(line_path).lower().strip()
                 result['matched'] = line_norm == rule_norm_path and bool(rule_norm_path)
                 result['parsed'] = {'filepath': line_path, 'normalized_filepath': line_norm}
+
+        elif match_type == 'script':
+            matched, error = script_matcher.run_script(script_code, line)
+            result['matched'] = matched
+            if error:
+                result['script_error'] = error
 
         # Inspect existing rule matches for this line.
         stripped = line.strip()

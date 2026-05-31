@@ -15,6 +15,7 @@ from django.urls import reverse
 from django.core.paginator import Paginator
 from django.db.models import Q, Case, When
 
+from .. import script_matcher
 from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
     evaluate_regex_pattern,
@@ -28,6 +29,7 @@ from ..models import (
 )
 from ..rule_sets import invalidate_for_rule_owner
 from ..rule_test_service import build_rule_test_results
+from .guest import is_moderator
 
 
 def _priority_choices():
@@ -49,6 +51,48 @@ def _coerce_priority(raw_value, match_type: str) -> int:
     except (TypeError, ValueError):
         return ClassificationRule.default_priority_for(match_type)
     return max(PRIORITY_MIN, min(PRIORITY_MAX, value))
+
+
+def _patterns_for(match_type: str, source_text: str) -> list:
+    """Split source text into rule patterns.
+
+    Script rules are a single multi-line snippet, so the whole blob is one rule.
+    Every other match type creates one rule per non-empty line.
+    """
+    if match_type == ClassificationRule.MATCH_SCRIPT:
+        return [source_text] if source_text.strip() else []
+    return _split_patterns(source_text)
+
+
+def _creatable_match_type_choices(user):
+    """Match types a user may author. Only moderators may create script rules."""
+    if is_moderator(user):
+        return ClassificationRule.MATCH_TYPE_CHOICES
+    return [
+        (code, label)
+        for code, label in ClassificationRule.MATCH_TYPE_CHOICES
+        if code != ClassificationRule.MATCH_SCRIPT
+    ]
+
+
+def _script_rule_error(match_type: str, source_text: str, user) -> str | None:
+    """Validate a script rule before save. Returns an error message, or None if OK.
+
+    Non-moderators may not author script rules at all. For moderators, the snippet
+    must compile, run cleanly on adversarial input, and stay within the time budget.
+    """
+    if match_type != ClassificationRule.MATCH_SCRIPT:
+        return None
+    if not is_moderator(user):
+        return 'Script rules can only be created by moderators.'
+    evaluation = script_matcher.evaluate_script(source_text)
+    if not evaluation['compile_ok']:
+        return evaluation['compile_error'] or 'Invalid script.'
+    if evaluation['runtime_error']:
+        return f"Script failed on test input: {evaluation['runtime_error']}"
+    if evaluation['is_slow']:
+        return 'Script is too slow on adversarial input and was rejected.'
+    return None
 
 
 def _split_patterns(source_text: str) -> list:
@@ -96,13 +140,16 @@ def rules_view(request):
             source_text = request.POST.get('source_text', '').strip()
             description = request.POST.get('description', '').strip()
             priority = _coerce_priority(request.POST.get('priority'), match_type)
-            patterns = _split_patterns(source_text)
+            patterns = _patterns_for(match_type, source_text)
+            script_error = _script_rule_error(match_type, source_text, request.user)
             if not patterns:
                 messages.error(request, 'Rule source text is required.')
             elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
                 messages.error(request, 'Invalid status.')
             elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
                 messages.error(request, 'Invalid match type.')
+            elif script_error:
+                messages.error(request, script_error)
             else:
                 existing = set(
                     ClassificationRule.objects.filter(
@@ -152,12 +199,15 @@ def rules_view(request):
             description = request.POST.get('description', '').strip()
             is_enabled = request.POST.get('is_enabled') == 'on'
             priority = _coerce_priority(request.POST.get('priority'), match_type)
+            script_error = _script_rule_error(match_type, source_text, request.user)
             if not source_text:
                 messages.error(request, 'Rule source text is required.')
             elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
                 messages.error(request, 'Invalid status.')
             elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
                 messages.error(request, 'Invalid match type.')
+            elif script_error:
+                messages.error(request, script_error)
             else:
                 duplicate = ClassificationRule.objects.filter(
                     owner=request.user, status=status, match_type=match_type, source_text=source_text
@@ -271,6 +321,7 @@ def rules_view(request):
         'status_choices': ClassificationRule.STATUS_CHOICES,
         'creatable_status_choices': ClassificationRule.CREATABLE_STATUS_CHOICES,
         'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
+        'creatable_match_type_choices': _creatable_match_type_choices(request.user),
         'status_map': STATUS_MAP,
         'match_type_map': MATCH_TYPE_MAP,
         'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
@@ -308,13 +359,16 @@ def add_rule_view(request):
         form_source_text = source_text
         form_description = description
         form_priority = raw_priority
-        patterns = _split_patterns(source_text)
+        patterns = _patterns_for(match_type, source_text)
+        script_error = _script_rule_error(match_type, source_text, request.user)
         if not patterns:
             messages.error(request, 'Rule source text is required.')
         elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
             messages.error(request, 'Invalid status.')
         elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
             messages.error(request, 'Invalid match type.')
+        elif script_error:
+            messages.error(request, script_error)
         else:
             priority = _coerce_priority(raw_priority, match_type)
             existing = set(
@@ -380,6 +434,7 @@ def add_rule_view(request):
         'status_choices': ClassificationRule.STATUS_CHOICES,
         'creatable_status_choices': ClassificationRule.CREATABLE_STATUS_CHOICES,
         'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
+        'creatable_match_type_choices': _creatable_match_type_choices(request.user),
         'form_status': form_status,
         'form_match_type': form_match_type,
         'form_source_text': form_source_text,
@@ -416,6 +471,11 @@ def test_rule_api(request):
     if status not in VALID_STATUSES:
         status = '?'
 
+    # Previewing a script rule executes the submitted snippet, so it is gated to
+    # moderators exactly like authoring one.
+    if match_type == ClassificationRule.MATCH_SCRIPT and not is_moderator(request.user):
+        return JsonResponse({'error': 'Script rules can only be tested by moderators.'}, status=403)
+
     if raw_priority is None or raw_priority == '':
         priority = None
     else:
@@ -424,7 +484,7 @@ def test_rule_api(request):
         except (TypeError, ValueError):
             priority = None
 
-    patterns = _split_patterns(source_text)
+    patterns = _patterns_for(match_type, source_text)
     if not patterns:
         return JsonResponse({'error': 'Field "source_text" is required.'}, status=400)
     if len(patterns) > 100:
