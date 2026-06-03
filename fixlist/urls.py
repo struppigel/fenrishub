@@ -9,7 +9,7 @@ from .views.analyzer import (
     update_analyzed_line_status_api,
     uploaded_log_cached_analysis_api,
 )
-from .views.auth import change_password_view, help_view, login_view, logout_view, profile_view
+from .views.auth import change_password_view, frst_download_view, help_view, login_view, logout_view, profile_view
 from .views.fixlists import (
     copy_to_clipboard_api,
     create_fixlist_view,
@@ -55,6 +55,7 @@ urlpatterns = [
     path('account/password/', change_password_view, name='change_password'),
     path('account/profile/', profile_view, name='profile'),
     path('help/', help_view, name='help'),
+    path('frst-download/', frst_download_view, name='frst_download'),
     path('fixlists/', dashboard_view, name='dashboard'),
     path('uploads/', uploaded_logs_view, name='uploaded_logs'),
     path('uploads/trash/', uploads_trash_view, name='uploads_trash'),

@@ -126,3 +126,9 @@ def logout_view(request):
 @require_http_methods(["GET"])
 def help_view(request):
     return render(request, 'help.html')
+
+
+@require_http_methods(["GET"])
+def frst_download_view(request):
+    """Public, unlisted page offering the FRST scan tool for download."""
+    return render(request, 'frst_download.html')

@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Download FRST64 - FenrisHub{% endblock %}
+
+{% block content %}
+<h2>Farbar Recovery Scan Tool (FRST64)</h2>
+<p class="info-box">English build of FRST64. Run it on the affected Windows machine to produce FRST.txt and Addition.txt logs, then upload those logs for analysis.</p>
+<div class="button-group">
+    <a href="{% static 'FRST64English.exe' %}" download>
+        <button type="button">Download FRST64English.exe</button>
+    </a>
+</div>
+{% endblock %}

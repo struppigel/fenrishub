@@ -35,6 +35,12 @@ class AuthenticationAndAccessTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response.url)
 
+    def test_frst_download_public_for_anonymous(self):
+        response = self.client.get(reverse("frst_download"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "FRST64English.exe")
+
     def test_change_password_requires_login(self):
         response = self.client.get(reverse("change_password"))
 
