@@ -10,13 +10,13 @@ from django.contrib import messages
 from django.contrib.auth.models import User
 from django.conf import settings
 from django.core.cache import cache
-from django.db.models import Q
+from django.db.models import Max, Q
 from django.urls import reverse
 from urllib.parse import urlencode
 from datetime import timedelta
 from django.utils import timezone
 
-from ..models import UploadedLog, Fixlist
+from ..models import InfectionCase, UploadedLog, Fixlist
 
 
 def _purge_old_trash():
@@ -28,6 +28,50 @@ def _purge_old_trash():
     Fixlist.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff).delete()
     UploadedLog.objects.filter(created_at__lt=hard_cutoff).delete()
     Fixlist.objects.filter(created_at__lt=hard_cutoff).delete()
+
+
+def _autoclose_stale_cases():
+    """Close open infection cases with no activity in over 30 days. Excludes training cases.
+
+    Activity mirrors the cases-list view: the latest created_at across the case itself and its
+    non-deleted logs, fixlists, and notes. Returns the number of cases closed.
+    """
+    cutoff = timezone.now() - timedelta(days=30)
+    candidates = (
+        InfectionCase.objects.filter(
+            status=InfectionCase.STATUS_OPEN,
+            deleted_at__isnull=True,
+            is_training=False,
+        )
+        .annotate(
+            last_log=Max(
+                'log_links__uploaded_log__created_at',
+                filter=Q(log_links__uploaded_log__deleted_at__isnull=True),
+            ),
+            last_fixlist=Max(
+                'fixlist_links__fixlist__created_at',
+                filter=Q(fixlist_links__fixlist__deleted_at__isnull=True),
+            ),
+            last_note=Max(
+                'note_entries__created_at',
+                filter=Q(note_entries__deleted_at__isnull=True),
+            ),
+        )
+    )
+
+    stale_ids = []
+    for case in candidates:
+        last_activity = max(
+            ts
+            for ts in (case.created_at, case.last_log, case.last_fixlist, case.last_note)
+            if ts is not None
+        )
+        if last_activity < cutoff:
+            stale_ids.append(case.pk)
+
+    if not stale_ids:
+        return 0
+    return InfectionCase.objects.filter(pk__in=stale_ids).update(status=InfectionCase.STATUS_CLOSED)
 
 
 def _anonymous_upload_limit() -> tuple[int, int]:

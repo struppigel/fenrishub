@@ -17,7 +17,7 @@ from ..models import (
     UploadedLog,
 )
 from ..upload_utils import execute_merge, resolve_ordered_logs_for_merge
-from .utils import _purge_old_trash, get_action_scoped_uploads
+from .utils import _autoclose_stale_cases, _purge_old_trash, get_action_scoped_uploads
 
 
 def _case_queryset_for_user(user):
@@ -202,6 +202,7 @@ def _selected_items_for_case_request(request, case):
 @login_required
 @require_http_methods(['GET'])
 def infection_cases_view(request):
+    _autoclose_stale_cases()
     cases = list(
         _case_queryset_for_user(request.user)
         .prefetch_related(

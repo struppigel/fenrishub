@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from ..models import Fixlist, InfectionCase, InfectionCaseFixlist, InfectionCaseLog, InfectionCaseNote, UploadedLog
 from ..views.infection_cases import _build_case_timeline
+from ..views.utils import _autoclose_stale_cases
 
 
 class InfectionCaseViewTests(TestCase):
@@ -1016,3 +1017,130 @@ class InfectionCaseTrainingModeTests(TestCase):
         response = self.client.get(reverse('view_infection_case', args=[case.case_id]))
 
         self.assertContains(response, 'observe')
+
+
+class AutoCloseStaleCasesTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='alice', password='password123')
+        self.client.login(username='alice', password='password123')
+        self.stale_time = timezone.now() - timedelta(days=31)
+        self.recent_time = timezone.now() - timedelta(days=29)
+
+    def _backdate_case(self, case, when):
+        InfectionCase.objects.filter(pk=case.pk).update(created_at=when)
+
+    def _make_log(self, upload_id, when):
+        log = UploadedLog.objects.create(
+            upload_id=upload_id,
+            forum_username='target_user',
+            original_filename=f'{upload_id}.txt',
+            content='content',
+            recipient_user=self.user,
+        )
+        UploadedLog.objects.filter(pk=log.pk).update(created_at=when)
+        return log
+
+    def test_case_with_old_log_is_closed(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        self._backdate_case(case, self.stale_time)
+        log = self._make_log('autoclose-old-log', self.stale_time)
+        InfectionCaseLog.objects.create(case=case, uploaded_log=log, added_by=self.user)
+
+        _autoclose_stale_cases()
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_CLOSED)
+
+    def test_case_with_recent_log_stays_open(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        self._backdate_case(case, self.stale_time)
+        log = self._make_log('autoclose-recent-log', self.recent_time)
+        InfectionCaseLog.objects.create(case=case, uploaded_log=log, added_by=self.user)
+
+        _autoclose_stale_cases()
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+
+    def test_case_with_recent_note_stays_open(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        self._backdate_case(case, self.stale_time)
+        note = InfectionCaseNote.objects.create(case=case, content='still working', created_by=self.user)
+        InfectionCaseNote.objects.filter(pk=note.pk).update(created_at=self.recent_time)
+
+        _autoclose_stale_cases()
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+
+    def test_empty_case_closed_when_created_long_ago(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        self._backdate_case(case, self.stale_time)
+
+        _autoclose_stale_cases()
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_CLOSED)
+
+    def test_empty_recent_case_stays_open(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        self._backdate_case(case, self.recent_time)
+
+        _autoclose_stale_cases()
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+
+    def test_stale_training_case_is_not_closed(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', is_training=True)
+        self._backdate_case(case, self.stale_time)
+
+        _autoclose_stale_cases()
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+
+    def test_already_closed_and_soft_deleted_cases_are_untouched(self):
+        soft_deleted = InfectionCase.objects.create(
+            owner=self.user,
+            username='target_user',
+            auto_assign_new_items=False,
+            deleted_at=timezone.now(),
+        )
+        self._backdate_case(soft_deleted, self.stale_time)
+
+        closed = _autoclose_stale_cases()
+
+        self.assertEqual(closed, 0)
+
+    def test_old_log_with_recent_fixlist_stays_open(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        self._backdate_case(case, self.stale_time)
+        old_log = self._make_log('mixed-old-log', self.stale_time)
+        InfectionCaseLog.objects.create(case=case, uploaded_log=old_log, added_by=self.user)
+        fixlist = Fixlist.objects.create(owner=self.user, username='target_user', content='fix')
+        Fixlist.objects.filter(pk=fixlist.pk).update(created_at=self.recent_time)
+        InfectionCaseFixlist.objects.create(case=case, fixlist=fixlist, added_by=self.user)
+
+        _autoclose_stale_cases()
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+
+    def test_returns_count_of_closed_cases(self):
+        first = InfectionCase.objects.create(owner=self.user, username='u1', auto_assign_new_items=False)
+        second = InfectionCase.objects.create(owner=self.user, username='u2', auto_assign_new_items=False)
+        self._backdate_case(first, self.stale_time)
+        self._backdate_case(second, self.stale_time)
+
+        self.assertEqual(_autoclose_stale_cases(), 2)
+
+    def test_loading_cases_list_triggers_autoclose(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        self._backdate_case(case, self.stale_time)
+
+        response = self.client.get(reverse('infection_cases'))
+
+        self.assertEqual(response.status_code, 200)
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_CLOSED)
