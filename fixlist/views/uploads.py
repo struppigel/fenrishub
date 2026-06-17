@@ -35,6 +35,7 @@ from .upload_actions import (
 from .utils import (
     _anonymous_upload_limit, _consume_anonymous_upload_slot, _resolve_upload_recipient_username,
     get_action_scoped_uploads, get_updatable_uploads, get_client_ip, _purge_old_trash,
+    redirect_preserving_filters,
 )
 
 
@@ -454,20 +455,20 @@ def uploads_trash_view(request):
             uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=False)
             if not user_can_delete_uploaded_log(request.user, uploaded_log):
                 messages.error(request, f'Only the assigned helper can restore {upload_id}.')
-                return redirect('uploads_trash')
+                return redirect_preserving_filters(request, 'uploads_trash')
             restore_uploaded_log(uploaded_log)
             messages.success(request, f'Upload {upload_id} restored.')
-            return redirect('uploads_trash')
+            return redirect_preserving_filters(request, 'uploads_trash')
 
         if action == 'delete_permanent':
             upload_id = request.POST.get('upload_id', '').strip()
             uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=False)
             if not user_can_delete_uploaded_log(request.user, uploaded_log):
                 messages.error(request, f'Only the assigned helper can permanently delete {upload_id}.')
-                return redirect('uploads_trash')
+                return redirect_preserving_filters(request, 'uploads_trash')
             uploaded_log.delete()
             messages.success(request, f'Upload {upload_id} permanently deleted.')
-            return redirect('uploads_trash')
+            return redirect_preserving_filters(request, 'uploads_trash')
 
         if action == 'restore_selected':
             return handle_restore_selected_action(request, selected_ids)

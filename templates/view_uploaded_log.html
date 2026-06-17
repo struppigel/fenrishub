@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load rule_tags %}
 
 {% block title %}Uploaded Log - Fenris{% endblock %}
 
@@ -79,6 +80,10 @@
     <div>{{ uploaded_log.upload_id }}</div>
     <div class="meta-key">filename</div>
     <div>{{ uploaded_log.original_filename }}</div>
+    <div class="meta-key">log type</div>
+    <div>
+        <span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|log_type_css_slug }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span>
+    </div>
     <div class="meta-key">forum user</div>
     <div style="display: flex; align-items: center; gap: 6px;">
         <span id="forumUserDisplay">{{ uploaded_log.forum_username }}</span>

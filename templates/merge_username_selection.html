@@ -23,6 +23,7 @@
     {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
     {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
     {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+    {% if page %}<input type="hidden" name="page" value="{{ page }}">{% endif %}
 
     <div class="form-group">
         <label>choose a username:</label>

@@ -172,6 +172,7 @@ def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer:
             'show_all': (request.POST.get('show_all') or '').strip().lower() in {'1', 'true', 'on', 'yes'},
             'username_filter': (request.POST.get('u') or '').strip(),
             'search_query': (request.POST.get('q') or '').strip(),
+            'page': (request.POST.get('page') or '').strip(),
         }
         return render(request, 'merge_username_selection.html', context)
 
@@ -268,12 +269,15 @@ def handle_rescan_stats_selected_action(request, selected_ids: list, action_scop
     """Handle rescan analysis stats for selected uploads."""
     if not selected_ids:
         messages.error(request, 'Select at least one upload to rescan.')
-        return redirect('uploaded_logs')
+        return redirect_preserving_filters(request, 'uploaded_logs')
 
     rescanned_count = 0
     failed_upload_ids = []
 
-    for uploaded_log in action_scope_uploads.filter(deleted_at__isnull=True, upload_id__in=selected_ids).iterator():
+    # Rescan only recomputes derived stats/log-type — it never changes ownership
+    # or classifications — so it's safe to run on any visible log, including those
+    # assigned to other helpers (which fall outside the caller's action scope).
+    for uploaded_log in UploadedLog.objects.filter(deleted_at__isnull=True, upload_id__in=selected_ids).iterator():
         try:
             uploaded_log.recalculate_analysis_stats()
             uploaded_log.recalculate_log_type()
@@ -296,4 +300,4 @@ def handle_rescan_stats_selected_action(request, selected_ids: list, action_scop
     else:
         messages.success(request, f'Rescanned stats for {rescanned_count} upload(s).')
 
-    return redirect('uploaded_logs')
+    return redirect_preserving_filters(request, 'uploaded_logs')

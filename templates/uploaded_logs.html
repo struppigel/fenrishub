@@ -137,6 +137,7 @@
     {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
     {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
     {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+    {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
 </form>
 
 {% if is_trash %}
@@ -254,12 +255,20 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="restore">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn" title="restore this upload from trash">restore</button>
             </form>
             <form method="post" action="{% url 'uploads_trash' %}">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete_permanent">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
+                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Permanently delete this upload?');" title="permanently delete this upload">delete</button>
             </form>
             {% endif %}
@@ -272,6 +281,7 @@
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn" title="assign this upload to you (take over)">assign</button>
             </form>
             {% elif uploaded_log.recipient_user == request.user %}
@@ -282,6 +292,7 @@
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn" title="release this upload back to the general channel">unassign</button>
             </form>
             {% else %}
@@ -292,6 +303,7 @@
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn" title="copy this upload into your channel (original stays with the other helper)">copy</button>
             </form>
             {% endif %}
@@ -306,6 +318,7 @@
                 {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this upload to trash?');" title="move this upload to trash">delete</button>
             </form>
             {% endif %}
