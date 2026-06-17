@@ -34,10 +34,11 @@
         font-weight: 600;
     }
 
-    /* Read-only display via <pre> rather than a large <textarea>: an editable
-       textarea keeps a full text-editing buffer for the whole log, which makes
-       the first drag-select/copy lag on big logs. A <pre> renders once and
-       native selection is instant. */
+    /* Read-only display via a block container rather than a large <textarea>:
+       an editable textarea keeps a full text-editing buffer for the whole log,
+       which makes the first drag-select/copy lag on big logs. The content is
+       split into chunks (.log-chunk) so the browser can skip laying out the
+       off-screen ones; native selection and copy stay instant on large logs. */
     .uploaded-content {
         min-height: 600px;
         max-height: 80vh;
@@ -51,6 +52,14 @@
         white-space: pre-wrap;
         word-wrap: break-word;
         color: var(--la-text-main);
+    }
+
+    /* Only the chunks intersecting the viewport are laid out / line-wrapped;
+       the rest fall back to the contain-intrinsic-size estimate (~100 lines).
+       This is what keeps initial render and selection fast on big logs. */
+    .uploaded-content .log-chunk {
+        content-visibility: auto;
+        contain-intrinsic-size: auto 1500px;
     }
 
     .uploaded-log-page .delete-btn {
@@ -134,19 +143,29 @@
 
 <div class="form-group">
     <label for="uploadedContent">content</label>
-    <pre id="uploadedContent" class="uploaded-content" tabindex="0">{{ uploaded_log.content }}</pre>
+    <div id="uploadedContent" class="uploaded-content" tabindex="0">{% for chunk in uploaded_log.content|chunk_log:100 %}<div class="log-chunk">{{ chunk }}</div>{% endfor %}</div>
 </div>
 
 <script>
+// The content is rendered as chunked .log-chunk blocks (see chunk_log filter)
+// so the browser can skip off-screen layout. Each chunk drops its trailing
+// newline, so rejoin the chunk text with '\n' to rebuild the full log.
+function getFullContent() {
+    const root = document.getElementById('uploadedContent');
+    const chunks = root.querySelectorAll('.log-chunk');
+    if (!chunks.length) return root.textContent;
+    return Array.from(chunks, c => c.textContent).join('\n');
+}
+
 function viewRawContent() {
-    const content = document.getElementById('uploadedContent').textContent;
+    const content = getFullContent();
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     window.open(url, '_blank');
 }
 
 function copyAllContent(button) {
-    const content = document.getElementById('uploadedContent').textContent;
+    const content = getFullContent();
     const originalText = button.textContent;
     navigator.clipboard.writeText(content).then(function() {
         button.textContent = 'copied';
@@ -155,7 +174,7 @@ function copyAllContent(button) {
 }
 
 function downloadContent() {
-    const content = document.getElementById('uploadedContent').textContent;
+    const content = getFullContent();
     const rawName = "{{ uploaded_log.original_filename|escapejs }}" || "{{ uploaded_log.upload_id|escapejs }}.txt";
     const safeName = rawName.replace(/[\\\/:*?"<>|]/g, '_').slice(0, 200) || "log.txt";
     const blob = new Blob([content], { type: 'text/plain' });

@@ -14,6 +14,27 @@ def log_type_css_slug(name):
     context_processors so the badge color rule and the element class always match."""
     return _log_type_css_slug(name or '')
 
+
+@register.filter(name='chunk_log')
+def chunk_log(content, lines_per_chunk=100):
+    """Split log content into chunks of N lines for the uploaded-log viewer.
+
+    Each chunk is rendered in its own block so the browser can skip laying out
+    off-screen chunks via CSS `content-visibility: auto`, which keeps the page
+    responsive (selection, scrolling) on large logs. Chunks carry no trailing
+    newline; joining them back with '\\n' reproduces the original, so copy and
+    download can reconstruct the full text from the rendered chunks."""
+    if not content:
+        return []
+    try:
+        n = int(lines_per_chunk)
+    except (TypeError, ValueError):
+        n = 100
+    if n < 1:
+        n = 100
+    lines = content.split('\n')
+    return ['\n'.join(lines[i:i + n]) for i in range(0, len(lines), n)]
+
 _FIELDS = [
     ('entry_type', 'parsed-entry-type'),
     ('clsid', 'parsed-clsid'),
