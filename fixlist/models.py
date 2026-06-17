@@ -452,8 +452,12 @@ RESERVED_LOG_TYPE_NAMES = {'unknown'}
 
 def log_type_css_slug(name: str) -> str:
     """Map a log_type name to its CSS class slug. Keeps backward compatibility
-    with the existing convention used in templates (lowercased, '&' and spaces stripped)."""
-    return (name or '').lower().replace('&', '').replace(' ', '')
+    with the existing convention used in templates (lowercased, '&' and spaces
+    stripped) while dropping any other character that isn't safe inside a CSS
+    class selector — notably '.', which the browser would parse as a class
+    boundary (e.g. 'Dr.Web' -> 'log-type-dr.web' would match two classes)."""
+    lowered = (name or '').lower().replace('&', '').replace(' ', '')
+    return re.sub(r'[^a-z0-9_-]', '', lowered)
 
 
 class LogTypeBadge(models.Model):

@@ -449,6 +449,104 @@ class InfectionCaseViewTests(TestCase):
         self.assertEqual(timeline[2]['item_type'], 'log')
         self.assertEqual(timeline[2]['uploaded_log'].upload_id, 'anchor-late')
 
+    def test_child_of_soft_deleted_note_rehomes_to_grandparent(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        uploaded_log = UploadedLog.objects.create(
+            upload_id='rehome-log',
+            forum_username='target_user',
+            original_filename='rehome.txt',
+            content='content',
+            recipient_user=self.user,
+        )
+        link = InfectionCaseLog.objects.create(case=case, uploaded_log=uploaded_log, added_by=self.user)
+
+        note_a = InfectionCaseNote.objects.create(case=case, content='note A', created_by=self.user, anchor_log=link)
+        note_b = InfectionCaseNote.objects.create(case=case, content='note B', created_by=self.user, anchor_note=note_a)
+        note_c = InfectionCaseNote.objects.create(case=case, content='note C', created_by=self.user, anchor_note=note_b)
+
+        note_b.deleted_at = timezone.now()
+        note_b.save()
+
+        timeline = _build_case_timeline(case)
+
+        contents = [item['note'].content for item in timeline if item['item_type'] == 'note']
+        self.assertIn('note A', contents)
+        self.assertIn('note C', contents)
+        self.assertNotIn('note B', contents)
+        # note C should be promoted to sit directly after its surviving grandparent note A.
+        idx_a = contents.index('note A')
+        self.assertEqual(contents[idx_a + 1], 'note C')
+
+    def test_note_anchored_to_trashed_log_floats_and_survives(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        uploaded_log = UploadedLog.objects.create(
+            upload_id='trash-anchor-log',
+            forum_username='target_user',
+            original_filename='trash.txt',
+            content='content',
+            recipient_user=self.user,
+        )
+        link = InfectionCaseLog.objects.create(case=case, uploaded_log=uploaded_log, added_by=self.user)
+        InfectionCaseNote.objects.create(case=case, content='orphaned note', created_by=self.user, anchor_log=link)
+
+        # Trash the anchor log; the link row persists but the log is hidden.
+        UploadedLog.objects.filter(pk=uploaded_log.pk).update(deleted_at=timezone.now())
+
+        timeline = _build_case_timeline(case)
+
+        note_contents = [item['note'].content for item in timeline if item['item_type'] == 'note']
+        log_ids = [item['uploaded_log'].upload_id for item in timeline if item['item_type'] == 'log']
+        self.assertIn('orphaned note', note_contents)
+        self.assertNotIn('trash-anchor-log', log_ids)
+
+    def test_restoring_trashed_log_reattaches_its_note(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        uploaded_log = UploadedLog.objects.create(
+            upload_id='restore-anchor-log',
+            forum_username='target_user',
+            original_filename='restore.txt',
+            content='content',
+            recipient_user=self.user,
+        )
+        link = InfectionCaseLog.objects.create(case=case, uploaded_log=uploaded_log, added_by=self.user)
+        InfectionCaseNote.objects.create(case=case, content='reattach note', created_by=self.user, anchor_log=link)
+
+        UploadedLog.objects.filter(pk=uploaded_log.pk).update(deleted_at=timezone.now())
+        UploadedLog.objects.filter(pk=uploaded_log.pk).update(deleted_at=None)
+
+        timeline = _build_case_timeline(case)
+
+        self.assertEqual(len(timeline), 2)
+        self.assertEqual(timeline[0]['item_type'], 'log')
+        self.assertEqual(timeline[0]['uploaded_log'].upload_id, 'restore-anchor-log')
+        self.assertEqual(timeline[1]['item_type'], 'note')
+        self.assertEqual(timeline[1]['note'].content, 'reattach note')
+
+    def test_middle_note_deleted_promotes_tail_to_log(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        uploaded_log = UploadedLog.objects.create(
+            upload_id='chain-log',
+            forum_username='target_user',
+            original_filename='chain.txt',
+            content='content',
+            recipient_user=self.user,
+        )
+        link = InfectionCaseLog.objects.create(case=case, uploaded_log=uploaded_log, added_by=self.user)
+
+        note_a = InfectionCaseNote.objects.create(case=case, content='chain A', created_by=self.user, anchor_log=link)
+        InfectionCaseNote.objects.create(case=case, content='chain B', created_by=self.user, anchor_note=note_a)
+
+        note_a.deleted_at = timezone.now()
+        note_a.save()
+
+        timeline = _build_case_timeline(case)
+
+        self.assertEqual(len(timeline), 2)
+        self.assertEqual(timeline[0]['item_type'], 'log')
+        self.assertEqual(timeline[0]['uploaded_log'].upload_id, 'chain-log')
+        self.assertEqual(timeline[1]['item_type'], 'note')
+        self.assertEqual(timeline[1]['note'].content, 'chain B')
+
     def test_add_note_with_invalid_anchor_becomes_unanchored(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
 

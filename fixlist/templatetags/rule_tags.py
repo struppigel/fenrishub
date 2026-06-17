@@ -3,8 +3,16 @@ from django.utils.html import escape
 from django.utils.safestring import mark_safe
 
 from fixlist import frst_extractors as ex
+from fixlist.models import log_type_css_slug as _log_type_css_slug
 
 register = template.Library()
+
+
+@register.filter(name='log_type_css_slug')
+def log_type_css_slug(name):
+    """CSS class slug for a log_type name. Single source of truth shared with
+    context_processors so the badge color rule and the element class always match."""
+    return _log_type_css_slug(name or '')
 
 _FIELDS = [
     ('entry_type', 'parsed-entry-type'),

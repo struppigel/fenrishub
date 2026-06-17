@@ -35,16 +35,17 @@ def _available_case_usernames_for_user(user):
 
 
 def _build_case_timeline(case):
-    # Build a mapping from InfectionCaseLog pk to the log's upload_id for anchor lookup.
-    log_pk_to_upload_id = {}
-
     base_items = []
+
+    # InfectionCaseLog pks whose log is still present (not soft-deleted). A note
+    # anchored to a log not in this set has lost its anchor and floats instead.
+    present_log_link_pks = set()
 
     for link in case.log_links.select_related('uploaded_log').defer('uploaded_log__content').all():
         uploaded_log = link.uploaded_log
         if uploaded_log.deleted_at is not None:
             continue
-        log_pk_to_upload_id[link.pk] = uploaded_log.upload_id
+        present_log_link_pks.add(link.pk)
         base_items.append(
             {
                 'item_type': 'log',
@@ -67,12 +68,36 @@ def _build_case_timeline(case):
             }
         )
 
-    # Separate anchored and unanchored notes.
-    log_anchored_notes = {}  # anchor InfectionCaseLog pk -> list of note dicts
-    note_anchored_notes = {}  # anchor InfectionCaseNote pk -> list of note dicts
+    # All notes, including soft-deleted ones: deleted notes are never rendered
+    # themselves, but act as transparent pass-throughs when resolving anchors so
+    # their children re-home to the nearest surviving item instead of vanishing.
+    notes_by_pk = {
+        note.pk: note
+        for note in case.note_entries.select_related('anchor_log', 'anchor_note').all()
+    }
+
+    def _resolve_anchor(note, seen):
+        # -> ('log', link_pk) | ('note', live_note_pk) | ('float', None)
+        if note.anchor_log_id is not None:
+            if note.anchor_log_id in present_log_link_pks:
+                return ('log', note.anchor_log_id)
+            return ('float', None)
+        if note.anchor_note_id is not None:
+            parent = notes_by_pk.get(note.anchor_note_id)
+            if parent is None or note.anchor_note_id in seen:
+                return ('float', None)
+            if parent.deleted_at is None:
+                return ('note', parent.pk)
+            seen.add(note.anchor_note_id)
+            return _resolve_anchor(parent, seen)  # skip over the deleted ancestor
+        return ('float', None)
+
+    # Separate anchored and unanchored notes by their *effective* anchor.
+    log_anchored_notes = {}  # InfectionCaseLog pk -> list of note dicts
+    note_anchored_notes = {}  # live InfectionCaseNote pk -> list of note dicts
     unanchored_notes = []
 
-    for note in case.note_entries.select_related('anchor_log', 'anchor_note').all():
+    for note in notes_by_pk.values():
         if note.deleted_at is not None:
             continue
         note_dict = {
@@ -80,15 +105,23 @@ def _build_case_timeline(case):
             'created_at': note.created_at,
             'note': note,
         }
-        if note.anchor_log_id is not None:
-            log_anchored_notes.setdefault(note.anchor_log_id, []).append(note_dict)
-        elif note.anchor_note_id is not None:
-            note_anchored_notes.setdefault(note.anchor_note_id, []).append(note_dict)
+        kind, target_pk = _resolve_anchor(note, set())
+        if kind == 'log':
+            log_anchored_notes.setdefault(target_pk, []).append(note_dict)
+        elif kind == 'note':
+            note_anchored_notes.setdefault(target_pk, []).append(note_dict)
         else:
             unanchored_notes.append(note_dict)
 
     base_items.extend(unanchored_notes)
     base_items.sort(key=lambda item: item['created_at'])
+
+    # Promoted children and original children share a sibling list, so sort each
+    # by creation time to keep the spliced order chronological.
+    for pinned_notes in log_anchored_notes.values():
+        pinned_notes.sort(key=lambda item: item['created_at'])
+    for pinned_notes in note_anchored_notes.values():
+        pinned_notes.sort(key=lambda item: item['created_at'])
 
     # Recursively collect notes anchored to a given note.
     def _collect_note_children(note_pk):

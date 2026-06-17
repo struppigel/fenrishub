@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load rule_tags %}
 
 {% block title %}Log Type Rules - Fenris{% endblock %}
 
@@ -109,7 +110,7 @@
         <tr {% if not item.rule.is_enabled %}class="disabled"{% endif %}>
             <td>{{ item.rule.updated_at|date:"Y-m-d H:i" }}</td>
             <td>{{ item.rule.name }}</td>
-            <td><span class="timeline-type-badge log log-type-{{ item.rule.log_type|lower|cut:'&'|cut:' ' }}">{{ item.rule.log_type }}</span></td>
+            <td><span class="timeline-type-badge log log-type-{{ item.rule.log_type|log_type_css_slug }}">{{ item.rule.log_type }}</span></td>
             <td>{{ item.rule.get_scope_display }}</td>
             <td class="ltr-pattern">{{ item.rule.pattern }}</td>
             <td>

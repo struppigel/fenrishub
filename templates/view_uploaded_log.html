@@ -33,10 +33,22 @@
         font-weight: 600;
     }
 
+    /* Read-only display via <pre> rather than a large <textarea>: an editable
+       textarea keeps a full text-editing buffer for the whole log, which makes
+       the first drag-select/copy lag on big logs. A <pre> renders once and
+       native selection is instant. */
     .uploaded-content {
         min-height: 600px;
+        max-height: 80vh;
+        overflow: auto;
+        margin: 0;
+        padding: 8px;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border);
         font-family: inherit;
+        font-size: 12px;
         white-space: pre-wrap;
+        word-wrap: break-word;
         color: var(--la-text-main);
     }
 
@@ -117,19 +129,19 @@
 
 <div class="form-group">
     <label for="uploadedContent">content</label>
-    <textarea id="uploadedContent" class="uploaded-content" readonly>{{ uploaded_log.content }}</textarea>
+    <pre id="uploadedContent" class="uploaded-content" tabindex="0">{{ uploaded_log.content }}</pre>
 </div>
 
 <script>
 function viewRawContent() {
-    const content = document.getElementById('uploadedContent').value;
+    const content = document.getElementById('uploadedContent').textContent;
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     window.open(url, '_blank');
 }
 
 function copyAllContent(button) {
-    const content = document.getElementById('uploadedContent').value;
+    const content = document.getElementById('uploadedContent').textContent;
     const originalText = button.textContent;
     navigator.clipboard.writeText(content).then(function() {
         button.textContent = 'copied';
@@ -138,7 +150,7 @@ function copyAllContent(button) {
 }
 
 function downloadContent() {
-    const content = document.getElementById('uploadedContent').value;
+    const content = document.getElementById('uploadedContent').textContent;
     const rawName = "{{ uploaded_log.original_filename|escapejs }}" || "{{ uploaded_log.upload_id|escapejs }}.txt";
     const safeName = rawName.replace(/[\\\/:*?"<>|]/g, '_').slice(0, 200) || "log.txt";
     const blob = new Blob([content], { type: 'text/plain' });
