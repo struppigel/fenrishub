@@ -1,8 +1,13 @@
+import io
+import re
+import zipfile
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Prefetch
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -592,6 +597,51 @@ def view_infection_case(request, case_id):
             'can_edit': can_edit,
         },
     )
+
+
+@login_required
+@require_http_methods(['GET'])
+def infection_case_download_logs_view(request, case_id):
+    """Download every log linked to a case bundled into a single zip archive."""
+    infection_case = get_object_or_404(
+        InfectionCase.objects.filter(deleted_at__isnull=True),
+        case_id=case_id,
+    )
+
+    linked_logs = list(
+        UploadedLog.objects.filter(
+            infection_case_links__case=infection_case,
+            deleted_at__isnull=True,
+        )
+        .distinct()
+        .order_by('created_at')
+    )
+
+    if not linked_logs:
+        messages.error(request, 'This case has no logs to download.')
+        return redirect('view_infection_case', case_id=infection_case.case_id)
+
+    buffer = io.BytesIO()
+    used_names = set()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for uploaded_log in linked_logs:
+            raw_name = uploaded_log.original_filename or f'{uploaded_log.upload_id}.txt'
+            safe_name = re.sub(r'[\\/:*?"<>|\r\n]', '_', raw_name)[:200] or 'log.txt'
+
+            # Disambiguate duplicate filenames so no entry is silently overwritten.
+            candidate = safe_name
+            counter = 2
+            while candidate in used_names:
+                stem, dot, ext = safe_name.partition('.')
+                candidate = f'{stem}_{counter}{dot}{ext}' if dot else f'{safe_name}_{counter}'
+                counter += 1
+            used_names.add(candidate)
+
+            archive.writestr(candidate, uploaded_log.content)
+
+    response = HttpResponse(buffer.getvalue(), content_type='application/zip')
+    response['Content-Disposition'] = f'attachment; filename="{infection_case.case_id}_logs.zip"'
+    return response
 
 
 @login_required

@@ -56,6 +56,7 @@ from .infection_cases import (
     view_infection_case,
     infection_case_add_items_view,
     infection_case_confirm_username_change_view,
+    infection_case_download_logs_view,
 )
 
 # Re-export utilities from utils module
@@ -105,6 +106,7 @@ __all__ = [
     'view_infection_case',
     'infection_case_add_items_view',
     'infection_case_confirm_username_change_view',
+    'infection_case_download_logs_view',
     'logout_view',
     'custom_404_view',
 ]

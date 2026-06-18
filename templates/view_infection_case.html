@@ -326,6 +326,7 @@
 
 <div class="button-group case-action-bar" style="margin-bottom: 10px;">
     <a href="{% url 'infection_cases' %}"><button type="button">back to cases</button></a>
+    <a href="{% url 'infection_case_download_logs' infection_case.case_id %}"><button type="button" title="download all logs linked to this case as a zip archive">download logs</button></a>
     {% if can_edit %}
     <button type="button" onclick="document.getElementById('addItemsModal').classList.add('show')">add items</button>
     <button type="submit" form="mergeCaseLogsForm" name="action" value="merge_logs" onclick="return confirmMergeCaseLogs();" title="merge the selected logs into a single log linked to this case">merge</button>

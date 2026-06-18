@@ -24,6 +24,7 @@ from .views.infection_cases import (
     infection_case_add_items_view,
     infection_case_confirm_username_change_view,
     infection_case_delete_view,
+    infection_case_download_logs_view,
     infection_cases_view,
     view_infection_case,
 )
@@ -67,6 +68,7 @@ urlpatterns = [
     path('cases/', infection_cases_view, name='infection_cases'),
     path('cases/create/', create_infection_case_view, name='create_infection_case'),
     path('cases/<str:case_id>/', view_infection_case, name='view_infection_case'),
+    path('cases/<str:case_id>/download-logs/', infection_case_download_logs_view, name='infection_case_download_logs'),
     path('cases/<str:case_id>/add-items/', infection_case_add_items_view, name='infection_case_add_items'),
     path('cases/<str:case_id>/confirm-username-change/', infection_case_confirm_username_change_view, name='infection_case_confirm_username_change'),
     path('cases/<str:case_id>/delete/', infection_case_delete_view, name='infection_case_delete'),
