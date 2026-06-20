@@ -137,11 +137,11 @@ class TrashViewTests(TestCase):
         self._make_log('other-trashed', deleted_at=tz.now(), recipient_user=User.objects.create_user(username='bob', password='password123'))
 
         default_response = self.client.get(reverse('uploaded_logs'))
-        show_all_response = self.client.get(reverse('uploaded_logs'), {'show_all': '1'})
+        all_channel_response = self.client.get(reverse('uploaded_logs'), {'channel': 'all'})
 
-        # Trash count is scoped to the current user regardless of the show_all toggle.
+        # Trash count is scoped to the current user regardless of the channel filter.
         self.assertContains(default_response, 'trash (1)')
-        self.assertContains(show_all_response, 'trash (1)')
+        self.assertContains(all_channel_response, 'trash (1)')
 
     def test_uploads_list_shows_no_count_when_trash_empty(self):
         self._make_log('active-log')
@@ -299,7 +299,7 @@ class TrashViewTests(TestCase):
         self._make_log('bobs-trashed', deleted_at=tz.now(), recipient_user=bob)
 
         own = self.client.get(reverse('uploads_trash'))
-        all_view = self.client.get(reverse('uploads_trash'), {'show_all': '1'})
+        all_view = self.client.get(reverse('uploads_trash'), {'channel': 'all'})
 
         self.assertContains(own, 'mine-trashed')
         self.assertNotContains(own, 'bobs-trashed')
@@ -374,13 +374,13 @@ class TrashViewTests(TestCase):
 
         response = self.client.get(
             reverse('uploads_trash'),
-            {'q': 'paged', 'show_all': '1', 'u': 'test_user'},
+            {'q': 'paged', 'channel': 'all', 'u': 'test_user'},
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'page=2')
         self.assertContains(response, 'q=paged')
-        self.assertContains(response, 'show_all=1')
+        self.assertContains(response, 'channel=all')
         self.assertContains(response, 'u=test_user')
 
     # --- bulk actions ---

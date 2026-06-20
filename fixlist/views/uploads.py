@@ -229,10 +229,12 @@ def uploaded_logs_view(request):
             and (uploaded_log.content_hash, uploaded_log.recipient_user_id) in duplicate_keys
         )
     helper_upload_url = request.build_absolute_uri(reverse('upload_log_for_helper', args=[request.user.username]))
+    general_upload_url = request.build_absolute_uri(reverse('upload_log'))
     return render(request, 'uploaded_logs.html', {
         **listing_context,
         'trash_count': trash_count,
         'helper_upload_url': helper_upload_url,
+        'general_upload_url': general_upload_url,
         'is_trash': False,
         'submit_url_name': 'uploaded_logs',
         'selection_storage_key': 'fenrishub_selected_upload_ids',
@@ -243,23 +245,42 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     """Build shared listing context (filters/search/pagination) for uploads pages.
 
     Used by both the live uploads view and the trash view. Reads `q`, `u`,
-    `show_all`, and `page` from request.GET; flips between active and trashed
+    `channel`, and `page` from request.GET; flips between active and trashed
     records via the `deleted` keyword. The returned dict is suitable for direct
     splatting into a render() context.
+
+    The `channel` filter selects which assignment scope is shown:
+    `mine` (default, own channel), `all`, `unassigned` (general channel), or a
+    specific helper username. Reserved values win over a same-named helper.
     """
     from django.db.models import Q
 
     username_filter = request.GET.get('u', '').strip()
-    show_all = request.GET.get('show_all', '').strip() in {'1', 'true', 'on', 'yes'}
     search_query = request.GET.get('q', '').strip()
 
-    list_visible_uploads = (
-        UploadedLog.objects.all()
-        if show_all
-        else UploadedLog.objects.filter(recipient_user=request.user)
+    deleted_filter = {'deleted_at__isnull': not deleted}
+
+    # Helpers with at least one log in the current (active/trash) scope, excluding
+    # the current user since `mine` already covers them. Drives the dropdown options.
+    channel_users = list(
+        UploadedLog.objects.filter(recipient_user__isnull=False, **deleted_filter)
+        .exclude(recipient_user=request.user)
+        .values_list('recipient_user__username', flat=True)
+        .distinct()
+        .order_by('recipient_user__username')
     )
 
-    deleted_filter = {'deleted_at__isnull': not deleted}
+    channel = request.GET.get('channel', '').strip().lower()
+    if channel == 'all':
+        list_visible_uploads = UploadedLog.objects.all()
+    elif channel == 'unassigned':
+        list_visible_uploads = UploadedLog.objects.filter(recipient_user__isnull=True)
+    elif channel in channel_users:
+        list_visible_uploads = UploadedLog.objects.filter(recipient_user__username=channel)
+    else:
+        channel = 'mine'
+        list_visible_uploads = UploadedLog.objects.filter(recipient_user=request.user)
+
     uploads = (
         list_visible_uploads.filter(**deleted_filter)
         .select_related('recipient_user', 'recipient_user__fenris_profile')
@@ -281,8 +302,8 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     pagination_params = {}
     if username_filter:
         pagination_params['u'] = username_filter
-    if show_all:
-        pagination_params['show_all'] = '1'
+    if channel != 'mine':
+        pagination_params['channel'] = channel
     if search_query:
         pagination_params['q'] = search_query
 
@@ -298,7 +319,8 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         'page_obj': page_obj,
         'username_filter': username_filter,
         'all_usernames': all_usernames,
-        'show_all': show_all,
+        'channel': channel,
+        'channel_users': channel_users,
         'search_query': search_query,
         'pagination_query': urlencode(pagination_params),
     }

@@ -116,13 +116,13 @@
     <p>Fenris is the name for the FRST log analyzer that I initially created for myself as a commandline tool and eventually turned into a web application for shared usage. It is currently on malwareanalysis.cc and also serves as upload platform for logs.</p>
 
     <h2 id="uploads">Uploads</h2>
-    <p>This view lists all uploaded logs. Per default you see only the ones assigned to you. You can toggle to see all uploaded logs with the &quot;all channels&quot; button. Logs have a unique ID consisting of two keywords and potentially a suffix. Logs are automatically categorized into FRST, Addition, FRST&amp;Addition, Fixlog, Unknown. Depending on that category their keywords have a different color.</p>
+    <p>This view lists all uploaded logs. Per default you see only the ones assigned to you (&quot;my channel&quot;). Use the channel dropdown to switch between &quot;my channel&quot;, &quot;all channels&quot; (every log), &quot;unassigned&quot; (the general channel), or a specific helper's channel. Logs have a unique ID consisting of two keywords and potentially a suffix. Logs are automatically categorized into FRST, Addition, FRST&amp;Addition, Fixlog, Unknown. Depending on that category their keywords have a different color.</p>
 
     <img src="{% static 'images/help/01-uploads-list.png' %}" alt="Uploads list view" loading="lazy">
 
-    <p>The keywords are shown to the user after upload and will allow you to find them properly. There is a search bar on the top, where you can type the keyword or username and press enter, such that it will filter logs that way.</p>
+    <p>The keywords are shown to the user after upload and will allow you to find them properly. There is a search bar on the top, where you can type the keyword or username and press enter, such that it will filter logs that way. A <strong>clear</strong> link appears whenever a search, user, or channel filter is active and resets all filters back to the default view.</p>
 
-    <p>The helper-URL is the URL that you use when instructing users to upload.</p>
+    <p>The <strong>copy upload url</strong> button gives you the URL to share when instructing users to upload. It offers two options: <strong>my channel</strong> copies your helper URL, so their uploads are assigned to you, while <strong>general channel</strong> copies the generic upload URL, so their uploads stay unassigned.</p>
 
     <div class="help-tip">
         <strong>Pro-tip:</strong> If you add <code>?u=User123</code>, you can prefill the username for the uploader, e.g.: <a href="https://malwareanalysis.cc/upload/struppigel/?u=User123" target="_blank" rel="noopener">https://malwareanalysis.cc/upload/struppigel/?u=User123</a>. If you don't want to assign uploaded logs to you, e.g., provide generic instructions, use this generic upload page: <a href="https://malwareanalysis.cc/upload/" target="_blank" rel="noopener">https://malwareanalysis.cc/upload/</a>.
@@ -161,7 +161,7 @@
 
     <p><strong>delete</strong> does the same as the bulk delete button: It moves the log to the trash.</p>
 
-    <p><strong>assign</strong> assigns the log to you as helper. The assignment prevents other helpers from deleting your log, prevents them from assigning it themselves, and makes the log directly visible in your uploads overview (unless all channels is toggled) for easier access. It has otherwise no technical implications.</p>
+    <p><strong>assign</strong> assigns the log to you as helper. The assignment prevents other helpers from deleting your log, prevents them from assigning it themselves, and makes the log directly visible in your uploads overview (in the &quot;mine&quot; channel) for easier access. It has otherwise no technical implications.</p>
 
     <p><strong>unassign</strong> just removes the assignment again. This is useful if you want another helper to take the log for analysis. If a log is assigned to another helper and you desperately still want to work on it but the helper isn't online and can't unassign the log, then you can <strong>copy</strong> the assigned log.</p>
 

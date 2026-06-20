@@ -139,9 +139,9 @@ class UploadedLogDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         uploaded.refresh_from_db()
         self.assertEqual(uploaded.recipient_user, self.user)
 
-    def test_assign_from_list_preserves_show_all_toggle_on_redirect(self):
+    def test_assign_from_list_preserves_channel_filter_on_redirect(self):
         uploaded = UploadedLog.objects.create(
-            upload_id='assign-keep-show-all',
+            upload_id='assign-keep-channel',
             forum_username='forum_user',
             original_filename='x.txt',
             content='payload',
@@ -151,11 +151,11 @@ class UploadedLogDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
 
         response = self.client.post(
             reverse('uploaded_logs'),
-            {'action': 'assign_to_me', 'upload_id': uploaded.upload_id, 'show_all': '1'},
+            {'action': 'assign_to_me', 'upload_id': uploaded.upload_id, 'channel': 'all'},
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, f"{reverse('uploaded_logs')}?show_all=1")
+        self.assertEqual(response.url, f"{reverse('uploaded_logs')}?channel=all")
 
     def test_assign_from_list_preserves_username_filter_on_redirect(self):
         uploaded = UploadedLog.objects.create(

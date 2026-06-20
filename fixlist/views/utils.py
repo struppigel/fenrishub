@@ -136,14 +136,12 @@ def get_updatable_uploads(user):
     )
 
 
-_TRUTHY_VALUES = {'1', 'true', 'on', 'yes'}
-
-
 def redirect_preserving_filters(request, target_url_name):
     """Redirect to a listing view, preserving search/filter query params from POST or GET.
 
-    Preserves `q`, `u`, and `page` as-is. Normalises `show_all` to `'1'` when set to a
-    truthy value (uploads-only filter; fixlist forms never submit it, so it's harmless there).
+    Preserves `q`, `u`, and `page` as-is. Carries the uploads `channel` filter when it is
+    non-default (anything other than `mine`); fixlist forms never submit it, so it's harmless
+    there.
     """
     params = {}
     for key in ('q', 'u'):
@@ -151,9 +149,9 @@ def redirect_preserving_filters(request, target_url_name):
         if value:
             params[key] = value
 
-    show_all = (request.POST.get('show_all') or request.GET.get('show_all') or '').strip().lower()
-    if show_all in _TRUTHY_VALUES:
-        params['show_all'] = '1'
+    channel = (request.POST.get('channel') or request.GET.get('channel') or '').strip().lower()
+    if channel and channel != 'mine':
+        params['channel'] = channel
 
     page = (request.POST.get('page') or request.GET.get('page') or '').strip()
     if page.isdigit() and page != '1':

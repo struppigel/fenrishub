@@ -12,7 +12,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse('login'), response.url)
 
-    def test_uploaded_logs_list_shows_assign_only_for_unassigned_in_show_all_mode(self):
+    def test_uploaded_logs_list_shows_assign_only_for_unassigned_in_all_channel(self):
         UploadedLog.objects.create(
             upload_id='assign-visible-general',
             forum_username='general_user',
@@ -29,7 +29,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         )
         self.client.login(username='alice', password='password123')
 
-        response = self.client.get(reverse('uploaded_logs'), {'show_all': '1'})
+        response = self.client.get(reverse('uploaded_logs'), {'channel': 'all'})
 
         self.assertContains(response, '>assign</button>', count=1)
 
@@ -63,7 +63,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertNotContains(response, 'general-log')
         self.assertNotContains(response, 'bob-log')
 
-    def test_uploaded_logs_list_show_all_includes_other_helpers_uploads(self):
+    def test_uploaded_logs_list_all_channel_includes_other_helpers_uploads(self):
         UploadedLog.objects.create(
             upload_id='general-log-all',
             forum_username='general_user',
@@ -87,12 +87,100 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         )
         self.client.login(username='alice', password='password123')
 
-        response = self.client.get(reverse('uploaded_logs'), {'show_all': '1'})
+        response = self.client.get(reverse('uploaded_logs'), {'channel': 'all'})
 
         self.assertContains(response, 'general-log-all')
         self.assertContains(response, 'alice-log-all')
         self.assertContains(response, 'bob-log-all')
-        self.assertTrue(response.context.get('show_all'))
+        self.assertEqual(response.context.get('channel'), 'all')
+
+    def test_uploaded_logs_list_unassigned_channel_shows_only_general(self):
+        UploadedLog.objects.create(
+            upload_id='general-only',
+            forum_username='general_user',
+            original_filename='g.txt',
+            content='payload',
+            recipient_user=None,
+        )
+        UploadedLog.objects.create(
+            upload_id='alice-owned',
+            forum_username='alice_user',
+            original_filename='a.txt',
+            content='payload',
+            recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='bob-owned',
+            forum_username='bob_user',
+            original_filename='b.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'channel': 'unassigned'})
+
+        self.assertEqual(response.context.get('channel'), 'unassigned')
+        self.assertContains(response, 'general-only')
+        self.assertNotContains(response, 'alice-owned')
+        self.assertNotContains(response, 'bob-owned')
+
+    def test_uploaded_logs_list_specific_helper_channel_shows_only_that_helper(self):
+        UploadedLog.objects.create(
+            upload_id='general-x',
+            forum_username='general_user',
+            original_filename='g.txt',
+            content='payload',
+            recipient_user=None,
+        )
+        UploadedLog.objects.create(
+            upload_id='alice-x',
+            forum_username='alice_user',
+            original_filename='a.txt',
+            content='payload',
+            recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='bob-x',
+            forum_username='bob_user',
+            original_filename='b.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'channel': 'bob'})
+
+        self.assertEqual(response.context.get('channel'), 'bob')
+        self.assertContains(response, 'bob-x')
+        self.assertNotContains(response, 'alice-x')
+        self.assertNotContains(response, 'general-x')
+        # bob has an assigned log, so he appears as a selectable channel option.
+        self.assertIn('bob', response.context.get('channel_users'))
+
+    def test_uploaded_logs_list_unknown_channel_falls_back_to_mine(self):
+        UploadedLog.objects.create(
+            upload_id='alice-fallback',
+            forum_username='alice_user',
+            original_filename='a.txt',
+            content='payload',
+            recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='bob-fallback',
+            forum_username='bob_user',
+            original_filename='b.txt',
+            content='payload',
+            recipient_user=self.other_user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        # 'nobody' is not a reserved value and has no assigned logs, so it falls back to mine.
+        response = self.client.get(reverse('uploaded_logs'), {'channel': 'nobody'})
+
+        self.assertEqual(response.context.get('channel'), 'mine')
+        self.assertContains(response, 'alice-fallback')
+        self.assertNotContains(response, 'bob-fallback')
 
     def test_uploaded_logs_list_is_paginated(self):
         for index in range(9):
@@ -139,12 +227,12 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         )
         self.client.login(username='alice', password='password123')
 
-        response = self.client.get(reverse('uploaded_logs'), {'page': '2', 'u': 'alice_user', 'show_all': '1'})
+        response = self.client.get(reverse('uploaded_logs'), {'page': '2', 'u': 'alice_user', 'channel': 'all'})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context['page_obj'].number, 2)
-        self.assertEqual(response.context['pagination_query'], 'u=alice_user&show_all=1')
-        self.assertContains(response, '?page=1&amp;u=alice_user&amp;show_all=1')
+        self.assertEqual(response.context['pagination_query'], 'u=alice_user&channel=all')
+        self.assertContains(response, '?page=1&amp;u=alice_user&amp;channel=all')
         self.assertContains(response, 'alice-page-log-0')
         self.assertNotContains(response, 'bob-page-log')
 
@@ -202,7 +290,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         )
         self.client.login(username='alice', password='password123')
 
-        response = self.client.get(reverse('uploaded_logs'), {'show_all': '1'})
+        response = self.client.get(reverse('uploaded_logs'), {'channel': 'all'})
         html = response.content.decode()
 
         self.assertNotIn('content-hash duplicate-hash', html)
@@ -562,7 +650,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
             {
                 'action': 'delete_selected',
                 'selected_upload_ids': [own.upload_id, other.upload_id],
-                'show_all': '1',
+                'channel': 'all',
             },
             follow=True,
         )
@@ -765,7 +853,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         )
         self.client.login(username='alice', password='password123')
 
-        response = self.client.get(reverse('uploaded_logs'), {'q': 'bob', 'show_all': '1'})
+        response = self.client.get(reverse('uploaded_logs'), {'q': 'bob', 'channel': 'all'})
 
         self.assertContains(response, 'azure-bear')
         self.assertNotContains(response, 'amber-wolf')

@@ -75,54 +75,50 @@
 
     .upload-stats .rule-set-tag { color: var(--la-text-muted); }
 
-    .toggle-switch {
-        position: relative;
-        display: inline-block;
-        width: 34px;
-        height: 18px;
-    }
-
-    .toggle-switch input {
-        opacity: 0;
-        width: 0;
-        height: 0;
-    }
-
-    .toggle-slider {
-        position: absolute;
-        cursor: pointer;
-        inset: 0;
-        background: var(--la-bg-2);
-        border: 1px solid var(--la-border);
-        transition: 0.2s;
-        border-radius: 999px;
-    }
-
-    .toggle-slider:before {
-        position: absolute;
-        content: "";
-        width: 12px;
-        height: 12px;
-        left: 2px;
-        top: 2px;
-        background: var(--la-text-primary);
-        transition: 0.2s;
-        border-radius: 50%;
-    }
-
-    .toggle-switch input:checked + .toggle-slider {
-        background: color-mix(in srgb, var(--la-status-c) 20%, var(--la-bg-2));
-        border-color: var(--la-status-c);
-    }
-
-    .toggle-switch input:checked + .toggle-slider:before {
-        transform: translateX(16px);
-    }
-
     .uploads-count {
         font-size: 11px;
         color: var(--la-text-muted);
         margin-bottom: 8px;
+    }
+
+    .upload-url-dropdown {
+        position: relative;
+        display: inline-block;
+    }
+
+    .upload-url-menu {
+        display: none;
+        position: absolute;
+        right: 0;
+        top: 100%;
+        margin-top: 2px;
+        background-color: var(--la-bg-4);
+        border: 1px solid var(--la-border-strong);
+        min-width: 130px;
+        z-index: 100;
+    }
+
+    .upload-url-dropdown:focus-within .upload-url-menu,
+    .upload-url-dropdown:hover .upload-url-menu {
+        display: block;
+    }
+
+    .upload-url-menu button {
+        display: block;
+        width: 100%;
+        padding: 7px 12px;
+        background: none;
+        border: none;
+        text-align: left;
+        color: var(--la-text-primary);
+        font-size: 11px;
+        font-family: inherit;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .upload-url-menu button:hover {
+        text-decoration: underline;
     }
 
 
@@ -134,7 +130,7 @@
 
 <form id="mergeUploadsForm" method="post" action="{% url submit_url_name %}">
     {% csrf_token %}
-    {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+    {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
     {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
     {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
     {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
@@ -149,17 +145,24 @@
 
 <form method="get" action="{% url submit_url_name %}" class="search-filter-form">
     {% include "partials/search_filter_inputs.html" with search_placeholder="search by user, upload id, assignee" all_users_label="all users" select_id="uploaderSelect" %}
-    <label style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 0; color: var(--la-text-primary); font-size: 12px;">
-        <span>all channels</span>
-        <span class="toggle-switch">
-            <input type="checkbox" id="allChannelsToggle" name="show_all" value="1" {% if show_all %}checked{% endif %}>
-            <span class="toggle-slider"></span>
-        </span>
-    </label>
+    <select name="channel" onchange="this.form.submit()" class="search-filter-select" title="filter by channel">
+        <option value="mine" {% if channel == 'mine' %}selected{% endif %}>my channel</option>
+        <option value="all" {% if channel == 'all' %}selected{% endif %}>all channels</option>
+        <option value="unassigned" {% if channel == 'unassigned' %}selected{% endif %}>unassigned</option>
+        {% for u in channel_users %}
+        <option value="{{ u }}" {% if u == channel %}selected{% endif %}>{{ u }}'s channel</option>
+        {% endfor %}
+    </select>
+    {% if search_query or username_filter or channel != 'mine' %}
+    <a href="{% url submit_url_name %}" class="search-filter-clear">clear</a>
+    {% endif %}
     {% if not is_trash %}
-    <div style="margin-left: auto; display: flex; gap: 6px; align-items: center; font-size: 11px; line-height: 1.2; color: var(--la-text-primary);">
-        <span>helper URL: <strong id="helperUploadUrl">{{ helper_upload_url }}</strong></span>
-        <button type="button" onclick="copyHelperUploadUrl(this)" style="padding: 3px 8px; font-size: 11px; line-height: 1;">copy</button>
+    <div style="margin-left: auto;" class="upload-url-dropdown" tabindex="0">
+        <button type="button" class="upload-url-btn">copy upload url &#9660;</button>
+        <div class="upload-url-menu">
+            <button type="button" data-url="{{ helper_upload_url }}" onclick="copyUploadUrl(this)">my channel</button>
+            <button type="button" data-url="{{ general_upload_url }}" onclick="copyUploadUrl(this)">general channel</button>
+        </div>
     </div>
     {% endif %}
 </form>
@@ -206,7 +209,7 @@
                     <a class="upload-id-link log-type-{{ uploaded_log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>
                     {% if uploaded_log.recipient_user %}
                     <span>({{ uploaded_log.recipient_user.username }})</span>
-                    {% elif show_all or is_trash %}
+                    {% else %}
                     <span>(unassigned)</span>
                     {% endif %}
                 </div>
@@ -255,7 +258,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="restore">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
@@ -265,7 +268,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete_permanent">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
@@ -278,7 +281,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="assign_to_me">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
@@ -289,7 +292,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="unassign_to_general">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
@@ -300,7 +303,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="copy_to_me">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
@@ -315,7 +318,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
@@ -336,91 +339,6 @@
 
 {% block extra_js %}
 <script>
-const uploadsListCache = {};
-const uploadsSelectCache = {};
-const uploadsPrefetchPromises = {};
-
-function uploadsModeKey(showAll) {
-    return showAll ? 'all' : 'own';
-}
-
-function buildUploadsModeUrl(showAll) {
-    const url = new URL(window.location.href);
-    if (showAll) {
-        url.searchParams.set('show_all', '1');
-    } else {
-        url.searchParams.delete('show_all');
-    }
-    return url.toString();
-}
-
-async function ensureUploadsModeCached(showAll) {
-    const key = uploadsModeKey(showAll);
-    if (uploadsListCache[key]) {
-        return;
-    }
-    if (uploadsPrefetchPromises[key]) {
-        await uploadsPrefetchPromises[key];
-        return;
-    }
-
-    const fetchPromise = fetch(buildUploadsModeUrl(showAll), {
-        credentials: 'same-origin',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-    })
-        .then(response => response.text())
-        .then(html => {
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-            const remoteContainer = doc.getElementById('uploadsListContainer');
-            if (!remoteContainer) {
-                throw new Error('uploads list container missing in response');
-            }
-            uploadsListCache[key] = remoteContainer.innerHTML;
-            const remoteSelect = doc.getElementById('uploaderSelect');
-            if (remoteSelect) {
-                uploadsSelectCache[key] = remoteSelect.innerHTML;
-            }
-        })
-        .finally(() => {
-            delete uploadsPrefetchPromises[key];
-        });
-
-    uploadsPrefetchPromises[key] = fetchPromise;
-    await fetchPromise;
-}
-
-function updateUploadsModeInUrl(showAll) {
-    const url = new URL(window.location.href);
-    if (showAll) {
-        url.searchParams.set('show_all', '1');
-    } else {
-        url.searchParams.delete('show_all');
-    }
-    window.history.replaceState({}, '', url.toString());
-}
-
-async function handleAllChannelsToggle(checkbox) {
-    const showAll = checkbox.checked;
-    const targetKey = uploadsModeKey(showAll);
-    const uploadsListContainer = document.getElementById('uploadsListContainer');
-
-    try {
-        await ensureUploadsModeCached(showAll);
-        uploadsListContainer.innerHTML = uploadsListCache[targetKey];
-        const uploaderSelect = document.getElementById('uploaderSelect');
-        if (uploaderSelect && uploadsSelectCache[targetKey]) {
-            uploaderSelect.innerHTML = uploadsSelectCache[targetKey];
-        }
-        updateUploadsModeInUrl(showAll);
-        ensureUploadsModeCached(!showAll).catch(() => {});
-        uploadSelection.syncToForm();
-        uploadSelection.bindCheckboxes();
-        bindUploadActionForms();
-    } catch (error) {
-        checkbox.form.submit();
-    }
-}
-
 const AJAX_UPLOAD_ACTIONS = new Set(['assign_to_me', 'unassign_to_general', 'copy_to_me']);
 
 async function refreshUploadsList() {
@@ -436,11 +354,6 @@ async function refreshUploadsList() {
         const currentContainer = document.getElementById('uploadsListContainer');
         if (!newContainer || !currentContainer) return false;
         currentContainer.innerHTML = newContainer.innerHTML;
-        Object.keys(uploadsListCache).forEach(k => delete uploadsListCache[k]);
-        Object.keys(uploadsSelectCache).forEach(k => delete uploadsSelectCache[k]);
-        const toggle = document.getElementById('allChannelsToggle');
-        const currentShowAll = toggle && toggle.checked;
-        uploadsListCache[uploadsModeKey(currentShowAll)] = currentContainer.innerHTML;
         uploadSelection.bindCheckboxes();
         uploadSelection.syncToForm();
         bindUploadActionForms();
@@ -501,27 +414,8 @@ const uploadSelection = createSelectionManager({
 });
 
 document.addEventListener('DOMContentLoaded', function() {
-    const toggle = document.getElementById('allChannelsToggle');
-    const uploadsListContainer = document.getElementById('uploadsListContainer');
-
     uploadSelection.init();
     bindUploadActionForms();
-
-    if (!toggle || !uploadsListContainer) {
-        return;
-    }
-
-    const currentShowAll = toggle.checked;
-    uploadsListCache[uploadsModeKey(currentShowAll)] = uploadsListContainer.innerHTML;
-    const uploaderSelect = document.getElementById('uploaderSelect');
-    if (uploaderSelect) {
-        uploadsSelectCache[uploadsModeKey(currentShowAll)] = uploaderSelect.innerHTML;
-    }
-    ensureUploadsModeCached(!currentShowAll).catch(() => {});
-
-    toggle.addEventListener('change', function() {
-        handleAllChannelsToggle(toggle);
-    });
 });
 
 {% if is_trash %}
@@ -543,8 +437,8 @@ function confirmDeletePermanentSelected() {
     return confirm('Permanently delete ' + count + ' selected upload(s)?');
 }
 {% else %}
-function copyHelperUploadUrl(button) {
-    const value = document.getElementById('helperUploadUrl').textContent;
+function copyUploadUrl(button) {
+    const value = button.dataset.url;
     navigator.clipboard.writeText(value).then(function() {
         const original = button.textContent;
         button.textContent = 'copied';
