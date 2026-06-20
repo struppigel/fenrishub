@@ -698,6 +698,7 @@ async function saveStatusSelection(index, newStatus) {
 const LINE_COPY_COMPONENT_LABELS = [
     ['filepath', 'filepath'],
     ['filename', 'filename'],
+    ['arguments', 'arguments'],
     ['clsid', 'clsid'],
     ['name', 'name'],
     ['company', 'company'],

@@ -1088,7 +1088,7 @@ def _build_line_result(
     dominant_status = _dominant_status(status_codes)
     components = {}
     if parsed_entry is not None:
-        for key in ("clsid", "name", "company"):
+        for key in ("clsid", "name", "company", "arguments"):
             value = getattr(parsed_entry, key, "") or ""
             if value:
                 components[key] = value
