@@ -599,6 +599,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof setupLineCopyMenu === 'function') {
         setupLineCopyMenu();
     }
+    if (typeof setupLineSearchMenu === 'function') {
+        setupLineSearchMenu();
+    }
     if (typeof setupLookupMenu === 'function') {
         setupLookupMenu();
     }

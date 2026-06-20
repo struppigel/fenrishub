@@ -705,6 +705,33 @@ const LINE_COPY_COMPONENT_LABELS = [
 
 let lineCopyMenuEl = null;
 let lineCopyMenuTrigger = null;
+let lineSearchMenuEl = null;
+let lineSearchMenuTrigger = null;
+
+// Shared by the copy and search menus so both offer the exact same item set:
+// the whole line, parsed components, and any detected URLs/domains.
+function buildLineLookupItems(entry) {
+    const items = [{ key: 'whole line', value: entry.line || '' }];
+    const components = (entry && typeof entry.components === 'object') ? entry.components : {};
+    LINE_COPY_COMPONENT_LABELS.forEach(([key, label]) => {
+        const value = components ? components[key] : '';
+        if (value) {
+            items.push({ key: label, value });
+        }
+    });
+
+    // Refanged URLs and bare domains detected in the line, so the user can act on
+    // the resolvable form directly without retyping (defanged "hxxp://..." → "http://...").
+    const seenLookups = new Set();
+    for (const span of findHighlightSpans(entry.line || '')) {
+        if (span.type !== 'url' && span.type !== 'domain') continue;
+        const value = span.type === 'url' ? refangUrl(span.text) : span.text;
+        if (seenLookups.has(value)) continue;
+        seenLookups.add(value);
+        items.push({ key: span.type, value });
+    }
+    return items;
+}
 
 function ensureLineCopyMenu() {
     if (lineCopyMenuEl && document.body.contains(lineCopyMenuEl)) {
@@ -761,6 +788,8 @@ function openLineCopyMenu(trigger, index) {
     const entry = analyzedLines[index];
     if (!entry) return;
 
+    closeLineSearchMenu();
+
     if (lineCopyMenuTrigger === trigger && lineCopyMenuEl && !lineCopyMenuEl.hidden) {
         closeLineCopyMenu();
         return;
@@ -774,25 +803,7 @@ function openLineCopyMenu(trigger, index) {
     header.textContent = 'copy to clipboard';
     menu.appendChild(header);
 
-    const items = [{ key: 'whole line', value: entry.line || '' }];
-    const components = (entry && typeof entry.components === 'object') ? entry.components : {};
-    LINE_COPY_COMPONENT_LABELS.forEach(([key, label]) => {
-        const value = components ? components[key] : '';
-        if (value) {
-            items.push({ key: label, value });
-        }
-    });
-
-    // Refanged URLs and bare domains detected in the line, so the user can paste
-    // the resolvable form directly without retyping (defanged "hxxp://..." → "http://...").
-    const seenLookups = new Set();
-    for (const span of findHighlightSpans(entry.line || '')) {
-        if (span.type !== 'url' && span.type !== 'domain') continue;
-        const value = span.type === 'url' ? refangUrl(span.text) : span.text;
-        if (seenLookups.has(value)) continue;
-        seenLookups.add(value);
-        items.push({ key: span.type, value });
-    }
+    const items = buildLineLookupItems(entry);
 
     items.forEach(({ key, value }) => {
         const item = document.createElement('button');
@@ -851,6 +862,111 @@ function setupLineCopyMenu() {
     });
     window.addEventListener('resize', () => closeLineCopyMenu());
     document.addEventListener('scroll', () => closeLineCopyMenu(), true);
+}
+
+// Search menu — mirrors the copy menu (same items, positioning and dismissal),
+// but each item opens a Google search for its value in a new tab instead of
+// copying it. Reuses the .line-copy-menu* CSS classes for styling.
+function ensureLineSearchMenu() {
+    if (lineSearchMenuEl && document.body.contains(lineSearchMenuEl)) {
+        return lineSearchMenuEl;
+    }
+    const menu = document.createElement('div');
+    menu.className = 'line-copy-menu line-search-menu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    menu.addEventListener('click', (event) => event.stopPropagation());
+    document.body.appendChild(menu);
+    lineSearchMenuEl = menu;
+    return menu;
+}
+
+function closeLineSearchMenu() {
+    if (lineSearchMenuTrigger) {
+        lineSearchMenuTrigger.setAttribute('aria-expanded', 'false');
+        lineSearchMenuTrigger = null;
+    }
+    if (lineSearchMenuEl) {
+        lineSearchMenuEl.hidden = true;
+        lineSearchMenuEl.innerHTML = '';
+    }
+}
+
+function openLineSearchMenu(trigger, index) {
+    const entry = analyzedLines[index];
+    if (!entry) return;
+
+    closeLineCopyMenu();
+
+    if (lineSearchMenuTrigger === trigger && lineSearchMenuEl && !lineSearchMenuEl.hidden) {
+        closeLineSearchMenu();
+        return;
+    }
+
+    const menu = ensureLineSearchMenu();
+    menu.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'line-copy-menu-header';
+    header.textContent = 'search on google';
+    menu.appendChild(header);
+
+    const items = buildLineLookupItems(entry);
+
+    items.forEach(({ key, value }) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'line-copy-menu-item';
+        item.setAttribute('role', 'menuitem');
+
+        const label = document.createElement('span');
+        label.className = 'line-copy-menu-key';
+        label.textContent = key;
+
+        const preview = document.createElement('span');
+        preview.className = 'line-copy-menu-value';
+        preview.textContent = value;
+
+        item.appendChild(label);
+        item.appendChild(preview);
+        item.addEventListener('click', (event) => {
+            event.stopPropagation();
+            window.open('https://www.google.com/search?q=' + encodeURIComponent(value), '_blank', 'noopener');
+            closeLineSearchMenu();
+        });
+        menu.appendChild(item);
+    });
+
+    menu.hidden = false;
+    if (lineSearchMenuTrigger && lineSearchMenuTrigger !== trigger) {
+        lineSearchMenuTrigger.setAttribute('aria-expanded', 'false');
+    }
+    lineSearchMenuTrigger = trigger;
+    trigger.setAttribute('aria-expanded', 'true');
+
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth || 240;
+    const menuHeight = menu.offsetHeight || 0;
+    let left = rect.right - menuWidth;
+    if (left < 8) left = Math.max(8, rect.left);
+    if (left + menuWidth > window.innerWidth - 8) {
+        left = window.innerWidth - menuWidth - 8;
+    }
+    let top = rect.bottom + 4;
+    if (top + menuHeight > window.innerHeight - 8) {
+        top = Math.max(8, rect.top - menuHeight - 4);
+    }
+    menu.style.left = `${left + window.scrollX}px`;
+    menu.style.top = `${top + window.scrollY}px`;
+}
+
+function setupLineSearchMenu() {
+    document.addEventListener('click', () => closeLineSearchMenu());
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeLineSearchMenu();
+    });
+    window.addEventListener('resize', () => closeLineSearchMenu());
+    document.addEventListener('scroll', () => closeLineSearchMenu(), true);
 }
 
 const DATE_HIGHLIGHT_RE = /\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?/g;
@@ -1344,9 +1460,24 @@ function renderLogLines() {
             openLineCopyMenu(copyBtn, index);
         });
 
+        const searchBtn = document.createElement('button');
+        searchBtn.type = 'button';
+        searchBtn.className = 'line-search-trigger';
+        searchBtn.dataset.lineIndex = String(index);
+        searchBtn.setAttribute('aria-label', 'search component on google');
+        searchBtn.setAttribute('aria-haspopup', 'menu');
+        searchBtn.setAttribute('aria-expanded', 'false');
+        searchBtn.title = 'search component on google';
+        searchBtn.innerHTML = '⌕';
+        searchBtn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            openLineSearchMenu(searchBtn, index);
+        });
+
         lineDiv.appendChild(badge);
         lineDiv.appendChild(text);
         lineDiv.appendChild(copyBtn);
+        lineDiv.appendChild(searchBtn);
 
         const reasons = Array.isArray(entry.reasons) ? entry.reasons : [];
         lineDiv.title = reasons.length > 0 ? `${line}\n\n${reasons.join('\n')}` : line;
