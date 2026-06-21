@@ -556,7 +556,7 @@ def defender_exclusion_snippet(line):
     The four Remove-MpPreference-backed exclusion types (Paths, Extensions,
     Processes, IpAddresses) produce a `PowerShell:` directive, e.g.
     `...\\Exclusions\\Paths|C:\\Users\\Oskar\\AppData\\Local\\Temp` ->
-    `PowerShell: Remove-MpPreference -ExclusionPath "C:\\Users\\Oskar\\AppData\\Local\\Temp" -ErrorAction SilentlyContinue`.
+    `PowerShell: Remove-MpPreference -ExclusionPath "C:\\Users\\Oskar\\AppData\\Local\\Temp"`.
 
     TemporaryPaths has no Remove-MpPreference parameter, so it is removed with
     FRST's native `DeleteValue: key|value` directive (the exclusion path is the
@@ -578,10 +578,7 @@ def defender_exclusion_snippet(line):
     if param:
         if not value:
             return None
-        return (
-            f'PowerShell: Remove-MpPreference -{param} "{value}" '
-            f"-ErrorAction SilentlyContinue"
-        )
+        return f'PowerShell: Remove-MpPreference -{param} "{value}"'
     if exclusion_type == "temporarypaths":
         value_name = "" if value.lower() == "(default)" else value
         return f"DeleteValue: {key_path}|{value_name}"

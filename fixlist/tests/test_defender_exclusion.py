@@ -16,31 +16,28 @@ class DefenderExclusionSnippetTests(TestCase):
         self.assertEqual(
             defender_exclusion_snippet(line),
             'PowerShell: Remove-MpPreference -ExclusionPath '
-            r'"C:\Users\Oskar\AppData\Local\Temp" -ErrorAction SilentlyContinue',
+            r'"C:\Users\Oskar\AppData\Local\Temp"',
         )
 
     def test_extensions_exclusion(self):
         line = r"HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Extensions|exe"
         self.assertEqual(
             defender_exclusion_snippet(line),
-            'PowerShell: Remove-MpPreference -ExclusionExtension "exe" '
-            "-ErrorAction SilentlyContinue",
+            'PowerShell: Remove-MpPreference -ExclusionExtension "exe"',
         )
 
     def test_processes_exclusion(self):
         line = r"HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes|rundll32.exe"
         self.assertEqual(
             defender_exclusion_snippet(line),
-            'PowerShell: Remove-MpPreference -ExclusionProcess "rundll32.exe" '
-            "-ErrorAction SilentlyContinue",
+            'PowerShell: Remove-MpPreference -ExclusionProcess "rundll32.exe"',
         )
 
     def test_ipaddresses_exclusion(self):
         line = r"HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\IpAddresses|10.0.0.5"
         self.assertEqual(
             defender_exclusion_snippet(line),
-            'PowerShell: Remove-MpPreference -ExclusionIpAddress "10.0.0.5" '
-            "-ErrorAction SilentlyContinue",
+            'PowerShell: Remove-MpPreference -ExclusionIpAddress "10.0.0.5"',
         )
 
     def test_value_with_spaces_is_quoted_intact(self):
@@ -77,8 +74,7 @@ class DefenderExclusionSnippetTests(TestCase):
         )
         self.assertEqual(
             defender_exclusion_snippet(line),
-            'PowerShell: Remove-MpPreference -ExclusionProcess "powershell.exe" '
-            "-ErrorAction SilentlyContinue",
+            'PowerShell: Remove-MpPreference -ExclusionProcess "powershell.exe"',
         )
 
     def test_type_lookup_is_case_insensitive(self):
@@ -152,7 +148,7 @@ class DefenderExclusionAnalyzerFlagTests(TestCase):
         self.assertEqual(
             result["fixlist_replacement"],
             'PowerShell: Remove-MpPreference -ExclusionPath '
-            r'"C:\Users\Oskar\AppData\Local\Temp" -ErrorAction SilentlyContinue',
+            r'"C:\Users\Oskar\AppData\Local\Temp"',
         )
 
     def test_ordinary_line_has_no_fixlist_replacement(self):
