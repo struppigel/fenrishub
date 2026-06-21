@@ -1112,6 +1112,7 @@ def _build_line_result(
         "dates": dates or [],
         "components": components,
         "filepath_highlight": filepath_highlight,
+        "fixlist_replacement": ex.defender_exclusion_snippet(line),
         "_alert_descriptions": alert_descriptions or [],
     }
 

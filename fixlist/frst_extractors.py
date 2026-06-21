@@ -537,6 +537,57 @@ def get_frst_entry(line):
     return None
 
 
+DEFENDER_EXCLUSION_PARAMS = {
+    "paths": "ExclusionPath",
+    "extensions": "ExclusionExtension",
+    "processes": "ExclusionProcess",
+    "ipaddresses": "ExclusionIpAddress",
+}
+# group(1): full registry key, group(2): exclusion type, group(3): value.
+_DEFENDER_EXCLUSION_RE = re.compile(
+    r"(?i)^(.*\\Windows Defender\\Exclusions\\([^\\|]+))\|(.*?)\s*(?:<====.*)?$"
+)
+
+
+def defender_exclusion_snippet(line):
+    """Return a FRST remediation directive for a Windows Defender exclusion
+    registry line, or None if the line isn't one.
+
+    The four Remove-MpPreference-backed exclusion types (Paths, Extensions,
+    Processes, IpAddresses) produce a `PowerShell:` directive, e.g.
+    `...\\Exclusions\\Paths|C:\\Users\\Oskar\\AppData\\Local\\Temp` ->
+    `PowerShell: Remove-MpPreference -ExclusionPath "C:\\Users\\Oskar\\AppData\\Local\\Temp" -ErrorAction SilentlyContinue`.
+
+    TemporaryPaths has no Remove-MpPreference parameter, so it is removed with
+    FRST's native `DeleteValue: key|value` directive (the exclusion path is the
+    registry value name). A default value (`(Default)`, or no value at all)
+    yields an empty value name: `DeleteValue: key|`.
+
+    The value is taken literally from the line (no normalize_path) so the
+    generated fixlist targets the actual machine path/value.
+    """
+    if not line:
+        return None
+    match = _DEFENDER_EXCLUSION_RE.search(line.strip())
+    if not match:
+        return None
+    key_path = match.group(1).strip()
+    exclusion_type = match.group(2).strip().lower()
+    value = match.group(3).strip()
+    param = DEFENDER_EXCLUSION_PARAMS.get(exclusion_type)
+    if param:
+        if not value:
+            return None
+        return (
+            f'PowerShell: Remove-MpPreference -{param} "{value}" '
+            f"-ErrorAction SilentlyContinue"
+        )
+    if exclusion_type == "temporarypaths":
+        value_name = "" if value.lower() == "(default)" else value
+        return f"DeleteValue: {key_path}|{value_name}"
+    return None
+
+
 def extract_any_frst_path(line):
     filepath_prefix = "FILEPATH:"
     if line.startswith(filepath_prefix):

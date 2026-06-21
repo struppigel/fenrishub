@@ -1516,10 +1516,19 @@ function setCopiedState(index, isCopied) {
     }
 }
 
+// The text a line contributes to the Fixlist. Some entries (e.g. Windows
+// Defender exclusions) carry a backend-provided replacement — a PowerShell
+// remediation snippet — that is inserted instead of the raw log line.
+function fixlistTextForEntry(entry) {
+    if (entry && entry.fixlist_replacement) return entry.fixlist_replacement;
+    return entry ? (entry.line || '') : '';
+}
+
 function removeLine(line, index) {
     const textarea = document.getElementById('selectedLines');
     const cursorPos = textarea.selectionStart;
-    const escaped = line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const effectiveLine = fixlistTextForEntry(analyzedLines[index]) || line;
+    const escaped = effectiveLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pattern = new RegExp('(?:^|\\n)' + escaped + '(?:\\n|$)');
     const match = textarea.value.match(pattern);
     if (match) {
@@ -1554,7 +1563,7 @@ function syncCopiedIndexesWithTextarea() {
     const staleIndexes = [];
     copiedLineIndexes.forEach((index) => {
         const entry = analyzedLines[index];
-        const line = entry && typeof entry.line === 'string' ? entry.line : '';
+        const line = fixlistTextForEntry(entry);
         if (!line || !presentLines.has(line)) {
             staleIndexes.push(index);
         }
@@ -1584,11 +1593,12 @@ function insertLine(line, index) {
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const text = textarea.value;
+    const effectiveLine = fixlistTextForEntry(analyzedLines[index]) || line;
 
-    const newText = text.substring(0, start) + line + '\n' + text.substring(end);
+    const newText = text.substring(0, start) + effectiveLine + '\n' + text.substring(end);
     textarea.value = newText;
 
-    textarea.selectionStart = textarea.selectionEnd = start + line.length + 1;
+    textarea.selectionStart = textarea.selectionEnd = start + effectiveLine.length + 1;
     textarea.focus();
 
     copiedLineIndexes.add(index);
@@ -1613,12 +1623,13 @@ function insertAllStatus(status) {
             if (shouldSkipFirewallRulesLine(line)) {
                 continue;
             }
+            const effectiveLine = fixlistTextForEntry(entry);
             const text = textarea.value;
 
-            const newText = text.substring(0, insertPosition) + line + '\n' + text.substring(insertPosition);
+            const newText = text.substring(0, insertPosition) + effectiveLine + '\n' + text.substring(insertPosition);
             textarea.value = newText;
 
-            insertPosition += line.length + 1;
+            insertPosition += effectiveLine.length + 1;
 
             copiedLineIndexes.add(index);
             addedIndexes.push(index);
