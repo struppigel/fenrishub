@@ -270,10 +270,12 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         .order_by('recipient_user__username')
     )
 
-    channel = request.GET.get('channel', '').strip().lower()
-    if channel == 'all':
+    channel = request.GET.get('channel', '').strip()
+    if channel.lower() == 'all':
+        channel = 'all'
         list_visible_uploads = UploadedLog.objects.all()
-    elif channel == 'unassigned':
+    elif channel.lower() == 'unassigned':
+        channel = 'unassigned'
         list_visible_uploads = UploadedLog.objects.filter(recipient_user__isnull=True)
     elif channel in channel_users:
         list_visible_uploads = UploadedLog.objects.filter(recipient_user__username=channel)
