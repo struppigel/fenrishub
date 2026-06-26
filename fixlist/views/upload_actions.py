@@ -169,7 +169,7 @@ def _start_merge(request, selected_ids: list, action_scope_uploads, to_analyzer:
             'confirm_action': confirm_action,
             'submit_url': uploaded_logs_url,
             'cancel_url': uploaded_logs_url,
-            'channel': (request.POST.get('channel') or '').strip().lower(),
+            'channel': (request.POST.get('channel') or '').strip(),
             'username_filter': (request.POST.get('u') or '').strip(),
             'search_query': (request.POST.get('q') or '').strip(),
             'page': (request.POST.get('page') or '').strip(),

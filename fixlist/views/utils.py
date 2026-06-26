@@ -149,7 +149,7 @@ def redirect_preserving_filters(request, target_url_name):
         if value:
             params[key] = value
 
-    channel = (request.POST.get('channel') or request.GET.get('channel') or '').strip().lower()
+    channel = (request.POST.get('channel') or request.GET.get('channel') or '').strip()
     if channel and channel != 'mine':
         params['channel'] = channel
 
