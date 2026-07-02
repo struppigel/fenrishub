@@ -271,7 +271,13 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="ruleWholeLogGroup" style="display: none;">
+                <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;">
+                    <input type="checkbox" id="ruleWholeLog" name="whole_log" {% if form_whole_log %}checked{% endif %} style="width: auto;">
+                    run once against the whole log
+                </label>
+            </div>
+            <div class="form-group" id="rulePriorityGroup">
                 <label for="rulePriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
                 <select id="rulePriority" name="priority">
                     <option value="" {% if form_priority == '' %}selected{% endif %}>auto from match type</option>
@@ -660,6 +666,82 @@
         }
     }
 
+    /* ── whole-log preview (single log-level verdict) ── */
+
+    async function renderWholeLogPreview(logText, sourceText, matchType) {
+        if (fetchController) fetchController.abort();
+        fetchController = new AbortController();
+
+        const container = document.getElementById('previewOutput');
+
+        try {
+            const resp = await fetch(TEST_RULE_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                body: JSON.stringify({
+                    source_text: sourceText, match_type: matchType,
+                    status: 'A', whole_log: true, lines: [logText],
+                }),
+                signal: fetchController.signal,
+            });
+
+            const data = await resp.json();
+            container.innerHTML = '';
+            if (data.error) {
+                clearRegexWarnings();
+                var errDiv = document.createElement('div');
+                errDiv.className = 'preview-error';
+                errDiv.textContent = data.error;
+                container.appendChild(errDiv);
+                document.getElementById('matchCount').textContent = '';
+                return;
+            }
+
+            renderRegexWarnings(data.regex_warnings);
+
+            /* Verdict line: matches (alert would fire) or no match. */
+            const verdict = document.createElement('div');
+            verdict.className = 'line-status-row';
+            if (data.matched) {
+                verdict.appendChild(makeStatusBadge('A'));
+                const label = document.createElement('span');
+                label.textContent = 'matches the whole log — this alert would fire';
+                verdict.appendChild(label);
+            } else {
+                verdict.appendChild(makeStatusBadge('?'));
+                const label = document.createElement('span');
+                label.textContent = 'no match — this alert would not fire';
+                verdict.appendChild(label);
+            }
+            container.appendChild(verdict);
+
+            if (data.script_error) {
+                const err = document.createElement('div');
+                err.className = 'preview-error';
+                err.textContent = 'Script error: ' + data.script_error;
+                container.appendChild(err);
+            }
+
+            /* For regex, show the log with the matched spans highlighted. */
+            if (matchType === 'regex' && data.match_ranges && data.match_ranges.length) {
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'preview-line matched';
+                renderHighlightSpans(lineDiv, data.log, data.match_ranges, 'match-highlight');
+                container.appendChild(lineDiv);
+            }
+
+            document.getElementById('matchCount').textContent =
+                data.matched ? 'rule matches the log' : 'rule does not match the log';
+        } catch (e) {
+            if (e.name === 'AbortError') return;
+            container.innerHTML = '';
+            var errDiv2 = document.createElement('div');
+            errDiv2.className = 'preview-error';
+            errDiv2.textContent = 'Request failed: ' + e.message;
+            container.appendChild(errDiv2);
+        }
+    }
+
     /* ── main update ── */
 
     function currentPriority() {
@@ -698,6 +780,45 @@
         }
     }
 
+    function syncWholeLogMode() {
+        const status = document.getElementById('ruleStatus').value;
+        const matchType = document.getElementById('ruleMatchType').value;
+        const group = document.getElementById('ruleWholeLogGroup');
+        const checkbox = document.getElementById('ruleWholeLog');
+        /* Whole-log only makes sense as an alert on regex / script rules. */
+        const eligible = status === 'A' && (matchType === 'regex' || matchType === 'script');
+        if (eligible) {
+            group.style.display = '';
+        } else {
+            group.style.display = 'none';
+            checkbox.checked = false;
+        }
+        const wholeLog = checkbox.checked;
+        /* Priority has no effect on whole-log alerts -- hide the knob. */
+        document.getElementById('rulePriorityGroup').style.display = wholeLog ? 'none' : '';
+        /* Script help depends on scope: whole-log scripts read the full log from
+         * `log`, per-line scripts read one line from `line`. Set both branches so
+         * the text is correct regardless of how we got here (e.g. status change). */
+        if (matchType === 'script') {
+            const help = document.getElementById('ruleScriptHelp');
+            const textarea = document.getElementById('ruleSourceText');
+            if (wholeLog) {
+                help.innerHTML =
+                    'Python snippet (one rule). <code>log</code> holds the entire log as a string and the <code>re</code> module is available; set <code>result</code> to a truthy value or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.';
+                textarea.placeholder = 'result = "evil.exe" in log';
+            } else {
+                help.innerHTML =
+                    'Python snippet (one rule). <code>line</code> holds the log line as a string and the <code>re</code> module is available; set <code>result</code> to a truthy value or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.';
+                textarea.placeholder = 'result = "evil" in line.lower()';
+            }
+        }
+    }
+
+    function isWholeLogActive() {
+        return document.getElementById('ruleWholeLog').checked &&
+            document.getElementById('ruleWholeLogGroup').style.display !== 'none';
+    }
+
     function updatePreview() {
         const sourceText = document.getElementById('ruleSourceText').value.trim();
         const matchType = document.getElementById('ruleMatchType').value;
@@ -705,6 +826,16 @@
         const lines = logText.split('\n').filter(function (l) { return l.trim().length > 0; });
 
         if (!sourceText) { clearPreview(); return; }
+
+        // Whole-log rules run once against the entire log, so they need text to
+        // test against and produce a single log-level verdict (not per-line rows).
+        if (isWholeLogActive()) {
+            if (!logText.trim()) { clearPreview(); return; }
+            document.getElementById('colorLegend').style.display = 'none';
+            renderWholeLogPreview(logText, sourceText, matchType);
+            return;
+        }
+
         // Regex needs warnings even before the user pastes test lines, so still
         // call the API. Other match types stay silent until there are lines.
         if (!lines.length && matchType !== 'regex') { clearPreview(); return; }
@@ -725,10 +856,19 @@
     document.getElementById('ruleMatchType').addEventListener('change', function () {
         syncPriorityPlaceholder();
         syncSourceTextMode();
+        syncWholeLogMode();
         schedulePreviewUpdate();
     });
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
-    document.getElementById('ruleStatus').addEventListener('change', schedulePreviewUpdate);
+    document.getElementById('ruleStatus').addEventListener('change', function () {
+        syncWholeLogMode();
+        schedulePreviewUpdate();
+    });
+    document.getElementById('ruleWholeLog').addEventListener('change', function () {
+        syncSourceTextMode();
+        syncWholeLogMode();
+        schedulePreviewUpdate();
+    });
     document.getElementById('rulePriority').addEventListener('change', function () {
         this.dataset.userTouched = 'true';
         schedulePreviewUpdate();
@@ -740,6 +880,7 @@
     }
     syncPriorityPlaceholder();
     syncSourceTextMode();
+    syncWholeLogMode();
 })();
 </script>
 {% endblock %}

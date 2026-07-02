@@ -28,7 +28,7 @@ from ..models import (
     PRIORITY_MIN,
 )
 from ..rule_sets import invalidate_for_rule_owner
-from ..rule_test_service import build_rule_test_results
+from ..rule_test_service import build_rule_test_results, build_wholelog_rule_test_result
 from .guest import is_moderator
 
 
@@ -75,17 +75,34 @@ def _creatable_match_type_choices(user):
     ]
 
 
-def _script_rule_error(match_type: str, source_text: str, user) -> str | None:
+def _whole_log_error(whole_log: bool, status: str, match_type: str) -> str | None:
+    """Validate the whole-log flag. Returns an error message, or None if OK.
+
+    Whole-log rules run once against the entire log and surface only as alerts, so
+    they are restricted to Alert status and the regex / script match types.
+    """
+    if not whole_log:
+        return None
+    if status != ClassificationRule.STATUS_ALERT:
+        return 'Whole-log rules must use Alert status.'
+    if match_type not in (ClassificationRule.MATCH_REGEX, ClassificationRule.MATCH_SCRIPT):
+        return 'Whole-log rules support only regex and script match types.'
+    return None
+
+
+def _script_rule_error(match_type: str, source_text: str, user, whole_log: bool = False) -> str | None:
     """Validate a script rule before save. Returns an error message, or None if OK.
 
     Non-moderators may not author script rules at all. For moderators, the snippet
     must compile, run cleanly on adversarial input, and stay within the time budget.
+    Whole-log script rules read their input from the ``log`` variable instead of ``line``.
     """
     if match_type != ClassificationRule.MATCH_SCRIPT:
         return None
     if not is_moderator(user):
         return 'Script rules can only be created by moderators.'
-    evaluation = script_matcher.evaluate_script(source_text)
+    var_name = 'log' if whole_log else 'line'
+    evaluation = script_matcher.evaluate_script(source_text, var_name=var_name)
     if not evaluation['compile_ok']:
         return evaluation['compile_error'] or 'Invalid script.'
     if evaluation['runtime_error']:
@@ -139,15 +156,19 @@ def rules_view(request):
             match_type = request.POST.get('match_type', '').strip()
             source_text = request.POST.get('source_text', '').strip()
             description = request.POST.get('description', '').strip()
+            whole_log = request.POST.get('whole_log') == 'on'
             priority = _coerce_priority(request.POST.get('priority'), match_type)
             patterns = _patterns_for(match_type, source_text)
-            script_error = _script_rule_error(match_type, source_text, request.user)
+            script_error = _script_rule_error(match_type, source_text, request.user, whole_log)
+            whole_log_error = _whole_log_error(whole_log, status, match_type)
             if not patterns:
                 messages.error(request, 'Rule source text is required.')
             elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
                 messages.error(request, 'Invalid status.')
             elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
                 messages.error(request, 'Invalid match type.')
+            elif whole_log_error:
+                messages.error(request, whole_log_error)
             elif script_error:
                 messages.error(request, script_error)
             else:
@@ -156,6 +177,7 @@ def rules_view(request):
                         owner=request.user,
                         status=status,
                         match_type=match_type,
+                        whole_log=whole_log,
                         source_text__in=patterns,
                     ).values_list('source_text', flat=True)
                 )
@@ -167,6 +189,7 @@ def rules_view(request):
                         source_text=pattern,
                         description=description,
                         priority=priority,
+                        whole_log=whole_log,
                     )
                     for pattern in patterns if pattern not in existing
                 ]
@@ -198,19 +221,24 @@ def rules_view(request):
             source_text = request.POST.get('source_text', '').strip()
             description = request.POST.get('description', '').strip()
             is_enabled = request.POST.get('is_enabled') == 'on'
+            whole_log = request.POST.get('whole_log') == 'on'
             priority = _coerce_priority(request.POST.get('priority'), match_type)
-            script_error = _script_rule_error(match_type, source_text, request.user)
+            script_error = _script_rule_error(match_type, source_text, request.user, whole_log)
+            whole_log_error = _whole_log_error(whole_log, status, match_type)
             if not source_text:
                 messages.error(request, 'Rule source text is required.')
             elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
                 messages.error(request, 'Invalid status.')
             elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
                 messages.error(request, 'Invalid match type.')
+            elif whole_log_error:
+                messages.error(request, whole_log_error)
             elif script_error:
                 messages.error(request, script_error)
             else:
                 duplicate = ClassificationRule.objects.filter(
-                    owner=request.user, status=status, match_type=match_type, source_text=source_text
+                    owner=request.user, status=status, match_type=match_type,
+                    source_text=source_text, whole_log=whole_log,
                 ).exclude(pk=rule.pk).exists()
                 if duplicate:
                     messages.error(request, 'A rule with this status, match type, and source text already exists.')
@@ -221,9 +249,10 @@ def rules_view(request):
                     rule.description = description
                     rule.is_enabled = is_enabled
                     rule.priority = priority
+                    rule.whole_log = whole_log
                     rule.save(update_fields=[
                         'status', 'match_type', 'source_text', 'description',
-                        'is_enabled', 'priority', 'updated_at',
+                        'is_enabled', 'priority', 'whole_log', 'updated_at',
                     ])
                     invalidate_for_rule_owner(request.user)
                     messages.success(request, 'Rule updated.')
@@ -342,6 +371,7 @@ def add_rule_view(request):
     form_source_text = ''
     form_description = ''
     form_priority = ''
+    form_whole_log = request.GET.get('whole_log') == '1'
 
     if form_status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
         form_status = ClassificationRule.STATUS_MALWARE
@@ -353,20 +383,25 @@ def add_rule_view(request):
         match_type = request.POST.get('match_type', '').strip()
         source_text = request.POST.get('source_text', '').strip()
         description = request.POST.get('description', '').strip()
+        whole_log = request.POST.get('whole_log') == 'on'
         raw_priority = request.POST.get('priority', '').strip()
         form_status = status
         form_match_type = match_type
         form_source_text = source_text
         form_description = description
         form_priority = raw_priority
+        form_whole_log = whole_log
         patterns = _patterns_for(match_type, source_text)
-        script_error = _script_rule_error(match_type, source_text, request.user)
+        script_error = _script_rule_error(match_type, source_text, request.user, whole_log)
+        whole_log_error = _whole_log_error(whole_log, status, match_type)
         if not patterns:
             messages.error(request, 'Rule source text is required.')
         elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
             messages.error(request, 'Invalid status.')
         elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
             messages.error(request, 'Invalid match type.')
+        elif whole_log_error:
+            messages.error(request, whole_log_error)
         elif script_error:
             messages.error(request, script_error)
         else:
@@ -376,6 +411,7 @@ def add_rule_view(request):
                     owner=request.user,
                     status=status,
                     match_type=match_type,
+                    whole_log=whole_log,
                     source_text__in=patterns,
                 ).values_list('source_text', flat=True)
             )
@@ -400,6 +436,7 @@ def add_rule_view(request):
                     'source_text': pattern,
                     'description': description,
                     'priority': priority,
+                    'whole_log': whole_log,
                 }
                 if parsed:
                     for field in ('entry_type', 'clsid', 'name', 'filepath', 'normalized_filepath',
@@ -420,7 +457,10 @@ def add_rule_view(request):
                         request,
                         f'{m} duplicate{"" if m == 1 else "s"} skipped: {summary}',
                     )
-                keep_qs = urlencode({'status': status, 'match_type': match_type})
+                keep_params = {'status': status, 'match_type': match_type}
+                if whole_log:
+                    keep_params['whole_log'] = '1'
+                keep_qs = urlencode(keep_params)
                 return redirect(f"{reverse('add_rule')}?{keep_qs}")
             else:
                 summary = _format_skipped(skipped)
@@ -440,6 +480,7 @@ def add_rule_view(request):
         'form_source_text': form_source_text,
         'form_description': form_description,
         'form_priority': form_priority,
+        'form_whole_log': form_whole_log,
         'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
         'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
         'priority_min': PRIORITY_MIN,
@@ -463,6 +504,7 @@ def test_rule_api(request):
     match_type = (payload.get('match_type') or '').strip()
     lines = payload.get('lines', [])
     raw_priority = payload.get('priority')
+    whole_log = bool(payload.get('whole_log'))
 
     if not isinstance(lines, list) or len(lines) > 500:
         return JsonResponse({'error': 'Field "lines" must be a list with at most 500 entries.'}, status=400)
@@ -489,6 +531,41 @@ def test_rule_api(request):
         return JsonResponse({'error': 'Field "source_text" is required.'}, status=400)
     if len(patterns) > 100:
         return JsonResponse({'error': 'At most 100 patterns are allowed.'}, status=400)
+
+    # Whole-log rules run once against the entire log (regex / script only), so the
+    # preview reconstructs the pasted text and returns a single log-level verdict.
+    if whole_log:
+        if match_type not in (ClassificationRule.MATCH_REGEX, ClassificationRule.MATCH_SCRIPT):
+            return JsonResponse(
+                {'error': 'Whole-log rules support only regex and script match types.'},
+                status=400,
+            )
+        log_text = '\n'.join(str(line) for line in lines)
+        try:
+            result_payload = build_wholelog_rule_test_result(patterns, match_type, log_text)
+        except ValueError as exc:
+            return JsonResponse({'error': str(exc)}, status=400)
+        if match_type == ClassificationRule.MATCH_REGEX:
+            regex_warnings = []
+            for pattern in patterns:
+                evaluation = evaluate_regex_pattern(pattern)
+                warning_kinds = []
+                if not evaluation['re2_ok']:
+                    warning_kinds.append('fallback')
+                if evaluation['is_slow']:
+                    warning_kinds.append('slow')
+                if not warning_kinds:
+                    continue
+                regex_warnings.append({
+                    'pattern': pattern,
+                    'kinds': warning_kinds,
+                    're2_error': evaluation['re2_error'],
+                    'worst_ms': round(evaluation['worst_ms'], 2),
+                    'worst_input': evaluation['worst_input'],
+                })
+            if regex_warnings:
+                result_payload['regex_warnings'] = regex_warnings
+        return JsonResponse(result_payload)
 
     try:
         first_payload = build_rule_test_results(

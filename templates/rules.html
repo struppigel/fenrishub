@@ -326,6 +326,9 @@
                     {% endfor %}
                 </select>
             </div>
+            <div class="form-group" id="editWholeLogGroup" style="display: none;">
+                <label class="checkbox-label"><input type="checkbox" name="whole_log" id="editWholeLog"> run once against the whole log</label>
+            </div>
             <div class="form-group">
                 <label for="editSourceText" id="editSourceTextLabel">source text</label>
                 <textarea id="editSourceText" name="source_text" required></textarea>
@@ -400,13 +403,14 @@
             <div class="rule-row">
                 <span class="rule-status-badge {{ rule.status_css_class }}">{{ rule.status }}</span>
                 <span class="rule-match-type">{{ rule.get_match_type_display }}</span>
+                {% if rule.whole_log %}<span class="rule-match-type" title="evaluated once against the whole log">whole log</span>{% endif %}
                 <span class="rule-priority" title="priority">p{{ rule.priority }}</span>
                 <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
                 {% if filter_mode != 'own' %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
                 {% if rule.owner_id == request.user.id %}
                 <div class="rule-actions">
                     <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
-                    <button type="button" class="rule-act" onclick="startEdit({{ rule.pk }}, '{{ rule.status|escapejs }}', '{{ rule.match_type|escapejs }}', `{{ rule.source_text|escapejs }}`, '{{ rule.description|escapejs }}', {{ rule.is_enabled|yesno:'true,false' }}, {{ rule.priority }})">edit</button>
+                    <button type="button" class="rule-act" onclick="startEdit({{ rule.pk }}, '{{ rule.status|escapejs }}', '{{ rule.match_type|escapejs }}', `{{ rule.source_text|escapejs }}`, '{{ rule.description|escapejs }}', {{ rule.is_enabled|yesno:'true,false' }}, {{ rule.priority }}, {{ rule.whole_log|yesno:'true,false' }})">edit</button>
                     <form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act rule-act-del" onclick="return confirm('Delete this rule?');">delete</button></form>
                 </div>
                 {% endif %}
@@ -462,7 +466,29 @@ function syncEditSourceTextMode() {
     }
 }
 
-function startEdit(pk, status, matchType, sourceText, description, isEnabled, priority) {
+function syncEditWholeLogMode() {
+    const status = document.getElementById('editStatus').value;
+    const matchType = document.getElementById('editMatchType').value;
+    const group = document.getElementById('editWholeLogGroup');
+    const checkbox = document.getElementById('editWholeLog');
+    const eligible = status === 'A' && (matchType === 'regex' || matchType === 'script');
+    if (eligible) {
+        group.style.display = '';
+    } else {
+        group.style.display = 'none';
+        checkbox.checked = false;
+    }
+    const wholeLog = checkbox.checked;
+    /* Priority has no effect on whole-log alerts -- hide the knob. */
+    document.getElementById('editPriority').closest('.form-group').style.display = wholeLog ? 'none' : '';
+    /* Whole-log scripts read the full log from `log`, not `line`. */
+    if (wholeLog && matchType === 'script') {
+        document.getElementById('editScriptHelp').innerHTML =
+            'Python snippet. <code>log</code> holds the entire log and the <code>re</code> module is available; set <code>result</code> to truthy or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.';
+    }
+}
+
+function startEdit(pk, status, matchType, sourceText, description, isEnabled, priority, wholeLog) {
     document.getElementById('editPk').value = pk;
     document.getElementById('editStatus').value = status;
     document.getElementById('editMatchType').value = matchType;
@@ -471,8 +497,10 @@ function startEdit(pk, status, matchType, sourceText, description, isEnabled, pr
     document.getElementById('editIsEnabled').checked = isEnabled;
     document.getElementById('editPriority').value = String(priority);
     document.getElementById('editPriority').dataset.userTouched = 'true';
+    document.getElementById('editWholeLog').checked = !!wholeLog;
     document.getElementById('editSection').style.display = 'block';
     syncEditSourceTextMode();
+    syncEditWholeLogMode();
     document.getElementById('editSourceText').focus();
 }
 
@@ -485,6 +513,13 @@ document.getElementById('editMatchType').addEventListener('change', function () 
         }
     }
     syncEditSourceTextMode();
+    syncEditWholeLogMode();
+});
+
+document.getElementById('editStatus').addEventListener('change', syncEditWholeLogMode);
+document.getElementById('editWholeLog').addEventListener('change', function () {
+    syncEditSourceTextMode();
+    syncEditWholeLogMode();
 });
 
 document.getElementById('editPriority').addEventListener('change', function () {

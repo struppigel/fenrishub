@@ -70,6 +70,7 @@ class RulePreviewApiTests(TestCase):
     # -- Substring matching --
 
     def test_substring_match(self):
+        # Substring is case-sensitive, mirroring the analyzer's `source_text in line`.
         response = self._post({
             "source_text": "evil",
             "match_type": "substring",
@@ -79,7 +80,31 @@ class RulePreviewApiTests(TestCase):
         data = response.json()
         self.assertTrue(data["results"][0]["matched"])
         self.assertFalse(data["results"][1]["matched"])
-        self.assertTrue(data["results"][2]["matched"])
+        # Different case must NOT match, exactly as the analyzer would classify it.
+        self.assertFalse(data["results"][2]["matched"])
+
+    def test_substring_preview_matches_analyzer_case_sensitivity(self):
+        # The preview verdict must equal the analyzer verdict for the same input.
+        from ..analyzer import inspect_line_matches, invalidate_rule_buckets_cache
+
+        make_rule(
+            "evil",
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+        )
+        invalidate_rule_buckets_cache()
+        # Analyzer: uppercase line does not match the lowercase substring rule.
+        self.assertEqual(inspect_line_matches("EVIL uppercase")["dominant_status"], "?")
+
+        response = self._post({
+            "source_text": "evil",
+            "match_type": "substring",
+            "status": "B",
+            "lines": ["EVIL uppercase"],
+        })
+        # Preview agrees: no match.
+        self.assertFalse(response.json()["results"][0]["matched"])
 
     def test_substring_returns_match_ranges(self):
         response = self._post({

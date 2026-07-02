@@ -125,6 +125,45 @@ def _build_alert_rule_warnings(analyzed_lines: list[dict]) -> list[dict]:
     return warnings
 
 
+def _build_wholelog_alert_warnings(raw_log_text: str, buckets) -> list[dict]:
+    """Evaluate whole-log alert rules once against the entire log.
+
+    Whole-log rules (regex or script, alert status) bypass the per-line tier/
+    shadowing logic entirely: each is tested once against ``raw_log_text`` and, on
+    a match, surfaces its description as a log-level alert warning. Priority plays
+    no part -- a matching rule always fires.
+    """
+    seen_descriptions = set()
+    ordered_descriptions = []
+
+    def _record(rule):
+        value = (rule.description or "").strip() or (rule.source_text or "").strip()
+        if not value or value in seen_descriptions:
+            return
+        seen_descriptions.add(value)
+        ordered_descriptions.append(value)
+
+    for rule, compiled in buckets.get("__wholelog_regex", []):
+        if compiled.search(raw_log_text):
+            _record(rule)
+
+    for rule, code in buckets.get("__wholelog_script", []):
+        matched, _error = script_matcher.run_script(code, raw_log_text, var_name="log")
+        if matched:
+            _record(rule)
+
+    warnings = []
+    for index, description in enumerate(ordered_descriptions, start=1):
+        warnings.append(
+            _build_warning(
+                code=f"alert_rule_wholelog_{index}",
+                title="Alert rule matched",
+                message=description,
+            )
+        )
+    return warnings
+
+
 def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
     detected_type = detect_log_type(raw_log_text or "")
     if detected_type not in {"FRST", "Addition", "FRST&Addition"}:
@@ -837,12 +876,32 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
         "__parsed_filepath_exclusions": parsed_filepath_exclusions,
         "__regex_set": None,
         "__regex_set_rules": [],
+        "__wholelog_regex": [],
+        "__wholelog_script": [],
     }
 
     pending_regex_rules = []
 
     for rule in rules:
         if rule.status not in VALID_STATUSES:
+            continue
+
+        # Whole-log rules run once against the entire log (see analyze_log_text),
+        # never per line. Route them into dedicated buckets and skip everything
+        # below so they never land in the per-line matchers.
+        if rule.whole_log:
+            if rule.match_type == ClassificationRule.MATCH_SCRIPT:
+                try:
+                    buckets["__wholelog_script"].append(
+                        (rule, script_matcher.compile_script(rule.source_text))
+                    )
+                except ValueError:
+                    pass
+            elif rule.match_type == ClassificationRule.MATCH_REGEX:
+                try:
+                    buckets["__wholelog_regex"].append((rule, re.compile(rule.source_text)))
+                except re.error:
+                    pass
             continue
 
         rule_path = (rule.normalized_filepath or "").strip().lower()
@@ -1452,6 +1511,7 @@ def analyze_log_text(raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY)
         analyzed_lines.append(_analyze_single_line(line, buckets))
 
     warnings.extend(_build_alert_rule_warnings(analyzed_lines))
+    warnings.extend(_build_wholelog_alert_warnings(raw_log_text or "", buckets))
     for entry in analyzed_lines:
         entry.pop("_alert_descriptions", None)
 

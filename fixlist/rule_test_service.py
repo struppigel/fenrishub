@@ -8,6 +8,59 @@ from .analyzer import STATUS_LABELS, STATUS_PRECEDENCE, _load_rule_buckets, insp
 from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
 
 
+def build_wholelog_rule_test_result(
+    patterns: list,
+    match_type: str,
+    log_text: str,
+) -> dict:
+    """Preview a whole-log alert rule against the entire pasted log at once.
+
+    Mirrors the analyzer's whole-log path: regex patterns search the full text,
+    and script snippets run once with the log bound to the ``log`` variable. The
+    result is a single log-level verdict rather than per-line rows.
+    """
+    if match_type == ClassificationRule.MATCH_REGEX:
+        ranges = []
+        for pattern in patterns:
+            try:
+                compiled = re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f'Invalid regex: {exc}') from exc
+            ranges.extend(
+                [m.start(), m.end()] for m in compiled.finditer(log_text) if m.end() > m.start()
+            )
+        # Merge overlapping spans (multiple patterns can match the same region) so
+        # the client renders a clean, non-overlapping set of highlights.
+        merged = []
+        for start, end in sorted(ranges):
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        return {
+            'whole_log': True,
+            'log': log_text,
+            'matched': bool(merged),
+            'match_ranges': merged or None,
+        }
+
+    if match_type == ClassificationRule.MATCH_SCRIPT:
+        # One snippet for the whole log (patterns is the single-element script blob).
+        code = script_matcher.compile_script(patterns[0])  # ValueError -> HTTP 400 in the view.
+        matched, error = script_matcher.run_script(code, log_text, var_name='log')
+        result = {
+            'whole_log': True,
+            'log': log_text,
+            'matched': matched,
+            'match_ranges': None,
+        }
+        if error:
+            result['script_error'] = error
+        return result
+
+    raise ValueError('Whole-log preview supports only regex and script match types.')
+
+
 def build_rule_test_results(
     source_text: str,
     status: str,
@@ -73,16 +126,16 @@ def build_rule_test_results(
             result['matched'] = line == source_text.strip()
 
         elif match_type == 'substring':
+            # Case-sensitive, mirroring the analyzer's `rule.source_text in line`.
             ranges = []
-            lower_line = line.lower()
-            lower_pat = source_text.lower()
-            idx = 0
-            while idx < len(lower_line):
-                pos = lower_line.find(lower_pat, idx)
-                if pos == -1:
-                    break
-                ranges.append([pos, pos + len(lower_pat)])
-                idx = pos + len(lower_pat)
+            if source_text:
+                idx = 0
+                while idx < len(line):
+                    pos = line.find(source_text, idx)
+                    if pos == -1:
+                        break
+                    ranges.append([pos, pos + len(source_text)])
+                    idx = pos + len(source_text)
             result['matched'] = len(ranges) > 0
             result['match_ranges'] = ranges or None
 

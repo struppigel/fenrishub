@@ -296,6 +296,10 @@ class ClassificationRule(models.Model):
     description = models.TextField(blank=True)
     source_name = models.CharField(max_length=128, blank=True)
     is_enabled = models.BooleanField(default=True)
+    whole_log = models.BooleanField(
+        default=False,
+        help_text='Alert rules only: evaluate once against the whole log instead of per line.',
+    )
 
     # Optional parsed metadata, populated for parsed/filepath rules.
     entry_type = models.CharField(max_length=64, blank=True)
@@ -326,7 +330,7 @@ class ClassificationRule(models.Model):
 
     class Meta:
         ordering = ['-priority', 'status', 'match_type', 'source_text']
-        unique_together = ('owner', 'status', 'match_type', 'source_text')
+        unique_together = ('owner', 'status', 'match_type', 'source_text', 'whole_log')
         constraints = [
             models.CheckConstraint(
                 check=Q(priority__gte=PRIORITY_MIN) & Q(priority__lte=PRIORITY_MAX),

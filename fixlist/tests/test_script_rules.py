@@ -14,7 +14,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from .. import script_matcher
-from ..analyzer import inspect_line_matches, invalidate_rule_buckets_cache
+from ..analyzer import analyze_log_text, inspect_line_matches, invalidate_rule_buckets_cache
 from ..models import ClassificationRule
 from .factories import make_rule, make_user
 
@@ -53,6 +53,26 @@ class ScriptMatcherUnitTests(TestCase):
         matched, error = script_matcher.run_script(code, "x")
         self.assertFalse(matched)
         self.assertIn("ZeroDivisionError", error)
+
+    def test_run_script_binds_custom_var_name(self):
+        # Whole-log script rules read their input from `log`, not `line`.
+        code = script_matcher.compile_script('result = "evil.exe" in log')
+        self.assertEqual(
+            script_matcher.run_script(code, "...\nevil.exe\n...", var_name="log"),
+            (True, None),
+        )
+        # The default `line` variable is undefined when `log` is requested, so a
+        # snippet reading `line` would fault (swallowed to a NOMATCH + error).
+        line_code = script_matcher.compile_script('result = "evil.exe" in line')
+        matched, error = script_matcher.run_script(line_code, "evil.exe", var_name="log")
+        self.assertFalse(matched)
+        self.assertIn("NameError", error)
+
+    def test_evaluate_script_accepts_log_variable(self):
+        evaluation = script_matcher.evaluate_script('result = "x" in log', var_name="log")
+        self.assertTrue(evaluation["compile_ok"])
+        self.assertIsNone(evaluation["runtime_error"])
+        self.assertFalse(evaluation["is_slow"])
 
     def test_safe_helpers_available(self):
         code = script_matcher.compile_script(
@@ -199,6 +219,83 @@ class ScriptRulePreviewApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("error", response.json())
 
+    def test_whole_log_script_preview_binds_log_and_runs_once(self):
+        _make_moderator()
+        self.client.login(username="mod", password="password123")
+        response = self._post({
+            "source_text": 'result = "evil.exe" in log',
+            "match_type": "script",
+            "status": "A",
+            "whole_log": True,
+            "lines": ["clean line", "C:\\Temp\\evil.exe", "another"],
+        })
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["whole_log"])
+        self.assertTrue(data["matched"])
+
+    def test_line_script_preview_log_variable_is_undefined(self):
+        # `log` is whole-log only; a per-line (non-whole-log) script referencing it
+        # must not see the log -- it gets a swallowed NameError, never a match.
+        _make_moderator()
+        self.client.login(username="mod", password="password123")
+        response = self._post({
+            "source_text": 'result = "evil.exe" in log',
+            "match_type": "script",
+            "status": "B",
+            "lines": ["C:\\Temp\\evil.exe"],
+        })
+        self.assertEqual(response.status_code, 200)
+        results = response.json()["results"]
+        self.assertFalse(results[0]["matched"])
+        self.assertIn("NameError", results[0].get("script_error", ""))
+
+    def test_whole_log_script_preview_line_variable_is_undefined(self):
+        # `line` is per-line only; a whole-log script referencing it gets a
+        # swallowed NameError (no match) rather than a stale per-line binding.
+        _make_moderator()
+        self.client.login(username="mod", password="password123")
+        response = self._post({
+            "source_text": 'result = "evil.exe" in line',
+            "match_type": "script",
+            "status": "A",
+            "whole_log": True,
+            "lines": ["C:\\Temp\\evil.exe"],
+        })
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertFalse(data["matched"])
+        self.assertIn("NameError", data.get("script_error", ""))
+
+    def test_whole_log_regex_preview_matches_across_lines(self):
+        make_user()
+        self.client.login(username="alice", password="password123")
+        response = self._post({
+            "source_text": r"ALPHA[\s\S]*OMEGA",
+            "match_type": "regex",
+            "status": "A",
+            "whole_log": True,
+            "lines": ["first ALPHA here", "noise", "then OMEGA here"],
+        })
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["whole_log"])
+        self.assertTrue(data["matched"])
+        self.assertTrue(data["match_ranges"])
+
+    def test_whole_log_preview_rejects_unsupported_match_type(self):
+        make_user()
+        self.client.login(username="alice", password="password123")
+        response = self._post({
+            "source_text": "EXACT-LINE",
+            "match_type": "exact",
+            "status": "A",
+            "whole_log": True,
+            "lines": ["EXACT-LINE"],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+
 
 class ScriptRuleCreationTests(TestCase):
     def setUp(self):
@@ -268,3 +365,129 @@ class ScriptRuleCreationTests(TestCase):
         self.assertFalse(
             ClassificationRule.objects.filter(match_type=ClassificationRule.MATCH_SCRIPT).exists()
         )
+
+
+class WholeLogAlertRuleTests(TestCase):
+    """Whole-log alert rules run once against the entire log, not per line."""
+
+    LOG = "first line ALPHA marker\nmiddle noise line\nlast line OMEGA marker\n"
+
+    def setUp(self):
+        invalidate_rule_buckets_cache()
+
+    def _alert_warnings(self, raw_log):
+        result = analyze_log_text(raw_log)
+        return [w for w in result["warnings"] if w.get("title") == "Alert rule matched"], result
+
+    def test_whole_log_regex_alert_matches_across_lines(self):
+        make_rule(
+            r"ALPHA[\s\S]*OMEGA",  # spans multiple lines -- impossible per line
+            status=ClassificationRule.STATUS_ALERT,
+            match_type=ClassificationRule.MATCH_REGEX,
+            description="Cross-line ALPHA/OMEGA pattern",
+            whole_log=True,
+        )
+        invalidate_rule_buckets_cache()
+
+        alert_warnings, result = self._alert_warnings(self.LOG)
+        self.assertEqual(len(alert_warnings), 1)
+        self.assertEqual(alert_warnings[0]["message"], "Cross-line ALPHA/OMEGA pattern")
+        # The rule must NOT classify any individual line -- it runs once, log-wide.
+        self.assertTrue(all(line["dominant_status"] == "?" for line in result["lines"]))
+
+    def test_whole_log_script_alert_reads_log_variable(self):
+        make_rule(
+            'result = "evil.exe" in log',
+            status=ClassificationRule.STATUS_ALERT,
+            match_type=ClassificationRule.MATCH_SCRIPT,
+            description="Found evil.exe somewhere in the log",
+            whole_log=True,
+        )
+        invalidate_rule_buckets_cache()
+
+        alert_warnings, result = self._alert_warnings("clean line\nC:\\Temp\\evil.exe\nanother\n")
+        self.assertEqual(len(alert_warnings), 1)
+        self.assertEqual(alert_warnings[0]["message"], "Found evil.exe somewhere in the log")
+        self.assertTrue(all(line["dominant_status"] == "?" for line in result["lines"]))
+
+    def test_whole_log_rule_does_not_fire_without_match(self):
+        make_rule(
+            r"ALPHA[\s\S]*OMEGA",
+            status=ClassificationRule.STATUS_ALERT,
+            match_type=ClassificationRule.MATCH_REGEX,
+            description="Cross-line ALPHA/OMEGA pattern",
+            whole_log=True,
+        )
+        invalidate_rule_buckets_cache()
+
+        alert_warnings, _ = self._alert_warnings("only ALPHA here, no second marker\n")
+        self.assertEqual(alert_warnings, [])
+
+    def test_whole_log_rule_message_falls_back_to_source_text(self):
+        make_rule(
+            "OMEGA",
+            status=ClassificationRule.STATUS_ALERT,
+            match_type=ClassificationRule.MATCH_REGEX,
+            description="",
+            whole_log=True,
+        )
+        invalidate_rule_buckets_cache()
+
+        alert_warnings, _ = self._alert_warnings(self.LOG)
+        self.assertEqual(len(alert_warnings), 1)
+        self.assertEqual(alert_warnings[0]["message"], "OMEGA")
+
+
+class WholeLogRuleCreationTests(TestCase):
+    def setUp(self):
+        invalidate_rule_buckets_cache()
+
+    def test_moderator_creates_whole_log_script_alert(self):
+        _make_moderator()
+        self.client.login(username="mod", password="password123")
+        response = self.client.post(reverse("add_rule"), {
+            "status": ClassificationRule.STATUS_ALERT,
+            "match_type": ClassificationRule.MATCH_SCRIPT,
+            "source_text": 'result = "evil.exe" in log',
+            "whole_log": "on",
+        })
+        self.assertEqual(response.status_code, 302)
+        rule = ClassificationRule.objects.get(match_type=ClassificationRule.MATCH_SCRIPT)
+        self.assertTrue(rule.whole_log)
+
+    def test_whole_log_regex_alert_created_by_regular_user(self):
+        make_user()
+        self.client.login(username="alice", password="password123")
+        response = self.client.post(reverse("add_rule"), {
+            "status": ClassificationRule.STATUS_ALERT,
+            "match_type": ClassificationRule.MATCH_REGEX,
+            "source_text": r"ALPHA[\s\S]*OMEGA",
+            "whole_log": "on",
+        })
+        self.assertEqual(response.status_code, 302)
+        rule = ClassificationRule.objects.get(match_type=ClassificationRule.MATCH_REGEX)
+        self.assertTrue(rule.whole_log)
+
+    def test_whole_log_rejected_for_non_alert_status(self):
+        make_user()
+        self.client.login(username="alice", password="password123")
+        response = self.client.post(reverse("add_rule"), {
+            "status": ClassificationRule.STATUS_MALWARE,
+            "match_type": ClassificationRule.MATCH_REGEX,
+            "source_text": "OMEGA",
+            "whole_log": "on",
+        })
+        self.assertEqual(response.status_code, 200)  # re-render with error
+        self.assertFalse(ClassificationRule.objects.filter(whole_log=True).exists())
+
+    def test_whole_log_rejected_for_non_regex_or_script_match_type(self):
+        make_user()
+        self.client.login(username="alice", password="password123")
+        response = self.client.post(reverse("add_rule"), {
+            "status": ClassificationRule.STATUS_ALERT,
+            "match_type": ClassificationRule.MATCH_EXACT,
+            "source_text": "EXACT-LINE",
+            "whole_log": "on",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(ClassificationRule.objects.filter(whole_log=True).exists())

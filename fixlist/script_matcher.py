@@ -109,8 +109,8 @@ def compile_script(source: str):
         raise ValueError(f"Invalid script: {exc}") from exc
 
 
-def _make_globals(line: str) -> dict:
-    return {
+def _make_globals(text: str, var_name: str = "line") -> dict:
+    namespace = {
         "__builtins__": _build_builtins(),
         "_getattr_": safer_getattr,
         "_getitem_": default_guarded_getitem,
@@ -120,8 +120,11 @@ def _make_globals(line: str) -> dict:
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
         "_inplacevar_": _inplacevar,
         "re": re,
-        "line": line,
     }
+    # Per-line rules read ``line``; whole-log rules read ``log``. The input text is
+    # bound under the requested name.
+    namespace[var_name] = text
+    return namespace
 
 
 def _interpret(result) -> bool:
@@ -131,14 +134,17 @@ def _interpret(result) -> bool:
     return bool(result)
 
 
-def run_script(code, line: str) -> tuple[bool, str | None]:
-    """Execute a compiled snippet against ``line``.
+def run_script(code, text: str, var_name: str = "line") -> tuple[bool, str | None]:
+    """Execute a compiled snippet against ``text``.
+
+    ``var_name`` is the variable the snippet reads its input from: ``"line"`` for
+    per-line rules, ``"log"`` for whole-log rules.
 
     Returns ``(matched, error)``. Any runtime exception is swallowed into a
     NOMATCH result with the error message, so a faulty rule can never break
     analysis of a log.
     """
-    namespace = _make_globals(line)
+    namespace = _make_globals(text, var_name)
     try:
         exec(code, namespace)
     except Exception as exc:  # noqa: BLE001 - untrusted code; never propagate
@@ -185,7 +191,7 @@ ADVERSARIAL_INPUTS = (
 )
 
 
-def evaluate_script(source: str, sample_lines=(), timeout_ms: float = SCRIPT_TIMEOUT_MS) -> dict:
+def evaluate_script(source: str, sample_lines=(), timeout_ms: float = SCRIPT_TIMEOUT_MS, var_name: str = "line") -> dict:
     """Validate a snippet for safe, reasonably fast execution.
 
     Compiles the snippet and runs it against adversarial + caller-supplied sample
@@ -213,7 +219,7 @@ def evaluate_script(source: str, sample_lines=(), timeout_ms: float = SCRIPT_TIM
 
     probes = list(ADVERSARIAL_INPUTS) + [str(s) for s in sample_lines]
     for probe in probes:
-        outcome = _run_with_timeout(lambda: run_script(code, probe), timeout_ms)
+        outcome = _run_with_timeout(lambda: run_script(code, probe, var_name), timeout_ms)
         if outcome is _TIMEOUT_SENTINEL:
             result["timed_out"] = True
             result["is_slow"] = True
