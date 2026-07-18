@@ -324,4 +324,166 @@ class FixlistCrudViewTests(TestCase):
         self.assertContains(response, 'name="username"')
         self.assertContains(response, 'value="session_user"', html=False)
 
+    def test_create_fixlist_updates_existing_when_fixlist_id_owned(self):
+        upload = UploadedLog.objects.create(
+            upload_id="edit-source",
+            forum_username="edit_user",
+            original_filename="FRST.txt",
+            content="line-1",
+        )
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            source_uploaded_log=upload,
+            username="Keep Me",
+            content="old-content",
+            internal_note="keep-note",
+        )
+
+        response = self.client.post(
+            reverse("create_fixlist"),
+            {
+                "content": "reanalyzed-content\nsecond-line",
+                "source_upload_id": upload.upload_id,
+                "fixlist_id": str(fixlist.pk),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("view_fixlist", args=[fixlist.pk]))
+        # No duplicate was created.
+        self.assertEqual(Fixlist.objects.count(), 1)
+        fixlist.refresh_from_db()
+        self.assertEqual(fixlist.content, "reanalyzed-content\nsecond-line")
+        self.assertEqual(fixlist.line_count, 2)
+        # Content-only update preserves the other fields.
+        self.assertEqual(fixlist.username, "Keep Me")
+        self.assertEqual(fixlist.internal_note, "keep-note")
+        self.assertEqual(fixlist.source_uploaded_log_id, upload.id)
+
+    def test_create_fixlist_ignores_other_users_fixlist_id(self):
+        other = User.objects.create_user(username="mallory", password="password123")
+        other_fixlist = Fixlist.objects.create(
+            owner=other,
+            username="Not Yours",
+            content="mallory-content",
+        )
+
+        response = self.client.post(
+            reverse("create_fixlist"),
+            {
+                "username": "New From Alice",
+                "content": "alice-content",
+                "fixlist_id": str(other_fixlist.pk),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        # Mallory's fixlist is untouched...
+        other_fixlist.refresh_from_db()
+        self.assertEqual(other_fixlist.content, "mallory-content")
+        # ...and a brand-new fixlist is created for alice instead.
+        created = Fixlist.objects.get(username="New From Alice")
+        self.assertEqual(created.owner, self.user)
+        self.assertEqual(created.content, "alice-content")
+
+    def test_create_fixlist_ignores_trashed_fixlist_id(self):
+        from django.utils import timezone
+
+        trashed = Fixlist.objects.create(
+            owner=self.user,
+            username="Trashed",
+            content="trashed-content",
+            deleted_at=timezone.now(),
+        )
+
+        response = self.client.post(
+            reverse("create_fixlist"),
+            {
+                "username": "New After Trash",
+                "content": "fresh-content",
+                "fixlist_id": str(trashed.pk),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        trashed.refresh_from_db()
+        self.assertEqual(trashed.content, "trashed-content")
+        created = Fixlist.objects.get(username="New After Trash")
+        self.assertNotEqual(created.pk, trashed.pk)
+        self.assertEqual(created.content, "fresh-content")
+
+    def test_log_analyzer_view_loads_fixlist_for_editing(self):
+        upload = UploadedLog.objects.create(
+            upload_id="analyzer-source",
+            forum_username="analyzer_user",
+            original_filename="FRST.txt",
+            content="line-1",
+        )
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            source_uploaded_log=upload,
+            username="Editable",
+            content="fixlist-body-line",
+        )
+
+        response = self.client.get(reverse("log_analyzer"), {"fixlist_id": str(fixlist.pk)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["initial_fixlist_id"], str(fixlist.pk))
+        self.assertEqual(response.context["initial_selected_lines"], "fixlist-body-line")
+        # Source log auto-loads even without an explicit upload_id.
+        self.assertEqual(response.context["initial_upload_id"], upload.upload_id)
+
+    def test_log_analyzer_view_ignores_non_owned_fixlist_id(self):
+        other = User.objects.create_user(username="mallory", password="password123")
+        other_fixlist = Fixlist.objects.create(
+            owner=other,
+            username="Not Yours",
+            content="mallory-body",
+        )
+
+        response = self.client.get(reverse("log_analyzer"), {"fixlist_id": str(other_fixlist.pk)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["initial_fixlist_id"], "")
+        # Falls back to the default fixlist template rather than another user's content.
+        self.assertNotEqual(response.context["initial_selected_lines"], "mallory-body")
+        self.assertEqual(
+            response.context["initial_selected_lines"],
+            response.context["fixlist_template"],
+        )
+
+    def test_view_fixlist_shows_reanalyze_link_when_source_present(self):
+        upload = UploadedLog.objects.create(
+            upload_id="reanalyze-source",
+            forum_username="reanalyze_user",
+            original_filename="FRST.txt",
+            content="line-1",
+        )
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            source_uploaded_log=upload,
+            username="Linkable",
+            content="payload",
+        )
+
+        response = self.client.get(reverse("view_fixlist", args=[fixlist.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "reanalyze &amp; edit")
+        self.assertContains(response, f"upload_id={upload.upload_id}")
+        self.assertContains(response, f"fixlist_id={fixlist.pk}")
+
+    def test_view_fixlist_hides_reanalyze_link_without_source(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="No Source",
+            content="payload",
+        )
+
+        response = self.client.get(reverse("view_fixlist", args=[fixlist.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "reanalyze &amp; edit")
+
 

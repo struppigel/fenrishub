@@ -54,6 +54,7 @@
         <button type="button" onclick="copyFrstFixMessage(this)" style="margin-top: 8px; margin-left: 8px;">copy fix message</button>
         {% if source_uploaded_log %}
         <a href="{% url 'view_uploaded_log' source_uploaded_log.upload_id %}" class="inline-action-link" style="margin-left: 8px;">view source log</a>
+        <a href="{% url 'log_analyzer' %}?upload_id={{ source_uploaded_log.upload_id|urlencode }}&amp;fixlist_id={{ fixlist.pk }}" class="inline-action-link" style="margin-left: 8px;">reanalyze &amp; edit</a>
         {% endif %}
         <a href="{{ guest_preview_url }}" target="_blank" rel="noopener" class="inline-action-link" style="margin-left: 8px;">preview guest view</a>
     </div>

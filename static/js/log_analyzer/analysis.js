@@ -1686,7 +1686,7 @@ function addRemainingAsClean() {
 
 const PENDING_FIXLIST_PAYLOAD_KEY = 'fenrishub_pending_fixlist_payload';
 
-function submitFixlistDirectly({ content, sourceUploadId }) {
+function submitFixlistDirectly({ content, sourceUploadId, fixlistId }) {
     if (!CREATE_FIXLIST_URL) {
         alert('Fixlist endpoint is not configured.');
         return;
@@ -1707,6 +1707,9 @@ function submitFixlistDirectly({ content, sourceUploadId }) {
     addField('content', content || '');
     if (sourceUploadId) {
         addField('source_upload_id', sourceUploadId);
+    }
+    if (fixlistId) {
+        addField('fixlist_id', fixlistId);
     }
 
     document.body.appendChild(form);
@@ -1767,7 +1770,7 @@ function goToCreateFixlist() {
 
     sessionStorage.setItem(
         PENDING_FIXLIST_PAYLOAD_KEY,
-        JSON.stringify({ content: selected, sourceUploadId }),
+        JSON.stringify({ content: selected, sourceUploadId, fixlistId: EDIT_FIXLIST_ID }),
     );
     beginRuleWorkflow(RULE_SUBMIT_TARGET_CREATE_FIXLIST);
 }

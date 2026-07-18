@@ -168,7 +168,7 @@
         </div>
         {% endif %}
         <button type="button" id="toggleFixlistPanelButton" aria-pressed="false" title="toggle fixlist panel visibility">hide fix</button>
-        {% if not is_guest %}<button type="button" id="saveFixlistButton" class="save-fixlist-button">save fix</button>{% endif %}
+        {% if not is_guest %}<button type="button" id="saveFixlistButton" class="save-fixlist-button">{% if initial_fixlist_id %}update fix{% else %}save fix{% endif %}</button>{% endif %}
     </div>
 </div>
 
@@ -190,7 +190,7 @@
         <textarea id="logInput" placeholder="Paste your log content here..."></textarea>
         <div id="logLines" class="log-lines-container" style="display: none;"></div>
     </div>
-    <textarea id="selectedLines">{{ fixlist_template }}</textarea>
+    <textarea id="selectedLines">{{ initial_selected_lines }}</textarea>
 </div>
 
 <div id="statusLegend" class="status-legend">
@@ -314,6 +314,7 @@ window.logAnalyzerConfig = {
     cachedAnalysisUrlTemplate: "{% url 'uploaded_log_cached_analysis_api' '__UPLOAD_ID__' %}",
     edgeAddonRedirectUrlTemplate: "{% url 'edge_addon_redirect' '__CRXID__' %}",
     initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
+    initialFixlistId: "{{ initial_fixlist_id|default:''|escapejs }}",
     snippetsApiUrl: "{% url 'snippets_api' %}",
     snippets: {{ snippets_json }},
     isSuperuser: {{ is_superuser|yesno:"true,false" }},

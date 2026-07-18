@@ -195,7 +195,23 @@ def create_fixlist_view(request):
         content = request.POST.get('content', '')
         internal_note = request.POST.get('internal_note', '')
         source_upload_id = (request.POST.get('source_upload_id', '') or '').strip()
+        fixlist_id = (request.POST.get('fixlist_id', '') or '').strip()
         source_uploaded_log = None
+
+        # Editing an existing fixlist from the analyzer: update in place instead of
+        # creating a duplicate. Only the content is replaced; username / internal_note /
+        # source_uploaded_log / visibility are preserved. An unknown, non-owned or
+        # trashed id is ignored and falls through to the create path below.
+        if fixlist_id.isdigit():
+            existing = Fixlist.objects.filter(
+                pk=int(fixlist_id),
+                owner=request.user,
+                deleted_at__isnull=True,
+            ).first()
+            if existing is not None:
+                existing.content = content
+                existing.save(update_fields=['content', 'line_count', 'updated_at'])
+                return redirect('view_fixlist', pk=existing.pk)
 
         if source_upload_id:
             source_uploaded_log = UploadedLog.objects.filter(

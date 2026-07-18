@@ -58,6 +58,7 @@ const LINE_DETAILS_URL = withGuestToken(analyzerConfig.lineDetailsUrl || '');
 const PREVIEW_RULE_CHANGES_URL = analyzerConfig.previewRuleChangesUrl || '';
 const PERSIST_RULE_CHANGES_URL = analyzerConfig.persistRuleChangesUrl || '';
 const CREATE_FIXLIST_URL = analyzerConfig.createFixlistUrl || '';
+const EDIT_FIXLIST_ID = analyzerConfig.initialFixlistId || '';
 const CURRENT_USERNAME = analyzerConfig.currentUsername || '';
 const RULE_SUBMIT_TARGET_CREATE_FIXLIST = 'create_fixlist';
 const RULE_SUBMIT_TARGET_RESCAN = 'rescan';

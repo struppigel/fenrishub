@@ -23,7 +23,7 @@ from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
     VALID_STATUSES,
 )
-from ..models import ClassificationRule, FixlistSnippet, UploadedLog, UploadedLogAnalysis
+from ..models import ClassificationRule, Fixlist, FixlistSnippet, UploadedLog, UploadedLogAnalysis
 from ..rule_sets import (
     SHARED_RULE_SET_KEY,
     resolve_effective_rule_set_key,
@@ -50,6 +50,8 @@ def log_analyzer_view(request):
             {
                 'uploaded_logs': [],
                 'initial_upload_id': '',
+                'initial_fixlist_id': '',
+                'initial_selected_lines': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
                 'is_superuser': False,
                 'snippets_json': mark_safe('[]'),
                 'fixlist_template': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
@@ -76,12 +78,32 @@ def log_analyzer_view(request):
         (profile.analyzer_fixlist_template if profile else '').strip()
         or DEFAULT_ANALYZER_FIXLIST_TEMPLATE
     )
+
+    # Editing an existing fixlist from the analyzer: preload its content into the fixlist
+    # panel and, absent an explicit upload_id, auto-load its source log for re-analysis.
+    initial_fixlist_id = ''
+    initial_selected_lines = fixlist_template
+    requested_fixlist_id = (request.GET.get('fixlist_id') or '').strip()
+    if requested_fixlist_id.isdigit():
+        editing_fixlist = Fixlist.objects.filter(
+            pk=int(requested_fixlist_id),
+            owner=request.user,
+            deleted_at__isnull=True,
+        ).select_related('source_uploaded_log').first()
+        if editing_fixlist is not None:
+            initial_fixlist_id = str(editing_fixlist.pk)
+            initial_selected_lines = editing_fixlist.content
+            if not initial_upload_id and editing_fixlist.source_uploaded_log:
+                initial_upload_id = editing_fixlist.source_uploaded_log.upload_id
+
     return render(
         request,
         'log_analyzer.html',
         {
             'uploaded_logs': uploads,
             'initial_upload_id': initial_upload_id,
+            'initial_fixlist_id': initial_fixlist_id,
+            'initial_selected_lines': initial_selected_lines,
             'is_superuser': request.user.is_superuser,
             'snippets_json': snippets_json,
             'fixlist_template': fixlist_template,
