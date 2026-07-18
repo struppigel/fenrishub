@@ -210,7 +210,7 @@
 
     <img src="{% static 'images/help/06-analyze-timestamp-highlight.png' %}" alt="Timestamp highlights for related entries" loading="lazy">
 
-    <p>When you hover over a log line, two small icons appear on the right. The copy icon <strong>&#9112;</strong> opens a menu to copy the whole line or an individual component (file path, file name, arguments, name, company, clsid, or any URL/domain found in the line) to the clipboard. Right next to it, the magnifying glass <strong>&#8981;</strong> opens the same list of components, but clicking one runs a Google search for that value in a new tab &mdash; handy for quickly looking up a suspicious file path, file name or company without retyping it.</p>
+    <p>When you hover over a log line, two small icons appear on the right. The copy icon <strong>&#9112;</strong> opens a menu to copy the whole line or an individual component (file path, file name, arguments, name, company, clsid, or any URL/domain found in the line) to the clipboard. Right next to it, the magnifying glass <strong>&#8981;</strong> opens the same list of components, but clicking one runs a Google search for that value in a new tab - handy for quickly looking up a suspicious file path, file name or company without retyping it.</p>
 
     <p>The top row has some more special buttons.</p>
 
@@ -258,9 +258,11 @@
 
     <p>If you are viewing an individual fixlist, you can also access the source log the list was based on (the source log is only available if the fixlist was created via the analyzer on an uploaded log).</p>
 
+    <p>Right next to <strong>view source log</strong> there is a <strong>reanalyze &amp; edit</strong> link. It reopens the fixlist in the analyzer with the source log loaded on the left and the fixlist contents loaded on the right, so you can re-classify lines, use the verdict picker, add snippets, and so on - the full analyzer instead of a plain text box. When you save from there, it <strong>updates the same fixlist</strong> instead of creating a new one (the save button reads <strong>update fix</strong> to make this clear), keeping its share link, token, username and internal note intact. This link only appears when the fixlist has an attached source log.</p>
+
     <p>You can change the username from here.</p>
 
-    <p>You can edit the contents, even after sharing the fixlist link. So last minute changes are no problem.</p>
+    <p>You can edit the contents, even after sharing the fixlist link. So last minute changes are no problem. For small tweaks the text box on this page is enough; use <strong>reanalyze &amp; edit</strong> when you want the analyzer's full toolset against the original log.</p>
 
     <p><strong>copy fix message</strong> will put a predefined message into the clipboard that instructs users how to fix. To change this predefined message template, click on your username on the top right, click on profile settings, and adjust the frst fix message. This frst fix message template has placeholders for the username, helpername (you), fixlist link and frst path, which will be automatically filled into the template. Some of these only work if the fixlist has an associated uploaded log, e.g., the FRST path is part of the FRST log and not the Fixlist. So if that is missing, it's probably because your Fixlist was created without a log.</p>
 
@@ -405,6 +407,6 @@
 
     <h3 id="case-sharing">Sharing a case with other helpers</h3>
 
-    <p>Any logged-in helper holding the link to a case can open it in read-only mode &mdash; just copy the URL from the address bar and send it. They will see the timeline, notes, metadata and stats, but cannot add notes, merge, unlink, edit metadata, or delete. A small "view-only &mdash; owned by &lt;owner&gt;" hint appears in the top bar for shared viewers. Only the case owner can mutate the case.</p>
+    <p>Any logged-in helper holding the link to a case can open it in read-only mode - just copy the URL from the address bar and send it. They will see the timeline, notes, metadata and stats, but cannot add notes, merge, unlink, edit metadata, or delete. A small "view-only - owned by &lt;owner&gt;" hint appears in the top bar for shared viewers. Only the case owner can mutate the case.</p>
 </div>
 {% endblock %}
