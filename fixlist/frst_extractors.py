@@ -489,7 +489,7 @@ def extract_firewall_rule(line):
         return None
     if line.rstrip().endswith("=> No File"):
         return None
-    regexp = r'FirewallRules: \[([^\]]+)\] => \((Allow|Block)\) ([^\(\n]+?)\s*(?:\(([^)]+)\s*->\s*([^)]+)\))?$'
+    regexp = r'FirewallRules: \[([^\]]+)\] => \((Allow|Block)\) (.+?)\s*(?:\(([^)]+)\s*->\s*([^)]+)\))?$'
     group_map = {"name": 2, "filepath": 3, "company": 5}
     return extract_frst_entry(line, regexp, group_map, entry_type="firewall")
 

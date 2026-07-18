@@ -1,6 +1,9 @@
 from django.test import TestCase
 
+from ..analyzer import inspect_line_matches, invalidate_rule_buckets_cache
 from ..frst_extractors import extract_firewall_rule, get_frst_entry, normalize_path
+from ..models import ClassificationRule
+from .factories import make_rule
 
 
 class ExtractFirewallRuleTests(TestCase):
@@ -114,6 +117,35 @@ class ExtractFirewallRuleTests(TestCase):
         self.assertEqual(allow_entry.clsid, block_entry.clsid)
         self.assertNotEqual(allow_entry, block_entry)
 
+    # -- Paths containing parentheses (e.g. Program Files (x86)) --
+
+    def test_parenthesized_path_with_company(self):
+        """A path with parentheses must parse; the trailing company suffix is
+        still peeled off at the end."""
+        line = (
+            r"FirewallRules: [{AAAA0000-0000-0000-0000-000000000001}] => (Block) "
+            r"C:\Program Files (x86)\Foo\evil.exe (Acme Inc -> Acme Signer)"
+        )
+        entry = extract_firewall_rule(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.entry_type, "firewall")
+        self.assertEqual(entry.name, "Block")
+        self.assertEqual(entry.company, "Acme Signer")
+        self.assertEqual(entry.filename, "evil.exe")
+        self.assertIn(r"Program Files (x86)", entry.filepath)
+
+    def test_parenthesized_path_without_company(self):
+        line = (
+            r"FirewallRules: [{AAAA0000-0000-0000-0000-000000000002}] => (Allow) "
+            r"C:\Program Files (x86)\Foo Bar\app.exe"
+        )
+        entry = extract_firewall_rule(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "Allow")
+        self.assertEqual(entry.company, "")
+        self.assertEqual(entry.filename, "app.exe")
+        self.assertIn(r"Program Files (x86)", entry.filepath)
+
     # -- Non-firewall lines --
 
     def test_non_firewall_line_returns_none(self):
@@ -197,3 +229,43 @@ class ExtractFirewallRuleTests(TestCase):
             entry_type="firewall",
         )
         self.assertEqual(legacy_rule_entry, freshly_parsed)
+
+
+class FirewallFilepathMatchingTests(TestCase):
+    """A filepath rule should match firewall entries, including paths that
+    contain parentheses (which previously failed to parse entirely)."""
+
+    PATH = r"C:\Program Files (x86)\Foo\evil.exe"
+
+    def setUp(self):
+        invalidate_rule_buckets_cache()
+        make_rule(
+            self.PATH,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_FILEPATH,
+            normalized_filepath=self.PATH,
+        )
+        invalidate_rule_buckets_cache()
+
+    def test_allow_firewall_with_parenthesized_path_matches_filepath_rule(self):
+        line = (
+            r"FirewallRules: [{AAAA0000-0000-0000-0000-000000000003}] => (Allow) "
+            + self.PATH
+            + r" (Acme Inc -> Acme Signer)"
+        )
+        self.assertEqual(
+            inspect_line_matches(line)["dominant_status"],
+            ClassificationRule.STATUS_MALWARE,
+        )
+
+    def test_block_firewall_with_parenthesized_path_also_matches(self):
+        # Behavior is unchanged by this fix: Block entries keep matching too.
+        line = (
+            r"FirewallRules: [{AAAA0000-0000-0000-0000-000000000004}] => (Block) "
+            + self.PATH
+            + r" (Acme Inc -> Acme Signer)"
+        )
+        self.assertEqual(
+            inspect_line_matches(line)["dominant_status"],
+            ClassificationRule.STATUS_MALWARE,
+        )
