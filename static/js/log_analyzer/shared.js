@@ -267,7 +267,11 @@ function updateSummary(summary, fallbackTotal = 0) {
 function updateLegendCounts() {
     const counts = Object.create(null);
     analyzedLines.forEach((line) => {
-        const cls = line.css_class || STATUS_CLASS_MAP[line.dominant_status] || 'status-unknown';
+        // css_class is presentational (a fallback-only match stays 'status-unknown'
+        // so the whole line isn't coloured). The verdict is dominant_status — count
+        // by that so the legend agrees with the uploads count, the matched summary,
+        // and the bulk buttons.
+        const cls = STATUS_CLASS_MAP[line.dominant_status] || 'status-unknown';
         counts[cls] = (counts[cls] || 0) + 1;
     });
     document.querySelectorAll('.legend-item[data-status-class]').forEach((item) => {

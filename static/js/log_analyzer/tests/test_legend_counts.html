@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<!--
+  Tests for updateLegendCounts() in shared.js.
+
+  The analyzer legend must count each line by its VERDICT (dominant_status),
+  not by the presentational css_class. A line that matches a malware rule only
+  via the weak filepath fallback keeps css_class = 'status-unknown' (so the
+  whole line isn't coloured), yet its verdict is still 'B'. The legend, the
+  uploads count, and the bulk buttons must all agree on that verdict.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>shared.js updateLegendCounts tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>shared.js – updateLegendCounts tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<!-- Minimal legend DOM that updateLegendCounts() reads/writes -->
+<div id="statusLegend">
+  <span class="legend-item" data-status-class="status-b"><span class="legend-count">(0)</span></span>
+  <span class="legend-item" data-status-class="status-c"><span class="legend-count">(0)</span></span>
+  <span class="legend-item" data-status-class="status-unknown"><span class="legend-count">(0)</span></span>
+</div>
+
+<script src="../shared.js"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Tiny test harness (same shape as test_insert_remove.html)
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+function legendCountFor(statusClass) {
+    const item = document.querySelector(
+        '.legend-item[data-status-class="' + statusClass + '"] .legend-count'
+    );
+    return item ? item.textContent : null;
+}
+
+// ---------------------------------------------------------------------------
+// updateLegendCounts counts by the verdict (dominant_status), not css_class
+// ---------------------------------------------------------------------------
+(function testLegendCountsByVerdict() {
+    analyzedLines = [
+        // Fallback-only malware matches: verdict B, but css_class stays unknown so
+        // the whole line isn't coloured. These previously counted as unknown.
+        { line: 'C:\\Users\\Default User', dominant_status: 'B', css_class: 'status-unknown' },
+        { line: 'C:\\Users\\All Users', dominant_status: 'B', css_class: 'status-unknown' },
+        // A normal clean line (verdict and css agree).
+        { line: 'clean.dll', dominant_status: 'C', css_class: 'status-c' },
+        // A genuinely unknown line.
+        { line: 'mystery.exe', dominant_status: '?', css_class: 'status-unknown' },
+    ];
+
+    updateLegendCounts();
+
+    assert(
+        'B legend counts fallback-only matches by verdict (2), not css_class (0)',
+        legendCountFor('status-b') === '(2)',
+        'got ' + legendCountFor('status-b')
+    );
+    assert(
+        'unknown legend counts only genuinely-unknown lines (1), not the fallback B lines',
+        legendCountFor('status-unknown') === '(1)',
+        'got ' + legendCountFor('status-unknown')
+    );
+    assert(
+        'C legend counts the clean line (1)',
+        legendCountFor('status-c') === '(1)',
+        'got ' + legendCountFor('status-c')
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+const summary = document.getElementById('summary');
+summary.textContent = passed + ' passed, ' + failed + ' failed';
+summary.style.color = failed === 0 ? '#6f9' : '#f66';
+</script>
+</body>
+</html>

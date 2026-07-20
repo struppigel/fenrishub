@@ -2,8 +2,14 @@ import json
 
 from django.urls import reverse
 
-from ..analyzer import inspect_line_matches, parse_rule_line
+from ..analyzer import (
+    analyze_log_text,
+    inspect_line_matches,
+    invalidate_rule_buckets_cache,
+    parse_rule_line,
+)
 from ..models import ClassificationRule, ParsedFilepathExclusion
+from ..rule_sets import SHARED_RULE_SET_KEY
 from .log_analyzer_api_shared import LogAnalyzerApiBaseTestCase
 
 
@@ -268,6 +274,56 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
         shadowed_matchers = {match["matcher"] for match in inspection["shadowed_matches"]}
         self.assertIn(ClassificationRule.STATUS_PUP, shadowed_statuses)
         self.assertIn("filepath", shadowed_matchers)
+
+    def test_parsed_fallback_only_verdict_is_consistent_across_consumers(self):
+        """A parsed-entry Task rule whose truncated filepath normalizes to the very
+        broad C:\\Users\\username matches unrelated user-profile "One month" lines
+        only via the weak filepath fallback. The verdict (dominant_status) must be
+        the rule's status everywhere the classification is consumed -- the uploads
+        listing (status_counts) and the bulk buttons -- while css_class stays
+        presentational ("status-unknown") so the whole line isn't coloured, only
+        the matched path is highlighted. Regression for a legend that used to count
+        by css_class and so reported 0 while uploads/bulk reported 2.
+        """
+        task_line = (
+            r"Task: {9ADF6FEE-88DF-4AD5-B3B5-61A63C46175A} - "
+            r"System32\Tasks\DeviceMetadataRetrieval_e122 => C:\Users\Tuan "
+            r"[213708 2026-07-07] () [File not signed] -> "
+            r"Kiet\AppData\Roaming\Keys7EE7\SmartScreenHost27dac.exe"
+        )
+        profile_lines = [
+            r"2026-07-20 12:10 - 2026-07-20 12:10 - 000000000 _SHDL C:\Users\Default User",
+            r"2026-07-20 12:10 - 2026-07-20 12:10 - 000000000 _SHDL C:\Users\All Users",
+        ]
+
+        parsed = parse_rule_line(
+            task_line,
+            status=ClassificationRule.STATUS_MALWARE,
+            source_name="test-suite",
+        )
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["match_type"], ClassificationRule.MATCH_PARSED_ENTRY)
+        self.assertEqual(parsed["normalized_filepath"], r"c:\users\username")
+        ClassificationRule.objects.create(owner=self.user, **parsed)
+        invalidate_rule_buckets_cache()
+
+        analysis = analyze_log_text("\n".join(profile_lines), SHARED_RULE_SET_KEY)
+
+        self.assertEqual(len(analysis["lines"]), 2)
+        for line in analysis["lines"]:
+            # The verdict: what bulk buttons and the uploads count both read.
+            self.assertEqual(line["dominant_status"], ClassificationRule.STATUS_MALWARE)
+            self.assertTrue(line["matched"])
+            # Presentational only: the line text isn't coloured; the path is.
+            self.assertEqual(line["css_class"], "status-unknown")
+            self.assertEqual(
+                line["filepath_highlight"]["status"], ClassificationRule.STATUS_MALWARE
+            )
+
+        # The count consumer (uploads listing reads status_counts) reflects the
+        # verdict, not css_class -- the number that previously disagreed with the
+        # analyzer legend.
+        self.assertEqual(analysis["summary"]["status_counts"]["B"], 2)
 
     def test_inspect_line_matches_uses_runtime_precedence_and_tracks_shadowed_matches(self):
         self.client.login(username="analyzer", password="password123")

@@ -1260,9 +1260,11 @@ def _analyze_single_line(line: str, buckets):
             parsed_entry=parsed_entry,
             filepath_highlight=_build_filepath_highlight_payload(line, status_codes),
         )
-        # Verdict is set (badge shows the rule's status), but the surrounding
-        # line text should not take the verdict colour — only the filepath
-        # substring does, via filepath_highlight.
+        # The verdict is `dominant_status` (the badge shows the rule's status, and
+        # it is what counts/bulk/uploads read). `css_class` here is PRESENTATION
+        # ONLY: it is forced to unknown so the surrounding line text is not tinted
+        # with the verdict colour — only the filepath substring is, via
+        # filepath_highlight. Never derive a verdict/count from css_class.
         result["css_class"] = STATUS_CSS_CLASS.get("?", "status-unknown")
         return result
 
