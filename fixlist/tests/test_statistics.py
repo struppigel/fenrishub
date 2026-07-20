@@ -225,6 +225,31 @@ class StatisticsViewTests(TestCase):
                 others = [v for i, v in enumerate(s['data']) if i != target_index]
                 self.assertTrue(all(v == 0 for v in others))
 
+    def test_fixlists_per_helper_series_is_per_day_with_zero_fill(self):
+        bob = User.objects.create_user(username='bob', password='pw')
+        fixlist_a = Fixlist.objects.create(owner=self.helper, username='ta', content='x')
+        fixlist_b = Fixlist.objects.create(owner=bob, username='tb', content='x')
+        target_dt = timezone.now() - timedelta(days=3)
+        FixlistStat.objects.filter(source_id__in=[fixlist_a.pk, fixlist_b.pk]).update(created_at=target_dt)
+
+        self.client.force_login(self.helper)
+        response = self.client.get(reverse('statistics'))
+        series_payload = response.context['fixlists_per_helper_series']
+
+        self.assertEqual(len(series_payload['days']), 30)
+        labels = [s['username'] for s in series_payload['series']]
+        self.assertIn('alice', labels)
+        self.assertIn('bob', labels)
+
+        target_iso = timezone.localtime(target_dt).date().isoformat()
+        target_index = series_payload['days'].index(target_iso)
+        for s in series_payload['series']:
+            self.assertEqual(len(s['data']), 30)
+            if s['username'] in ('alice', 'bob'):
+                self.assertEqual(s['data'][target_index], 1)
+                others = [v for i, v in enumerate(s['data']) if i != target_index]
+                self.assertTrue(all(v == 0 for v in others))
+
     def test_unassigned_uploads_bucketed(self):
         UploadedLog.objects.create(
             forum_username='forumuser',

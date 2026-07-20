@@ -241,21 +241,19 @@
     <div class="stats-section">
         <h3>fixlists per helper</h3>
         {% if fixlists_per_helper %}
-        <div class="stats-grid-two">
-            <table class="stats-table">
-                <thead>
-                    <tr><th>helper</th><th class="num">fixlists</th></tr>
-                </thead>
-                <tbody>
-                    {% for row in fixlists_per_helper %}
-                    <tr><td>{{ row.username }}</td><td class="num">{{ row.count }}</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            <div class="stats-chart-wrap">
-                <canvas id="fixlistsPerHelperChart" height="240"></canvas>
-            </div>
+        <div class="stats-chart-wrap">
+            <canvas id="fixlistsPerHelperChart"></canvas>
         </div>
+        <table class="stats-table" style="margin-top: 12px;">
+            <thead>
+                <tr><th>helper</th><th class="num">fixlists</th></tr>
+            </thead>
+            <tbody>
+                {% for row in fixlists_per_helper %}
+                <tr><td>{{ row.username }}</td><td class="num">{{ row.count }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
         {% else %}
         <div class="info-box">no fixlists created in the selected range.</div>
         {% endif %}
@@ -267,7 +265,7 @@
 {{ known_unknown|json_script:"data-known-unknown" }}
 {{ fixlog_summary|json_script:"data-fixlog-summary" }}
 {{ logs_per_helper_series|json_script:"data-logs-per-helper-series" }}
-{{ fixlists_per_helper_top|json_script:"data-fixlists-per-helper" }}
+{{ fixlists_per_helper_series|json_script:"data-fixlists-per-helper-series" }}
 {% endblock %}
 
 {% block extra_js %}
@@ -307,16 +305,6 @@
             type: 'bar',
             data: { labels: labels, datasets: [{ label: label, data: data, backgroundColor: color, borderColor: color }] },
             options: baseOptions,
-        });
-    }
-
-    function horizontalBar(canvasId, labels, data, color, label) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas || !labels.length) return;
-        new Chart(canvas, {
-            type: 'bar',
-            data: { labels: labels, datasets: [{ label: label, data: data, backgroundColor: color, borderColor: color }] },
-            options: Object.assign({}, baseOptions, { indexAxis: 'y' }),
         });
     }
 
@@ -435,11 +423,26 @@
         });
     }
 
-    const fixlistsPerHelper = readJson('data-fixlists-per-helper') || [];
-    horizontalBar('fixlistsPerHelperChart',
-        fixlistsPerHelper.map(r => r.username),
-        fixlistsPerHelper.map(r => r.count),
-        colors.warning, 'fixlists created');
+    const fixlistsPerHelperSeries = readJson('data-fixlists-per-helper-series') || { days: [], series: [] };
+    const fixlistsHelperCanvas = document.getElementById('fixlistsPerHelperChart');
+    if (fixlistsHelperCanvas && fixlistsPerHelperSeries.series.length) {
+        new Chart(fixlistsHelperCanvas, {
+            type: 'line',
+            data: {
+                labels: fixlistsPerHelperSeries.days,
+                datasets: fixlistsPerHelperSeries.series.map((s, i) => ({
+                    label: s.username,
+                    data: s.data,
+                    borderColor: seriesPalette[i % seriesPalette.length],
+                    backgroundColor: seriesPalette[i % seriesPalette.length],
+                    tension: 0.2,
+                    pointRadius: 2,
+                    fill: false,
+                })),
+            },
+            options: baseOptions,
+        });
+    }
 })();
 </script>
 {% endblock %}

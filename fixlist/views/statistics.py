@@ -196,6 +196,30 @@ def statistics_view(request):
         key=lambda r: (-r['count'], r['username'].lower()),
     )
 
+    fixlist_helper_day_raw = (
+        fixlist_qs.annotate(day=TruncDate('created_at', tzinfo=tz))
+        .values('day', 'owner_username')
+        .annotate(n=Count('id'))
+    )
+    fixlist_helper_day_map = {}
+    for row in fixlist_helper_day_raw:
+        if row['day'] is None:
+            continue
+        label = (row['owner_username'] or '').strip() or UNASSIGNED_LABEL
+        fixlist_helper_day_map.setdefault(label, {})[row['day']] = row['n']
+
+    fixlist_helper_totals = sorted(
+        ((label, sum(by_day.values())) for label, by_day in fixlist_helper_day_map.items()),
+        key=lambda r: (-r[1], r[0].lower()),
+    )
+    fixlists_per_helper_series = {
+        'days': day_axis_iso,
+        'series': [
+            {'username': label, 'data': [fixlist_helper_day_map[label].get(d, 0) for d in day_axis]}
+            for label, _ in fixlist_helper_totals
+        ],
+    }
+
     context = {
         'start_date': start_date.isoformat(),
         'end_date': end_date.isoformat(),
@@ -209,5 +233,6 @@ def statistics_view(request):
         'known_unknown': known_unknown,
         'fixlists_per_helper': fixlists_per_helper,
         'fixlists_per_helper_top': fixlists_per_helper[:TOP_N],
+        'fixlists_per_helper_series': fixlists_per_helper_series,
     }
     return render(request, 'statistics.html', context)
