@@ -101,7 +101,7 @@
 
         <h3>content</h3>
 
-        <div class="code-block">{{ fixlist.content }}</div>
+        <div id="fixlist-content" class="code-block">{{ fixlist.content }}</div>
 
       
     </div>
@@ -147,8 +147,12 @@ function copyContent() {
         return;
     }
 
-    const content = `{{ fixlist.content|escapejs }}`;
-    navigator.clipboard.writeText(content).then(function() {
+    const contentEl = document.getElementById('fixlist-content');
+    if (!contentEl) {
+        return;
+    }
+
+    navigator.clipboard.writeText(contentEl.textContent).then(function() {
         const feedback = document.getElementById('copy-feedback');
         feedback.classList.add('show');
         setTimeout(() => feedback.classList.remove('show'), 2000);

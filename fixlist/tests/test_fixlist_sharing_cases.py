@@ -140,4 +140,25 @@ class SharingAndDownloadTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_shared_page_does_not_inline_content_into_js_template_literal(self):
+        """Fixlist content with PowerShell ${...} must not break the inline script.
+
+        escapejs does not escape `$` or `{`, so content interpolated into a JS
+        template literal turns `${env:ProgramFiles(x86)}` into an interpolation
+        that fails to parse. That SyntaxError killed the whole script block, so
+        agreeToWarning() was never defined and the consent button did nothing.
+        """
+        self.fixlist.content = 'CloseProcesses:\n"${env:ProgramFiles(x86)}\\App"\n'
+        self.fixlist.save(update_fields=["content"])
+
+        response = self.client.get(reverse("shared_fixlist", args=[self.fixlist.share_token]))
+        html = response.content.decode("utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("const content = `", html)
+        self.assertIn('id="fixlist-content"', html)
+        # The raw ${...} must only survive inside HTML-escaped body text, never in the script.
+        script = html.split("<script>")[-1]
+        self.assertNotIn("${", script)
+
 
