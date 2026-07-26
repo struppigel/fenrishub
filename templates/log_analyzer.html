@@ -136,6 +136,7 @@
 {% block page_context_label %}log analyzer{% endblock %}
 
 {% block content %}
+<div id="analyzerDraftPrompt" class="analysis-warnings" aria-live="polite" hidden></div>
 <div id="analysisWarnings" class="analysis-warnings" aria-live="polite" hidden></div>
 
 <div class="analyzer-toolbar-grid">
@@ -326,6 +327,7 @@ window.logAnalyzerConfig = {
 <script defer src="{% static 'js/log_analyzer/analysis.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/conflict_wizard.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/rule_preview.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/draft_autosave.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/bootstrap.js' %}"></script>
 <script>
 (function() {

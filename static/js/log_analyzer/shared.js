@@ -450,4 +450,8 @@ function clearPendingAnalyzerChanges() {
     removedRuleCandidateIds.clear();
     expandedRuleCandidateId = null;
     updateSaveChangesButtonState();
+    // These changes are now real rules, so the draft must stop offering them back.
+    if (typeof flushDraftSave === 'function') {
+        flushDraftSave();
+    }
 }

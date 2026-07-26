@@ -509,7 +509,15 @@ function bindAnalyzerControls() {
 
     const selectedLinesTextarea = document.getElementById('selectedLines');
     if (selectedLinesTextarea) {
-        selectedLinesTextarea.addEventListener('input', () => syncCopiedIndexesWithTextarea());
+        selectedLinesTextarea.addEventListener('input', () => {
+            syncCopiedIndexesWithTextarea();
+            scheduleDraftSave();
+        });
+    }
+
+    const logInputTextarea = document.getElementById('logInput');
+    if (logInputTextarea) {
+        logInputTextarea.addEventListener('input', () => scheduleDraftSave());
     }
 
     bindLegendToggle();
@@ -593,7 +601,7 @@ function exposeLegacyAnalyzerGlobals() {
 
 exposeLegacyAnalyzerGlobals();
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     initializeCursorPosition();
     setupStatusPicker();
     if (typeof setupLineCopyMenu === 'function') {
@@ -606,6 +614,9 @@ document.addEventListener('DOMContentLoaded', () => {
         setupLookupMenu();
     }
     initializePendingStatusChanges();
+    // Must follow initializePendingStatusChanges(), which wipes pending state on
+    // every load; a restore before this point would be erased.
+    initDraftAutosave();
     if (typeof applyQuestionCursorModeState === 'function') {
         applyQuestionCursorModeState();
     }
@@ -620,5 +631,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     bindAnalyzerControls();
     bindAnalyzerModalDismissals();
-    loadInitialUploadForAnalyzer();
+    // Wait for the initial analysis to settle so the restored overrides land on
+    // real lines and the prompt isn't cleared by the analysis render. A failed
+    // load must still surface the draft — that is when recovery matters most.
+    try {
+        await loadInitialUploadForAnalyzer();
+    } finally {
+        offerDraftRestore();
+    }
 });

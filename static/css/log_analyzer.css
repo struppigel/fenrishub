@@ -256,6 +256,12 @@ body.clean-cursor-mode .line-text {
     font-size: 12px;
 }
 
+.analysis-warning-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
 .textareas-box {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

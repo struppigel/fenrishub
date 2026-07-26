@@ -687,6 +687,7 @@ async function saveStatusSelection(index, newStatus) {
         renderLogLines();
         closeStatusPicker({ restoreFocus: false });
         focusStatusBadge(index);
+        scheduleDraftSave();
     } catch (error) {
         alert(error.message || 'Failed to update line status.');
     } finally {
@@ -1550,6 +1551,7 @@ function removeLine(line, index) {
     }
     copiedLineIndexes.delete(index);
     setCopiedState(index, false);
+    scheduleDraftSave();
 }
 
 function syncCopiedIndexesWithTextarea() {
@@ -1603,6 +1605,7 @@ function insertLine(line, index) {
 
     copiedLineIndexes.add(index);
     setCopiedState(index, true);
+    scheduleDraftSave();
 }
 
 function insertAllStatus(status) {
@@ -1641,6 +1644,7 @@ function insertAllStatus(status) {
         textarea.selectionStart = textarea.selectionEnd = insertPosition;
         textarea.focus();
         addedIndexes.forEach((idx) => setCopiedState(idx, true));
+        scheduleDraftSave();
     }
 }
 
@@ -1682,6 +1686,7 @@ function addRemainingAsClean() {
     applyPendingOverrides();
     updateSummary(summarizeEffectiveStatuses(analyzedLines), analyzedLines.length);
     renderLogLines();
+    scheduleDraftSave();
 }
 
 const PENDING_FIXLIST_PAYLOAD_KEY = 'fenrishub_pending_fixlist_payload';
@@ -1711,6 +1716,12 @@ function submitFixlistDirectly({ content, sourceUploadId, fixlistId }) {
     if (fixlistId) {
         addField('fixlist_id', fixlistId);
     }
+
+    // The work is about to become a real Fixlist row, so stop guarding the
+    // navigation. The draft is flagged rather than deleted, so a failed POST
+    // is still recoverable.
+    setSuppressUnloadGuard(true);
+    markDraftSubmitted();
 
     document.body.appendChild(form);
     form.submit();

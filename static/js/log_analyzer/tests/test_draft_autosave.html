@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<!--
+  Tests for draft_autosave.js.
+
+  Closing the analyzer tab used to destroy every manual reclassification (the
+  pendingStatusChanges Map) and the whole fixlist being composed (the
+  #selectedLines textarea), because neither reaches the server until the final
+  "save fix" POST. draft_autosave.js mirrors that state into localStorage.
+
+  These cover the parts that silently lose data when wrong: the save/restore
+  round-trip of Map and Set state, key derivation, the CRLF-normalised dirty
+  check (Windows textareas report \r\n and would otherwise look permanently
+  dirty), quota fallback, and pruning.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>draft_autosave.js tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>draft_autosave.js – autosave/restore tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<!-- Minimal analyzer DOM the module reads/writes -->
+<div id="analyzerDraftPrompt" hidden></div>
+<textarea id="logInput"></textarea>
+<textarea id="selectedLines"></textarea>
+<div id="logLines"></div>
+<select id="uploadSourceSelect"><option value=""></option><option value="silver-river">silver-river</option></select>
+<button type="button" id="saveRulesRescanButton"></button>
+
+<script>
+// ---------------------------------------------------------------------------
+// Minimal stubs so shared.js / draft_autosave.js load without errors
+// ---------------------------------------------------------------------------
+window.logAnalyzerConfig = {
+    analyzeLogUrl: '/fake/analyze/',
+    lineDetailsUrl: '/fake/details/',
+    createFixlistUrl: '/fake/create/',
+    initialUploadId: '',
+    initialFixlistId: '',
+    isSuperuser: false,
+    currentUsername: 'tester',
+};
+
+// Defined in analysis.js / bootstrap.js, which are not loaded here.
+function renderLogLines() {}
+function setCopiedState() {}
+function fixlistTextForEntry(entry) { return entry ? (entry.line || '') : ''; }
+function toggleStatusVisibility(statusClass) { hiddenStatuses.add(statusClass); }
+function parseLogs() { return Promise.resolve(); }
+</script>
+
+<script src="../shared.js"></script>
+<script src="../draft_autosave.js"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Tiny test harness (same shape as test_legend_counts.html)
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+// Wipe every key this module owns so runs are independent.
+function resetStorage() {
+    Object.keys(localStorage)
+        .filter((key) => key.indexOf('fenrishub_analyzer_draft') === 0)
+        .forEach((key) => localStorage.removeItem(key));
+}
+
+function resetAnalyzerState() {
+    resetStorage();
+    document.getElementById('logInput').value = '';
+    document.getElementById('selectedLines').value = '';
+    document.getElementById('uploadSourceSelect').value = '';
+    pendingStatusChanges = new Map();
+    pendingChangeSequence = 0;
+    ruleDescriptionOverrides = new Map();
+    hiddenStatuses.clear();
+    analyzedLines = [];
+    copiedLineIndexes = new Set();
+    initDraftAutosave();
+}
+
+function makeChange(line, from, to, order) {
+    return [line, { id: String(order), order, line, original_status: from, new_status: to }];
+}
+
+// Restoring a draft can await a re-parse, so tests run in sequence.
+async function main() {
+
+// ---------------------------------------------------------------------------
+// Dirty detection — the trigger for both autosave and the beforeunload guard
+// ---------------------------------------------------------------------------
+(function testDirtyDetection() {
+    resetAnalyzerState();
+
+    assert('a freshly loaded analyzer is not dirty', hasUnsavedAnalyzerWork() === false);
+
+    pendingStatusChanges.set(...makeChange('evil.exe', '?', 'B', 1));
+    assert('a status change makes it dirty', hasUnsavedAnalyzerWork() === true);
+
+    pendingStatusChanges = new Map();
+    document.getElementById('selectedLines').value = 'CloseProcesses:\n';
+    assert('an edited fixlist makes it dirty', hasUnsavedAnalyzerWork() === true);
+})();
+
+// ---------------------------------------------------------------------------
+// CRLF: Windows textareas report \r\n, the server seeds \n. Comparing raw would
+// mark every page dirty on load and pop a spurious "Leave site?" prompt.
+// ---------------------------------------------------------------------------
+(function testCrlfDirtyCheck() {
+    resetStorage();
+    const selectedLines = document.getElementById('selectedLines');
+    selectedLines.value = 'CloseProcesses:\nEnd::';
+    document.getElementById('uploadSourceSelect').value = '';
+    pendingStatusChanges = new Map();
+    initDraftAutosave();
+
+    selectedLines.value = 'CloseProcesses:\r\nEnd::';
+    assert(
+        'seeded text re-reported as CRLF is not treated as an edit',
+        hasUnsavedAnalyzerWork() === false
+    );
+
+    selectedLines.value = 'CloseProcesses:\r\nEnd::\r\nExtra';
+    assert(
+        'a real edit is still detected through CRLF normalisation',
+        hasUnsavedAnalyzerWork() === true
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Save/restore round-trip: Maps and Sets must survive JSON
+// ---------------------------------------------------------------------------
+(function testRoundTrip() {
+    resetAnalyzerState();
+
+    document.getElementById('logInput').value = 'HKLM\\...\\Run: [Evil] evil.exe\nclean.dll';
+    pendingStatusChanges.set(...makeChange('HKLM\\...\\Run: [Evil] evil.exe', '?', 'B', 1));
+    pendingStatusChanges.set(...makeChange('clean.dll', '?', 'C', 2));
+    pendingChangeSequence = 2;
+    ruleDescriptionOverrides.set('1', 'known dropper');
+    hiddenStatuses.add('status-i');
+    document.getElementById('selectedLines').value = 'CloseProcesses:\nHKLM\\...\\Run: [Evil] evil.exe\n';
+
+    saveDraftNow();
+
+    const key = getCurrentDraftKey();
+    const stored = JSON.parse(localStorage.getItem(key));
+    assert('draft is written to localStorage', stored !== null);
+    assert('pending changes are serialized as entry pairs', stored.pendingStatusChanges.length === 2);
+    assert('the raw log is stored when there is no upload to refetch it from', stored.logInput.length > 0);
+    assert('hidden legend statuses are stored', stored.hiddenStatuses.indexOf('status-i') !== -1);
+
+    // Simulate a fresh page load, then restore.
+    analyzedLines = [
+        { line: 'HKLM\\...\\Run: [Evil] evil.exe', dominant_status: '?', _lineTextKey: 'HKLM\\...\\Run: [Evil] evil.exe' },
+        { line: 'clean.dll', dominant_status: '?', _lineTextKey: 'clean.dll' },
+    ];
+    pendingStatusChanges = new Map();
+    pendingChangeSequence = 0;
+    ruleDescriptionOverrides = new Map();
+    hiddenStatuses.clear();
+    copiedLineIndexes = new Set();
+    document.getElementById('selectedLines').value = '';
+
+    restoreDraft(key, stored);
+
+    assert('both status changes are restored', pendingStatusChanges.size === 2, 'got ' + pendingStatusChanges.size);
+    assert(
+        'a restored change keeps its verdict',
+        pendingStatusChanges.get('HKLM\\...\\Run: [Evil] evil.exe').new_status === 'B'
+    );
+    assert('the change sequence is restored so new ids do not collide', pendingChangeSequence === 2);
+    assert('rule descriptions are restored', ruleDescriptionOverrides.get('1') === 'known dropper');
+    assert('the fixlist text is restored', document.getElementById('selectedLines').value.indexOf('evil.exe') !== -1);
+    assert('legend filters are restored', hiddenStatuses.has('status-i'));
+    assert(
+        'copied-line highlighting is rebuilt for lines present in the restored fixlist',
+        copiedLineIndexes.has(0) && !copiedLineIndexes.has(1),
+        'got ' + JSON.stringify([...copiedLineIndexes])
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Overrides for lines that no longer exist are dropped, not resurrected
+// ---------------------------------------------------------------------------
+(function testStaleOverridesDropped() {
+    resetAnalyzerState();
+
+    const payload = {
+        v: 1,
+        savedAt: 1,
+        uploadId: '',
+        fixlistId: '',
+        selectedLines: '',
+        pendingStatusChanges: [makeChange('gone-from-log.exe', '?', 'B', 1)],
+        pendingChangeSequence: 1,
+        ruleDescriptionOverrides: [],
+        hiddenStatuses: [],
+        scrollTop: 0,
+    };
+    analyzedLines = [{ line: 'still-here.dll', dominant_status: '?', _lineTextKey: 'still-here.dll' }];
+
+    restoreDraft('unused-key', payload);
+
+    assert(
+        'an override whose line is gone from the log is dropped',
+        pendingStatusChanges.size === 0,
+        'got ' + pendingStatusChanges.size
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// A draft must never graft one log's fixlist onto a different log.
+// ---------------------------------------------------------------------------
+await (async function testDraftNotRestoredOntoDifferentLog() {
+    resetAnalyzerState();
+
+    // Work done against log A.
+    document.getElementById('logInput').value = 'LOG A: HKLM\\...\\Run: [EvilA] a.exe';
+    document.getElementById('selectedLines').value = 'CloseProcesses:\na.exe\n';
+    pendingStatusChanges.set(...makeChange('a.exe', '?', 'B', 1));
+    saveDraftNow();
+    const draftA = JSON.parse(localStorage.getItem(getCurrentDraftKey()));
+
+    // Different upload keys separately, so an upload draft can never collide.
+    document.getElementById('uploadSourceSelect').value = 'silver-river';
+    const uploadKey = getCurrentDraftKey();
+    document.getElementById('uploadSourceSelect').value = '';
+    assert('an upload draft and a pasted draft never share a key', uploadKey !== getCurrentDraftKey());
+
+    // Now log B is loaded and the stale prompt is still on screen.
+    document.getElementById('logInput').value = 'LOG B: totally different machine';
+    document.getElementById('selectedLines').value = '';
+    analyzedLines = [{ line: 'b.dll', dominant_status: '?', _lineTextKey: 'b.dll' }];
+    pendingStatusChanges = new Map();
+    initDraftAutosave();
+
+    const realConfirm = window.confirm;
+    let asked = '';
+    window.confirm = function(message) { asked = message; return false; };
+    await restoreDraft('unused-key', draftA);
+    window.confirm = realConfirm;
+
+    assert('restoring onto a different log asks first', asked.indexOf('different log') !== -1, asked);
+    assert(
+        'declining leaves the other log\'s fixlist untouched',
+        document.getElementById('selectedLines').value === '',
+        'got ' + JSON.stringify(document.getElementById('selectedLines').value)
+    );
+    assert('declining restores no status changes', pendingStatusChanges.size === 0);
+
+    // Accepting replaces the log too, so the fixlist and log stay consistent.
+    window.confirm = function() { return true; };
+    await restoreDraft('unused-key', draftA);
+    window.confirm = realConfirm;
+
+    assert(
+        'accepting swaps in the draft\'s own log so fixlist and log agree',
+        document.getElementById('logInput').value.indexOf('LOG A') === 0,
+        'got ' + document.getElementById('logInput').value.slice(0, 20)
+    );
+    assert(
+        'accepting restores the fixlist',
+        document.getElementById('selectedLines').value.indexOf('a.exe') !== -1
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// The matching log restores with no prompt at all
+// ---------------------------------------------------------------------------
+(function testMatchingLogRestoresSilently() {
+    resetAnalyzerState();
+
+    document.getElementById('logInput').value = 'LOG A: HKLM\\...\\Run: [EvilA] a.exe';
+    document.getElementById('selectedLines').value = 'CloseProcesses:\na.exe\n';
+    saveDraftNow();
+    const draft = JSON.parse(localStorage.getItem(getCurrentDraftKey()));
+
+    document.getElementById('selectedLines').value = '';
+    analyzedLines = [];
+
+    const realConfirm = window.confirm;
+    let asked = false;
+    window.confirm = function() { asked = true; return true; };
+    restoreDraft(getCurrentDraftKey(), draft);
+    window.confirm = realConfirm;
+
+    assert('restoring onto the same log does not prompt', asked === false);
+    assert('the fixlist comes back', document.getElementById('selectedLines').value.indexOf('a.exe') !== -1);
+})();
+
+// ---------------------------------------------------------------------------
+// Key derivation
+// ---------------------------------------------------------------------------
+(function testKeyDerivation() {
+    resetAnalyzerState();
+
+    document.getElementById('logInput').value = 'some log text';
+    const pastedKey = getCurrentDraftKey();
+    assert('a pasted log keys off the log hash', pastedKey.indexOf(':h:') !== -1, pastedKey);
+
+    document.getElementById('logInput').value = 'different log text';
+    assert('a different pasted log gets a different key', getCurrentDraftKey() !== pastedKey);
+
+    document.getElementById('uploadSourceSelect').value = 'silver-river';
+    const uploadKey = getCurrentDraftKey();
+    assert('a selected upload keys off the upload id', uploadKey.indexOf(':u:silver-river') !== -1, uploadKey);
+    assert('the upload key ignores log text', uploadKey === getCurrentDraftKey());
+})();
+
+// ---------------------------------------------------------------------------
+// With an upload selected the log text is refetchable, so it must not eat quota
+// ---------------------------------------------------------------------------
+(function testLogTextOmittedForUploads() {
+    resetAnalyzerState();
+
+    document.getElementById('uploadSourceSelect').value = 'silver-river';
+    document.getElementById('logInput').value = 'a very long FRST log...';
+    document.getElementById('selectedLines').value = 'CloseProcesses:\n';
+
+    saveDraftNow();
+    const stored = JSON.parse(localStorage.getItem(getCurrentDraftKey()));
+
+    assert('the log text is omitted when it can be refetched', stored.logInput === undefined);
+    assert('a hash of the log is still kept to detect content drift', typeof stored.logInputHash === 'string');
+})();
+
+// ---------------------------------------------------------------------------
+// Discovery: a pasted-log session has an empty #logInput on load, so its own
+// key is unreachable and the most recent upload-less draft must be offered.
+// ---------------------------------------------------------------------------
+(function testFindRestorableDraft() {
+    resetAnalyzerState();
+
+    document.getElementById('logInput').value = 'pasted log body';
+    document.getElementById('selectedLines').value = 'CloseProcesses:\nevil.exe\n';
+    pendingStatusChanges.set(...makeChange('evil.exe', '?', 'B', 1));
+    saveDraftNow();
+
+    // Fresh load: textareas empty, nothing selected.
+    document.getElementById('logInput').value = '';
+    document.getElementById('selectedLines').value = '';
+    document.getElementById('uploadSourceSelect').value = '';
+    pendingStatusChanges = new Map();
+    initDraftAutosave();
+
+    const found = findRestorableDraft();
+    assert('a pasted-log draft is still found after reload', found !== null);
+    assert('the found draft carries the work', found && found.payload.pendingStatusChanges.length === 1);
+})();
+
+// ---------------------------------------------------------------------------
+// A submitted draft became a real Fixlist row; it must stop being offered.
+// ---------------------------------------------------------------------------
+(function testSubmittedDraftNotOffered() {
+    resetAnalyzerState();
+
+    document.getElementById('logInput').value = 'pasted log body';
+    document.getElementById('selectedLines').value = 'CloseProcesses:\nevil.exe\n';
+    saveDraftNow();
+    markDraftSubmitted();
+
+    document.getElementById('selectedLines').value = '';
+    initDraftAutosave();
+
+    assert('a submitted draft is not offered again', findRestorableDraft() === null);
+    assert(
+        'but it is still on disk, so a failed POST stays recoverable',
+        localStorage.getItem(getCurrentDraftKey()) !== null
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Work being undone (or rules persisted) must drop the draft, not leave it stale
+// ---------------------------------------------------------------------------
+(function testCleanStateClearsDraft() {
+    resetAnalyzerState();
+
+    document.getElementById('logInput').value = 'pasted log body';
+    document.getElementById('selectedLines').value = 'CloseProcesses:\n';
+    saveDraftNow();
+    assert('draft exists while work is unsaved', localStorage.getItem(getCurrentDraftKey()) !== null);
+
+    // clearPendingAnalyzerChanges() after a rules-persist lands here.
+    document.getElementById('selectedLines').value = '';
+    pendingStatusChanges = new Map();
+    saveDraftNow();
+
+    assert(
+        'the draft is cleared once nothing is unsaved',
+        localStorage.getItem(getCurrentDraftKey()) === null
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Pruning: expired and over-count drafts are swept
+// ---------------------------------------------------------------------------
+(function testPruning() {
+    resetStorage();
+
+    const now = new Date().getTime();
+    const staleKey = 'fenrishub_analyzer_draft:u:ancient-log';
+    const freshKey = 'fenrishub_analyzer_draft:u:recent-log';
+    localStorage.setItem(staleKey, JSON.stringify({ v: 1, savedAt: now - (30 * 24 * 60 * 60 * 1000) }));
+    localStorage.setItem(freshKey, JSON.stringify({ v: 1, savedAt: now }));
+    localStorage.setItem('fenrishub_analyzer_drafts_index', JSON.stringify({
+        [staleKey]: { savedAt: now - (30 * 24 * 60 * 60 * 1000), uploadId: 'ancient-log' },
+        [freshKey]: { savedAt: now, uploadId: 'recent-log' },
+    }));
+
+    pruneDraftIndex(now);
+
+    assert('a draft older than the retention window is deleted', localStorage.getItem(staleKey) === null);
+    assert('a recent draft survives pruning', localStorage.getItem(freshKey) !== null);
+})();
+
+// ---------------------------------------------------------------------------
+// Quota exhaustion must degrade, never throw into the analyzer UI
+// ---------------------------------------------------------------------------
+(function testQuotaFallback() {
+    resetAnalyzerState();
+
+    const realSetItem = Storage.prototype.setItem;
+    let attempts = 0;
+    // Fail every write of the draft body; index writes still succeed.
+    Storage.prototype.setItem = function(key, value) {
+        if (key.indexOf('fenrishub_analyzer_draft:') === 0) {
+            attempts++;
+            const error = new Error('QuotaExceededError');
+            error.name = 'QuotaExceededError';
+            throw error;
+        }
+        return realSetItem.call(this, key, value);
+    };
+
+    let threw = false;
+    try {
+        document.getElementById('logInput').value = 'pasted log body';
+        document.getElementById('selectedLines').value = 'CloseProcesses:\n';
+        saveDraftNow();
+    } catch (e) {
+        threw = true;
+    } finally {
+        Storage.prototype.setItem = realSetItem;
+    }
+
+    assert('a full quota does not throw into the analyzer', threw === false);
+    assert('the write is retried before giving up', attempts >= 2, 'attempts: ' + attempts);
+})();
+
+resetStorage();
+
+} // end main
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+main().then(function() {
+    const summary = document.getElementById('summary');
+    summary.textContent = passed + ' passed, ' + failed + ' failed';
+    summary.style.color = failed === 0 ? '#6f9' : '#f66';
+});
+</script>
+</body>
+</html>
