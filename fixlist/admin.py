@@ -73,35 +73,45 @@ class RuleImportForm(forms.Form):
         return cleaned
 
 
-class ChromeExtensionBulkUploadForm(forms.Form):
+class MalextBulkUploadForm(forms.Form):
     csv_file = forms.FileField(
         help_text=(
-            'CSV from mallorybowes/chrome-mal-ids '
-            '(columns EXTID, EXTID-NAME, STILL-ACTIVE).'
+            'CSV export from malext.io '
+            '(columns extension_id, name, reason).'
         ),
     )
 
 
-CHROME_EXT_ID_RE = re.compile(r'^[a-p]{32}$')
-CHROME_EXT_SOURCE_NAME = 'chrome-mal-ids'
-CHROME_EXT_SOURCE_URL = 'https://github.com/mallorybowes/chrome-mal-ids'
-CHROME_EXT_NAME_SKIP = {'unknown', 'see source/notes fields'}
-CHROME_EXT_CURLY_QUOTES = '“”‘’"\''
+EXT_ID_RE = re.compile(r'^[a-p]{32}$')
+EXT_ID_TOKEN_RE = re.compile(r'[a-p]{32}')
+MALEXT_SOURCE_NAME = 'malext.io'
+MALEXT_MALWARE_REASON = 'malware'
+MALEXT_NAME_SKIP = {'unknown'}
+MALEXT_CURLY_QUOTES = '“”‘’"\''
 
 
-def _normalize_chrome_ext_name(raw):
+def _normalize_malext_name(raw):
     if not raw:
         return ''
-    cleaned = raw.strip().strip(CHROME_EXT_CURLY_QUOTES).strip()
-    if cleaned.lower() in CHROME_EXT_NAME_SKIP:
+    cleaned = raw.strip().strip(MALEXT_CURLY_QUOTES).strip()
+    if cleaned.lower() in MALEXT_NAME_SKIP:
         return ''
     return cleaned
 
 
-def _build_chrome_ext_description(name):
+def _build_malext_description(name, reason):
+    parts = [f'from {MALEXT_SOURCE_NAME}']
     if name:
-        return f'{name} - {CHROME_EXT_SOURCE_URL}'
-    return CHROME_EXT_SOURCE_URL
+        parts.append(name)
+    if reason:
+        parts.append(reason)
+    return ', '.join(parts)
+
+
+def _status_for_malext_reason(reason):
+    if (reason or '').strip().lower() == MALEXT_MALWARE_REASON:
+        return ClassificationRule.STATUS_MALWARE
+    return ClassificationRule.STATUS_PUP
 
 
 class ChangeRuleOwnerForm(forms.Form):
@@ -352,9 +362,9 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                 name='fixlist_classificationrule_import_rules',
             ),
             path(
-                'import-chrome-extensions/',
-                self.admin_site.admin_view(self.import_chrome_extensions_view),
-                name='fixlist_classificationrule_import_chrome_extensions',
+                'import-malext-extensions/',
+                self.admin_site.admin_view(self.import_malext_extensions_view),
+                name='fixlist_classificationrule_import_malext_extensions',
             ),
             path(
                 'reparse-all/',
@@ -685,45 +695,47 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         }
         return TemplateResponse(request, 'admin/fixlist/classificationrule/import_rules.html', context)
 
-    def import_chrome_extensions_view(self, request):
+    def import_malext_extensions_view(self, request):
         if request.method == 'POST':
-            form = ChromeExtensionBulkUploadForm(request.POST, request.FILES)
+            form = MalextBulkUploadForm(request.POST, request.FILES)
             if form.is_valid():
                 csv_file = form.cleaned_data['csv_file']
-                raw = csv_file.read().decode('utf-8', errors='ignore')
+                raw = csv_file.read().decode('utf-8-sig', errors='ignore')
                 reader = csv.DictReader(io.StringIO(raw))
 
                 rows_scanned = 0
-                inactive_skipped = 0
                 invalid_skipped = 0
                 within_file_dupe_skipped = 0
-                collected = {}  # extid -> description
+                collected = {}  # extid -> (status, description)
 
                 for row in reader:
                     rows_scanned += 1
-                    extid = (row.get('EXTID') or '').strip()
+                    extid = (row.get('extension_id') or '').strip()
                     if not extid:
                         continue
-                    if not CHROME_EXT_ID_RE.match(extid):
+                    if not EXT_ID_RE.match(extid):
                         invalid_skipped += 1
-                        continue
-                    still_active = (row.get('STILL-ACTIVE') or '').strip()
-                    if still_active == '0':
-                        inactive_skipped += 1
                         continue
                     if extid in collected:
                         within_file_dupe_skipped += 1
                         continue
-                    name = _normalize_chrome_ext_name(row.get('EXTID-NAME'))
-                    collected[extid] = _build_chrome_ext_description(name)
+                    name = _normalize_malext_name(row.get('name'))
+                    reason = (row.get('reason') or '').strip()
+                    collected[extid] = (
+                        _status_for_malext_reason(reason),
+                        _build_malext_description(name, reason),
+                    )
 
-                existing = set(
-                    ClassificationRule.objects.filter(
-                        status=ClassificationRule.STATUS_MALWARE,
-                        match_type=ClassificationRule.MATCH_SUBSTRING,
-                        source_text__in=list(collected.keys()),
-                    ).values_list('source_text', flat=True)
-                )
+                # An extension ID counts as already covered when it shows up in
+                # any existing rule, either as the whole source text or embedded
+                # in a path such as ...\User Data\profile\Extensions\<extid>.
+                seen_ids = set()
+                for source_text, filepath in ClassificationRule.objects.values_list(
+                    'source_text', 'filepath'
+                ).iterator():
+                    for field in (source_text, filepath):
+                        if field:
+                            seen_ids.update(EXT_ID_TOKEN_RE.findall(field))
 
                 priority = ClassificationRule.default_priority_for(
                     ClassificationRule.MATCH_SUBSTRING
@@ -731,31 +743,36 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                 to_create = [
                     ClassificationRule(
                         owner=request.user,
-                        status=ClassificationRule.STATUS_MALWARE,
+                        status=status,
                         match_type=ClassificationRule.MATCH_SUBSTRING,
                         source_text=extid,
                         description=description,
-                        source_name=CHROME_EXT_SOURCE_NAME,
+                        source_name=MALEXT_SOURCE_NAME,
                         priority=priority,
                     )
-                    for extid, description in collected.items()
-                    if extid not in existing
+                    for extid, (status, description) in collected.items()
+                    if extid not in seen_ids
                 ]
                 duplicate_skipped = len(collected) - len(to_create)
+                created_malware = sum(
+                    1
+                    for rule in to_create
+                    if rule.status == ClassificationRule.STATUS_MALWARE
+                )
 
                 if to_create:
-                    ClassificationRule.objects.bulk_create(to_create)
+                    ClassificationRule.objects.bulk_create(to_create, batch_size=1000)
                     invalidate_for_rule_owner(request.user)
 
                 self.message_user(
                     request,
                     (
-                        f'Chrome extension import complete: '
+                        f'malext.io import complete: '
                         f'scanned={rows_scanned}, '
-                        f'created={len(to_create)}, '
+                        f'created_malware={created_malware}, '
+                        f'created_pup={len(to_create) - created_malware}, '
                         f'skipped_duplicate={duplicate_skipped}, '
                         f'skipped_within_file={within_file_dupe_skipped}, '
-                        f'skipped_inactive={inactive_skipped}, '
                         f'skipped_invalid={invalid_skipped}'
                     ),
                     level=messages.SUCCESS if to_create else messages.INFO,
@@ -764,17 +781,17 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                     reverse('admin:fixlist_classificationrule_changelist')
                 )
         else:
-            form = ChromeExtensionBulkUploadForm()
+            form = MalextBulkUploadForm()
 
         context = {
             **self.admin_site.each_context(request),
             'opts': self.model._meta,
-            'title': 'Import malicious Chrome extension IDs',
+            'title': 'Import malext.io extension IDs',
             'form': form,
         }
         return TemplateResponse(
             request,
-            'admin/fixlist/classificationrule/import_chrome_extensions.html',
+            'admin/fixlist/classificationrule/import_malext_extensions.html',
             context,
         )
 
