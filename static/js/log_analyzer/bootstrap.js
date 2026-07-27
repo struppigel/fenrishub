@@ -12,32 +12,9 @@ function bindAnalyzerButton(elementId, handler) {
 
 const _uploadContentCache = new Map();
 
-// Console-style loading indicator. Braille frames render in any modern
-// monospace font and give the analyzer status line a familiar CLI feel.
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-function startStatusSpinner(element, baseText) {
-    if (!element) {
-        return () => {};
-    }
-    // The spinner glyph is hidden from screen readers — it ticks ~12 times
-    // per second and would spam any aria-live attribute on the parent.
-    element.textContent = '';
-    const baseSpan = document.createElement('span');
-    baseSpan.textContent = baseText;
-    const spinSpan = document.createElement('span');
-    spinSpan.setAttribute('aria-hidden', 'true');
-    spinSpan.textContent = ` ${SPINNER_FRAMES[0]}`;
-    element.appendChild(baseSpan);
-    element.appendChild(spinSpan);
-
-    let i = 1;
-    const id = setInterval(() => {
-        spinSpan.textContent = ` ${SPINNER_FRAMES[i % SPINNER_FRAMES.length]}`;
-        i += 1;
-    }, 80);
-    return () => clearInterval(id);
-}
+// Console-style loading indicator, defined in js/status_spinner.js (loaded from
+// base.html) so the log search page can use the same one.
+const startStatusSpinner = window.startStatusSpinner;
 
 function buildUploadedLogContentUrl(uploadId) {
     const template = (window.logAnalyzerConfig && window.logAnalyzerConfig.uploadedLogContentUrlTemplate) || '';

@@ -1,0 +1,244 @@
+{% extends 'base.html' %}
+{% load rule_tags %}
+
+{% block title %}Search logs - Fenris{% endblock %}
+
+{% block page_context_label %}search logs{% endblock %}
+
+{% block extra_css %}
+<style>
+    .search-mode-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        color: var(--la-text-muted);
+        white-space: nowrap;
+    }
+
+    .search-results-count {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        margin-bottom: 8px;
+    }
+
+    .search-notice {
+        color: var(--la-warning-text);
+    }
+
+    .search-preview {
+        font-family: inherit;
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin-top: 4px;
+    }
+
+    .search-preview-line-number {
+        color: var(--la-text-disabled);
+        margin-right: 6px;
+    }
+
+    .search-hit {
+        background-color: var(--la-warning-bg);
+        color: var(--la-warning-text);
+    }
+
+    .search-status {
+        font-size: 12px;
+        color: var(--la-text-muted);
+        white-space: nowrap;
+    }
+
+    .search-controls {
+        margin-bottom: 12px;
+        align-items: center;
+    }
+
+    .search-controls a {
+        text-decoration: none;
+    }
+
+
+    .fixlist-actions .action-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 32px;
+        padding: 0 10px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-primary);
+        border: 1px solid var(--la-border);
+        font-size: 12px;
+        font-family: inherit;
+        line-height: 1;
+        text-decoration: none;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+
+    .fixlist-actions .action-btn:hover {
+        text-decoration: underline;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h3>search logs</h3>
+
+<form method="get" action="{% url 'log_search' %}" class="search-filter-form">
+    <input type="text" name="q" value="{{ search_query }}" placeholder="search log contents" class="search-filter-input" autofocus>
+    <label class="search-mode-label" title="match with a regular expression instead of a plain substring">
+        <input class="select-checkbox" type="checkbox" name="regex" value="1" {% if use_regex %}checked{% endif %}>
+        regex
+    </label>
+    <label class="search-mode-label" title="only match lines with the exact same upper/lower case">
+        <input class="select-checkbox" type="checkbox" name="case" value="1" {% if case_sensitive %}checked{% endif %}>
+        case sensitive
+    </label>
+    <select name="type" class="search-filter-select" title="only search logs of this type">
+        <option value="">all log types</option>
+        {% for type_name in log_types %}
+        <option value="{{ type_name }}" {% if type_name == log_type_filter %}selected{% endif %}>{{ type_name }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit" id="searchSubmitButton">search</button>
+    {% if search_query or log_type_filter %}
+    <a href="{% url 'log_search' %}" class="search-filter-clear">clear</a>
+    {% endif %}
+    <span id="searchStatus" class="search-status" role="status" hidden></span>
+</form>
+
+{% if search_error %}
+<div class="error-box">{{ search_error }}</div>
+{% elif not search_query %}
+<div class="info-box">enter a search term to look through the contents of every log. matching ignores upper/lower case unless case sensitive is ticked, and covers all channels, excluding trashed logs.</div>
+{% elif not results %}
+<div class="info-box">no {% if log_type_filter %}{{ log_type_filter }} {% endif %}logs contain "{{ search_query }}".</div>
+{% else %}
+
+<form id="downloadSelectedForm" method="get" action="{% url 'log_search_download' %}">
+    <input type="hidden" name="q" value="{{ search_query }}">
+    {% if use_regex %}<input type="hidden" name="regex" value="1">{% endif %}
+    {% if case_sensitive %}<input type="hidden" name="case" value="1">{% endif %}
+    {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
+</form>
+
+<div class="search-controls button-group">
+    <button type="submit" form="downloadSelectedForm" onclick="return confirmDownloadSelected();" title="download the ticked logs as a zip archive">download selected</button>
+    <a href="{% url 'log_search_download' %}?{{ download_query }}"><button type="button" title="download every matching log as a zip archive">download all</button></a>
+    <span id="selectionIndicator" class="muted" hidden style="font-size: 12px;">
+        <span id="selectionCount">0</span> selected
+        <a href="#" id="clearSelectionLink" style="margin-left: 6px;">clear</a>
+    </span>
+</div>
+
+<div class="search-results-count">
+    {% if truncated %}
+    <span class="search-notice">more than {{ search_limit }} logs matched &mdash; showing the first {{ match_count }}. narrow the search term.</span>
+    {% else %}
+    {{ match_count }} matching log{{ match_count|pluralize }}
+    {% endif %}
+    {% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}
+    {% if over_zip_limit %}
+    <br><span class="search-notice">download all includes the first {{ zip_limit }} logs only.</span>
+    {% endif %}
+</div>
+
+{% for result in results %}
+<div class="fixlist-item">
+    <div style="flex: 1;">
+        <div class="fixlist-title">
+            <input class="upload-select select-checkbox" form="downloadSelectedForm" type="checkbox" name="selected_upload_ids" value="{{ result.log.upload_id }}" aria-label="select {{ result.log.upload_id }} for download">
+            <span class="timeline-type-badge log log-type-{{ result.log.log_type|log_type_css_slug }}">{% if result.log.log_type == 'Unknown' %}Unknown Log{% else %}{{ result.log.log_type }}{% endif %}</span>
+            <a class="upload-id-link log-type-{{ result.log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' result.log.upload_id %}">{{ result.log.upload_id }}</a>
+            {% if result.log.recipient_user %}
+            <span>({{ result.log.recipient_user.username }})</span>
+            {% else %}
+            <span>(unassigned)</span>
+            {% endif %}
+        </div>
+        <div class="fixlist-meta">
+            {{ result.log.original_filename }} | {{ result.log.forum_username }} | {{ result.log.created_at|date:"Y-m-d H:i" }} | lines {{ result.log.total_line_count }}
+        </div>
+        {% if result.line_number %}
+        <div class="fixlist-meta search-preview"><span class="search-preview-line-number">{{ result.line_number }}:</span>{{ result.before }}<span class="search-hit">{{ result.hit }}</span>{{ result.after }}</div>
+        {% endif %}
+    </div>
+    <div class="fixlist-actions">
+        <a href="{% url 'view_uploaded_log' result.log.upload_id %}" class="action-btn" title="open this upload's detail page">view</a>
+        <a href="{% url 'log_analyzer' %}?upload_id={{ result.log.upload_id|urlencode }}" class="action-btn" title="open this upload in the log analyzer">analyze</a>
+        <a href="{% url 'download_uploaded_log' result.log.upload_id %}" class="action-btn" title="download this upload as a text file">download</a>
+    </div>
+</div>
+{% endfor %}
+
+{% include "partials/pagination.html" %}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const searchSelection = createSelectionManager({
+    storageKey: 'fenrishub_selected_search_upload_ids',
+    formId: 'downloadSelectedForm',
+    checkboxClass: 'upload-select',
+    inputName: 'selected_upload_ids',
+});
+
+function confirmDownloadSelected() {
+    if (searchSelection.getStored().size === 0) {
+        alert('Tick at least one log to download.');
+        return false;
+    }
+    return true;
+}
+
+// Scanning every log body can take a few seconds, and the browser gives no
+// feedback until the next page renders — so show the analyzer's status spinner
+// while the request is in flight.
+function bindSearchProgress() {
+    const form = document.querySelector('.search-filter-form');
+    const status = document.getElementById('searchStatus');
+    const submitButton = document.getElementById('searchSubmitButton');
+    if (!form || !status) return;
+
+    let stopSpinner = null;
+
+    function showProgress() {
+        if (stopSpinner) return;
+        status.hidden = false;
+        stopSpinner = startStatusSpinner(status, 'searching all logs');
+        if (submitButton) submitButton.disabled = true;
+    }
+
+    function hideProgress() {
+        if (stopSpinner) stopSpinner();
+        stopSpinner = null;
+        status.hidden = true;
+        status.textContent = '';
+        if (submitButton) submitButton.disabled = false;
+    }
+
+    form.addEventListener('submit', function() {
+        const query = form.querySelector('input[name="q"]');
+        if (query && !query.value.trim()) return;
+        showProgress();
+    });
+
+    // Paging re-runs the search server-side, so it is just as slow as the
+    // initial query and deserves the same feedback.
+    document.querySelectorAll('.pagination a').forEach(function(link) {
+        link.addEventListener('click', showProgress);
+    });
+
+    // Restoring from the back/forward cache would otherwise leave the spinner
+    // ticking on a page that has already finished loading.
+    window.addEventListener('pageshow', hideProgress);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    searchSelection.init();
+    bindSearchProgress();
+});
+</script>
+{% endblock %}

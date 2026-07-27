@@ -11,15 +11,6 @@
         color: var(--la-warning-text);
     }
 
-    .upload-select {
-        margin-right: 8px;
-    }
-
-    .fixlist-title .upload-id-link,
-    .fixlist-title > span {
-        vertical-align: middle;
-    }
-
     .fixlist-actions .action-btn {
         display: inline-flex;
         align-items: center;
@@ -204,7 +195,7 @@
         <div style="flex: 1;">
             <div>
                 <div class="fixlist-title">
-                    <input class="upload-select merge-select-checkbox" form="mergeUploadsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">
+                    <input class="upload-select select-checkbox" form="mergeUploadsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">
                     <span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|log_type_css_slug }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span>
                     <a class="upload-id-link log-type-{{ uploaded_log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>
                     {% if uploaded_log.recipient_user %}

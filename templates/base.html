@@ -375,7 +375,8 @@
             color: var(--la-status-s);
         }
 
-        .merge-select-checkbox {
+        /* Dark-theme checkbox used by every listing selection and filter toggle. */
+        .select-checkbox {
             appearance: none;
             -webkit-appearance: none;
             width: 13px;
@@ -391,21 +392,21 @@
             flex-shrink: 0;
         }
 
-        .merge-select-checkbox:hover {
+        .select-checkbox:hover {
             border-color: var(--la-text-muted);
         }
 
-        .merge-select-checkbox:focus-visible {
+        .select-checkbox:focus-visible {
             outline: 1px solid var(--la-text-primary);
             outline-offset: 1px;
         }
 
-        .merge-select-checkbox:checked {
+        .select-checkbox:checked {
             background: var(--la-text-primary);
             border-color: var(--la-text-primary);
         }
 
-        .merge-select-checkbox:checked::after {
+        .select-checkbox:checked::after {
             content: '';
             position: absolute;
             left: 3px;
@@ -491,6 +492,16 @@
         .fixlist-title {
             font-size: 13px;
             color: var(--la-text-neutral);
+        }
+
+        /* Row selection checkbox, shared by every listing that supports bulk actions. */
+        .upload-select {
+            margin-right: 8px;
+        }
+
+        .fixlist-title .upload-id-link,
+        .fixlist-title > span {
+            vertical-align: middle;
         }
 
         .fixlist-meta {
@@ -724,6 +735,7 @@
                                 <a href="{% url 'profile' %}">profile settings</a>
                                 <a href="{% url 'change_password' %}">change password</a>
                                 <a href="{% url 'statistics' %}">stats</a>
+                                <a href="{% url 'log_search' %}">search logs</a>
                                 <a href="{% url 'help' %}">help</a>
                                 {% if is_moderator %}<a href="{% url 'log_type_rules' %}">log type rules</a>{% endif %}
                                 <form method="post" action="{% url 'logout' %}">
@@ -810,6 +822,7 @@
     });
     </script>
     <script src="{% static 'js/selection_manager.js' %}"></script>
+    <script src="{% static 'js/status_spinner.js' %}"></script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

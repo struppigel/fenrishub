@@ -28,6 +28,7 @@ from .views.infection_cases import (
     infection_cases_view,
     view_infection_case,
 )
+from .views.log_search import log_search_download_view, log_search_view
 from .views.log_type_rules import (
     add_log_type_rule_view,
     delete_log_type_rule_view,
@@ -60,6 +61,9 @@ urlpatterns = [
     path('fixlists/', dashboard_view, name='dashboard'),
     path('uploads/', uploaded_logs_view, name='uploaded_logs'),
     path('uploads/trash/', uploads_trash_view, name='uploads_trash'),
+    # Must stay above the <str:upload_id> route, which would otherwise match 'search'.
+    path('uploads/search/', log_search_view, name='log_search'),
+    path('uploads/search/download/', log_search_download_view, name='log_search_download'),
     path('uploads/<str:upload_id>/', view_uploaded_log, name='view_uploaded_log'),
     path('uploads/<str:upload_id>/download/', download_uploaded_log, name='download_uploaded_log'),
     path('uploads/diff/<str:id1>/<str:id2>/', diff_uploaded_logs_view, name='diff_uploaded_logs'),

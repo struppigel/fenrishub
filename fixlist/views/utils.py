@@ -5,6 +5,10 @@ Contains common helpers, rate limiting, IP resolution, and auxiliary view utilit
 used across multiple view domains.
 """
 
+import io
+import re
+import zipfile
+
 from django.shortcuts import render, redirect
 from django.contrib import messages
 from django.contrib.auth.models import User
@@ -174,6 +178,34 @@ def check_missing_ids(request, requested_ids, found_ids, *, item_label, target, 
     location = ' in trash' if in_trash else ''
     messages.error(request, f'Unable to find {item_label}(s){location}: {", ".join(missing)}.')
     return redirect_preserving_filters(request, target)
+
+
+def safe_log_filename(uploaded_log) -> str:
+    """Sanitize an upload's original filename for use as a download/archive entry name."""
+    raw_name = uploaded_log.original_filename or f'{uploaded_log.upload_id}.txt'
+    return re.sub(r'[\\/:*?"<>|\r\n]', '_', raw_name)[:200] or 'log.txt'
+
+
+def build_uploaded_logs_zip(uploaded_logs) -> bytes:
+    """Bundle uploaded logs into an in-memory zip archive and return its bytes.
+
+    Entry names come from each log's original filename, sanitized; collisions get a
+    numeric suffix so no log is silently dropped from the archive.
+    """
+    buffer = io.BytesIO()
+    used_names = set()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for uploaded_log in uploaded_logs:
+            safe_name = safe_log_filename(uploaded_log)
+            candidate = safe_name
+            counter = 2
+            while candidate in used_names:
+                stem, dot, ext = safe_name.partition('.')
+                candidate = f'{stem}_{counter}{dot}{ext}' if dot else f'{safe_name}_{counter}'
+                counter += 1
+            used_names.add(candidate)
+            archive.writestr(candidate, uploaded_log.content)
+    return buffer.getvalue()
 
 
 def get_client_ip(request):

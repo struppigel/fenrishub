@@ -1,7 +1,3 @@
-import io
-import re
-import zipfile
-
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
@@ -22,7 +18,12 @@ from ..models import (
     UploadedLog,
 )
 from ..upload_utils import execute_merge, resolve_ordered_logs_for_merge
-from .utils import _autoclose_stale_cases, _purge_old_trash, get_action_scoped_uploads
+from .utils import (
+    _autoclose_stale_cases,
+    _purge_old_trash,
+    build_uploaded_logs_zip,
+    get_action_scoped_uploads,
+)
 
 
 def _case_queryset_for_user(user):
@@ -621,25 +622,7 @@ def infection_case_download_logs_view(request, case_id):
         messages.error(request, 'This case has no logs to download.')
         return redirect('view_infection_case', case_id=infection_case.case_id)
 
-    buffer = io.BytesIO()
-    used_names = set()
-    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for uploaded_log in linked_logs:
-            raw_name = uploaded_log.original_filename or f'{uploaded_log.upload_id}.txt'
-            safe_name = re.sub(r'[\\/:*?"<>|\r\n]', '_', raw_name)[:200] or 'log.txt'
-
-            # Disambiguate duplicate filenames so no entry is silently overwritten.
-            candidate = safe_name
-            counter = 2
-            while candidate in used_names:
-                stem, dot, ext = safe_name.partition('.')
-                candidate = f'{stem}_{counter}{dot}{ext}' if dot else f'{safe_name}_{counter}'
-                counter += 1
-            used_names.add(candidate)
-
-            archive.writestr(candidate, uploaded_log.content)
-
-    response = HttpResponse(buffer.getvalue(), content_type='application/zip')
+    response = HttpResponse(build_uploaded_logs_zip(linked_logs), content_type='application/zip')
     response['Content-Disposition'] = f'attachment; filename="{infection_case.case_id}_logs.zip"'
     return response
 
