@@ -40,8 +40,8 @@
        split into chunks (.log-chunk) so the browser can skip laying out the
        off-screen ones; native selection and copy stay instant on large logs. */
     .uploaded-content {
-        min-height: 600px;
-        max-height: 80vh;
+        min-height: 400px;
+        max-height: 53vh;
         overflow: auto;
         margin: 0;
         padding: 8px;
@@ -62,6 +62,17 @@
         contain-intrinsic-size: auto 1500px;
     }
 
+    /* Action bar sits above the log; buttons size to their label instead of
+       the 120px default, matching the uploads and case pages. */
+    .uploaded-log-page .log-action-bar button {
+        min-width: 0;
+    }
+
+    .uploaded-log-page .log-action-bar form {
+        display: inline;
+        margin: 0;
+    }
+
     .uploaded-log-page .delete-btn {
         background-color: var(--la-error-bg);
         color: var(--la-error-text);
@@ -72,12 +83,26 @@
 
 {% block content %}
 <div class="uploaded-log-page">
-<div class="button-group">
+<div class="button-group log-action-bar">
     {% if uploaded_log.deleted_at %}
     <a href="{% url 'uploads_trash' %}"><button type="button">back to trash</button></a>
     {% else %}
     <a href="{% url 'uploaded_logs' %}"><button type="button">back to uploads</button></a>
     <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}"><button type="button">analyze</button></a>
+    {% endif %}
+    <button type="button" onclick="viewRawContent()">view raw</button>
+    {% if converted_response %}<button type="button" onclick="copyConvertedResponse(this)">copy parsed response</button>{% endif %}
+    <button type="button" onclick="copyAllContent(this)">copy log text</button>
+    <button type="button" onclick="downloadContent()">download</button>
+    {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == user %}
+    <form method="post">
+        {% csrf_token %}
+        {% if uploaded_log.deleted_at %}
+        <button type="submit" name="action" value="restore">restore</button>
+        {% else %}
+        <button type="submit" name="action" value="delete" class="delete-btn" onclick="return confirm('Delete this upload?');">delete</button>
+        {% endif %}
+    </form>
     {% endif %}
 </div>
 
@@ -146,6 +171,8 @@
     <div id="uploadedContent" class="uploaded-content" tabindex="0">{% for chunk in uploaded_log.content|chunk_log:100 %}<div class="log-chunk">{{ chunk }}</div>{% endfor %}</div>
 </div>
 
+{% if converted_response %}{{ converted_response|json_script:"convertedResponse" }}{% endif %}
+
 <script>
 // The content is rendered as chunked .log-chunk blocks (see chunk_log filter)
 // so the browser can skip off-screen layout. Each chunk drops its trailing
@@ -173,6 +200,16 @@ function copyAllContent(button) {
     });
 }
 
+function copyConvertedResponse(button) {
+    const el = document.getElementById('convertedResponse');
+    if (!el) return;
+    const originalText = button.textContent;
+    navigator.clipboard.writeText(JSON.parse(el.textContent)).then(function() {
+        button.textContent = 'copied';
+        setTimeout(() => { button.textContent = originalText; }, 1200);
+    });
+}
+
 function downloadContent() {
     const content = getFullContent();
     const rawName = "{{ uploaded_log.original_filename|escapejs }}" || "{{ uploaded_log.upload_id|escapejs }}.txt";
@@ -189,22 +226,5 @@ function downloadContent() {
 }
 </script>
 
-<form method="post">
-    {% csrf_token %}
-    <div class="button-group">
-        <button type="button" onclick="viewRawContent()">view raw</button>
-        <button type="button" onclick="copyAllContent(this)">copy all</button>
-        <button type="button" onclick="downloadContent()">download</button>
-        {% if uploaded_log.deleted_at %}
-        {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == user %}
-        <button type="submit" name="action" value="restore">restore</button>
-        {% endif %}
-        {% else %}
-        {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == user %}
-        <button type="submit" name="action" value="delete" class="delete-btn" onclick="return confirm('Delete this upload?');">delete</button>
-        {% endif %}
-        {% endif %}
-    </div>
-</form>
 </div>
 {% endblock %}

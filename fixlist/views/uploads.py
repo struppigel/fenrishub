@@ -18,6 +18,7 @@ from django.db.models import Count
 from urllib.parse import urlencode
 
 from ..forms import UploadedLogForm
+from ..log_converters import convert_log_to_response
 from ..models import UploadedLog
 from ..permissions import user_can_delete_uploaded_log
 from ..upload_utils import (
@@ -390,7 +391,13 @@ def view_uploaded_log(request, upload_id):
             messages.success(request, f'{upload_id} was unassigned')
             return redirect('view_uploaded_log', upload_id=upload_id)
 
-    return render(request, 'view_uploaded_log.html', {'uploaded_log': uploaded_log})
+    # Empty unless the log type has a converter and it found something to report.
+    converted_response = convert_log_to_response(uploaded_log.log_type, uploaded_log.content)
+
+    return render(request, 'view_uploaded_log.html', {
+        'uploaded_log': uploaded_log,
+        'converted_response': converted_response,
+    })
 
 
 @login_required

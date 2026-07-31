@@ -31,7 +31,7 @@ class UploadedLogDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
 
         response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '>copy all<')
+        self.assertContains(response, '>copy log text<')
         self.assertContains(response, '>download<')
         self.assertContains(response, 'copyAllContent(')
         self.assertContains(response, 'downloadContent(')
