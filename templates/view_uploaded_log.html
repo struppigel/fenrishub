@@ -40,8 +40,8 @@
        split into chunks (.log-chunk) so the browser can skip laying out the
        off-screen ones; native selection and copy stay instant on large logs. */
     .uploaded-content {
-        min-height: 400px;
-        max-height: 53vh;
+        min-height: 450px;
+        max-height: 60vh;
         overflow: auto;
         margin: 0;
         padding: 8px;
@@ -167,7 +167,6 @@
 </div>
 
 <div class="form-group">
-    <label for="uploadedContent">content</label>
     <div id="uploadedContent" class="uploaded-content" tabindex="0">{% for chunk in uploaded_log.content|chunk_log:100 %}<div class="log-chunk">{{ chunk }}</div>{% endfor %}</div>
 </div>
 
