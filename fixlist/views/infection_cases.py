@@ -7,6 +7,7 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import urlencode
 from django.views.decorators.http import require_http_methods
 
 from ..models import (
@@ -585,11 +586,20 @@ def view_infection_case(request, case_id):
         selectable_uploads = available_uploads.exclude(upload_id__in=linked_upload_ids)
         selectable_fixlists = available_fixlists.exclude(pk__in=linked_fixlist_ids)
 
+    # Upload link handed to the affected user: it targets the case owner's
+    # channel so new logs land with the helper who owns the case, and prefills
+    # the forum username the case is tracked under.
+    helper_upload_url = request.build_absolute_uri(
+        reverse('upload_log_for_helper', args=[infection_case.owner.username])
+        + '?' + urlencode({'u': infection_case.username})
+    )
+
     return render(
         request,
         'view_infection_case.html',
         {
             'infection_case': infection_case,
+            'helper_upload_url': helper_upload_url,
             'timeline_items': timeline_items,
             'selectable_uploads': selectable_uploads,
             'selectable_fixlists': selectable_fixlists,
