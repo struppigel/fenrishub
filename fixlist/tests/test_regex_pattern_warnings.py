@@ -2,13 +2,59 @@
 add-rule preview API. Locks in the behaviour that powers the slow-regex
 warning in the rule adder UI."""
 import json
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
-from ..analyzer import _re2, evaluate_regex_pattern, invalidate_rule_buckets_cache
+from .. import analyzer
+from ..analyzer import (
+    REGEX_ADVERSARIAL_INPUTS,
+    REGEX_SLOW_THRESHOLD_MS,
+    _re2,
+    evaluate_regex_pattern,
+    invalidate_rule_buckets_cache,
+)
 from ..models import ClassificationRule
+
+
+class EvaluateRegexPatternBenchmarkTests(TestCase):
+    """The benchmark re-times any reading that lands over the threshold, so a
+    CPU hiccup on a shared CI box is not reported as a slow pattern. These
+    tests drive the timer directly instead of using a genuinely slow regex --
+    the suite runs as Railway's preDeployCommand and real backtracking blowups
+    would hang the deploy."""
+
+    THRESHOLD_S = REGEX_SLOW_THRESHOLD_MS / 1000.0
+
+    def test_one_slow_reading_followed_by_fast_ones_is_not_slow(self):
+        readings = iter([self.THRESHOLD_S * 1.2])
+
+        def fake_timer(compiled, payload):
+            return next(readings, self.THRESHOLD_S / 50)
+
+        with patch.object(analyzer, '_time_regex_search', side_effect=fake_timer):
+            result = evaluate_regex_pattern(r'\bdControl\b')
+
+        self.assertFalse(result['is_slow'])
+
+    def test_consistently_slow_readings_stay_slow(self):
+        with patch.object(analyzer, '_time_regex_search', return_value=self.THRESHOLD_S * 1.2):
+            result = evaluate_regex_pattern(r'\bdControl\b')
+
+        self.assertTrue(result['is_slow'])
+
+    def test_blowup_far_past_threshold_is_not_re_timed(self):
+        with patch.object(
+            analyzer, '_time_regex_search', return_value=self.THRESHOLD_S * 100
+        ) as timer:
+            result = evaluate_regex_pattern(r'\bdControl\b')
+
+        self.assertTrue(result['is_slow'])
+        # One reading per input and no retries -- re-running a real blowup
+        # would multiply the cost of the very case that is already expensive.
+        self.assertEqual(timer.call_count, len(REGEX_ADVERSARIAL_INPUTS))
 
 
 class EvaluateRegexPatternTests(TestCase):

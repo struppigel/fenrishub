@@ -983,6 +983,23 @@ REGEX_ADVERSARIAL_INPUTS = (
 
 REGEX_SLOW_THRESHOLD_MS = 5.0
 
+# A single wall-clock sample can be inflated by the OS descheduling us mid-run
+# (CI runs the suite with --parallel on shared CPUs), so a sample that lands
+# over the threshold gets re-run and the fastest reading wins -- noise only
+# ever adds time. Readings far past the threshold are genuine backtracking
+# blowups rather than jitter, so those are not re-run.
+REGEX_BENCH_RETRIES = 4
+REGEX_BENCH_RETRY_CEILING = 10.0
+
+
+def _time_regex_search(compiled, payload: str) -> float:
+    start = time.perf_counter()
+    try:
+        compiled.search(payload)
+    except re.error:
+        pass
+    return time.perf_counter() - start
+
 
 def evaluate_regex_pattern(pattern: str, slow_threshold_ms: float = REGEX_SLOW_THRESHOLD_MS) -> dict:
     """Validate and benchmark a single regex pattern.
@@ -997,7 +1014,9 @@ def evaluate_regex_pattern(pattern: str, slow_threshold_ms: float = REGEX_SLOW_T
       - ``stdlib_error``: error message if stdlib re rejected it. When this is
         non-None the rule cannot run at all.
       - ``worst_ms``: highest wall-clock time across the adversarial inputs
-        (stdlib re), in milliseconds.
+        (stdlib re), in milliseconds. Each input is re-timed when its first
+        reading looks slow, so a scheduler hiccup does not get reported as a
+        slow pattern -- see REGEX_BENCH_RETRIES.
       - ``worst_input``: label of the input that triggered ``worst_ms``.
       - ``is_slow``: True iff ``worst_ms`` exceeds ``slow_threshold_ms``.
 
@@ -1034,12 +1053,12 @@ def evaluate_regex_pattern(pattern: str, slow_threshold_ms: float = REGEX_SLOW_T
     worst_label = ''
     threshold_s = slow_threshold_ms / 1000.0
     for label, payload in REGEX_ADVERSARIAL_INPUTS:
-        start = time.perf_counter()
-        try:
-            compiled.search(payload)
-        except re.error:
-            pass
-        elapsed = time.perf_counter() - start
+        elapsed = _time_regex_search(compiled, payload)
+        if threshold_s <= elapsed < threshold_s * REGEX_BENCH_RETRY_CEILING:
+            for _ in range(REGEX_BENCH_RETRIES):
+                elapsed = min(elapsed, _time_regex_search(compiled, payload))
+                if elapsed < threshold_s:
+                    break
         if elapsed > worst:
             worst = elapsed
             worst_label = label
