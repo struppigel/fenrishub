@@ -203,7 +203,9 @@ def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
     usage_percent = None
     total_mb = None
     free_gb = None
+    drive_total_gb = None
     drive_free_space_by_letter = {}
+    drive_total_space_by_letter = {}
     windows_drive_letter = None
     saw_memory_context = False
 
@@ -223,23 +225,31 @@ def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
             saw_memory_context = True
             drive_match = re.search(r"Drive\s+([a-zA-Z]):", line, re.IGNORECASE)
             free_match = re.search(r"\(Free:\s*(\d+(?:\.\d+)?)\s*GB\)", line, re.IGNORECASE)
+            total_match = re.search(r"\(Total:\s*(\d+(?:\.\d+)?)\s*GB\)", line, re.IGNORECASE)
             if drive_match and free_match:
                 drive_letter = drive_match.group(1).upper()
                 drive_free_space_by_letter[drive_letter] = float(free_match.group(1))
+                if total_match:
+                    drive_total_space_by_letter[drive_letter] = float(total_match.group(1))
                 if re.search(r"\bWindows\b", line, re.IGNORECASE):
                     windows_drive_letter = drive_letter
 
+    system_drive_letter = None
     if windows_drive_letter and windows_drive_letter in drive_free_space_by_letter:
-        free_gb = drive_free_space_by_letter[windows_drive_letter]
+        system_drive_letter = windows_drive_letter
     elif "C" in drive_free_space_by_letter:
-        free_gb = drive_free_space_by_letter["C"]
+        system_drive_letter = "C"
+
+    if system_drive_letter:
+        free_gb = drive_free_space_by_letter[system_drive_letter]
+        drive_total_gb = drive_total_space_by_letter.get(system_drive_letter)
 
     if not saw_memory_context:
         return None
 
     threshold_usage_percent = 80
     threshold_total_ram_gb = 4
-    threshold_free_space_gb = 50
+    threshold_free_space_percent = 10
     total_gb = total_mb / 1024 if total_mb is not None else None
     reasons = []
     details = []
@@ -258,10 +268,18 @@ def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
             reasons.append(f"RAM usage above {threshold_usage_percent}%")
 
     if free_gb is not None:
-        details.append(f"System drive free space: {free_gb:.2f} GB")
-        if free_gb < threshold_free_space_gb:
-            low_memory = True
-            reasons.append(f"Free space on Windows partition below {threshold_free_space_gb} GB")
+        if drive_total_gb:
+            free_space_percent = free_gb / drive_total_gb * 100
+            details.append(
+                f"System drive free space: {free_gb:.2f} GB of {drive_total_gb:.2f} GB ({free_space_percent:.1f}%)"
+            )
+            if free_space_percent < threshold_free_space_percent:
+                low_memory = True
+                reasons.append(
+                    f"Free space on Windows partition below {threshold_free_space_percent}% of drive capacity"
+                )
+        else:
+            details.append(f"System drive free space: {free_gb:.2f} GB")
 
     if total_mb is None or usage_percent is None or free_gb is None:
         reasons.append("Memory information incomplete")
