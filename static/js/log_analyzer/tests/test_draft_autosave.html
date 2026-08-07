@@ -36,6 +36,7 @@
 <div id="analyzerDraftPrompt" hidden></div>
 <textarea id="logInput"></textarea>
 <textarea id="selectedLines"></textarea>
+<textarea id="responseText"></textarea>
 <div id="logLines"></div>
 <select id="uploadSourceSelect"><option value=""></option><option value="silver-river">silver-river</option></select>
 <button type="button" id="saveRulesRescanButton"></button>
@@ -98,6 +99,7 @@ function resetAnalyzerState() {
     resetStorage();
     document.getElementById('logInput').value = '';
     document.getElementById('selectedLines').value = '';
+    document.getElementById('responseText').value = '';
     document.getElementById('uploadSourceSelect').value = '';
     pendingStatusChanges = new Map();
     pendingChangeSequence = 0;
@@ -129,6 +131,38 @@ async function main() {
     pendingStatusChanges = new Map();
     document.getElementById('selectedLines').value = 'CloseProcesses:\n';
     assert('an edited fixlist makes it dirty', hasUnsavedAnalyzerWork() === true);
+
+    // The response never reaches the server, so any text in it is unsaved work.
+    document.getElementById('selectedLines').value = '';
+    initDraftAutosave();
+    assert('an empty response is not dirty', hasUnsavedAnalyzerWork() === false);
+    document.getElementById('responseText').value = 'Hi, your machine is clean.';
+    assert('a typed response makes it dirty', hasUnsavedAnalyzerWork() === true);
+})();
+
+// ---------------------------------------------------------------------------
+// The response panel has no server-side home at all, so the draft is the only
+// thing standing between a written reply and a closed tab.
+// ---------------------------------------------------------------------------
+(function testResponseRoundTrip() {
+    resetAnalyzerState();
+
+    document.getElementById('logInput').value = 'clean.dll';
+    document.getElementById('responseText').value = 'Please reboot and run FRST again.';
+    saveDraftNow();
+
+    const stored = JSON.parse(localStorage.getItem(getCurrentDraftKey()));
+    assert('the response text is stored', stored.responseText === 'Please reboot and run FRST again.');
+
+    const found = findRestorableDraft();
+    assert('a draft carrying only a response is still offered', found !== null);
+    assert(
+        'the prompt mentions the response',
+        found !== null && describeDraft(found.payload).indexOf('response') !== -1,
+        found ? describeDraft(found.payload) : 'no draft'
+    );
+
+    document.getElementById('responseText').value = '';
 })();
 
 // ---------------------------------------------------------------------------
@@ -169,6 +203,7 @@ async function main() {
     ruleDescriptionOverrides.set('1', 'known dropper');
     hiddenStatuses.add('status-i');
     document.getElementById('selectedLines').value = 'CloseProcesses:\nHKLM\\...\\Run: [Evil] evil.exe\n';
+    document.getElementById('responseText').value = 'Run the attached fixlist, then reboot.';
 
     saveDraftNow();
 
@@ -190,6 +225,7 @@ async function main() {
     hiddenStatuses.clear();
     copiedLineIndexes = new Set();
     document.getElementById('selectedLines').value = '';
+    document.getElementById('responseText').value = '';
 
     restoreDraft(key, stored);
 
@@ -201,6 +237,11 @@ async function main() {
     assert('the change sequence is restored so new ids do not collide', pendingChangeSequence === 2);
     assert('rule descriptions are restored', ruleDescriptionOverrides.get('1') === 'known dropper');
     assert('the fixlist text is restored', document.getElementById('selectedLines').value.indexOf('evil.exe') !== -1);
+    assert(
+        'the response text is restored',
+        document.getElementById('responseText').value === 'Run the attached fixlist, then reboot.',
+        'got ' + JSON.stringify(document.getElementById('responseText').value)
+    );
     assert('legend filters are restored', hiddenStatuses.has('status-i'));
     assert(
         'copied-line highlighting is rebuilt for lines present in the restored fixlist',
@@ -369,6 +410,7 @@ await (async function testDraftNotRestoredOntoDifferentLog() {
     // Fresh load: textareas empty, nothing selected.
     document.getElementById('logInput').value = '';
     document.getElementById('selectedLines').value = '';
+    document.getElementById('responseText').value = '';
     document.getElementById('uploadSourceSelect').value = '';
     pendingStatusChanges = new Map();
     initDraftAutosave();

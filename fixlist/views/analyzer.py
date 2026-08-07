@@ -23,7 +23,7 @@ from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
     VALID_STATUSES,
 )
-from ..models import ClassificationRule, Fixlist, FixlistSnippet, UploadedLog, UploadedLogAnalysis
+from ..models import ClassificationRule, Fixlist, FixlistSnippet, Speech, UploadedLog, UploadedLogAnalysis
 from ..rule_sets import (
     SHARED_RULE_SET_KEY,
     resolve_effective_rule_set_key,
@@ -54,6 +54,7 @@ def log_analyzer_view(request):
                 'initial_selected_lines': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
                 'is_superuser': False,
                 'snippets_json': mark_safe('[]'),
+                'speeches_json': mark_safe('[]'),
                 'fixlist_template': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
             },
         )
@@ -72,6 +73,18 @@ def log_analyzer_view(request):
             'content': s.content,
         }
         for s in snippets_qs
+    ]))
+    speeches_qs = Speech.objects.filter(
+        analyzer_users=request.user,
+    ).select_related('owner').order_by('category', 'name')
+    speeches_json = mark_safe(json.dumps([
+        {
+            'id': s.id,
+            'name': s.name if s.owner_id == request.user.id else f"{s.name} ({s.owner.username})",
+            'category': s.category,
+            'content': s.content,
+        }
+        for s in speeches_qs
     ]))
     profile = getattr(request.user, 'fenris_profile', None)
     fixlist_template = (
@@ -106,6 +119,7 @@ def log_analyzer_view(request):
             'initial_selected_lines': initial_selected_lines,
             'is_superuser': request.user.is_superuser,
             'snippets_json': snippets_json,
+            'speeches_json': speeches_json,
             'fixlist_template': fixlist_template,
         },
     )

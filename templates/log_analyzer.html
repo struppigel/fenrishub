@@ -66,6 +66,13 @@
         display: inline-block;
     }
 
+    /* These two carry an explicit display, which beats the UA [hidden] rule.
+       The right-panel picker swaps them by toggling the hidden attribute. */
+    .snippet-menu[hidden],
+    .bulk-insert-controls[hidden] {
+        display: none !important;
+    }
+
     .snippet-menu-trigger {
         cursor: pointer;
         color: var(--la-text-muted);
@@ -129,6 +136,22 @@
         display: block;
     }
 
+    /* Right-panel picker — the snippet menu's dropdown, sized for its three
+       items and marking the current selection. */
+    .panel-menu > .snippet-menu-dropdown {
+        min-width: 110px;
+    }
+
+    .panel-menu-item.is-selected {
+        color: var(--la-text-primary);
+    }
+
+    .panel-menu-item.is-selected::after {
+        content: '\2713';
+        float: right;
+        margin-left: 12px;
+    }
+
 
 </style>
 {% endblock %}
@@ -163,12 +186,23 @@
             </label>
         </div>
         {% if not is_guest %}
+        <div class="snippet-menu" id="speechMenu" hidden>
+            <button type="button" class="snippet-menu-trigger" id="speechMenuTrigger">speeches &#x25BE;</button>
+            <div class="snippet-menu-dropdown" id="speechMenuDropdown"></div>
+        </div>
         <div class="snippet-menu" id="snippetMenu">
             <button type="button" class="snippet-menu-trigger" id="snippetMenuTrigger">snippets &#x25BE;</button>
             <div class="snippet-menu-dropdown" id="snippetMenuDropdown"></div>
         </div>
         {% endif %}
-        <button type="button" id="toggleFixlistPanelButton" aria-pressed="false" title="toggle fixlist panel visibility">hide fix</button>
+        <div class="snippet-menu panel-menu" id="panelMenu">
+            <button type="button" class="snippet-menu-trigger" id="panelMenuTrigger" aria-haspopup="true" aria-expanded="false" title="choose what the right panel shows">fixlist &#x25BE;</button>
+            <div class="snippet-menu-dropdown" id="panelMenuDropdown" role="menu">
+                <div class="snippet-menu-item panel-menu-item" data-panel-view="fix" role="menuitemradio" aria-checked="true">fixlist</div>
+                <div class="snippet-menu-item panel-menu-item" data-panel-view="response" role="menuitemradio" aria-checked="false">response</div>
+                <div class="snippet-menu-item panel-menu-item" data-panel-view="hidden" role="menuitemradio" aria-checked="false">hidden</div>
+            </div>
+        </div>
         {% if not is_guest %}<button type="button" id="saveFixlistButton" class="save-fixlist-button">{% if initial_fixlist_id %}update fix{% else %}save fix{% endif %}</button>{% endif %}
     </div>
 </div>
@@ -191,7 +225,10 @@
         <textarea id="logInput" placeholder="Paste your log content here..."></textarea>
         <div id="logLines" class="log-lines-container" style="display: none;"></div>
     </div>
-    <textarea id="selectedLines">{{ initial_selected_lines }}</textarea>
+    <div class="right-panel">
+        <textarea id="selectedLines">{{ initial_selected_lines }}</textarea>
+        <textarea id="responseText" placeholder="Write the response for the user here..." title="kept in this browser's draft, not saved to the server" hidden></textarea>
+    </div>
 </div>
 
 <div id="statusLegend" class="status-legend">
@@ -318,6 +355,8 @@ window.logAnalyzerConfig = {
     initialFixlistId: "{{ initial_fixlist_id|default:''|escapejs }}",
     snippetsApiUrl: "{% url 'snippets_api' %}",
     snippets: {{ snippets_json }},
+    speechesApiUrl: "{% url 'speeches_api' %}",
+    speeches: {{ speeches_json }},
     isSuperuser: {{ is_superuser|yesno:"true,false" }},
     currentUsername: "{{ request.user.username|escapejs }}",
     guestToken: "{{ guest_token|default:''|escapejs }}",
@@ -331,90 +370,131 @@ window.logAnalyzerConfig = {
 <script defer src="{% static 'js/log_analyzer/bootstrap.js' %}"></script>
 <script>
 (function() {
-    const menu = document.getElementById('snippetMenu');
-    const trigger = document.getElementById('snippetMenuTrigger');
-    const dropdown = document.getElementById('snippetMenuDropdown');
-    if (!menu || !trigger || !dropdown) return;
+    // Two dropdowns insert stored text at the caret: `snippets` (fixlist lines)
+    // and `speeches` (canned prose). They differ only in their data, their empty
+    // label and where they insert, so they share one builder.
+    function buildInsertMenu(options) {
+        const menu = document.getElementById(options.menuId);
+        const trigger = document.getElementById(options.triggerId);
+        const dropdown = document.getElementById(options.dropdownId);
+        if (!menu || !trigger || !dropdown) return null;
 
-    let snippetsData = [];
-    let lastCursorPos = 0;
-    const selectedLines = document.getElementById('selectedLines');
+        var items = [];
+        var lastCursorPos = 0;
+        var lastCursorTarget = null;
 
-    // Save cursor position before opening menu
-    trigger.addEventListener('mousedown', function() {
-        if (selectedLines) lastCursorPos = selectedLines.selectionStart;
-    });
-
-    trigger.addEventListener('click', function(e) {
-        e.stopPropagation();
-        menu.classList.toggle('open');
-    });
-
-    // Close menu when clicking outside
-    document.addEventListener('click', function() {
-        menu.classList.remove('open');
-    });
-    dropdown.addEventListener('click', function(e) {
-        e.stopPropagation();
-    });
-
-    function insertSnippet(snippetId) {
-        var snippet = snippetsData.find(function(s) { return s.id === snippetId; });
-        if (!snippet || !selectedLines) return;
-
-        var text = selectedLines.value;
-        var pos = lastCursorPos;
-        var inserted = snippet.content.replace(/\r\n/g, '\n');
-        if (!inserted.endsWith('\n')) inserted += '\n';
-        if (pos > 0 && text[pos - 1] !== '\n') inserted = '\n' + inserted;
-
-        var before = text.substring(0, pos);
-        var after = text.substring(pos);
-        selectedLines.value = before + inserted + after;
-        var cursorPos = selectedLines.value.length - after.length;
-        lastCursorPos = cursorPos;
-
-        menu.classList.remove('open');
-        selectedLines.focus();
-        selectedLines.setSelectionRange(cursorPos, cursorPos);
-    }
-
-    function loadSnippets() {
-        snippetsData = (window.logAnalyzerConfig || {}).snippets || [];
-        dropdown.innerHTML = '';
-        // Group by category
-        var categories = {};
-        snippetsData.forEach(function(s) {
-            if (!categories[s.category]) categories[s.category] = [];
-            categories[s.category].push(s);
-        });
-        var catNames = Object.keys(categories).sort();
-        catNames.forEach(function(cat) {
-            var catItem = document.createElement('div');
-            catItem.className = 'snippet-menu-item has-submenu';
-            catItem.textContent = cat;
-            var sub = document.createElement('div');
-            sub.className = 'snippet-submenu';
-            categories[cat].forEach(function(s) {
-                var item = document.createElement('div');
-                item.className = 'snippet-menu-item';
-                item.textContent = s.name;
-                item.addEventListener('click', function() { insertSnippet(s.id); });
-                sub.appendChild(item);
-            });
-            catItem.appendChild(sub);
-            dropdown.appendChild(catItem);
-        });
-        if (catNames.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'snippet-menu-item';
-            empty.textContent = 'no snippets selected';
-            empty.style.color = 'var(--la-text-muted)';
-            dropdown.appendChild(empty);
+        function closeMenu() {
+            menu.classList.remove('open');
         }
+
+        // Save cursor position before opening menu
+        trigger.addEventListener('mousedown', function() {
+            lastCursorTarget = options.resolveTarget();
+            if (lastCursorTarget) lastCursorPos = lastCursorTarget.selectionStart;
+        });
+
+        trigger.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (window.closeRightPanelMenu) window.closeRightPanelMenu();
+            if (options.closeSiblings) options.closeSiblings();
+            menu.classList.toggle('open');
+        });
+
+        // Close menu when clicking outside
+        document.addEventListener('click', closeMenu);
+        dropdown.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
+
+        function insertItem(itemId) {
+            var entry = items.find(function(s) { return s.id === itemId; });
+            var target = lastCursorTarget || options.resolveTarget();
+            if (!entry || !target) return;
+
+            var text = target.value;
+            var pos = lastCursorPos;
+            var inserted = entry.content.replace(/\r\n/g, '\n');
+            if (!inserted.endsWith('\n')) inserted += '\n';
+            if (pos > 0 && text[pos - 1] !== '\n') inserted = '\n' + inserted;
+
+            var before = text.substring(0, pos);
+            var after = text.substring(pos);
+            target.value = before + inserted + after;
+            var cursorPos = target.value.length - after.length;
+            lastCursorPos = cursorPos;
+
+            closeMenu();
+            target.focus();
+            target.setSelectionRange(cursorPos, cursorPos);
+        }
+
+        function load() {
+            items = (window.logAnalyzerConfig || {})[options.configKey] || [];
+            dropdown.innerHTML = '';
+            // Group by category
+            var categories = {};
+            items.forEach(function(s) {
+                if (!categories[s.category]) categories[s.category] = [];
+                categories[s.category].push(s);
+            });
+            var catNames = Object.keys(categories).sort();
+            catNames.forEach(function(cat) {
+                var catItem = document.createElement('div');
+                catItem.className = 'snippet-menu-item has-submenu';
+                catItem.textContent = cat;
+                var sub = document.createElement('div');
+                sub.className = 'snippet-submenu';
+                categories[cat].forEach(function(s) {
+                    var item = document.createElement('div');
+                    item.className = 'snippet-menu-item';
+                    item.textContent = s.name;
+                    item.addEventListener('click', function() { insertItem(s.id); });
+                    sub.appendChild(item);
+                });
+                catItem.appendChild(sub);
+                dropdown.appendChild(catItem);
+            });
+            if (catNames.length === 0) {
+                var empty = document.createElement('div');
+                empty.className = 'snippet-menu-item';
+                empty.textContent = options.emptyLabel;
+                empty.style.color = 'var(--la-text-muted)';
+                dropdown.appendChild(empty);
+            }
+        }
+
+        load();
+        return { close: closeMenu };
     }
 
-    loadSnippets();
+    var snippetMenu = null;
+    var speechMenu = null;
+
+    // Snippets go into whichever right-hand panel is active (fixlist or response).
+    snippetMenu = buildInsertMenu({
+        menuId: 'snippetMenu',
+        triggerId: 'snippetMenuTrigger',
+        dropdownId: 'snippetMenuDropdown',
+        configKey: 'snippets',
+        emptyLabel: 'no snippets selected',
+        resolveTarget: function() {
+            if (window.getActiveRightTextarea) return window.getActiveRightTextarea();
+            return document.getElementById('selectedLines');
+        },
+        closeSiblings: function() { if (speechMenu) speechMenu.close(); },
+    });
+
+    // Speeches are prose, so they always go into the response panel — which is
+    // the only panel this menu is visible for.
+    speechMenu = buildInsertMenu({
+        menuId: 'speechMenu',
+        triggerId: 'speechMenuTrigger',
+        dropdownId: 'speechMenuDropdown',
+        configKey: 'speeches',
+        emptyLabel: 'no speeches selected',
+        resolveTarget: function() { return document.getElementById('responseText'); },
+        closeSiblings: function() { if (snippetMenu) snippetMenu.close(); },
+    });
 })();
 </script>
 {% endblock %}

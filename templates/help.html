@@ -92,6 +92,7 @@
             </li>
             <li><a href="#fixlists">Fixlists</a></li>
             <li><a href="#snippets">Snippets</a></li>
+            <li><a href="#speeches">Speeches</a></li>
             <li><a href="#rules">Rules</a>
                 <ul>
                     <li><a href="#rule-sets">Rule sets (shared vs private)</a></li>
@@ -287,6 +288,18 @@
     <p><strong>hide preview</strong> lets you see a more concise snippet list. Per default the preview shows the first two lines of the snippet code.</p>
 
     <img src="{% static 'images/help/10-snippets-hide-preview.png' %}" alt="Snippets list with previews hidden" loading="lazy">
+
+    <h2 id="speeches">Speeches</h2>
+
+    <p>Speeches are to your written reply what snippets are to your fixlist: reusable blocks of text that you paste into the response you write back to the user. Think greetings, instructions for running a tool, or the all-clear at the end of a case.</p>
+
+    <p>The page works exactly like <a href="#snippets">Snippets</a> - <strong>add speech</strong> creates one, every speech has a category (default <strong>generic</strong>), speeches can be shared with other helpers, and <strong>hide preview</strong> gives you a more concise list.</p>
+
+    <p>As with snippets, click <strong>select</strong> so a speech becomes available in the analyzer. To use another helper's speeches, pick their name in the combobox that says &quot;my speeches&quot; and select the ones you want.</p>
+
+    <p>In the Analyze view, switch the right panel from <strong>fixlist</strong> to <strong>response</strong> using the panel picker. The bulk <strong>add B P J !</strong> buttons are replaced by a <strong>speeches</strong> picker, since those verdicts have nothing to add to prose. Pick a speech and it is inserted at your cursor. The <strong>snippets</strong> picker stays available in both panels.</p>
+
+    <p>The response text is part of the analyzer draft, so it survives a reload or an accidentally closed tab and is offered back to you together with the fixlist. That draft lives in your browser only - it is never sent to the server, so it will not follow you to another machine.</p>
 
     <h2 id="rules">Rules</h2>
 

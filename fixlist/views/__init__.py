@@ -44,6 +44,11 @@ from .snippets import (
     snippets_api,
 )
 
+from .speeches import (
+    speeches_view,
+    speeches_api,
+)
+
 from .rules import (
     rules_view,
     add_rule_view,
@@ -98,6 +103,8 @@ __all__ = [
     'update_analyzed_line_status_api',
     'snippets_view',
     'snippets_api',
+    'speeches_view',
+    'speeches_api',
     'rules_view',
     'add_rule_view',
     'test_rule_api',

@@ -454,6 +454,47 @@ function bindLegendToggle() {
     });
 }
 
+// The right-panel picker reuses the snippet menu's markup and dismissal
+// behaviour: click the trigger to open, click anywhere else to close.
+function bindRightPanelMenu() {
+    const menu = document.getElementById('panelMenu');
+    const trigger = document.getElementById('panelMenuTrigger');
+    const dropdown = document.getElementById('panelMenuDropdown');
+    if (!menu || !trigger || !dropdown) return;
+
+    function closeMenu() {
+        menu.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+    }
+    // The snippet menu lives in an inline script in the template; let it close
+    // this one so the two dropdowns are never open at once.
+    window.closeRightPanelMenu = closeMenu;
+
+    trigger.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        ['snippetMenu', 'speechMenu'].forEach((id) => {
+            const other = document.getElementById(id);
+            if (other) other.classList.remove('open');
+        });
+        const open = menu.classList.toggle('open');
+        trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+
+    dropdown.addEventListener('click', (event) => {
+        const item = event.target.closest('[data-panel-view]');
+        event.stopPropagation();
+        if (!item) return;
+        closeMenu();
+        selectRightPanelView(item.dataset.panelView);
+    });
+
+    document.addEventListener('click', () => closeMenu());
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeMenu();
+    });
+}
+
 function bindAnalyzerControls() {
     bindAnalyzerButton('parseButton', () => parseLogs());
     bindAnalyzerButton('resetButton', () => resetToInput());
@@ -470,8 +511,7 @@ function bindAnalyzerControls() {
     bindAnalyzerButton('toggleLoadUploadButton', () => toggleUploadSourceRow());
     bindAnalyzerButton('copyFrstPathButton', () => copyFrstPathFromLog());
     bindAnalyzerButton('addRemainingCleanButton', () => addRemainingAsClean());
-    bindAnalyzerButton('toggleFixlistPanelButton', () => toggleFixlistPanel());
-    
+
     const uploadSourceSelect = document.getElementById('uploadSourceSelect');
     if (uploadSourceSelect) {
         uploadSourceSelect.addEventListener('change', () => loadSelectedUploadForAnalyzer());
@@ -484,12 +524,19 @@ function bindAnalyzerControls() {
         });
     });
 
+    bindRightPanelMenu();
+
     const selectedLinesTextarea = document.getElementById('selectedLines');
     if (selectedLinesTextarea) {
         selectedLinesTextarea.addEventListener('input', () => {
             syncCopiedIndexesWithTextarea();
             scheduleDraftSave();
         });
+    }
+
+    const responseTextarea = document.getElementById('responseText');
+    if (responseTextarea) {
+        responseTextarea.addEventListener('input', () => scheduleDraftSave());
     }
 
     const logInputTextarea = document.getElementById('logInput');
@@ -572,7 +619,9 @@ function exposeLegacyAnalyzerGlobals() {
         syncCopiedIndexesWithTextarea,
         toggleQuestionCursorMode,
         toggleCleanCursorMode,
-        toggleFixlistPanel,
+        getActiveRightTextarea,
+        setActiveRightPanel,
+        selectRightPanelView,
     });
 }
 
@@ -602,6 +651,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (typeof initFixlistPanelState === 'function') {
         initFixlistPanelState();
+    }
+    if (typeof initRightPanelState === 'function') {
+        initRightPanelState();
     }
     if (typeof initIgnoreFirewallRulesState === 'function') {
         initIgnoreFirewallRulesState();

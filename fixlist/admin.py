@@ -36,6 +36,7 @@ from .models import (
     LogTypeDetectionRule,
     ParsedFilepathExclusion,
     SiteConfig,
+    Speech,
     UploadedLog,
 )
 
@@ -803,6 +804,15 @@ class FixlistSnippetAdmin(admin.ModelAdmin):
     search_fields = ('name', 'content')
     readonly_fields = ('created_at', 'updated_at')
     fields = ('owner', 'name', 'content', 'created_at', 'updated_at')
+
+
+@admin.register(Speech)
+class SpeechAdmin(admin.ModelAdmin):
+    list_display = ('name', 'owner', 'category', 'is_shared', 'updated_at')
+    list_filter = ('owner', 'category', 'is_shared')
+    search_fields = ('name', 'content')
+    readonly_fields = ('created_at', 'updated_at')
+    fields = ('owner', 'name', 'category', 'content', 'is_shared', 'created_at', 'updated_at')
 
 
 @admin.register(UploadedLog)

@@ -825,6 +825,32 @@ class FixlistSnippet(models.Model):
         return f"{self.name} ({self.owner.username})"
 
 
+class Speech(models.Model):
+    """A reusable block of prose for the analyzer's response panel.
+
+    Mirrors FixlistSnippet: snippets are canned fixlist lines, speeches are the
+    canned paragraphs that go back to the user in the forum.
+    """
+
+    DEFAULT_CATEGORY = 'generic'
+
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='speeches')
+    name = models.CharField(max_length=255)
+    content = models.TextField()
+    category = models.CharField(max_length=255, default=DEFAULT_CATEGORY)
+    is_shared = models.BooleanField(default=False)
+    analyzer_users = models.ManyToManyField(User, related_name='analyzer_speeches', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        unique_together = ('owner', 'name')
+
+    def __str__(self):
+        return f"{self.name} ({self.owner.username})"
+
+
 class InfectionCase(models.Model):
     STATUS_OPEN = 'open'
     STATUS_CLOSED = 'closed'

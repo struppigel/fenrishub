@@ -39,6 +39,7 @@ from .views.log_type_rules import (
 )
 from .views.rules import add_rule_view, rules_view, test_rule_api
 from .views.snippets import snippets_api, snippets_toggle_analyzer_api, snippets_view
+from .views.speeches import speeches_api, speeches_toggle_analyzer_api, speeches_view
 from .views.statistics import statistics_view
 from .views.uploads import (
     diff_uploaded_logs_view,
@@ -86,6 +87,7 @@ urlpatterns = [
     path('api/fixlist/rules-preview/', preview_pending_rule_changes_api, name='preview_pending_rule_changes_api'),
     path('api/fixlist/rules-persist/', persist_pending_rule_changes_api, name='persist_pending_rule_changes_api'),
     path('fixlists/snippets/', snippets_view, name='snippets'),
+    path('speeches/', speeches_view, name='speeches'),
     path('rules/', rules_view, name='rules'),
     path('rules/add/', add_rule_view, name='add_rule'),
     path('api/rules/test/', test_rule_api, name='test_rule_api'),
@@ -97,6 +99,8 @@ urlpatterns = [
     path('api/log-types/test/', test_log_type_api, name='test_log_type_api'),
     path('api/snippets/', snippets_api, name='snippets_api'),
     path('api/snippets/toggle-analyzer/', snippets_toggle_analyzer_api, name='snippets_toggle_analyzer_api'),
+    path('api/speeches/', speeches_api, name='speeches_api'),
+    path('api/speeches/toggle-analyzer/', speeches_toggle_analyzer_api, name='speeches_toggle_analyzer_api'),
     path('fixlist/<int:pk>/', view_fixlist, name='view_fixlist'),
     path('share/<str:token>/', shared_fixlist_view, name='shared_fixlist'),
     path('download/<str:token>/', download_fixlist, name='download_fixlist'),

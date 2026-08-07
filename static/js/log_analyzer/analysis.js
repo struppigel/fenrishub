@@ -57,17 +57,48 @@ const FIXLIST_PANEL_HIDDEN_KEY = 'fenrishub_fixlist_panel_hidden';
 const IGNORE_FIREWALL_RULES_KEY = 'fenrishub_ignore_firewall_rules';
 let fixlistPanelHidden = false;
 
+// The right column hosts two editors — the fixlist and the (not yet persisted)
+// response to the user — and shows one at a time. Both stay in the DOM while
+// the other is showing, so the browser keeps their text, caret and scroll
+// position across a switch. Which one is up, and whether the column is
+// collapsed at all, is picked from a single dropdown ("fixlist" / "response" /
+// "hidden").
+//
+// The collapsed flag is kept separate from the fix/response choice on purpose:
+// inserting a line must not re-open a column the analyst deliberately
+// collapsed to get a full-width log view.
+const ACTIVE_RIGHT_PANEL_KEY = 'fenrishub_right_panel_active';
+let activeRightPanel = 'fix';
+
+function getActiveRightTextarea() {
+    return document.getElementById(activeRightPanel === 'response' ? 'responseText' : 'selectedLines');
+}
+
+function currentRightPanelView() {
+    return fixlistPanelHidden ? 'hidden' : activeRightPanel;
+}
+
+const RIGHT_PANEL_VIEW_LABELS = { fix: 'fixlist', response: 'response', hidden: 'hidden' };
+
+function applyRightPanelMenuState() {
+    const view = currentRightPanelView();
+    const trigger = document.getElementById('panelMenuTrigger');
+    if (trigger) {
+        trigger.textContent = RIGHT_PANEL_VIEW_LABELS[view] + ' ▾';
+    }
+    document.querySelectorAll('[data-panel-view]').forEach((item) => {
+        const isSelected = item.dataset.panelView === view;
+        item.classList.toggle('is-selected', isSelected);
+        item.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+    });
+}
+
 function applyFixlistPanelState() {
     const box = document.querySelector('.textareas-box');
     if (box) {
         box.classList.toggle('fixlist-hidden', fixlistPanelHidden);
     }
-    const button = document.getElementById('toggleFixlistPanelButton');
-    if (button) {
-        button.setAttribute('aria-pressed', fixlistPanelHidden ? 'true' : 'false');
-        button.classList.toggle('is-active', fixlistPanelHidden);
-        button.textContent = fixlistPanelHidden ? 'show fix' : 'hide fix';
-    }
+    applyRightPanelMenuState();
 }
 
 function initFixlistPanelState() {
@@ -79,12 +110,73 @@ function initFixlistPanelState() {
     applyFixlistPanelState();
 }
 
-function toggleFixlistPanel() {
-    fixlistPanelHidden = !fixlistPanelHidden;
+function setFixlistPanelHidden(hidden) {
+    if (hidden === fixlistPanelHidden) return;
+    fixlistPanelHidden = hidden;
     try {
         localStorage.setItem(FIXLIST_PANEL_HIDDEN_KEY, fixlistPanelHidden ? '1' : '0');
     } catch (e) {}
     applyFixlistPanelState();
+}
+
+function applyRightPanelState() {
+    const fixlist = document.getElementById('selectedLines');
+    const response = document.getElementById('responseText');
+    if (fixlist) fixlist.hidden = activeRightPanel !== 'fix';
+    if (response) response.hidden = activeRightPanel !== 'response';
+
+    // The bulk "add B P J ! / ignore FW" group only makes sense for the
+    // fixlist; while the response is up the speeches picker takes its place.
+    const writingResponse = activeRightPanel === 'response';
+    const bulkControls = document.querySelector('.bulk-insert-controls');
+    if (bulkControls) bulkControls.hidden = writingResponse;
+    const speechMenu = document.getElementById('speechMenu');
+    if (speechMenu) speechMenu.hidden = !writingResponse;
+
+    applyRightPanelMenuState();
+}
+
+function setActiveRightPanel(panel, { focus = true } = {}) {
+    const target = panel === 'response' ? 'response' : 'fix';
+    if (target === activeRightPanel) return;
+    activeRightPanel = target;
+    try {
+        localStorage.setItem(ACTIVE_RIGHT_PANEL_KEY, activeRightPanel);
+    } catch (e) {}
+    applyRightPanelState();
+    if (focus) {
+        const textarea = getActiveRightTextarea();
+        if (textarea) textarea.focus();
+    }
+}
+
+function initRightPanelState() {
+    try {
+        // 'speech' is the pre-rename value; treat it as 'response'.
+        const stored = localStorage.getItem(ACTIVE_RIGHT_PANEL_KEY);
+        activeRightPanel = (stored === 'response' || stored === 'speech') ? 'response' : 'fix';
+    } catch (e) {
+        activeRightPanel = 'fix';
+    }
+    applyRightPanelState();
+}
+
+// The single entry point behind the picker.
+function selectRightPanelView(view) {
+    if (view === 'hidden') {
+        setFixlistPanelHidden(true);
+        return;
+    }
+    setFixlistPanelHidden(false);
+    setActiveRightPanel(view);
+    const textarea = getActiveRightTextarea();
+    if (textarea) textarea.focus();
+}
+
+// Inserting or removing a line always targets the fixlist, so flip back to it
+// to keep the edit visible. A collapsed column stays collapsed.
+function ensureFixlistPanelActive() {
+    setActiveRightPanel('fix');
 }
 
 function initIgnoreFirewallRulesState() {
@@ -1526,6 +1618,7 @@ function fixlistTextForEntry(entry) {
 }
 
 function removeLine(line, index) {
+    ensureFixlistPanelActive();
     const textarea = document.getElementById('selectedLines');
     const cursorPos = textarea.selectionStart;
     const effectiveLine = fixlistTextForEntry(analyzedLines[index]) || line;
@@ -1591,6 +1684,7 @@ function insertLine(line, index) {
         return;
     }
 
+    ensureFixlistPanelActive();
     const textarea = document.getElementById('selectedLines');
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
@@ -1609,6 +1703,7 @@ function insertLine(line, index) {
 }
 
 function insertAllStatus(status) {
+    ensureFixlistPanelActive();
     syncCopiedIndexesWithTextarea();
     const textarea = document.getElementById('selectedLines');
     let insertPosition = textarea.selectionStart;

@@ -1,10 +1,11 @@
 // Autosave / restore for in-progress analyzer work.
 //
 // Nothing the analyst does between "load log" and "save fix" reaches the server:
-// the fixlist lives in the #selectedLines textarea and every manual
+// the fixlist lives in the #selectedLines textarea, the reply to the user lives in
+// #responseText (which has no server-side home at all), and every manual
 // reclassification lives in the pendingStatusChanges Map. Closing the tab used to
-// destroy both. This module mirrors that state into localStorage on a debounce and
-// offers it back on the next visit.
+// destroy all of it. This module mirrors that state into localStorage on a debounce
+// and offers it back on the next visit.
 //
 // localStorage only, by design: it covers the accidental-tab-close case, and it is
 // the only option that also works for anonymous and guest sessions, which have no
@@ -25,6 +26,7 @@ let draftSaveTimer = null;
 let draftIntervalTimer = null;
 let draftLastFingerprint = '';
 let draftInitialSelectedLines = '';
+let draftInitialResponseText = '';
 let draftRestorePending = false;
 let draftUnloadGuardBound = false;
 let suppressUnloadGuard = false;
@@ -146,6 +148,7 @@ function serializeRuleDescriptionOverrides() {
 function buildDraftPayload(now) {
     const logInputEl = document.getElementById('logInput');
     const selectedLinesEl = document.getElementById('selectedLines');
+    const responseTextEl = document.getElementById('responseText');
     const logLinesEl = document.getElementById('logLines');
     const logInputValue = logInputEl ? logInputEl.value : '';
     const uploadId = getCurrentUploadId();
@@ -157,6 +160,7 @@ function buildDraftPayload(now) {
         fixlistId: EDIT_FIXLIST_ID || '',
         logInputHash: hashDraftText(logInputValue),
         selectedLines: selectedLinesEl ? selectedLinesEl.value : '',
+        responseText: responseTextEl ? responseTextEl.value : '',
         pendingStatusChanges: [...pendingStatusChanges.entries()],
         pendingChangeSequence,
         ruleDescriptionOverrides: serializeRuleDescriptionOverrides(),
@@ -176,6 +180,7 @@ function buildDraftPayload(now) {
 function draftFingerprint() {
     const logInputEl = document.getElementById('logInput');
     const selectedLinesEl = document.getElementById('selectedLines');
+    const responseTextEl = document.getElementById('responseText');
     return [
         pendingStatusChanges.size,
         pendingChangeSequence,
@@ -183,12 +188,19 @@ function draftFingerprint() {
         hiddenStatuses.size,
         logInputEl ? logInputEl.value.length : 0,
         selectedLinesEl ? selectedLinesEl.value.length : 0,
+        responseTextEl ? responseTextEl.value.length : 0,
     ].join('|');
 }
 
 // True when there is analyst work that only exists in the browser.
 function hasUnsavedAnalyzerWork() {
     if (pendingStatusChanges.size > 0) {
+        return true;
+    }
+    // The response is never written to the server, so any text in it at all is
+    // work that only the draft can preserve.
+    const responseTextEl = document.getElementById('responseText');
+    if (responseTextEl && normalizeDraftNewlines(responseTextEl.value) !== draftInitialResponseText) {
         return true;
     }
     const selectedLinesEl = document.getElementById('selectedLines');
@@ -218,6 +230,7 @@ function persistDraftPayload(key, payload) {
         fixlistId: payload.fixlistId,
         logInputHash: payload.logInputHash,
         selectedLines: payload.selectedLines,
+        responseText: payload.responseText,
         pendingStatusChanges: payload.pendingStatusChanges,
         pendingChangeSequence: payload.pendingChangeSequence,
         ruleDescriptionOverrides: payload.ruleDescriptionOverrides,
@@ -340,6 +353,9 @@ function draftIsWorthOffering(payload) {
     if (changeCount > 0) {
         return true;
     }
+    if (normalizeDraftNewlines(payload.responseText).trim().length > 0) {
+        return true;
+    }
     return normalizeDraftNewlines(payload.selectedLines) !== draftInitialSelectedLines;
 }
 
@@ -378,10 +394,18 @@ function describeDraft(payload) {
         .split('\n')
         .filter((segment) => segment.trim().length > 0).length;
 
-    const parts = [`Draft from ${formatDraftTimestamp(payload.savedAt)}`];
-    parts.push(`${changeCount} status change${changeCount === 1 ? '' : 's'}`);
-    parts.push(`${fixlistLineCount} fixlist line${fixlistLineCount === 1 ? '' : 's'}`);
-    return `${parts[0]} - ${parts[1]}, ${parts[2]}.`;
+    const details = [
+        `${changeCount} status change${changeCount === 1 ? '' : 's'}`,
+        `${fixlistLineCount} fixlist line${fixlistLineCount === 1 ? '' : 's'}`,
+    ];
+
+    // Only worth mentioning when there is one; most drafts have no response.
+    const responseChars = normalizeDraftNewlines(payload.responseText).trim().length;
+    if (responseChars > 0) {
+        details.push(`a response of ${responseChars} character${responseChars === 1 ? '' : 's'}`);
+    }
+
+    return `Draft from ${formatDraftTimestamp(payload.savedAt)} - ${details.join(', ')}.`;
 }
 
 function dismissDraftPrompt() {
@@ -541,6 +565,11 @@ async function restoreDraft(key, payload) {
         restoreCopiedIndexesFromTextarea();
     }
 
+    const responseTextEl = document.getElementById('responseText');
+    if (responseTextEl && typeof payload.responseText === 'string') {
+        responseTextEl.value = payload.responseText;
+    }
+
     restoreHiddenStatuses(payload);
 
     const logLinesEl = document.getElementById('logLines');
@@ -597,6 +626,8 @@ function setSuppressUnloadGuard(value) {
 function initDraftAutosave() {
     const selectedLinesEl = document.getElementById('selectedLines');
     draftInitialSelectedLines = normalizeDraftNewlines(selectedLinesEl ? selectedLinesEl.value : '');
+    const responseTextEl = document.getElementById('responseText');
+    draftInitialResponseText = normalizeDraftNewlines(responseTextEl ? responseTextEl.value : '');
     draftLastFingerprint = draftFingerprint();
 
     pruneDraftIndex(new Date().getTime());

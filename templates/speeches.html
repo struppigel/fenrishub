@@ -1,0 +1,472 @@
+{% extends 'base.html' %}
+
+{% block title %}Speeches - Fenris{% endblock %}
+
+{% block page_context_label %}speeches{% endblock %}
+
+{% block extra_css %}
+<style>
+    .speech-item {
+        padding: 10px;
+        margin-bottom: 8px;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border);
+    }
+
+    .speech-item:hover {
+        border-color: var(--la-border-strong);
+    }
+
+    .speech-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+    }
+
+    .speech-name {
+        font-size: 13px;
+        color: var(--la-text-neutral);
+        font-weight: 600;
+    }
+
+    .speech-content-preview {
+        font-size: 12px;
+        color: var(--la-text-muted);
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        display: -webkit-box;
+        line-clamp: 2;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    body.speeches-compact .speech-content-preview {
+        display: none;
+    }
+
+    body.speeches-compact .speech-item {
+        padding: 4px 10px;
+        margin-bottom: 4px;
+    }
+
+    body.speeches-compact .speech-header {
+        margin-bottom: 0;
+    }
+
+    .speech-actions {
+        display: flex;
+        gap: 8px;
+        flex-shrink: 0;
+    }
+
+    .speech-actions .action-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 32px;
+        padding: 0 10px;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-primary);
+        border: 1px solid var(--la-border);
+        font-size: 12px;
+        font-family: inherit;
+        line-height: 1;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+
+    .speech-actions .action-btn:hover {
+        text-decoration: underline;
+    }
+
+    .speech-actions .delete-btn {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+        border-color: var(--la-error-border);
+    }
+
+    .speech-actions .analyzer-btn {
+        font-size: 11px;
+        width: 72px;
+        text-align: center;
+    }
+
+    .speech-actions .analyzer-btn.active {
+        background-color: color-mix(in srgb, var(--la-status-c) 15%, var(--la-bg-1));
+        border-color: var(--la-status-c);
+        color: var(--la-status-c);
+    }
+
+    .speech-form-section {
+        margin-bottom: 16px;
+        padding: 10px;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border);
+    }
+
+    /* Speeches are prose, not fixlist lines — keep the page font and give them
+       room, since they run longer than a snippet. */
+    .speech-form-section textarea {
+        min-height: 160px;
+        font-family: inherit;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    #createSection, #editSection {
+        display: none;
+    }
+
+    .shared-badge, .category-badge {
+        font-size: 10px;
+        color: var(--la-text-muted);
+        font-weight: normal;
+    }
+
+    .checkbox-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--la-text-neutral);
+        cursor: pointer;
+    }
+
+    .speeches-toolbar {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+        align-items: center;
+    }
+
+    .speech-owner {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        font-weight: normal;
+    }
+
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 16px;
+    }
+
+    .modal-card {
+        width: min(900px, 100%);
+        max-height: 90vh;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border-strong);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px;
+        border-bottom: 1px solid var(--la-border);
+    }
+
+    .modal-title {
+        font-size: 13px;
+        color: var(--la-text-primary);
+        font-weight: 600;
+    }
+
+    .modal-body {
+        padding: 10px;
+        overflow: auto;
+    }
+
+    .modal-content {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        color: var(--la-text-primary);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div>
+    <div id="createSection" class="speech-form-section">
+        <h3>new speech</h3>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create">
+            <div class="form-group">
+                <label for="createName">name</label>
+                <input type="text" id="createName" name="name" placeholder="Speech name..." required>
+            </div>
+            <div class="form-group">
+                <label for="createCategory">category</label>
+                <input type="text" id="createCategory" name="category" value="generic" list="categoryList" placeholder="Category...">
+            </div>
+            <div class="form-group">
+                <label for="createContent">content</label>
+                <textarea id="createContent" name="content" placeholder="Text to paste into the response..." required></textarea>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label"><input type="checkbox" name="is_shared" checked> shared with all users</label>
+            </div>
+            <div class="button-group">
+                <button type="submit">create</button>
+            </div>
+        </form>
+    </div>
+
+    <div id="editSection" class="speech-form-section">
+        <h3>edit speech</h3>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="edit">
+            <input type="hidden" name="pk" id="editPk">
+            <div class="form-group">
+                <label for="editName">name</label>
+                <input type="text" id="editName" name="name" required>
+            </div>
+            <div class="form-group">
+                <label for="editCategory">category</label>
+                <input type="text" id="editCategory" name="category" list="categoryList" placeholder="Category...">
+            </div>
+            <div class="form-group">
+                <label for="editContent">content</label>
+                <textarea id="editContent" name="content" required></textarea>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label"><input type="checkbox" name="is_shared" id="editIsShared"> shared with all users</label>
+            </div>
+            <div class="button-group">
+                <button type="submit">save</button>
+                <button type="button" onclick="cancelEdit()">cancel</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="divider"></div>
+
+    <datalist id="categoryList">
+        {% for cat in categories %}
+        <option value="{{ cat }}">
+        {% endfor %}
+    </datalist>
+
+    <form method="get" action="{% url 'speeches' %}" class="speeches-toolbar">
+        <select name="category" onchange="this.form.submit()" style="width: auto; padding: 4px 8px;">
+            <option value="">all categories</option>
+            {% for cat in categories %}
+            <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="q" value="{{ search_query }}" placeholder="search by name, content" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
+        {% if sharing_users %}
+        <select name="shared_by" onchange="this.form.submit()" style="width: auto; padding: 4px 8px;">
+            <option value="">my speeches</option>
+            {% for u in sharing_users %}
+            <option value="{{ u.username }}" {% if shared_by == u.username %}selected{% endif %}>+ {{ u.username }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
+        <span style="flex: 1;"></span>
+        <button type="button" id="togglePreviewButton" aria-pressed="false">hide previews</button>
+        <button type="button" onclick="showCreate()">add speech</button>
+    </form>
+
+    {% if speeches %}
+        {% for speech in speeches %}
+        <div class="speech-item">
+            <div class="speech-header">
+                <span class="speech-name">{{ speech.name }} <span class="category-badge">[{{ speech.category }}]</span>{% if speech.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if shared_by %} <span class="speech-owner">by {{ speech.owner.username }}</span>{% endif %}</span>
+                <div class="speech-actions">
+                    <button type="button" class="action-btn analyzer-btn{% if speech.pk in analyzer_speech_ids %} active{% endif %}" data-toggle-pk="{{ speech.pk }}" title="{% if speech.pk in analyzer_speech_ids %}deselect speech from log analyzer{% else %}select speech to be available in log analyzer{% endif %}">{% if speech.pk in analyzer_speech_ids %}selected{% else %}select{% endif %}</button>
+                    <button type="button" class="action-btn view-btn" data-name="{{ speech.name|escapejs }}" data-content-id="speech-content-{{ speech.pk }}">view</button>
+                    {% if speech.owner_id == request.user.id %}
+                    <button type="button" class="action-btn edit-btn" data-pk="{{ speech.pk }}" data-name="{{ speech.name|escapejs }}" data-category="{{ speech.category|escapejs }}" data-content-id="speech-content-{{ speech.pk }}" data-is-shared="{% if speech.is_shared %}1{% else %}0{% endif %}">edit</button>
+                    <form method="post" style="display: inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="pk" value="{{ speech.pk }}">
+                        <button type="submit" class="action-btn delete-btn" onclick="return confirm('Delete speech &quot;{{ speech.name|escapejs }}&quot;?');">delete</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="speech-content-preview">{{ speech.content }}</div>
+            <pre id="speech-content-{{ speech.pk }}" style="display:none;">{{ speech.content }}</pre>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="info-box">
+            no speeches yet.
+        </div>
+    {% endif %}
+
+    {% if page_obj.paginator.num_pages > 1 %}
+    <div class="button-group" style="margin-top: 12px;">
+        {% if page_obj.has_previous %}
+        <a href="?{% if pagination_query %}{{ pagination_query }}&{% endif %}page={{ page_obj.previous_page_number }}"><button type="button">previous</button></a>
+        {% endif %}
+        <span style="padding: 8px 4px; font-size: 12px; color: var(--la-text-muted);">page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+        {% if page_obj.has_next %}
+        <a href="?{% if pagination_query %}{{ pagination_query }}&{% endif %}page={{ page_obj.next_page_number }}"><button type="button">next</button></a>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<div id="viewModal" class="modal-overlay" onclick="closeViewModal(event)">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="viewModalTitle">
+        <div class="modal-header">
+            <span id="viewModalTitle" class="modal-title">speech</span>
+            <button type="button" class="action-btn" onclick="closeViewModal()">close</button>
+        </div>
+        <div class="modal-body">
+            <pre id="viewModalContent" class="modal-content"></pre>
+        </div>
+    </div>
+</div>
+
+<script>
+function startEdit(pk, name, category, content, isShared) {
+    document.getElementById('editPk').value = pk;
+    document.getElementById('editName').value = name;
+    document.getElementById('editCategory').value = category;
+    document.getElementById('editContent').value = content;
+    document.getElementById('editIsShared').checked = isShared;
+    document.getElementById('editSection').style.display = 'block';
+    document.getElementById('createSection').style.display = 'none';
+    document.getElementById('editName').focus();
+}
+
+function startEditById(pk, name, category, contentElementId, isShared) {
+    const contentElement = document.getElementById(contentElementId);
+    startEdit(pk, name, category, contentElement ? contentElement.textContent : '', isShared);
+}
+
+function showCreate() {
+    document.getElementById('editSection').style.display = 'none';
+    document.getElementById('createSection').style.display = 'block';
+    document.getElementById('createName').focus();
+}
+
+function cancelEdit() {
+    document.getElementById('editSection').style.display = 'none';
+    document.getElementById('createSection').style.display = 'none';
+}
+
+function openViewModal(name, content) {
+    document.getElementById('viewModalTitle').textContent = name;
+    document.getElementById('viewModalContent').textContent = content;
+    document.getElementById('viewModal').style.display = 'flex';
+}
+
+function openViewModalById(name, contentElementId) {
+    const contentElement = document.getElementById(contentElementId);
+    openViewModal(name, contentElement ? contentElement.textContent : '');
+}
+
+function closeViewModal(event) {
+    if (event && event.target !== event.currentTarget) {
+        return;
+    }
+    document.getElementById('viewModal').style.display = 'none';
+}
+
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        closeViewModal();
+    }
+});
+
+document.querySelectorAll('.view-btn').forEach(function(button) {
+    button.addEventListener('click', function() {
+        openViewModalById(button.dataset.name || '', button.dataset.contentId || '');
+    });
+});
+
+document.querySelectorAll('.edit-btn').forEach(function(button) {
+    button.addEventListener('click', function() {
+        startEditById(
+            Number(button.dataset.pk || 0),
+            button.dataset.name || '',
+            button.dataset.category || '',
+            button.dataset.contentId || '',
+            button.dataset.isShared === '1'
+        );
+    });
+});
+
+const SPEECHES_COMPACT_KEY = 'fenrishub_speeches_compact';
+
+function applySpeechesCompactState(compact) {
+    document.body.classList.toggle('speeches-compact', compact);
+    const button = document.getElementById('togglePreviewButton');
+    if (button) {
+        button.setAttribute('aria-pressed', compact ? 'true' : 'false');
+        button.textContent = compact ? 'show previews' : 'hide previews';
+    }
+}
+
+function setSpeechesCompactCookie(compact) {
+    const maxAge = 60 * 60 * 24 * 365;
+    document.cookie = 'fenrishub_speeches_compact=' + (compact ? '1' : '0') +
+        '; path=/; max-age=' + maxAge + '; SameSite=Lax';
+}
+
+(function initSpeechesCompact() {
+    let compact = false;
+    try {
+        compact = localStorage.getItem(SPEECHES_COMPACT_KEY) === '1';
+    } catch (e) {}
+    applySpeechesCompactState(compact);
+    setSpeechesCompactCookie(compact);
+    const button = document.getElementById('togglePreviewButton');
+    if (button) {
+        button.addEventListener('click', function() {
+            const next = !document.body.classList.contains('speeches-compact');
+            try {
+                localStorage.setItem(SPEECHES_COMPACT_KEY, next ? '1' : '0');
+            } catch (e) {}
+            setSpeechesCompactCookie(next);
+            const url = new URL(window.location.href);
+            url.searchParams.delete('page');
+            window.location.href = url.toString();
+        });
+    }
+})();
+
+document.querySelectorAll('[data-toggle-pk]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var pk = btn.dataset.togglePk;
+        var formData = new FormData();
+        formData.append('pk', pk);
+        fetch('{% url "speeches_toggle_analyzer_api" %}', {
+            method: 'POST',
+            headers: {'X-CSRFToken': '{{ csrf_token }}'},
+            body: formData,
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.selected) {
+                btn.classList.add('active');
+                btn.textContent = 'selected';
+                btn.title = 'deselect speech from log analyzer';
+            } else {
+                btn.classList.remove('active');
+                btn.textContent = 'select';
+                btn.title = 'select speech to be available in log analyzer';
+            }
+        });
+    });
+});
+</script>
+{% endblock %}
