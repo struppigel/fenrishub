@@ -115,6 +115,13 @@
         line-height: 1.5;
     }
 
+    .speech-form-section .field-help {
+        color: var(--la-text-muted);
+        font-size: 12px;
+        margin-top: -2px;
+        margin-bottom: 6px;
+    }
+
     #createSection, #editSection {
         display: none;
     }
@@ -213,6 +220,7 @@
             </div>
             <div class="form-group">
                 <label for="createContent">content</label>
+                <div class="field-help">Placeholders, filled in when you insert the speech in the log analyzer: <code>{HELPERNAME}</code> your name, <code>{USERNAME}</code> the forum user of the loaded log, <code>{UPLOADLINK_USER}</code> an upload link addressed to that user, <code>{UPLOADLINK_GENERAL}</code> the general upload link. <code>{USERNAME}</code> and <code>{UPLOADLINK_USER}</code> need a loaded log - without one they are left as they are.</div>
                 <textarea id="createContent" name="content" placeholder="Text to paste into the response..." required></textarea>
             </div>
             <div class="form-group">
@@ -240,6 +248,7 @@
             </div>
             <div class="form-group">
                 <label for="editContent">content</label>
+                <div class="field-help">Placeholders, filled in when you insert the speech in the log analyzer: <code>{HELPERNAME}</code> your name, <code>{USERNAME}</code> the forum user of the loaded log, <code>{UPLOADLINK_USER}</code> an upload link addressed to that user, <code>{UPLOADLINK_GENERAL}</code> the general upload link. <code>{USERNAME}</code> and <code>{UPLOADLINK_USER}</code> need a loaded log - without one they are left as they are.</div>
                 <textarea id="editContent" name="content" required></textarea>
             </div>
             <div class="form-group">

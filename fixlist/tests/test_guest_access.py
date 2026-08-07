@@ -51,6 +51,18 @@ class GuestAnalyzerAccessTests(TestCase):
         self.assertIn('id="parseButton"', body)
         # Guest token must be exposed to JS for API calls.
         self.assertIn(f'guestToken: "{GUEST_TOKEN}"', body)
+        self.assertNotIn('id="speechMenu"', body)
+
+    def test_guest_gets_no_per_helper_upload_link(self):
+        """A guest has no username, so {UPLOADLINK_USER} must stay literal."""
+        _set_guest_token()
+        response = self.client.get(reverse('log_analyzer') + f'?guest={GUEST_TOKEN}')
+
+        self.assertEqual(response.context['upload_link_helper_base'], '')
+        self.assertEqual(
+            response.context['upload_link_general'],
+            'http://testserver' + reverse('upload_log'),
+        )
 
     def test_analyzer_does_not_leak_uploaded_logs_to_guests(self):
         _set_guest_token()

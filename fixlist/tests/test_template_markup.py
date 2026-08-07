@@ -40,3 +40,20 @@ class TemplateMarkupTests(TestCase):
     def test_profile_template_mentions_frstpath_placeholder(self):
         content = self._read_template("profile.html")
         self.assertIn("{FRSTPATH}", content)
+
+    def test_speeches_template_documents_every_supported_placeholder(self):
+        """The help text must not drift from applySpeechPlaceholders() in shared.js."""
+        content = self._read_template("speeches.html")
+        # One help block under the create form's content field, one under the edit form's.
+        self.assertEqual(content.count('class="field-help"'), 2)
+        for placeholder in ("{HELPERNAME}", "{USERNAME}", "{UPLOADLINK_USER}", "{UPLOADLINK_GENERAL}"):
+            with self.subTest(placeholder=placeholder):
+                # At least once per form; some are also named again in the caveat sentence.
+                self.assertGreaterEqual(content.count(placeholder), 2)
+
+    def test_shared_js_resolves_every_documented_placeholder(self):
+        project_root = Path(__file__).resolve().parent.parent.parent
+        content = (project_root / "static" / "js" / "log_analyzer" / "shared.js").read_text(encoding="utf-8")
+        for placeholder in ("{HELPERNAME}", "{USERNAME}", "{UPLOADLINK_USER}", "{UPLOADLINK_GENERAL}"):
+            with self.subTest(placeholder=placeholder):
+                self.assertIn(f"'{placeholder}'", content)

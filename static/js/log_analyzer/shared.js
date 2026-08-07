@@ -60,6 +60,49 @@ const PERSIST_RULE_CHANGES_URL = analyzerConfig.persistRuleChangesUrl || '';
 const CREATE_FIXLIST_URL = analyzerConfig.createFixlistUrl || '';
 const EDIT_FIXLIST_ID = analyzerConfig.initialFixlistId || '';
 const CURRENT_USERNAME = analyzerConfig.currentUsername || '';
+const UPLOAD_LINK_HELPER_BASE = analyzerConfig.uploadLinkHelperBase || '';
+const UPLOAD_LINK_GENERAL = analyzerConfig.uploadLinkGeneral || '';
+
+// The forum username of the upload currently loaded in the analyzer. Set from
+// the upload content payload; cleared when the selection is cleared, so one
+// case's user never bleeds into the next case's reply.
+let currentForumUsername = '';
+
+function setCurrentForumUsername(name) {
+    currentForumUsername = String(name === null || name === undefined ? '' : name).trim();
+}
+
+// Speeches carry placeholders that are resolved the moment one is inserted into
+// the response panel — {USERNAME} depends on which upload is loaded right now,
+// so this cannot be done server-side. Mirrors copyFrstFixMessage() in
+// view_fixlist.html: a split/join global replace, no regex escaping needed.
+//
+// A token with no value is deliberately left in the text. A visible {USERNAME}
+// is a prompt to fill it in; a silent "Hi ," or a link missing its ?u= is a
+// message you send without noticing.
+function applySpeechPlaceholders(text) {
+    const replacements = {};
+    if (CURRENT_USERNAME) {
+        replacements['{HELPERNAME}'] = CURRENT_USERNAME;
+    }
+    if (currentForumUsername) {
+        replacements['{USERNAME}'] = currentForumUsername;
+    }
+    if (UPLOAD_LINK_HELPER_BASE && currentForumUsername) {
+        replacements['{UPLOADLINK_USER}'] =
+            `${UPLOAD_LINK_HELPER_BASE}?u=${encodeURIComponent(currentForumUsername)}`;
+    }
+    if (UPLOAD_LINK_GENERAL) {
+        replacements['{UPLOADLINK_GENERAL}'] = UPLOAD_LINK_GENERAL;
+    }
+
+    let result = String(text === null || text === undefined ? '' : text);
+    Object.keys(replacements).forEach((token) => {
+        result = result.split(token).join(replacements[token]);
+    });
+    return result;
+}
+
 const RULE_SUBMIT_TARGET_CREATE_FIXLIST = 'create_fixlist';
 const RULE_SUBMIT_TARGET_RESCAN = 'rescan';
 let statusPickerBusy = false;

@@ -227,6 +227,30 @@ class SpeechViewTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
 
+    def test_analyzer_page_exposes_upload_link_bases(self):
+        response = self.client.get(reverse('log_analyzer'))
+
+        self.assertEqual(
+            response.context['upload_link_helper_base'],
+            'http://testserver' + reverse('upload_log_for_helper', args=['alice']),
+        )
+        self.assertEqual(
+            response.context['upload_link_general'],
+            'http://testserver' + reverse('upload_log'),
+        )
+        self.assertContains(response, 'uploadLinkHelperBase')
+        self.assertContains(response, 'uploadLinkGeneral')
+
+    def test_speech_placeholders_are_stored_verbatim(self):
+        """Substitution happens on insert in the browser; the DB keeps the tokens."""
+        content = 'Hi {USERNAME}, upload via {UPLOADLINK_USER} - {HELPERNAME}'
+        self.client.post(reverse('speeches'), {
+            'action': 'create', 'name': 'greeting', 'content': content,
+        })
+
+        speech = Speech.objects.get(name='greeting')
+        self.assertEqual(speech.content, content)
+
     def test_analyzer_page_exposes_selected_speeches(self):
         speech = Speech.objects.create(owner=self.user, name='analyzer speech', content='hello there')
         speech.analyzer_users.add(self.user)

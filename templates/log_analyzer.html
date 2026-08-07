@@ -357,6 +357,8 @@ window.logAnalyzerConfig = {
     snippets: {{ snippets_json }},
     speechesApiUrl: "{% url 'speeches_api' %}",
     speeches: {{ speeches_json }},
+    uploadLinkHelperBase: "{{ upload_link_helper_base|default:''|escapejs }}",
+    uploadLinkGeneral: "{{ upload_link_general|default:''|escapejs }}",
     isSuperuser: {{ is_superuser|yesno:"true,false" }},
     currentUsername: "{{ request.user.username|escapejs }}",
     guestToken: "{{ guest_token|default:''|escapejs }}",
@@ -413,7 +415,8 @@ window.logAnalyzerConfig = {
 
             var text = target.value;
             var pos = lastCursorPos;
-            var inserted = entry.content.replace(/\r\n/g, '\n');
+            var content = options.transform ? options.transform(entry.content) : entry.content;
+            var inserted = content.replace(/\r\n/g, '\n');
             if (!inserted.endsWith('\n')) inserted += '\n';
             if (pos > 0 && text[pos - 1] !== '\n') inserted = '\n' + inserted;
 
@@ -493,6 +496,9 @@ window.logAnalyzerConfig = {
         configKey: 'speeches',
         emptyLabel: 'no speeches selected',
         resolveTarget: function() { return document.getElementById('responseText'); },
+        // {HELPERNAME} / {USERNAME} / {UPLOADLINK_*} are resolved on insert.
+        // Snippets deliberately get no transform and stay literal.
+        transform: function(text) { return applySpeechPlaceholders(text); },
         closeSiblings: function() { if (snippetMenu) snippetMenu.close(); },
     });
 })();

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<!--
+  Tests for applySpeechPlaceholders() in shared.js.
+
+  Speeches are canned prose inserted into the analyzer's response panel. They
+  carry placeholders that are resolved at insert time, because {USERNAME}
+  depends on which upload is loaded right now — something only the browser
+  knows.
+
+  The rule that matters most here: a token with no value is LEFT AS IS, never
+  blanked. A visible {USERNAME} is a prompt to fill it in; a silent "Hi ," or an
+  upload link missing its ?u= is a message you send to a user without noticing.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>shared.js applySpeechPlaceholders tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>shared.js – applySpeechPlaceholders tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<script>
+// shared.js reads these at load time.
+window.logAnalyzerConfig = {
+    currentUsername: 'alice',
+    uploadLinkHelperBase: 'https://fenris.test/upload/alice/',
+    uploadLinkGeneral: 'https://fenris.test/upload/',
+};
+</script>
+
+<script src="../shared.js"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Tiny test harness (same shape as test_legend_counts.html)
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+function assertEqual(description, actual, expected) {
+    assert(description, actual === expected, 'got ' + JSON.stringify(actual));
+}
+
+// ---------------------------------------------------------------------------
+// With a log loaded: every token resolves
+// ---------------------------------------------------------------------------
+(function testAllTokensResolve() {
+    setCurrentForumUsername('bob');
+
+    assertEqual('{HELPERNAME} becomes the logged-in analyst',
+        applySpeechPlaceholders('- {HELPERNAME}'), '- alice');
+
+    assertEqual('{USERNAME} becomes the forum user of the loaded log',
+        applySpeechPlaceholders('Hi {USERNAME},'), 'Hi bob,');
+
+    assertEqual('{UPLOADLINK_USER} is the helper channel with the user prefilled',
+        applySpeechPlaceholders('{UPLOADLINK_USER}'),
+        'https://fenris.test/upload/alice/?u=bob');
+
+    assertEqual('{UPLOADLINK_GENERAL} is the general channel',
+        applySpeechPlaceholders('{UPLOADLINK_GENERAL}'),
+        'https://fenris.test/upload/');
+})();
+
+// ---------------------------------------------------------------------------
+// Replacement is global, and untouched text stays byte-for-byte identical
+// ---------------------------------------------------------------------------
+(function testReplacementScope() {
+    setCurrentForumUsername('bob');
+
+    assertEqual('every occurrence of a token is replaced, not just the first',
+        applySpeechPlaceholders('{USERNAME} {USERNAME} {USERNAME}'), 'bob bob bob');
+
+    assertEqual('unknown tokens are left alone',
+        applySpeechPlaceholders('{NOPE} {FRSTPATH}'), '{NOPE} {FRSTPATH}');
+
+    assertEqual('text with no tokens is unchanged',
+        applySpeechPlaceholders('Run FRST as admin.\nThen reboot.'),
+        'Run FRST as admin.\nThen reboot.');
+
+    assertEqual('a bare token name without braces is not touched',
+        applySpeechPlaceholders('USERNAME and HELPERNAME'), 'USERNAME and HELPERNAME');
+
+    assertEqual('empty input stays empty', applySpeechPlaceholders(''), '');
+})();
+
+// ---------------------------------------------------------------------------
+// No log loaded — the case that must NOT silently produce a broken message
+// ---------------------------------------------------------------------------
+(function testNoLogLoaded() {
+    setCurrentForumUsername('');
+
+    assertEqual('{USERNAME} is left as is when no log is loaded',
+        applySpeechPlaceholders('Hi {USERNAME},'), 'Hi {USERNAME},');
+
+    assertEqual('{UPLOADLINK_USER} is left as is rather than losing its ?u=',
+        applySpeechPlaceholders('{UPLOADLINK_USER}'), '{UPLOADLINK_USER}');
+
+    assertEqual('{HELPERNAME} still resolves without a log',
+        applySpeechPlaceholders('- {HELPERNAME}'), '- alice');
+
+    assertEqual('{UPLOADLINK_GENERAL} still resolves without a log',
+        applySpeechPlaceholders('{UPLOADLINK_GENERAL}'), 'https://fenris.test/upload/');
+
+    assertEqual('a mixed speech resolves what it can and leaves the rest',
+        applySpeechPlaceholders('Hi {USERNAME}, use {UPLOADLINK_GENERAL} - {HELPERNAME}'),
+        'Hi {USERNAME}, use https://fenris.test/upload/ - alice');
+})();
+
+// ---------------------------------------------------------------------------
+// Clearing the upload selection must not leave the previous case's user behind
+// ---------------------------------------------------------------------------
+(function testStaleUsernameCleared() {
+    setCurrentForumUsername('bob');
+    assertEqual('sanity: bob resolves', applySpeechPlaceholders('{USERNAME}'), 'bob');
+
+    setCurrentForumUsername('');
+    assertEqual('clearing the selection drops the previous forum user',
+        applySpeechPlaceholders('{USERNAME}'), '{USERNAME}');
+
+    setCurrentForumUsername('   ');
+    assertEqual('a whitespace-only forum username counts as absent',
+        applySpeechPlaceholders('{USERNAME}'), '{USERNAME}');
+
+    setCurrentForumUsername(null);
+    assertEqual('a null forum username counts as absent',
+        applySpeechPlaceholders('{USERNAME}'), '{USERNAME}');
+})();
+
+// ---------------------------------------------------------------------------
+// Forum usernames are user-supplied text and end up in a URL query string
+// ---------------------------------------------------------------------------
+(function testUrlEncoding() {
+    setCurrentForumUsername('john doe');
+    assertEqual('spaces in a forum username are encoded in the link',
+        applySpeechPlaceholders('{UPLOADLINK_USER}'),
+        'https://fenris.test/upload/alice/?u=john%20doe');
+    assertEqual('but the plain {USERNAME} keeps the readable form',
+        applySpeechPlaceholders('{USERNAME}'), 'john doe');
+
+    setCurrentForumUsername('a&b=c');
+    assertEqual('ampersands and equals cannot break out of the query string',
+        applySpeechPlaceholders('{UPLOADLINK_USER}'),
+        'https://fenris.test/upload/alice/?u=a%26b%3Dc');
+})();
+
+// ---------------------------------------------------------------------------
+// A forum username that itself looks like a token must not be re-substituted
+// ---------------------------------------------------------------------------
+(function testNoRecursiveSubstitution() {
+    setCurrentForumUsername('{HELPERNAME}');
+    assertEqual('a substituted value is not itself scanned for tokens',
+        applySpeechPlaceholders('{USERNAME}'), '{HELPERNAME}');
+})();
+
+document.getElementById('summary').textContent =
+    failed === 0 ? `ALL PASS (${passed})` : `${failed} FAILED, ${passed} passed`;
+document.getElementById('summary').className = failed === 0 ? 'pass' : 'fail';
+</script>
+</body>
+</html>

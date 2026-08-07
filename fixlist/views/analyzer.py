@@ -17,6 +17,7 @@ from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponseBadRequest, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
+from django.urls import reverse
 from django.utils.safestring import mark_safe
 
 from ..analyzer import (
@@ -55,6 +56,10 @@ def log_analyzer_view(request):
                 'is_superuser': False,
                 'snippets_json': mark_safe('[]'),
                 'speeches_json': mark_safe('[]'),
+                # A guest has no username, so there is no per-helper upload link
+                # and {UPLOADLINK_USER} stays literal for them.
+                'upload_link_helper_base': '',
+                'upload_link_general': request.build_absolute_uri(reverse('upload_log')),
                 'fixlist_template': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
             },
         )
@@ -86,6 +91,12 @@ def log_analyzer_view(request):
         }
         for s in speeches_qs
     ]))
+    # Bases for the {UPLOADLINK_*} speech placeholders. The per-user link needs a
+    # forum username that only the browser knows, so the client appends ?u=.
+    upload_link_helper_base = request.build_absolute_uri(
+        reverse('upload_log_for_helper', args=[request.user.username])
+    )
+    upload_link_general = request.build_absolute_uri(reverse('upload_log'))
     profile = getattr(request.user, 'fenris_profile', None)
     fixlist_template = (
         (profile.analyzer_fixlist_template if profile else '').strip()
@@ -120,6 +131,8 @@ def log_analyzer_view(request):
             'is_superuser': request.user.is_superuser,
             'snippets_json': snippets_json,
             'speeches_json': speeches_json,
+            'upload_link_helper_base': upload_link_helper_base,
+            'upload_link_general': upload_link_general,
             'fixlist_template': fixlist_template,
         },
     )

@@ -74,6 +74,7 @@ async function loadSelectedUploadForAnalyzer() {
     const uploadId = (selectElement.value || '').trim();
     if (!uploadId) {
         statusElement.textContent = '';
+        setCurrentForumUsername('');
         const url = new URL(window.location);
         url.searchParams.delete('upload_id');
         window.history.replaceState(null, '', url);
@@ -122,6 +123,9 @@ async function loadSelectedUploadForAnalyzer() {
         ].filter((part) => part && String(part).trim().length > 0);
         placeholderOption.textContent = parts.join(' | ');
     }
+
+    // Speech placeholders resolve {USERNAME} against whichever log is loaded.
+    setCurrentForumUsername(contentPayload.forum_username);
 
     if (typeof resetToInput === 'function') {
         resetToInput();
