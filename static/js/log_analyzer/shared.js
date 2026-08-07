@@ -72,6 +72,27 @@ function setCurrentForumUsername(name) {
     currentForumUsername = String(name === null || name === undefined ? '' : name).trim();
 }
 
+// {COUNTER} numbers steps across the whole reply, not per speech, so several
+// speeches inserted one after another compose into a single numbered list.
+// Reset when the response is emptied (see the speech menu's transform) and
+// carried in the analyzer draft so a restored half-written reply keeps counting
+// from where it left off instead of repeating numbers.
+const COUNTER_TOKEN = '{COUNTER}';
+let speechCounter = 0;
+
+function resetSpeechCounter() {
+    speechCounter = 0;
+}
+
+function getSpeechCounter() {
+    return speechCounter;
+}
+
+function setSpeechCounter(value) {
+    const parsed = Number(value);
+    speechCounter = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
 // Speeches carry placeholders that are resolved the moment one is inserted into
 // the response panel — {USERNAME} depends on which upload is loaded right now,
 // so this cannot be done server-side. Mirrors copyFrstFixMessage() in
@@ -81,6 +102,11 @@ function setCurrentForumUsername(name) {
 // is a prompt to fill it in; a silent "Hi ," or a link missing its ?u= is a
 // message you send without noticing.
 function applySpeechPlaceholders(text) {
+    // ?u= prefills the forum-username field on the upload form. It works on both
+    // the per-helper and the general route (see upload_log_view).
+    const prefilled = (base) =>
+        `${base}?u=${encodeURIComponent(currentForumUsername)}`;
+
     const replacements = {};
     if (CURRENT_USERNAME) {
         replacements['{HELPERNAME}'] = CURRENT_USERNAME;
@@ -88,15 +114,32 @@ function applySpeechPlaceholders(text) {
     if (currentForumUsername) {
         replacements['{USERNAME}'] = currentForumUsername;
     }
-    if (UPLOAD_LINK_HELPER_BASE && currentForumUsername) {
-        replacements['{UPLOADLINK_USER}'] =
-            `${UPLOAD_LINK_HELPER_BASE}?u=${encodeURIComponent(currentForumUsername)}`;
+    if (UPLOAD_LINK_HELPER_BASE) {
+        replacements['{UPLOADLINK_HELPER}'] = UPLOAD_LINK_HELPER_BASE;
+        if (currentForumUsername) {
+            replacements['{UPLOADLINK_HELPER_PREFILLED}'] = prefilled(UPLOAD_LINK_HELPER_BASE);
+        }
     }
     if (UPLOAD_LINK_GENERAL) {
         replacements['{UPLOADLINK_GENERAL}'] = UPLOAD_LINK_GENERAL;
+        if (currentForumUsername) {
+            replacements['{UPLOADLINK_GENERAL_PREFILLED}'] = prefilled(UPLOAD_LINK_GENERAL);
+        }
     }
 
+    // Note the closing brace is part of each token, so {UPLOADLINK_HELPER} is
+    // not a substring of {UPLOADLINK_HELPER_PREFILLED} and replacement order
+    // cannot corrupt the longer name. test_speech_placeholders.html locks this in.
     let result = String(text === null || text === undefined ? '' : text);
+
+    // Counted first, so it numbers only what the speech's author wrote — a
+    // {COUNTER} arriving via some other placeholder's value stays literal, the
+    // same way substituted values are never rescanned for further tokens.
+    const segments = result.split(COUNTER_TOKEN);
+    if (segments.length > 1) {
+        result = segments.reduce((acc, segment) => `${acc}${++speechCounter}${segment}`);
+    }
+
     Object.keys(replacements).forEach((token) => {
         result = result.split(token).join(replacements[token]);
     });

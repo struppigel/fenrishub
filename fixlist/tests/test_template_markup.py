@@ -3,6 +3,18 @@ from pathlib import Path
 from django.test import TestCase
 
 
+# Kept in one place so the help text, the resolver and this guard cannot drift apart.
+SPEECH_PLACEHOLDERS = (
+    "{HELPERNAME}",
+    "{USERNAME}",
+    "{UPLOADLINK_HELPER}",
+    "{UPLOADLINK_HELPER_PREFILLED}",
+    "{UPLOADLINK_GENERAL}",
+    "{UPLOADLINK_GENERAL_PREFILLED}",
+    "{COUNTER}",
+)
+
+
 class TemplateMarkupTests(TestCase):
     """
     Only regression-guard checks remain: each asserts that something deliberately
@@ -46,14 +58,32 @@ class TemplateMarkupTests(TestCase):
         content = self._read_template("speeches.html")
         # One help block under the create form's content field, one under the edit form's.
         self.assertEqual(content.count('class="field-help"'), 2)
-        for placeholder in ("{HELPERNAME}", "{USERNAME}", "{UPLOADLINK_USER}", "{UPLOADLINK_GENERAL}"):
+        for placeholder in SPEECH_PLACEHOLDERS:
             with self.subTest(placeholder=placeholder):
                 # At least once per form; some are also named again in the caveat sentence.
                 self.assertGreaterEqual(content.count(placeholder), 2)
 
+    def test_help_page_documents_every_supported_placeholder(self):
+        content = self._read_template("help.html")
+        for placeholder in SPEECH_PLACEHOLDERS:
+            with self.subTest(placeholder=placeholder):
+                self.assertIn(placeholder, content)
+
     def test_shared_js_resolves_every_documented_placeholder(self):
         project_root = Path(__file__).resolve().parent.parent.parent
         content = (project_root / "static" / "js" / "log_analyzer" / "shared.js").read_text(encoding="utf-8")
-        for placeholder in ("{HELPERNAME}", "{USERNAME}", "{UPLOADLINK_USER}", "{UPLOADLINK_GENERAL}"):
+        for placeholder in SPEECH_PLACEHOLDERS:
             with self.subTest(placeholder=placeholder):
                 self.assertIn(f"'{placeholder}'", content)
+
+    def test_speech_placeholder_tokens_cannot_collide_by_prefix(self):
+        """
+        {UPLOADLINK_HELPER} is a prefix of {UPLOADLINK_HELPER_PREFILLED} apart from
+        the closing brace. Drop a brace from either name and the shorter token would
+        eat the longer one during substitution, yielding ".../upload/x/_PREFILLED}".
+        """
+        for token in SPEECH_PLACEHOLDERS:
+            with self.subTest(token=token):
+                self.assertTrue(token.startswith("{") and token.endswith("}"))
+                others = [o for o in SPEECH_PLACEHOLDERS if o != token]
+                self.assertFalse(any(token in other for other in others))

@@ -243,7 +243,7 @@ class SpeechViewTests(TestCase):
 
     def test_speech_placeholders_are_stored_verbatim(self):
         """Substitution happens on insert in the browser; the DB keeps the tokens."""
-        content = 'Hi {USERNAME}, upload via {UPLOADLINK_USER} - {HELPERNAME}'
+        content = 'Hi {USERNAME}, upload via {UPLOADLINK_HELPER_PREFILLED} - {HELPERNAME}'
         self.client.post(reverse('speeches'), {
             'action': 'create', 'name': 'greeting', 'content': content,
         })

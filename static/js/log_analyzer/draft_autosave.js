@@ -161,6 +161,7 @@ function buildDraftPayload(now) {
         logInputHash: hashDraftText(logInputValue),
         selectedLines: selectedLinesEl ? selectedLinesEl.value : '',
         responseText: responseTextEl ? responseTextEl.value : '',
+        speechCounter: getSpeechCounter(),
         pendingStatusChanges: [...pendingStatusChanges.entries()],
         pendingChangeSequence,
         ruleDescriptionOverrides: serializeRuleDescriptionOverrides(),
@@ -231,6 +232,7 @@ function persistDraftPayload(key, payload) {
         logInputHash: payload.logInputHash,
         selectedLines: payload.selectedLines,
         responseText: payload.responseText,
+        speechCounter: payload.speechCounter,
         pendingStatusChanges: payload.pendingStatusChanges,
         pendingChangeSequence: payload.pendingChangeSequence,
         ruleDescriptionOverrides: payload.ruleDescriptionOverrides,
@@ -569,6 +571,8 @@ async function restoreDraft(key, payload) {
     if (responseTextEl && typeof payload.responseText === 'string') {
         responseTextEl.value = payload.responseText;
     }
+    // Keep numbering going where the restored reply left off.
+    setSpeechCounter(payload.speechCounter);
 
     restoreHiddenStatuses(payload);
 

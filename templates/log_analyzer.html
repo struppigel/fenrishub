@@ -496,9 +496,14 @@ window.logAnalyzerConfig = {
         configKey: 'speeches',
         emptyLabel: 'no speeches selected',
         resolveTarget: function() { return document.getElementById('responseText'); },
-        // {HELPERNAME} / {USERNAME} / {UPLOADLINK_*} are resolved on insert.
-        // Snippets deliberately get no transform and stay literal.
-        transform: function(text) { return applySpeechPlaceholders(text); },
+        // {HELPERNAME} / {USERNAME} / {UPLOADLINK_*} / {COUNTER} are resolved on
+        // insert. Snippets deliberately get no transform and stay literal.
+        transform: function(text) {
+            // An empty response means a fresh reply, so step numbering starts over.
+            var target = document.getElementById('responseText');
+            if (target && target.value.trim() === '') resetSpeechCounter();
+            return applySpeechPlaceholders(text);
+        },
         closeSiblings: function() { if (snippetMenu) snippetMenu.close(); },
     });
 })();

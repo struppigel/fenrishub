@@ -301,6 +301,23 @@
 
     <p>The response text is part of the analyzer draft, so it survives a reload or an accidentally closed tab and is offered back to you together with the fixlist. That draft lives in your browser only - it is never sent to the server, so it will not follow you to another machine.</p>
 
+    <h3 id="speech-placeholders">Placeholders in speeches</h3>
+
+    <p>A speech can contain placeholders that are filled in at the moment you insert it. The speech itself always keeps the raw placeholder, so you can reuse it for the next case.</p>
+
+    <ul>
+        <li><code>{HELPERNAME}</code> - your own username.</li>
+        <li><code>{USERNAME}</code> - the forum username of the log currently loaded in the analyzer.</li>
+        <li><code>{UPLOADLINK_HELPER}</code> - an upload link to your own channel, so the next log the user sends lands assigned to you.</li>
+        <li><code>{UPLOADLINK_GENERAL}</code> - an upload link to the general channel, for when any helper may pick the log up.</li>
+        <li><code>{UPLOADLINK_HELPER_PREFILLED}</code> and <code>{UPLOADLINK_GENERAL_PREFILLED}</code> - the same two links with <code>?u=</code> appended, which fills the forum username in on the upload form so the user does not have to type it.</li>
+        <li><code>{COUNTER}</code> - the next step number.</li>
+    </ul>
+
+    <p>Everything that needs the forum user - <code>{USERNAME}</code> and the two <code>_PREFILLED</code> links - requires a loaded log. Without one, those placeholders are deliberately left in the text rather than filled with nothing, so you can see at a glance that they still need attention.</p>
+
+    <p><code>{COUNTER}</code> counts across the whole reply rather than restarting for each speech, so you can build one numbered instruction list out of several speeches. A speech containing three <code>{COUNTER}</code> lines inserted into an empty response gives you 1, 2, 3; insert a second speech after it and its first <code>{COUNTER}</code> is 4. The count starts over at 1 whenever you insert into an empty response, so clearing the response is how you begin a fresh reply.</p>
+
     <h2 id="rules">Rules</h2>
 
     <p>Rules decide about the verdict of a log line. Rules are probably the most complicated part of Fenris. You don't need the rules as a beginner, you can choose to never use this view. But if you ever want more flexibility when adjusting how log lines are parsed, this is a way to do it.</p>

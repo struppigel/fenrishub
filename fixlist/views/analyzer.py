@@ -57,7 +57,7 @@ def log_analyzer_view(request):
                 'snippets_json': mark_safe('[]'),
                 'speeches_json': mark_safe('[]'),
                 # A guest has no username, so there is no per-helper upload link
-                # and {UPLOADLINK_USER} stays literal for them.
+                # and the {UPLOADLINK_HELPER*} placeholders stay literal for them.
                 'upload_link_helper_base': '',
                 'upload_link_general': request.build_absolute_uri(reverse('upload_log')),
                 'fixlist_template': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,

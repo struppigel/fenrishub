@@ -80,13 +80,42 @@ function assertEqual(description, actual, expected) {
     assertEqual('{USERNAME} becomes the forum user of the loaded log',
         applySpeechPlaceholders('Hi {USERNAME},'), 'Hi bob,');
 
-    assertEqual('{UPLOADLINK_USER} is the helper channel with the user prefilled',
-        applySpeechPlaceholders('{UPLOADLINK_USER}'),
+    assertEqual('{UPLOADLINK_HELPER} is the helper channel',
+        applySpeechPlaceholders('{UPLOADLINK_HELPER}'),
+        'https://fenris.test/upload/alice/');
+
+    assertEqual('{UPLOADLINK_HELPER_PREFILLED} adds ?u= for the loaded user',
+        applySpeechPlaceholders('{UPLOADLINK_HELPER_PREFILLED}'),
         'https://fenris.test/upload/alice/?u=bob');
 
     assertEqual('{UPLOADLINK_GENERAL} is the general channel',
         applySpeechPlaceholders('{UPLOADLINK_GENERAL}'),
         'https://fenris.test/upload/');
+
+    assertEqual('{UPLOADLINK_GENERAL_PREFILLED} adds ?u= to the general channel',
+        applySpeechPlaceholders('{UPLOADLINK_GENERAL_PREFILLED}'),
+        'https://fenris.test/upload/?u=bob');
+})();
+
+// ---------------------------------------------------------------------------
+// {UPLOADLINK_HELPER} is a prefix of {UPLOADLINK_HELPER_PREFILLED} apart from
+// the closing brace. Drop the brace from either token and the shorter one eats
+// the longer one, silently producing ".../upload/alice/_PREFILLED}".
+// ---------------------------------------------------------------------------
+(function testNoPrefixCollision() {
+    setCurrentForumUsername('bob');
+
+    assertEqual('the short helper token does not eat the prefilled one',
+        applySpeechPlaceholders('{UPLOADLINK_HELPER} then {UPLOADLINK_HELPER_PREFILLED}'),
+        'https://fenris.test/upload/alice/ then https://fenris.test/upload/alice/?u=bob');
+
+    assertEqual('the short general token does not eat the prefilled one',
+        applySpeechPlaceholders('{UPLOADLINK_GENERAL_PREFILLED} then {UPLOADLINK_GENERAL}'),
+        'https://fenris.test/upload/?u=bob then https://fenris.test/upload/');
+
+    assert('no output ever contains a stray _PREFILLED fragment',
+        applySpeechPlaceholders('{UPLOADLINK_HELPER_PREFILLED} {UPLOADLINK_GENERAL_PREFILLED}')
+            .indexOf('_PREFILLED') === -1);
 })();
 
 // ---------------------------------------------------------------------------
@@ -120,13 +149,19 @@ function assertEqual(description, actual, expected) {
     assertEqual('{USERNAME} is left as is when no log is loaded',
         applySpeechPlaceholders('Hi {USERNAME},'), 'Hi {USERNAME},');
 
-    assertEqual('{UPLOADLINK_USER} is left as is rather than losing its ?u=',
-        applySpeechPlaceholders('{UPLOADLINK_USER}'), '{UPLOADLINK_USER}');
+    assertEqual('{UPLOADLINK_HELPER_PREFILLED} is left as is rather than losing its ?u=',
+        applySpeechPlaceholders('{UPLOADLINK_HELPER_PREFILLED}'), '{UPLOADLINK_HELPER_PREFILLED}');
+
+    assertEqual('{UPLOADLINK_GENERAL_PREFILLED} is left as is too',
+        applySpeechPlaceholders('{UPLOADLINK_GENERAL_PREFILLED}'), '{UPLOADLINK_GENERAL_PREFILLED}');
 
     assertEqual('{HELPERNAME} still resolves without a log',
         applySpeechPlaceholders('- {HELPERNAME}'), '- alice');
 
-    assertEqual('{UPLOADLINK_GENERAL} still resolves without a log',
+    assertEqual('the un-prefilled helper link still resolves without a log',
+        applySpeechPlaceholders('{UPLOADLINK_HELPER}'), 'https://fenris.test/upload/alice/');
+
+    assertEqual('the un-prefilled general link still resolves without a log',
         applySpeechPlaceholders('{UPLOADLINK_GENERAL}'), 'https://fenris.test/upload/');
 
     assertEqual('a mixed speech resolves what it can and leaves the rest',
@@ -155,19 +190,65 @@ function assertEqual(description, actual, expected) {
 })();
 
 // ---------------------------------------------------------------------------
+// {COUNTER} numbers steps across the whole reply, so several speeches compose
+// into one numbered list rather than each restarting at 1.
+// ---------------------------------------------------------------------------
+(function testCounter() {
+    setCurrentForumUsername('bob');
+    resetSpeechCounter();
+
+    assertEqual('occurrences take successive integers',
+        applySpeechPlaceholders('{COUNTER}\n{COUNTER}\n{COUNTER}'), '1\n2\n3');
+
+    assertEqual('a second insertion continues rather than restarting',
+        applySpeechPlaceholders('{COUNTER}'), '4');
+
+    assertEqual('text with no counter does not consume a number',
+        applySpeechPlaceholders('nothing to number'), 'nothing to number');
+    assertEqual('so the next counter is still 5',
+        applySpeechPlaceholders('{COUNTER}'), '5');
+
+    resetSpeechCounter();
+    assertEqual('reset starts over at 1', applySpeechPlaceholders('{COUNTER}'), '1');
+
+    resetSpeechCounter();
+    assertEqual('counters mix with the other placeholders',
+        applySpeechPlaceholders('{COUNTER}. Hi {USERNAME}\n{COUNTER}. Upload: {UPLOADLINK_GENERAL}'),
+        '1. Hi bob\n2. Upload: https://fenris.test/upload/');
+
+    resetSpeechCounter();
+    assertEqual('counters embedded in a line still number left to right',
+        applySpeechPlaceholders('step {COUNTER} then step {COUNTER}'), 'step 1 then step 2');
+
+    // The draft carries the counter so a restored half-written reply keeps going.
+    setSpeechCounter(7);
+    assertEqual('a restored counter resumes from its stored value',
+        applySpeechPlaceholders('{COUNTER}'), '8');
+    setSpeechCounter(0);
+    assertEqual('a zero stored counter starts at 1',
+        applySpeechPlaceholders('{COUNTER}'), '1');
+    setSpeechCounter(undefined);
+    assertEqual('a missing stored counter (old draft) starts at 1',
+        applySpeechPlaceholders('{COUNTER}'), '1');
+})();
+
+// ---------------------------------------------------------------------------
 // Forum usernames are user-supplied text and end up in a URL query string
 // ---------------------------------------------------------------------------
 (function testUrlEncoding() {
     setCurrentForumUsername('john doe');
-    assertEqual('spaces in a forum username are encoded in the link',
-        applySpeechPlaceholders('{UPLOADLINK_USER}'),
+    assertEqual('spaces in a forum username are encoded in the helper link',
+        applySpeechPlaceholders('{UPLOADLINK_HELPER_PREFILLED}'),
         'https://fenris.test/upload/alice/?u=john%20doe');
+    assertEqual('and in the general link',
+        applySpeechPlaceholders('{UPLOADLINK_GENERAL_PREFILLED}'),
+        'https://fenris.test/upload/?u=john%20doe');
     assertEqual('but the plain {USERNAME} keeps the readable form',
         applySpeechPlaceholders('{USERNAME}'), 'john doe');
 
     setCurrentForumUsername('a&b=c');
     assertEqual('ampersands and equals cannot break out of the query string',
-        applySpeechPlaceholders('{UPLOADLINK_USER}'),
+        applySpeechPlaceholders('{UPLOADLINK_HELPER_PREFILLED}'),
         'https://fenris.test/upload/alice/?u=a%26b%3Dc');
 })();
 

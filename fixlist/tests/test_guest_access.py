@@ -54,7 +54,7 @@ class GuestAnalyzerAccessTests(TestCase):
         self.assertNotIn('id="speechMenu"', body)
 
     def test_guest_gets_no_per_helper_upload_link(self):
-        """A guest has no username, so {UPLOADLINK_USER} must stay literal."""
+        """A guest has no username, so the {UPLOADLINK_HELPER*} tokens must stay literal."""
         _set_guest_token()
         response = self.client.get(reverse('log_analyzer') + f'?guest={GUEST_TOKEN}')
 
