@@ -108,18 +108,13 @@
 
     /* Speeches are prose, not fixlist lines — keep the page font and give them
        room, since they run longer than a snippet. */
+    /* Tall enough that the placeholder's list of supported variables fits
+       without the analyst having to scroll an empty textarea to read it. */
     .speech-form-section textarea {
-        min-height: 160px;
+        min-height: 300px;
         font-family: inherit;
         font-size: 13px;
         line-height: 1.5;
-    }
-
-    .speech-form-section .field-help {
-        color: var(--la-text-muted);
-        font-size: 12px;
-        margin-top: -2px;
-        margin-bottom: 6px;
     }
 
     #createSection, #editSection {
@@ -220,8 +215,7 @@
             </div>
             <div class="form-group">
                 <label for="createContent">content</label>
-                <div class="field-help">Placeholders, filled in when you insert the speech in the log analyzer: <code>{HELPERNAME}</code> your name, <code>{USERNAME}</code> the forum user of the loaded log, <code>{UPLOADLINK_USER}</code> an upload link addressed to that user, <code>{UPLOADLINK_GENERAL}</code> the general upload link. <code>{USERNAME}</code> and <code>{UPLOADLINK_USER}</code> need a loaded log - without one they are left as they are.</div>
-                <textarea id="createContent" name="content" placeholder="Text to paste into the response..." required></textarea>
+                <textarea id="createContent" name="content" required placeholder="Write the text you want to paste into the response here.&#10;&#10;Placeholders, filled in when you insert the speech in the analyzer:&#10;&#10;{HELPERNAME} - your own username&#10;{USERNAME} - the forum user of the log loaded in the analyzer&#10;{UPLOADLINK_HELPER} - upload link to your own channel&#10;{UPLOADLINK_HELPER_PREFILLED} - the same link, with the forum user filled in&#10;{UPLOADLINK_GENERAL} - upload link to the general channel&#10;{UPLOADLINK_GENERAL_PREFILLED} - the same link, with the forum user filled in&#10;{COUNTER} - the next step number, counting on across the whole response&#10;&#10;{USERNAME} and the two prefilled links need a loaded log. Without one they are left as they are."></textarea>
             </div>
             <div class="form-group">
                 <label class="checkbox-label"><input type="checkbox" name="is_shared" checked> shared with all users</label>
@@ -248,8 +242,7 @@
             </div>
             <div class="form-group">
                 <label for="editContent">content</label>
-                <div class="field-help">Placeholders, filled in when you insert the speech in the log analyzer: <code>{HELPERNAME}</code> your name, <code>{USERNAME}</code> the forum user of the loaded log, <code>{UPLOADLINK_USER}</code> an upload link addressed to that user, <code>{UPLOADLINK_GENERAL}</code> the general upload link. <code>{USERNAME}</code> and <code>{UPLOADLINK_USER}</code> need a loaded log - without one they are left as they are.</div>
-                <textarea id="editContent" name="content" required></textarea>
+                <textarea id="editContent" name="content" required placeholder="Write the text you want to paste into the response here.&#10;&#10;Placeholders, filled in when you insert the speech in the analyzer:&#10;&#10;{HELPERNAME} - your own username&#10;{USERNAME} - the forum user of the log loaded in the analyzer&#10;{UPLOADLINK_HELPER} - upload link to your own channel&#10;{UPLOADLINK_HELPER_PREFILLED} - the same link, with the forum user filled in&#10;{UPLOADLINK_GENERAL} - upload link to the general channel&#10;{UPLOADLINK_GENERAL_PREFILLED} - the same link, with the forum user filled in&#10;{COUNTER} - the next step number, counting on across the whole response&#10;&#10;{USERNAME} and the two prefilled links need a loaded log. Without one they are left as they are."></textarea>
             </div>
             <div class="form-group">
                 <label class="checkbox-label"><input type="checkbox" name="is_shared" id="editIsShared"> shared with all users</label>

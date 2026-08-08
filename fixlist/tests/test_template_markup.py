@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from django.test import TestCase
@@ -54,14 +55,18 @@ class TemplateMarkupTests(TestCase):
         self.assertIn("{FRSTPATH}", content)
 
     def test_speeches_template_documents_every_supported_placeholder(self):
-        """The help text must not drift from applySpeechPlaceholders() in shared.js."""
+        """
+        The variable list lives in the content textarea's placeholder on both the
+        create and the edit form, and must not drift from applySpeechPlaceholders()
+        in shared.js.
+        """
         content = self._read_template("speeches.html")
-        # One help block under the create form's content field, one under the edit form's.
-        self.assertEqual(content.count('class="field-help"'), 2)
-        for placeholder in SPEECH_PLACEHOLDERS:
-            with self.subTest(placeholder=placeholder):
-                # At least once per form; some are also named again in the caveat sentence.
-                self.assertGreaterEqual(content.count(placeholder), 2)
+        tags = re.findall(r'<textarea id="(?:createContent|editContent)"[^>]*>', content)
+        self.assertEqual(len(tags), 2)
+        for tag in tags:
+            for placeholder in SPEECH_PLACEHOLDERS:
+                with self.subTest(tag=tag[:40], placeholder=placeholder):
+                    self.assertIn(placeholder, tag)
 
     def test_help_page_documents_every_supported_placeholder(self):
         content = self._read_template("help.html")
