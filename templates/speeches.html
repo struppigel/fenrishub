@@ -270,14 +270,17 @@
             {% endfor %}
         </select>
         <input type="text" name="q" value="{{ search_query }}" placeholder="search by name, content" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
-        {% if sharing_users %}
-        <select name="shared_by" onchange="this.form.submit()" style="width: auto; padding: 4px 8px;">
+        {# always rendered, disabled when nobody else shares yet, so the feature stays visible #}
+        <select name="shared_by" onchange="this.form.submit()" style="width: auto; padding: 4px 8px;"{% if not sharing_users %} disabled title="no other user has shared a speech yet"{% endif %}>
+            {% if sharing_users %}
             <option value="">my speeches</option>
             {% for u in sharing_users %}
             <option value="{{ u.username }}" {% if shared_by == u.username %}selected{% endif %}>+ {{ u.username }}</option>
             {% endfor %}
+            {% else %}
+            <option value="">no shared speeches yet</option>
+            {% endif %}
         </select>
-        {% endif %}
         <span style="flex: 1;"></span>
         <button type="button" id="togglePreviewButton" aria-pressed="false">hide previews</button>
         <button type="button" onclick="showCreate()">add speech</button>

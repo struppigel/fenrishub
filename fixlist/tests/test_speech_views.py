@@ -30,6 +30,23 @@ class SpeechViewTests(TestCase):
         self.assertContains(response, 'bob speech')
         self.assertNotContains(response, 'bob private')
 
+    def test_shared_by_selector_shown_when_nobody_shares(self):
+        Speech.objects.create(owner=self.user, name='my speech', content='own content')
+
+        response = self.client.get(reverse('speeches'))
+
+        self.assertContains(response, 'name="shared_by"')
+        self.assertContains(response, 'no shared speeches yet')
+
+    def test_shared_by_selector_lists_sharing_users(self):
+        Speech.objects.create(owner=self.other_user, name='bob speech', content='shared', is_shared=True)
+
+        response = self.client.get(reverse('speeches'))
+
+        self.assertContains(response, 'name="shared_by"')
+        self.assertNotContains(response, 'no shared speeches yet')
+        self.assertContains(response, '+ bob')
+
     def test_search_filters_by_name(self):
         Speech.objects.create(owner=self.user, name='all clean', content='content a')
         Speech.objects.create(owner=self.user, name='rerun frst', content='content b')

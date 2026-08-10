@@ -31,6 +31,23 @@ class SnippetViewTests(TestCase):
         self.assertContains(response, 'bob snippet')
         self.assertNotContains(response, 'bob private')
 
+    def test_shared_by_selector_shown_when_nobody_shares(self):
+        FixlistSnippet.objects.create(owner=self.user, name='my snippet', content='own content')
+
+        response = self.client.get(reverse('snippets'))
+
+        self.assertContains(response, 'name="shared_by"')
+        self.assertContains(response, 'no shared snippets yet')
+
+    def test_shared_by_selector_lists_sharing_users(self):
+        FixlistSnippet.objects.create(owner=self.other_user, name='bob snippet', content='shared', is_shared=True)
+
+        response = self.client.get(reverse('snippets'))
+
+        self.assertContains(response, 'name="shared_by"')
+        self.assertNotContains(response, 'no shared snippets yet')
+        self.assertContains(response, '+ bob')
+
     def test_search_filters_by_name(self):
         FixlistSnippet.objects.create(owner=self.user, name='registry fix', content='content a')
         FixlistSnippet.objects.create(owner=self.user, name='browser reset', content='content b')
