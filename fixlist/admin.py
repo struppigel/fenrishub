@@ -130,8 +130,8 @@ class ChangeRuleOwnerForm(forms.Form):
 
 @admin.register(Fixlist)
 class FixlistAdmin(admin.ModelAdmin):
-    list_display = ('username', 'owner', 'download_count', 'created_at', 'share_token')
-    list_filter = ('created_at', 'is_public')
+    list_display = ('username', 'owner', 'download_count', 'is_protected', 'created_at', 'share_token')
+    list_filter = ('created_at', 'is_public', 'is_protected')
     search_fields = ('username', 'owner__username')
     readonly_fields = ('download_count', 'share_token', 'created_at', 'updated_at')
     fields = ('owner', 'username', 'content', 'internal_note', 'download_count', 'share_token', 'created_at', 'updated_at', 'is_public')
@@ -817,13 +817,13 @@ class SpeechAdmin(admin.ModelAdmin):
 
 @admin.register(UploadedLog)
 class UploadedLogAdmin(admin.ModelAdmin):
-    list_display = ('upload_id', 'forum_username', 'log_type', 'is_incomplete', 'created_by', 'recipient_user', 'created_at')
-    list_filter = ('log_type', 'is_incomplete', 'created_at')
+    list_display = ('upload_id', 'forum_username', 'log_type', 'is_incomplete', 'is_protected', 'created_by', 'recipient_user', 'created_at')
+    list_filter = ('log_type', 'is_incomplete', 'is_protected', 'created_at')
     search_fields = ('upload_id', 'forum_username', 'original_filename')
     readonly_fields = ('upload_id', 'content_hash', 'detected_encoding', 'created_at', 'updated_at')
     fieldsets = (
         (None, {
-            'fields': ('upload_id', 'forum_username', 'original_filename', 'log_type', 'is_incomplete', 'created_by', 'recipient_user'),
+            'fields': ('upload_id', 'forum_username', 'original_filename', 'log_type', 'is_incomplete', 'is_protected', 'created_by', 'recipient_user'),
         }),
         ('Content', {
             'fields': ('content', 'content_hash', 'detected_encoding'),

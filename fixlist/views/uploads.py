@@ -338,12 +338,25 @@ def view_uploaded_log(request, upload_id):
     if request.method == 'POST':
         action = request.POST.get('action', '')
 
+        if action in ('protect', 'unprotect'):
+            if not user_can_delete_uploaded_log(request.user, uploaded_log):
+                messages.error(request, f'Only the assigned helper can change protection for {upload_id}.')
+                return redirect('view_uploaded_log', upload_id=upload_id)
+            uploaded_log.is_protected = action == 'protect'
+            uploaded_log.save(update_fields=['is_protected', 'updated_at'])
+            state = 'protected from deletion' if uploaded_log.is_protected else 'no longer deletion-protected'
+            messages.success(request, f'Upload {upload_id} is {state}.')
+            return redirect('view_uploaded_log', upload_id=upload_id)
+
         if action == 'delete':
             if uploaded_log.deleted_at is not None:
                 messages.error(request, f'Upload {upload_id} is already in trash.')
                 return redirect('view_uploaded_log', upload_id=upload_id)
             if not user_can_delete_uploaded_log(request.user, uploaded_log):
                 messages.error(request, f'Only the assigned helper can delete {upload_id}.')
+                return redirect('view_uploaded_log', upload_id=upload_id)
+            if uploaded_log.is_protected:
+                messages.error(request, f'Upload {upload_id} is deletion-protected. Remove protection first.')
                 return redirect('view_uploaded_log', upload_id=upload_id)
             soft_delete_uploaded_log(uploaded_log)
             _purge_old_trash()
@@ -497,6 +510,9 @@ def uploads_trash_view(request):
             if not user_can_delete_uploaded_log(request.user, uploaded_log):
                 messages.error(request, f'Only the assigned helper can permanently delete {upload_id}.')
                 return redirect_preserving_filters(request, 'uploads_trash')
+            if uploaded_log.is_protected:
+                messages.error(request, f'Upload {upload_id} is deletion-protected. Remove protection first.')
+                return redirect_preserving_filters(request, 'uploads_trash')
             uploaded_log.delete()
             messages.success(request, f'Upload {upload_id} permanently deleted.')
             return redirect_preserving_filters(request, 'uploads_trash')
@@ -508,15 +524,26 @@ def uploads_trash_view(request):
             return handle_delete_permanent_selected_action(request, selected_ids)
 
         if action == 'empty_trash':
-            deletable_logs = [log for log in action_scope_uploads.filter(deleted_at__isnull=False)
+            trashed_logs = [log for log in action_scope_uploads.filter(deleted_at__isnull=False)
                             if user_can_delete_uploaded_log(request.user, log)]
+            # Emptying the trash sweeps everything at once, so protected uploads are
+            # kept back instead of aborting the whole action.
+            deletable_logs = [log for log in trashed_logs if not log.is_protected]
+            protected_count = len(trashed_logs) - len(deletable_logs)
             if not deletable_logs:
-                messages.error(request, 'You have no deleted uploads to clean from trash.')
+                if protected_count:
+                    messages.error(
+                        request,
+                        f'Nothing emptied: all {protected_count} upload(s) in your trash are deletion-protected.',
+                    )
+                else:
+                    messages.error(request, 'You have no deleted uploads to clean from trash.')
                 return redirect('uploads_trash')
             count = len(deletable_logs)
             for log in deletable_logs:
                 log.delete()
-            messages.success(request, f'Trash emptied ({count} upload(s) permanently deleted).')
+            kept = f' {protected_count} protected upload(s) kept.' if protected_count else ''
+            messages.success(request, f'Trash emptied ({count} upload(s) permanently deleted).{kept}')
             return redirect('uploads_trash')
 
         messages.error(request, 'Invalid action.')

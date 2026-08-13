@@ -24,14 +24,17 @@ from ..models import InfectionCase, UploadedLog, Fixlist
 
 
 def _purge_old_trash():
-    """Delete soft-deleted records older than 7 days and all records older than 30 days."""
+    """Delete soft-deleted records older than 7 days and all records older than 30 days.
+
+    Records flagged `is_protected` are never purged, regardless of age.
+    """
     now = timezone.now()
     trash_cutoff = now - timedelta(days=7)
     hard_cutoff = now - timedelta(days=30)
-    UploadedLog.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff).delete()
-    Fixlist.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff).delete()
-    UploadedLog.objects.filter(created_at__lt=hard_cutoff).delete()
-    Fixlist.objects.filter(created_at__lt=hard_cutoff).delete()
+    UploadedLog.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff, is_protected=False).delete()
+    Fixlist.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff, is_protected=False).delete()
+    UploadedLog.objects.filter(created_at__lt=hard_cutoff, is_protected=False).delete()
+    Fixlist.objects.filter(created_at__lt=hard_cutoff, is_protected=False).delete()
 
 
 def _autoclose_stale_cases():

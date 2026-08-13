@@ -73,6 +73,10 @@
         border-color: var(--la-error-border);
     }
 
+    .protected-state {
+        color: var(--la-success-text);
+    }
+
     .fixlists-count {
         font-size: 11px;
         color: var(--la-text-muted);
@@ -143,7 +147,7 @@
                     <span class="visibility-state visibility-state-public">public</span>
                     {% else %}
                     <span class="visibility-state visibility-state-hidden">hidden</span>
-                    {% endif %}{% endif %}{% if is_trash and fixlist.deleted_at %} | deleted {{ fixlist.deleted_at|date:"Y-m-d H:i" }}{% endif %}
+                    {% endif %}{% endif %}{% if is_trash and fixlist.deleted_at %} | deleted {{ fixlist.deleted_at|date:"Y-m-d H:i" }}{% endif %}{% if fixlist.is_protected %} | <span class="protected-state" title="this fixlist cannot be trashed, deleted or auto-purged">protected</span>{% endif %}
                 </div>
             </div>
         </div>
@@ -156,12 +160,14 @@
                 <input type="hidden" name="pk" value="{{ fixlist.pk }}">
                 <button type="submit" class="action-btn">restore</button>
             </form>
+            {% if not fixlist.is_protected %}
             <form method="post" action="{% url 'fixlists_trash' %}">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete_permanent">
                 <input type="hidden" name="pk" value="{{ fixlist.pk }}">
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Permanently delete this fixlist?');">delete</button>
             </form>
+            {% endif %}
             {% else %}
             <button type="button" class="action-btn" onclick="copyShareLink('{% url 'shared_fixlist' fixlist.share_token %}', this)">copy link</button>
             <a href="{% url 'view_fixlist' fixlist.pk %}" class="action-btn">view</a>
@@ -176,11 +182,13 @@
                 <button type="submit" class="action-btn visibility-toggle-btn">publish</button>
                 {% endif %}
             </form>
+            {% if not fixlist.is_protected %}
             <form method="post" action="{% url 'view_fixlist' fixlist.pk %}" style="display: inline;">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete">
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this fixlist to trash?');">delete</button>
             </form>
+            {% endif %}
             {% endif %}
         </div>
     </div>

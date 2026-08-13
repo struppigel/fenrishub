@@ -725,8 +725,13 @@ def infection_case_delete_view(request, case_id):
         trashed_fixlists = 0
         with transaction.atomic():
             if move_linked_to_trash:
-                trashed_logs = UploadedLog.objects.filter(pk__in=linked_log_ids, deleted_at__isnull=True).update(deleted_at=deleted_at)
-                trashed_fixlists = Fixlist.objects.filter(pk__in=linked_fixlist_ids, deleted_at__isnull=True).update(deleted_at=deleted_at)
+                # Deletion-protected items stay put; the case itself is still deleted.
+                trashed_logs = UploadedLog.objects.filter(
+                    pk__in=linked_log_ids, deleted_at__isnull=True, is_protected=False,
+                ).update(deleted_at=deleted_at)
+                trashed_fixlists = Fixlist.objects.filter(
+                    pk__in=linked_fixlist_ids, deleted_at__isnull=True, is_protected=False,
+                ).update(deleted_at=deleted_at)
 
             infection_case.deleted_at = deleted_at
             infection_case.save(update_fields=['deleted_at', 'updated_at'])

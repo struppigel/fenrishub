@@ -79,6 +79,18 @@ def _build_fixlists_listing_context(request, *, deleted: bool) -> dict:
     }
 
 
+def _check_protected_fixlists(request, qs, *, verb, target):
+    """Return error redirect if any fixlist in `qs` is deletion-protected; else None."""
+    protected = sorted(qs.filter(is_protected=True).values_list('username', flat=True))
+    if not protected:
+        return None
+    messages.error(
+        request,
+        f'Deletion-protected, cannot {verb}: {", ".join(protected)}. Remove protection first.',
+    )
+    return redirect_preserving_filters(request, target)
+
+
 def handle_fixlist_delete_selected_action(request, selected_pks: list) -> HttpResponse:
     """Move multiple selected fixlists to trash."""
     if not selected_pks:
@@ -89,6 +101,8 @@ def handle_fixlist_delete_selected_action(request, selected_pks: list) -> HttpRe
     found_pks = {str(pk) for pk in qs.values_list('pk', flat=True)}
     if resp := check_missing_ids(request, selected_pks, found_pks,
                                  item_label='fixlist', target='dashboard'):
+        return resp
+    if resp := _check_protected_fixlists(request, qs, verb='delete', target='dashboard'):
         return resp
 
     count = qs.update(deleted_at=timezone.now())
@@ -124,6 +138,9 @@ def handle_fixlist_delete_permanent_selected_action(request, selected_pks: list)
     found_pks = {str(pk) for pk in qs.values_list('pk', flat=True)}
     if resp := check_missing_ids(request, selected_pks, found_pks,
                                  item_label='fixlist', target='fixlists_trash', in_trash=True):
+        return resp
+    if resp := _check_protected_fixlists(request, qs, verb='permanently delete',
+                                         target='fixlists_trash'):
         return resp
 
     count = qs.count()
@@ -271,6 +288,12 @@ def fixlists_trash_view(request):
         if action == 'delete_permanent':
             pk = request.POST.get('pk', '').strip()
             fixlist = get_object_or_404(Fixlist, pk=pk, owner=request.user, deleted_at__isnull=False)
+            if fixlist.is_protected:
+                messages.error(
+                    request,
+                    f'Fixlist "{fixlist.username}" is deletion-protected. Remove protection first.',
+                )
+                return redirect('fixlists_trash')
             username = fixlist.username
             fixlist.delete()
             messages.success(request, f'Fixlist "{username}" permanently deleted.')
@@ -283,10 +306,15 @@ def fixlists_trash_view(request):
             return handle_fixlist_delete_permanent_selected_action(request, selected_pks)
 
         if action == 'empty_trash':
-            qs = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=False)
+            trashed_qs = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=False)
+            # Emptying the trash sweeps everything at once, so protected fixlists are
+            # kept back instead of aborting the whole action.
+            protected_count = trashed_qs.filter(is_protected=True).count()
+            qs = trashed_qs.filter(is_protected=False)
             count = qs.count()
             qs.delete()
-            messages.success(request, f'Trash emptied ({count} fixlist(s) permanently deleted).')
+            kept = f' {protected_count} protected fixlist(s) kept.' if protected_count else ''
+            messages.success(request, f'Trash emptied ({count} fixlist(s) permanently deleted).{kept}')
             return redirect('fixlists_trash')
 
         messages.error(request, 'Invalid action.')
@@ -324,11 +352,28 @@ def view_fixlist(request, pk):
             return redirect('view_fixlist', pk=fixlist.pk)
         
         elif action == 'delete':
+            if fixlist.is_protected:
+                messages.error(
+                    request,
+                    f'Fixlist "{fixlist.username}" is deletion-protected. Remove protection first.',
+                )
+                if request.POST.get('next') == 'dashboard':
+                    return redirect('dashboard')
+                return redirect('view_fixlist', pk=fixlist.pk)
             fixlist.deleted_at = timezone.now()
             fixlist.save(update_fields=['deleted_at'])
             _purge_old_trash()
             messages.success(request, f'Fixlist "{fixlist.username}" moved to trash.')
             return redirect('dashboard')
+
+        elif action in ('protect', 'unprotect'):
+            fixlist.is_protected = action == 'protect'
+            fixlist.save(update_fields=['is_protected'])
+            state = 'protected from deletion' if fixlist.is_protected else 'no longer deletion-protected'
+            messages.success(request, f'Fixlist "{fixlist.username}" is {state}.')
+            if request.POST.get('next') == 'dashboard':
+                return redirect('dashboard')
+            return redirect('view_fixlist', pk=fixlist.pk)
 
         elif action == 'disable_public':
             fixlist.is_public = False

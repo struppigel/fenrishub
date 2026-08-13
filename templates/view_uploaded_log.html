@@ -73,6 +73,10 @@
         margin: 0;
     }
 
+    .protected-state {
+        color: var(--la-success-text);
+    }
+
     .uploaded-log-page .delete-btn {
         background-color: var(--la-error-bg);
         color: var(--la-error-text);
@@ -97,9 +101,14 @@
     {% if not uploaded_log.recipient_user or uploaded_log.recipient_user == user %}
     <form method="post">
         {% csrf_token %}
+        {% if uploaded_log.is_protected %}
+        <button type="submit" name="action" value="unprotect" title="allow this upload to be trashed, deleted and auto-purged again">unprotect</button>
+        {% else %}
+        <button type="submit" name="action" value="protect" title="prevent this upload from being trashed, deleted, merged away or auto-purged">protect</button>
+        {% endif %}
         {% if uploaded_log.deleted_at %}
         <button type="submit" name="action" value="restore">restore</button>
-        {% else %}
+        {% elif not uploaded_log.is_protected %}
         <button type="submit" name="action" value="delete" class="delete-btn" onclick="return confirm('Delete this upload?');">delete</button>
         {% endif %}
     </form>
@@ -159,6 +168,10 @@
     {% if uploaded_log.detected_encoding %}
     <div class="meta-key">encoding</div>
     <div>{{ uploaded_log.detected_encoding }}</div>
+    {% endif %}
+    {% if uploaded_log.is_protected %}
+    <div class="meta-key">protection</div>
+    <div class="protected-state">deletion-protected</div>
     {% endif %}
     {% if uploaded_log.deleted_at %}
     <div class="meta-key">deleted</div>

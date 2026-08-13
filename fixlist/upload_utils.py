@@ -67,6 +67,14 @@ def resolve_ordered_logs_for_merge(selected_ids: list[str], scoped_qs):
     if missing_ids:
         return [], f'Unable to find upload(s): {", ".join(missing_ids)}.'
 
+    # Merging moves every source log to trash, so protected logs can't take part.
+    protected_ids = sorted(log.upload_id for log in selected_logs if log.is_protected)
+    if protected_ids:
+        return [], (
+            f'Deletion-protected, cannot merge: {", ".join(protected_ids)}. '
+            'Remove protection first.'
+        )
+
     ordered_logs = [logs_by_id[upload_id] for upload_id in selected_ids]
     return ordered_logs, None
 

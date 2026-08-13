@@ -14,6 +14,10 @@
         width: 78px;
     }
 
+    .protected-state {
+        color: var(--la-success-text);
+    }
+
     .inline-action-link {
         display: inline-block;
         margin-top: 8px;
@@ -44,7 +48,7 @@
         token {{ fixlist.share_token }}<br>
         created {{ fixlist.created_at|date:"Y-m-d H:i" }}<br>
         updated {{ fixlist.updated_at|date:"Y-m-d H:i" }}<br>
-        {% if fixlist.is_public %}public{% else %}hidden{% endif %}
+        {% if fixlist.is_public %}public{% else %}hidden{% endif %}{% if fixlist.is_protected %}<br><span class="protected-state">deletion-protected</span>{% endif %}
     </div>
 
     <div class="success-box">
@@ -87,7 +91,12 @@
             {% else %}
             <button type="submit" name="action" value="enable_public" class="visibility-toggle-btn">publish</button>
             {% endif %}
+            {% if fixlist.is_protected %}
+            <button type="submit" name="action" value="unprotect" title="allow this fixlist to be trashed, deleted and auto-purged again">unprotect</button>
+            {% else %}
+            <button type="submit" name="action" value="protect" title="prevent this fixlist from being trashed, deleted or auto-purged">protect</button>
             <button type="submit" name="action" value="delete" onclick="return confirm('Delete this fixlist?');" style="background-color: var(--la-error-bg); color: var(--la-error-text); border-color: var(--la-error-border);">delete</button>
+            {% endif %}
         </div>
     </form>
 

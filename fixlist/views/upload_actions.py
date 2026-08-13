@@ -28,12 +28,27 @@ def _check_unauthorized_uploads(request, logs, *, verb, target):
     return redirect_preserving_filters(request, target)
 
 
+def _check_protected_uploads(request, logs, *, verb, target):
+    """Return error redirect if any log is deletion-protected; else None."""
+    protected = sorted(log.upload_id for log in logs if log.is_protected)
+    if not protected:
+        return None
+    messages.error(
+        request,
+        f'Deletion-protected, cannot {verb}: {", ".join(protected)}. Remove protection first.',
+    )
+    return redirect_preserving_filters(request, target)
+
+
 def handle_delete_action(request, upload_id: str, action_scope_uploads) -> HttpResponse:
     """Handle single upload deletion (move to trash)."""
     uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id, deleted_at__isnull=True)
     if not user_can_delete_uploaded_log(request.user, uploaded_log):
         messages.error(request, f'Only the assigned helper can delete {upload_id}.')
         return redirect_preserving_filters(request, 'uploaded_logs')
+    if resp := _check_protected_uploads(request, [uploaded_log],
+                                        verb='delete', target='uploaded_logs'):
+        return resp
     soft_delete_uploaded_log(uploaded_log)
     _purge_old_trash()
     messages.success(request, f'Upload {upload_id} moved to trash.')
@@ -89,6 +104,9 @@ def handle_delete_selected_action(request, selected_ids: list, action_scope_uplo
     if resp := _check_unauthorized_uploads(request, selected_logs,
                                            verb='delete', target='uploaded_logs'):
         return resp
+    if resp := _check_protected_uploads(request, selected_logs,
+                                        verb='delete', target='uploaded_logs'):
+        return resp
 
     UploadedLog.objects.filter(
         upload_id__in=[log.upload_id for log in selected_logs]
@@ -137,6 +155,9 @@ def handle_delete_permanent_selected_action(request, selected_ids: list) -> Http
         return resp
     if resp := _check_unauthorized_uploads(request, selected_logs,
                                            verb='permanently delete', target='uploads_trash'):
+        return resp
+    if resp := _check_protected_uploads(request, selected_logs,
+                                        verb='permanently delete', target='uploads_trash'):
         return resp
 
     count = len(selected_logs)

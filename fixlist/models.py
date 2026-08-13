@@ -71,6 +71,10 @@ class Fixlist(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     is_public = models.BooleanField(default=True)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+    is_protected = models.BooleanField(
+        default=False,
+        help_text='Protected fixlists cannot be trashed, permanently deleted, or auto-purged.',
+    )
     line_count = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -581,6 +585,10 @@ class UploadedLog(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     scan_date = models.DateTimeField(null=True, blank=True, default=None)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+    is_protected = models.BooleanField(
+        default=False,
+        help_text='Protected logs cannot be trashed, permanently deleted, merged away, or auto-purged.',
+    )
     total_line_count = models.PositiveIntegerField(default=0)
     count_malware = models.PositiveIntegerField(default=0)
     count_pup = models.PositiveIntegerField(default=0)
