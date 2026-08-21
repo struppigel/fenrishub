@@ -222,6 +222,60 @@ class LogAnalyzerApiWarningTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("low_memory", warnings_by_code)
 
+    def test_analyze_api_accepts_drive_lines_prefixed_with_physical_disk(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Percentage of memory in use: 63%\n"
+                    "Total physical RAM: 8066.72 MB\n"
+                    "Available physical RAM: 2951.59 MB\n"
+                    "Disk 0 - Drive c: () (Fixed) (Total:180.2 GB) (Free:78.05 GB) (Model: EVM SSD) NTFS\n"
+                    "Disk 0 - Drive d: (New Volume) (Fixed) (Total:148.05 GB) (Free:42.24 GB) (Model: EVM SSD) NTFS\n"
+                    "Disk 0 - \\\\?\\Volume{16d1336b-1023-478a-b60c-bae55c2e3cdd}\\ (Recovery) (Fixed) (Total:0.52 GB) (Free:0.06 GB) NTFS\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("low_memory", warnings_by_code)
+
+    def test_analyze_api_checks_free_space_on_drive_line_prefixed_with_physical_disk(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Percentage of memory in use: 63%\n"
+                    "Total physical RAM: 8066.72 MB\n"
+                    "Available physical RAM: 2951.59 MB\n"
+                    "Disk 0 - Drive c: () (Fixed) (Total:180.2 GB) (Free:8.05 GB) (Model: EVM SSD) NTFS\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("low_memory", warnings_by_code)
+        self.assertIn(
+            "Free space on Windows partition below",
+            warnings_by_code["low_memory"]["message"],
+        )
+        self.assertNotIn(
+            "Memory information incomplete",
+            warnings_by_code["low_memory"]["message"],
+        )
+
     def test_analyze_api_warns_when_multiple_enabled_av_entries_found(self):
         self.client.login(username="analyzer", password="password123")
 

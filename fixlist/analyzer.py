@@ -199,6 +199,11 @@ def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
     )
 
 
+# FRST prints drive lines either bare ("Drive c: ...") or prefixed with the
+# physical disk ("Disk 0 - Drive c: ...").
+_DRIVE_LINE_RE = re.compile(r"(?:Disk\s+\d+\s*-\s*)?Drive\s")
+
+
 def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
     usage_percent = None
     total_mb = None
@@ -221,7 +226,7 @@ def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
             match = re.search(r"([\d.]+)", line)
             if match:
                 total_mb = float(match.group(1))
-        elif line.startswith("Drive"):
+        elif _DRIVE_LINE_RE.match(line):
             saw_memory_context = True
             drive_match = re.search(r"Drive\s+([a-zA-Z]):", line, re.IGNORECASE)
             free_match = re.search(r"\(Free:\s*(\d+(?:\.\d+)?)\s*GB\)", line, re.IGNORECASE)
