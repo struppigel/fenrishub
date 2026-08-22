@@ -297,6 +297,49 @@ function normalizePendingChangesForCurrentLines() {
     });
 }
 
+// Replace [start, end) in a textarea while keeping the browser's own undo
+// history intact.
+//
+// Writing to .value directly is invisible to that history, which is why a bulk
+// insert used to be un-undoable: Ctrl+Z had nothing to take back and the analyst
+// had to delete the lines by hand. Going through execCommand makes the edit look
+// like typing, so one call becomes exactly one undo step (and one redo step),
+// and the 'input' event that fires keeps the copied-line highlighting and the
+// draft autosave in sync for free.
+function applyTextareaEdit(textarea, start, end, replacement) {
+    if (!textarea) {
+        return false;
+    }
+    const before = textarea.value;
+    const expected = before.substring(0, start) + replacement + before.substring(end);
+    if (expected === before) {
+        return true;
+    }
+
+    textarea.focus();
+    textarea.setSelectionRange(start, end);
+
+    let accepted = false;
+    try {
+        accepted = replacement
+            ? document.execCommand('insertText', false, replacement)
+            : document.execCommand('delete');
+    } catch (e) {
+        accepted = false;
+    }
+    if (accepted && textarea.value === expected) {
+        return true;
+    }
+
+    // The engine refused the command (or applied it differently than asked).
+    // Falling back to a plain write costs the undo step but never loses the edit.
+    textarea.value = expected;
+    const caret = start + replacement.length;
+    textarea.setSelectionRange(caret, caret);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    return false;
+}
+
 function initializeCursorPosition() {
     const textarea = document.getElementById('selectedLines');
     const text = textarea.value;

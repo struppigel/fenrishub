@@ -585,6 +585,51 @@ def defender_exclusion_snippet(line):
     return None
 
 
+# group(1): extension name, group(2): extension directory. Only the
+# `<BROWSER> Extension: (Name) - <path> [date]` form is covered — the
+# registry-forced `CHR HKLM\...\Chrome\Extension: [id]` lines carry no path
+# and FRST removes them as written.
+_BROWSER_EXTENSION_RE = re.compile(
+    r"(?i)^(?:Edge|CHR|FF|BRA)\s+Extension:\s+\((.*)\)\s+-\s+(.+?)"
+    r"\s*(?:\[[^\]]*\])?\s*(?:<====.*)?$"
+)
+
+
+def browser_extension_snippet(line):
+    r"""Return the fixlist form of a browser extension line, or None if the line
+    isn't one.
+
+    `CHR Extension: (Google Docs Offline) - C:\...\Extensions\ghbm... [2026-04-01]`
+    becomes a commented folder deletion:
+
+        Comment: Browser extension - Google Docs Offline
+        C:\...\Extensions\ghbm...
+
+    FRST would not act on the raw `CHR Extension:` line at all, so the directory
+    is emitted on its own to have the extension folder deleted, with the name
+    kept as a comment so the fixlist stays readable.
+
+    The path is taken literally from the line (no normalize_path) so the
+    generated fixlist targets the actual machine path.
+    """
+    if not line:
+        return None
+    match = _BROWSER_EXTENSION_RE.match(line.strip())
+    if not match:
+        return None
+    name = match.group(1).strip()
+    filepath = match.group(2).strip()
+    if not filepath or "(No File)" in filepath:
+        return None
+    return f"Comment: Browser extension - {name}\n{filepath}"
+
+
+def fixlist_replacement(line):
+    """The text a log line contributes to a fixlist when it differs from the
+    line itself, or None when the raw line is what FRST needs."""
+    return defender_exclusion_snippet(line) or browser_extension_snippet(line)
+
+
 def extract_any_frst_path(line):
     filepath_prefix = "FILEPATH:"
     if line.startswith(filepath_prefix):

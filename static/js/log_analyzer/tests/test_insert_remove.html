@@ -432,6 +432,201 @@ function logLineDivAt(index) {
 })();
 
 // ---------------------------------------------------------------------------
+// Tests - undo history (these need a real browser; execCommand is what keeps
+// button-driven edits in the native Ctrl+Z stack)
+// ---------------------------------------------------------------------------
+
+// Type into the textarea the way a user would, so the browser opens an undo
+// history that our programmatic edits can be appended to.
+function seedUndoHistory(textarea, text) {
+    textarea.value = '';
+    textarea.focus();
+    textarea.setSelectionRange(0, 0);
+    document.execCommand('insertText', false, text);
+}
+
+(function testInsertAllStatusIsOneUndoStep() {
+    const entries = [
+        { line: 'bad1.exe', dominant_status: 'B', css_class: 'status-b' },
+        { line: 'bad2.exe', dominant_status: 'B', css_class: 'status-b' },
+        { line: 'bad3.exe', dominant_status: 'B', css_class: 'status-b' },
+    ];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    seedUndoHistory(textarea, 'Start::\n\nEnd::');
+    const before = textarea.value;
+    textarea.setSelectionRange(8, 8);
+    document.getElementById('bulkIgnoreFirewallRules').checked = false;
+
+    insertAllStatus('B');
+    const afterInsert = textarea.value;
+    assert(
+        'undo: bulk insert added all three lines',
+        ['bad1.exe', 'bad2.exe', 'bad3.exe'].every((line) => afterInsert.includes(line)),
+        afterInsert
+    );
+
+    textarea.focus();
+    document.execCommand('undo');
+    assert(
+        'undo: a single Ctrl+Z takes the whole batch back out',
+        textarea.value === before,
+        JSON.stringify(textarea.value)
+    );
+
+    document.execCommand('redo');
+    assert(
+        'undo: redo puts the batch back',
+        textarea.value === afterInsert,
+        JSON.stringify(textarea.value)
+    );
+})();
+
+(function testInsertLineIsUndoable() {
+    const entries = [
+        { line: 'bad.exe', dominant_status: 'B', css_class: 'status-b' },
+    ];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    seedUndoHistory(textarea, 'Start::\n\nEnd::');
+    const before = textarea.value;
+    textarea.setSelectionRange(8, 8);
+
+    insertLine('bad.exe', 0);
+    assert('undo: single insert landed', textarea.value.includes('bad.exe'));
+
+    textarea.focus();
+    document.execCommand('undo');
+    assert(
+        'undo: Ctrl+Z takes a single inserted line back out',
+        textarea.value === before,
+        JSON.stringify(textarea.value)
+    );
+})();
+
+(function testRemoveLineIsUndoable() {
+    const entries = [
+        { line: 'bad.exe', dominant_status: 'B', css_class: 'status-b' },
+    ];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    seedUndoHistory(textarea, 'Start::\nbad.exe\nEnd::');
+    const before = textarea.value;
+
+    removeLine('bad.exe', 0);
+    assert('undo: removal took the line out', !textarea.value.includes('bad.exe'));
+
+    textarea.focus();
+    document.execCommand('undo');
+    assert(
+        'undo: Ctrl+Z puts a removed line back',
+        textarea.value === before,
+        JSON.stringify(textarea.value)
+    );
+})();
+
+// recomputeCopiedIndexesFromTextarea is what the analyzer runs after an undo,
+// so the left-hand "copied" marks follow lines coming back as well as going.
+(function testRecomputeCopiedIndexes() {
+    const entries = [
+        { line: 'junk1.dll', dominant_status: 'J', css_class: 'status-j' },
+        { line: 'junk2.dll', dominant_status: 'J', css_class: 'status-j' },
+    ];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    textarea.value = 'junk1.dll\n';
+    copiedLineIndexes = new Set([1]);
+    setCopiedState(1, true);
+
+    recomputeCopiedIndexesFromTextarea();
+
+    assert(
+        'recompute: index present in the text is marked copied',
+        copiedLineIndexes.has(0) && logLineDivAt(0).classList.contains('copied')
+    );
+    assert(
+        'recompute: index missing from the text is unmarked',
+        !copiedLineIndexes.has(1) && !logLineDivAt(1).classList.contains('copied')
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Tests - multi-line fixlist_replacement (browser extensions become a
+// "Comment:" line plus the extension folder, so the copied marks have to track
+// a run of consecutive lines rather than a single one).
+// ---------------------------------------------------------------------------
+
+const EXTENSION_ENTRY = {
+    line: 'CHR Extension: (Bad Ext) - C:\\ext\\abcd [2026-04-01]',
+    fixlist_replacement: 'Comment: Browser extension - Bad Ext\nC:\\ext\\abcd',
+    dominant_status: 'B',
+    css_class: 'status-b',
+};
+
+(function testMultiLineReplacementInsertRemove() {
+    const entries = [Object.assign({}, EXTENSION_ENTRY)];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    textarea.value = '';
+    textarea.selectionStart = textarea.selectionEnd = 0;
+
+    insertLine(entries[0].line, 0);
+    assert(
+        'multiline: insert writes the replacement, not the raw line',
+        textarea.value === EXTENSION_ENTRY.fixlist_replacement + '\n',
+        JSON.stringify(textarea.value)
+    );
+
+    syncCopiedIndexesWithTextarea();
+    assert(
+        'multiline: sync keeps the copied mark for a present two-line block',
+        copiedLineIndexes.has(0) && logLineDivAt(0).classList.contains('copied')
+    );
+
+    removeLine(entries[0].line, 0);
+    assert(
+        'multiline: remove takes both lines back out',
+        textarea.value === '',
+        JSON.stringify(textarea.value)
+    );
+    assert(
+        'multiline: remove clears the copied mark',
+        !copiedLineIndexes.has(0) && !logLineDivAt(0).classList.contains('copied')
+    );
+})();
+
+(function testMultiLineReplacementSyncDropsPartialBlock() {
+    const entries = [Object.assign({}, EXTENSION_ENTRY)];
+    resetState(entries);
+
+    const textarea = document.getElementById('selectedLines');
+    textarea.value = '';
+    textarea.selectionStart = textarea.selectionEnd = 0;
+    insertLine(entries[0].line, 0);
+
+    // The analyst deletes the folder line by hand; only the comment is left, so
+    // the entry is no longer really in the fixlist.
+    textarea.value = 'Comment: Browser extension - Bad Ext\n';
+    syncCopiedIndexesWithTextarea();
+    assert(
+        'multiline: sync drops the mark when only part of the block remains',
+        !copiedLineIndexes.has(0)
+    );
+
+    textarea.value = 'CloseProcesses:\n' + EXTENSION_ENTRY.fixlist_replacement + '\nEnd::';
+    recomputeCopiedIndexesFromTextarea();
+    assert(
+        'multiline: recompute re-marks a block surrounded by other lines',
+        copiedLineIndexes.has(0) && logLineDivAt(0).classList.contains('copied')
+    );
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 const summary = document.getElementById('summary');

@@ -420,9 +420,14 @@ window.logAnalyzerConfig = {
             if (!inserted.endsWith('\n')) inserted += '\n';
             if (pos > 0 && text[pos - 1] !== '\n') inserted = '\n' + inserted;
 
-            var before = text.substring(0, pos);
             var after = text.substring(pos);
-            target.value = before + inserted + after;
+            // Shared helper from shared.js: keeps the insert in the browser's
+            // undo history so Ctrl+Z takes the snippet back out again.
+            if (window.applyTextareaEdit) {
+                window.applyTextareaEdit(target, pos, pos, inserted);
+            } else {
+                target.value = text.substring(0, pos) + inserted + after;
+            }
             var cursorPos = target.value.length - after.length;
             lastCursorPos = cursorPos;
 

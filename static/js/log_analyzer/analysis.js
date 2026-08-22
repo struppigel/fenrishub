@@ -1617,6 +1617,26 @@ function fixlistTextForEntry(entry) {
     return entry ? (entry.line || '') : '';
 }
 
+// Presence lookup over the fixlist text, used to keep the "copied" marks in
+// sync. A replacement can span several lines (a browser extension becomes a
+// `Comment:` plus the extension folder), so a plain per-line Set isn't enough —
+// those have to be matched as a run of consecutive lines.
+function buildFixlistPresence(value) {
+    const lines = String(value || '').split('\n');
+    const singles = new Set(lines.filter((segment) => segment.length > 0));
+    return function has(text) {
+        if (!text) return false;
+        if (!text.includes('\n')) return singles.has(text);
+        const block = text.split('\n');
+        for (let start = 0; start + block.length <= lines.length; start++) {
+            if (block.every((segment, offset) => lines[start + offset] === segment)) {
+                return true;
+            }
+        }
+        return false;
+    };
+}
+
 function removeLine(line, index) {
     ensureFixlistPanelActive();
     const textarea = document.getElementById('selectedLines');
@@ -1632,7 +1652,7 @@ function removeLine(line, index) {
         if (match[0].startsWith('\n') && match[0].endsWith('\n')) {
             replaceWith = '\n';
         }
-        textarea.value = textarea.value.substring(0, matchStart) + replaceWith + textarea.value.substring(matchStart + removal.length);
+        applyTextareaEdit(textarea, matchStart, matchStart + removal.length, replaceWith);
 
         const removedLength = removal.length - replaceWith.length;
         let restoredPos = cursorPos;
@@ -1652,20 +1672,40 @@ function syncCopiedIndexesWithTextarea() {
     if (!textarea || copiedLineIndexes.size === 0) {
         return;
     }
-    const presentLines = new Set(
-        textarea.value.split('\n').filter((segment) => segment.length > 0),
-    );
+    const isPresent = buildFixlistPresence(textarea.value);
     const staleIndexes = [];
     copiedLineIndexes.forEach((index) => {
         const entry = analyzedLines[index];
-        const line = fixlistTextForEntry(entry);
-        if (!line || !presentLines.has(line)) {
+        if (!isPresent(fixlistTextForEntry(entry))) {
             staleIndexes.push(index);
         }
     });
     staleIndexes.forEach((index) => {
         copiedLineIndexes.delete(index);
         setCopiedState(index, false);
+    });
+}
+
+// syncCopiedIndexesWithTextarea() only prunes, which is enough while edits only
+// ever remove lines. An undo can put removed lines back, so after one the marks
+// have to be derived from the text in both directions.
+function recomputeCopiedIndexesFromTextarea() {
+    const textarea = document.getElementById('selectedLines');
+    if (!textarea || !analyzedLines.length) {
+        return;
+    }
+    const isInFixlist = buildFixlistPresence(textarea.value);
+    analyzedLines.forEach((entry, index) => {
+        const isPresent = isInFixlist(fixlistTextForEntry(entry));
+        if (isPresent === copiedLineIndexes.has(index)) {
+            return;
+        }
+        if (isPresent) {
+            copiedLineIndexes.add(index);
+        } else {
+            copiedLineIndexes.delete(index);
+        }
+        setCopiedState(index, isPresent);
     });
 }
 
@@ -1688,11 +1728,9 @@ function insertLine(line, index) {
     const textarea = document.getElementById('selectedLines');
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
-    const text = textarea.value;
     const effectiveLine = fixlistTextForEntry(analyzedLines[index]) || line;
 
-    const newText = text.substring(0, start) + effectiveLine + '\n' + text.substring(end);
-    textarea.value = newText;
+    applyTextareaEdit(textarea, start, end, effectiveLine + '\n');
 
     textarea.selectionStart = textarea.selectionEnd = start + effectiveLine.length + 1;
     textarea.focus();
@@ -1706,9 +1744,9 @@ function insertAllStatus(status) {
     ensureFixlistPanelActive();
     syncCopiedIndexesWithTextarea();
     const textarea = document.getElementById('selectedLines');
-    let insertPosition = textarea.selectionStart;
-    let linesAdded = 0;
+    const insertPosition = textarea.selectionStart;
     const addedIndexes = [];
+    const addedLines = [];
 
     for (let index = 0; index < analyzedLines.length; index++) {
         if (copiedLineIndexes.has(index)) {
@@ -1721,24 +1759,24 @@ function insertAllStatus(status) {
             if (shouldSkipFirewallRulesLine(line)) {
                 continue;
             }
-            const effectiveLine = fixlistTextForEntry(entry);
-            const text = textarea.value;
-
-            const newText = text.substring(0, insertPosition) + effectiveLine + '\n' + text.substring(insertPosition);
-            textarea.value = newText;
-
-            insertPosition += effectiveLine.length + 1;
-
-            copiedLineIndexes.add(index);
+            addedLines.push(fixlistTextForEntry(entry));
             addedIndexes.push(index);
-            linesAdded++;
         }
     }
 
-    if (linesAdded > 0) {
-        textarea.selectionStart = textarea.selectionEnd = insertPosition;
+    if (addedLines.length > 0) {
+        // The whole batch goes in as one edit, so a mis-clicked bulk button
+        // costs a single Ctrl+Z rather than one per line.
+        const block = addedLines.join('\n') + '\n';
+        applyTextareaEdit(textarea, insertPosition, insertPosition, block);
+
+        const caret = insertPosition + block.length;
+        textarea.selectionStart = textarea.selectionEnd = caret;
         textarea.focus();
-        addedIndexes.forEach((idx) => setCopiedState(idx, true));
+        addedIndexes.forEach((idx) => {
+            copiedLineIndexes.add(idx);
+            setCopiedState(idx, true);
+        });
         scheduleDraftSave();
     }
 }

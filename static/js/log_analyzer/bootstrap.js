@@ -499,6 +499,23 @@ function bindRightPanelMenu() {
     });
 }
 
+// Browsers restore form-control values on reload, so a fixlist the analyst
+// emptied stays empty even though the server re-rendered the starter template
+// into the markup. defaultValue still holds what was rendered, so a blank
+// textarea can be refilled from it — a reload puts the starter (or the fixlist
+// being edited) back.
+function restoreRenderedFixlistIfBlank() {
+    const selectedLinesElement = document.getElementById('selectedLines');
+    if (!selectedLinesElement || selectedLinesElement.value.trim()) {
+        return;
+    }
+    const rendered = selectedLinesElement.defaultValue || '';
+    if (!rendered.trim()) {
+        return;
+    }
+    selectedLinesElement.value = rendered;
+}
+
 function bindAnalyzerControls() {
     bindAnalyzerButton('parseButton', () => parseLogs());
     bindAnalyzerButton('resetButton', () => resetToInput());
@@ -532,8 +549,13 @@ function bindAnalyzerControls() {
 
     const selectedLinesTextarea = document.getElementById('selectedLines');
     if (selectedLinesTextarea) {
-        selectedLinesTextarea.addEventListener('input', () => {
-            syncCopiedIndexesWithTextarea();
+        selectedLinesTextarea.addEventListener('input', (event) => {
+            const inputType = event && event.inputType;
+            if (inputType === 'historyUndo' || inputType === 'historyRedo') {
+                recomputeCopiedIndexesFromTextarea();
+            } else {
+                syncCopiedIndexesWithTextarea();
+            }
             scheduleDraftSave();
         });
     }
@@ -549,6 +571,48 @@ function bindAnalyzerControls() {
     }
 
     bindLegendToggle();
+    bindFixlistHistoryShortcut();
+}
+
+// The bulk buttons leave focus in the fixlist, so Ctrl+Z reaches it on its own.
+// Clicking anything that takes focus away (a legend chip, a status badge) breaks
+// that, and the keystroke would otherwise land on the document and do nothing —
+// so when no editable field owns it, hand it to the fixlist.
+function bindFixlistHistoryShortcut() {
+    document.addEventListener('keydown', (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+            return;
+        }
+        const key = String(event.key || '').toLowerCase();
+        const isRedo = key === 'y' || (key === 'z' && event.shiftKey);
+        const isUndo = key === 'z' && !event.shiftKey;
+        if (!isUndo && !isRedo) {
+            return;
+        }
+
+        // A focused field has its own history; never steal from it.
+        const active = document.activeElement;
+        if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) {
+            return;
+        }
+        if (document.querySelector('.rule-review-modal:not([hidden])')) {
+            return;
+        }
+
+        const textarea = document.getElementById('selectedLines');
+        if (!textarea || textarea.hidden || textarea.offsetParent === null) {
+            return;
+        }
+
+        event.preventDefault();
+        textarea.focus();
+        try {
+            document.execCommand(isRedo ? 'redo' : 'undo');
+        } catch (e) {
+            // Engine without programmatic history control; the analyst can still
+            // click into the fixlist and press Ctrl+Z there.
+        }
+    });
 }
 
 function bindAnalyzerModalDismissals() {
@@ -644,6 +708,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupLookupMenu();
     }
     initializePendingStatusChanges();
+    // Before initDraftAutosave(), so the refilled text becomes the baseline the
+    // draft compares against instead of looking like unsaved work.
+    restoreRenderedFixlistIfBlank();
     // Must follow initializePendingStatusChanges(), which wipes pending state on
     // every load; a restore before this point would be erased.
     initDraftAutosave();

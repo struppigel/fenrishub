@@ -508,12 +508,9 @@ function restoreCopiedIndexesFromTextarea() {
     if (!textarea || !analyzedLines.length) {
         return;
     }
-    const presentLines = new Set(
-        normalizeDraftNewlines(textarea.value).split('\n').filter((segment) => segment.length > 0),
-    );
+    const isPresent = buildFixlistPresence(normalizeDraftNewlines(textarea.value));
     analyzedLines.forEach((entry, index) => {
-        const line = fixlistTextForEntry(entry);
-        if (line && presentLines.has(line)) {
+        if (isPresent(fixlistTextForEntry(entry))) {
             copiedLineIndexes.add(index);
             setCopiedState(index, true);
         }
