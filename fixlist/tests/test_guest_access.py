@@ -52,6 +52,10 @@ class GuestAnalyzerAccessTests(TestCase):
         # Guest token must be exposed to JS for API calls.
         self.assertIn(f'guestToken: "{GUEST_TOKEN}"', body)
         self.assertNotIn('id="speechMenu"', body)
+        # Capturing marked text as a speech needs an account to own the speech,
+        # so the button and its modal must not render for guests.
+        self.assertNotIn('id="addSpeechButton"', body)
+        self.assertNotIn('id="speechCaptureModal"', body)
         # A guest has no fixlist to load a response from.
         self.assertEqual(response.context['initial_response_text'], '')
 

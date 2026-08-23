@@ -132,6 +132,15 @@ function applyRightPanelState() {
     if (bulkControls) bulkControls.hidden = writingResponse;
     const speechMenu = document.getElementById('speechMenu');
     if (speechMenu) speechMenu.hidden = !writingResponse;
+    // Capturing a speech only makes sense out of prose, so the button follows
+    // the picker in and out of view.
+    const addSpeechButton = document.getElementById('addSpeechButton');
+    if (addSpeechButton) {
+        addSpeechButton.hidden = !writingResponse;
+        if (typeof refreshAddSpeechButtonState === 'function') {
+            refreshAddSpeechButtonState();
+        }
+    }
 
     applyRightPanelMenuState();
 }

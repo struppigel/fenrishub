@@ -186,6 +186,7 @@
             </label>
         </div>
         {% if not is_guest %}
+        <button type="button" id="addSpeechButton" class="add-speech-button" title="mark text in the response, then save it as a reusable speech" disabled hidden>+speech</button>
         <div class="snippet-menu" id="speechMenu" hidden>
             <button type="button" class="snippet-menu-trigger" id="speechMenuTrigger">speeches &#x25BE;</button>
             <div class="snippet-menu-dropdown" id="speechMenuDropdown"></div>
@@ -248,6 +249,48 @@
 </div>
 
 <div id="statusPicker" class="status-picker" role="radiogroup" aria-label="Select line status" hidden></div>
+
+{% if not is_guest %}
+<div id="speechCaptureModal" class="rule-review-modal" hidden>
+    <div class="rule-review-backdrop" id="speechCaptureBackdrop"></div>
+    <div id="speechCaptureDialog" class="rule-review-content speech-capture-content" role="dialog" aria-modal="true" aria-labelledby="speechCaptureTitle" tabindex="-1">
+        <h3 id="speechCaptureTitle">add selection to speeches</h3>
+        <p id="speechCaptureError" class="review-summary speech-capture-error" role="alert" hidden></p>
+
+        <div class="review-section">
+            <h4>name</h4>
+            <input type="text" id="speechCaptureName" class="speech-capture-field" maxlength="255" placeholder="Speech name..." autocomplete="off">
+        </div>
+
+        <div class="review-section">
+            <h4>category</h4>
+            <input type="text" id="speechCaptureCategory" class="speech-capture-field" maxlength="255" list="speechCaptureCategoryList" placeholder="Category..." autocomplete="off">
+            <datalist id="speechCaptureCategoryList"></datalist>
+        </div>
+
+        <div class="review-section">
+            <h4>content</h4>
+            <textarea id="speechCaptureContent" class="speech-capture-field"></textarea>
+        </div>
+
+        <div class="speech-capture-toggles">
+            <label class="speech-capture-toggle" for="speechCaptureShared">
+                <input type="checkbox" id="speechCaptureShared" checked>
+                share with other helpers
+            </label>
+            <label class="speech-capture-toggle" for="speechCapturePlaceholders" title="swaps your name, the forum username and the upload links for their placeholders">
+                <input type="checkbox" id="speechCapturePlaceholders">
+                replace names and links with placeholders
+            </label>
+        </div>
+
+        <div class="button-group review-actions">
+            <button type="button" id="speechCaptureCancelButton">cancel</button>
+            <button type="button" id="speechCaptureSaveButton">save speech</button>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <div id="lineInspectorModal" class="rule-review-modal" hidden>
     <div class="rule-review-backdrop" id="lineInspectorBackdrop"></div>
@@ -356,6 +399,7 @@ window.logAnalyzerConfig = {
     snippetsApiUrl: "{% url 'snippets_api' %}",
     snippets: {{ snippets_json }},
     speechesApiUrl: "{% url 'speeches_api' %}",
+    speechCreateUrl: "{% url 'speech_create_api' %}",
     speeches: {{ speeches_json }},
     uploadLinkHelperBase: "{{ upload_link_helper_base|default:''|escapejs }}",
     uploadLinkGeneral: "{{ upload_link_general|default:''|escapejs }}",
@@ -369,6 +413,7 @@ window.logAnalyzerConfig = {
 <script defer src="{% static 'js/log_analyzer/conflict_wizard.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/rule_preview.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/draft_autosave.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/speech_capture.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/bootstrap.js' %}"></script>
 <script>
 (function() {
@@ -472,7 +517,9 @@ window.logAnalyzerConfig = {
         }
 
         load();
-        return { close: closeMenu };
+        // reload() rebuilds from window.logAnalyzerConfig, so a speech captured
+        // from the response panel shows up without a page reload.
+        return { close: closeMenu, reload: load };
     }
 
     var snippetMenu = null;
@@ -511,6 +558,11 @@ window.logAnalyzerConfig = {
         },
         closeSiblings: function() { if (snippetMenu) snippetMenu.close(); },
     });
+
+    // speech_capture.js calls this after saving a newly captured speech.
+    window.reloadSpeechMenu = function() {
+        if (speechMenu) speechMenu.reload();
+    };
 })();
 </script>
 {% endblock %}

@@ -146,6 +146,56 @@ function applySpeechPlaceholders(text) {
     return result;
 }
 
+// The other direction, used when a marked passage of an already written reply
+// is captured as a new speech: swap the concrete values back out for their
+// tokens so the speech is reusable on the next case instead of naming this one.
+//
+// Order is load-bearing. Each prefilled link contains its own base URL as a
+// prefix and the forum username inside its ?u= query, so links must be
+// reversed before their bases and both before the usernames - otherwise a
+// half-tokenised URL comes out the far end.
+//
+// {COUNTER} is deliberately never reproduced. A digit in written prose is far
+// more likely to be a real number than a step counter, and a speech that
+// silently renumbers text the analyst wrote is worse than one that does not.
+function reverseSpeechPlaceholders(text) {
+    const prefilled = (base) =>
+        `${base}?u=${encodeURIComponent(currentForumUsername)}`;
+
+    // An array, not an object: insertion order is the replacement order and
+    // that ordering is the whole point here.
+    const replacements = [];
+    if (UPLOAD_LINK_HELPER_BASE) {
+        if (currentForumUsername) {
+            replacements.push([prefilled(UPLOAD_LINK_HELPER_BASE), '{UPLOADLINK_HELPER_PREFILLED}']);
+        }
+    }
+    if (UPLOAD_LINK_GENERAL) {
+        if (currentForumUsername) {
+            replacements.push([prefilled(UPLOAD_LINK_GENERAL), '{UPLOADLINK_GENERAL_PREFILLED}']);
+        }
+    }
+    if (UPLOAD_LINK_HELPER_BASE) {
+        replacements.push([UPLOAD_LINK_HELPER_BASE, '{UPLOADLINK_HELPER}']);
+    }
+    if (UPLOAD_LINK_GENERAL) {
+        replacements.push([UPLOAD_LINK_GENERAL, '{UPLOADLINK_GENERAL}']);
+    }
+    if (currentForumUsername) {
+        replacements.push([currentForumUsername, '{USERNAME}']);
+    }
+    if (CURRENT_USERNAME) {
+        replacements.push([CURRENT_USERNAME, '{HELPERNAME}']);
+    }
+
+    let result = String(text === null || text === undefined ? '' : text);
+    replacements.forEach(([value, token]) => {
+        if (!value) return;
+        result = result.split(value).join(token);
+    });
+    return result;
+}
+
 const RULE_SUBMIT_TARGET_CREATE_FIXLIST = 'create_fixlist';
 const RULE_SUBMIT_TARGET_RESCAN = 'rescan';
 let statusPickerBusy = false;

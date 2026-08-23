@@ -213,6 +213,7 @@ const modalTriggerElements = {
     lineInspectorModal: null,
     ruleReviewModal: null,
     conflictWizardModal: null,
+    speechCaptureModal: null,
 };
 
 function isVisibleElement(element) {
@@ -251,6 +252,13 @@ function getActiveModalId() {
     const ruleReviewModal = document.getElementById('ruleReviewModal');
     if (ruleReviewModal && !ruleReviewModal.hidden) {
         return 'ruleReviewModal';
+    }
+
+    // Last: the rule workflow modals are mid-save and outrank a speech capture
+    // if both were somehow open.
+    const speechCaptureModal = document.getElementById('speechCaptureModal');
+    if (speechCaptureModal && !speechCaptureModal.hidden) {
+        return 'speechCaptureModal';
     }
 
     return null;
@@ -526,6 +534,8 @@ function bindAnalyzerControls() {
     bindAnalyzerButton('saveRulesRescanButton', () => saveRulesAndRescan());
     bindAnalyzerButton('saveFixlistButton', () => goToCreateFixlist());
     bindAnalyzerButton('lineInspectorCloseButton', () => closeLineInspectorModal());
+    bindAnalyzerButton('speechCaptureCancelButton', () => closeSpeechCaptureModal());
+    bindAnalyzerButton('speechCaptureSaveButton', () => saveSpeechCapture());
     bindAnalyzerButton('ruleReviewBackButton', () => cancelRuleWorkflow());
     bindAnalyzerButton('ruleReviewContinueButton', () => submitWithRulePersist(false));
     bindAnalyzerButton('ruleReviewSavePersistButton', () => submitWithRulePersist(true));
@@ -621,7 +631,11 @@ function bindAnalyzerModalDismissals() {
     const lineInspectorBackdrop = document.getElementById('lineInspectorBackdrop');
     const ruleReviewBackdrop = document.getElementById('ruleReviewBackdrop');
     const conflictWizardBackdrop = document.getElementById('conflictWizardBackdrop');
+    const speechCaptureBackdrop = document.getElementById('speechCaptureBackdrop');
 
+    if (speechCaptureBackdrop) {
+        speechCaptureBackdrop.addEventListener('click', () => closeSpeechCaptureModal());
+    }
     if (lineInspectorBackdrop) {
         lineInspectorBackdrop.addEventListener('click', () => closeLineInspectorModal());
     }
@@ -654,6 +668,10 @@ function bindAnalyzerModalDismissals() {
         }
         if (activeModalId === 'ruleReviewModal') {
             cancelRuleWorkflow();
+            return;
+        }
+        if (activeModalId === 'speechCaptureModal') {
+            closeSpeechCaptureModal();
         }
     });
 }
@@ -733,6 +751,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     bindAnalyzerControls();
     bindAnalyzerModalDismissals();
+    if (typeof setupAddSpeechButton === 'function') {
+        setupAddSpeechButton();
+    }
     // Wait for the initial analysis to settle so the restored overrides land on
     // real lines and the prompt isn't cleared by the analysis render. A failed
     // load must still surface the draft — that is when recovery matters most.

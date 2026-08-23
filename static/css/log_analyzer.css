@@ -423,6 +423,21 @@ body.clean-cursor-mode .line-text {
     display: none !important;
 }
 
+/* Captures the marked response text as a speech. Sits beside the speeches
+   picker and shares its look, and is disabled until something is marked. */
+.add-speech-button[hidden] {
+    display: none !important;
+}
+
+.add-speech-button:hover:not(:disabled) {
+    text-decoration: underline;
+}
+
+.add-speech-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 .rule-review-modal {
     position: fixed;
     inset: 0;
@@ -479,6 +494,54 @@ body.clean-cursor-mode .line-text {
     font-size: 12px;
     line-height: 1.4;
     color: var(--la-text-secondary);
+}
+
+/* Speech capture modal - narrower than the rule review modals, since it is a
+   short form rather than a list of candidates to scan. */
+.speech-capture-content {
+    width: min(620px, 96vw);
+}
+
+.speech-capture-field {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    background: var(--la-bg-3);
+    color: var(--la-text-primary);
+    border: 1px solid var(--la-border-muted);
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.speech-capture-field:focus {
+    outline: none;
+    border-color: var(--la-focus-alt);
+}
+
+textarea.speech-capture-field {
+    min-height: 160px;
+    resize: vertical;
+    line-height: 1.4;
+}
+
+.speech-capture-toggles {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.speech-capture-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--la-text-secondary);
+    cursor: pointer;
+}
+
+.speech-capture-error {
+    color: var(--la-status-b);
 }
 
 .rule-candidates-list {

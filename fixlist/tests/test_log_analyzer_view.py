@@ -1,3 +1,4 @@
+import re
 from unittest.mock import patch
 
 from django.http import HttpResponse
@@ -46,3 +47,51 @@ class LogAnalyzerViewTests(UploadedLogSharedSetupMixin, TestCase):
 
         self.assertContains(response, 'active-log')
         self.assertNotContains(response, 'trashed-log')
+
+    def test_renders_speech_capture_button_and_modal(self):
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('log_analyzer'))
+
+        self.assertContains(response, 'id="addSpeechButton"')
+        self.assertContains(response, 'id="speechCaptureModal"')
+        self.assertContains(response, 'id="speechCaptureName"')
+        self.assertContains(response, 'id="speechCaptureCategory"')
+        self.assertContains(response, 'id="speechCaptureContent"')
+        self.assertContains(response, 'id="speechCaptureShared"')
+        self.assertContains(response, 'id="speechCapturePlaceholders"')
+
+    def test_speech_capture_shares_by_default(self):
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('log_analyzer'))
+
+        shared = re.search(r'<input[^>]*id="speechCaptureShared"[^>]*>', response.content.decode())
+        self.assertIsNotNone(shared)
+        self.assertIn('checked', shared.group(0))
+
+    def test_speech_capture_button_starts_hidden_and_disabled(self):
+        """It belongs to the response panel and needs marked text, neither of
+        which is true on a freshly loaded page."""
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('log_analyzer'))
+
+        button = re.search(r'<button[^>]*id="addSpeechButton"[^>]*>', response.content.decode())
+        self.assertIsNotNone(button)
+        self.assertIn('disabled', button.group(0))
+        self.assertIn('hidden', button.group(0))
+
+    def test_exposes_speech_create_url_to_the_frontend(self):
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('log_analyzer'))
+
+        self.assertContains(response, f'speechCreateUrl: "{reverse("speech_create_api")}"')
+
+    def test_loads_the_speech_capture_script(self):
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('log_analyzer'))
+
+        self.assertContains(response, 'log_analyzer/speech_capture.js')

@@ -92,7 +92,12 @@
             </li>
             <li><a href="#fixlists">Fixes</a></li>
             <li><a href="#snippets">Snippets</a></li>
-            <li><a href="#speeches">Speeches</a></li>
+            <li><a href="#speeches">Speeches</a>
+                <ul>
+                    <li><a href="#capture-speech">Turning part of a reply into a speech</a></li>
+                    <li><a href="#speech-placeholders">Placeholders in speeches</a></li>
+                </ul>
+            </li>
             <li><a href="#rules">Rules</a>
                 <ul>
                     <li><a href="#rule-sets">Rule sets (shared vs private)</a></li>
@@ -306,6 +311,14 @@
     <p>In the Analyze view, switch the right panel from <strong>fixlist</strong> to <strong>response</strong> using the panel picker. The bulk <strong>add B P J !</strong> buttons are replaced by a <strong>speeches</strong> picker, since those verdicts have nothing to add to prose. Pick a speech and it is inserted at your cursor. The <strong>snippets</strong> picker stays available in both panels.</p>
 
     <p>When you press <strong>save</strong>, the response is stored on the fixlist next to its contents, so it follows you to any machine and comes back when you reopen the fixlist or use <strong>reanalyze &amp; edit</strong>. Until then it is part of the analyzer draft in your browser, which survives a reload or an accidentally closed tab and is offered back to you together with the fixlist.</p>
+
+    <h3 id="capture-speech">Turning part of a reply into a speech</h3>
+
+    <p>The best speeches are usually written in the middle of a real case. When you have typed a paragraph you know you will want again, mark it in the response panel and press <strong>+speech</strong>, the button next to the speeches picker. It stays greyed out until something is marked. A dialog opens asking for a name and a category (existing categories are offered as you type, and the default is <strong>generic</strong>). You can edit the text before saving. <strong>share with other helpers</strong> is ticked by default, so untick it if the speech should stay private to you.</p>
+
+    <p>The new speech is saved and selected for the analyzer straight away, so it shows up in the <strong>speeches</strong> picker without reloading the page.</p>
+
+    <p>The dialog also offers <strong>replace names and links with placeholders</strong>. With it ticked, your own username, the forum username of the loaded log and the upload links are swapped for their placeholders before the speech is stored, which is what makes the captured text reusable on the next case rather than a souvenir of this one. See <a href="#speech-placeholders">Placeholders in speeches</a> for the tokens involved. <code>{COUNTER}</code> is deliberately left out of this: a number you wrote is far more likely to be a real number than a step counter, so digits are never touched.</p>
 
     <h3 id="speech-placeholders">Placeholders in speeches</h3>
 

@@ -151,6 +151,52 @@ class SpeechViewTests(TestCase):
 
         self.assertEqual(Speech.objects.filter(owner=self.user, name='dupe').count(), 1)
 
+    def test_create_duplicate_name_reports_the_error(self):
+        Speech.objects.create(owner=self.user, name='dupe', content='first')
+
+        response = self.client.post(reverse('speeches'), {
+            'action': 'create', 'name': 'dupe', 'content': 'second',
+        }, follow=True)
+
+        self.assertContains(response, 'A speech named &quot;dupe&quot; already exists.')
+
+    def test_create_blank_name_reports_the_error(self):
+        response = self.client.post(reverse('speeches'), {
+            'action': 'create', 'name': '  ', 'content': 'body',
+        }, follow=True)
+
+        self.assertContains(response, 'Speech name is required.')
+        self.assertFalse(Speech.objects.exists())
+
+    def test_create_blank_content_reports_the_error(self):
+        response = self.client.post(reverse('speeches'), {
+            'action': 'create', 'name': 'greeting', 'content': '  ',
+        }, follow=True)
+
+        self.assertContains(response, 'Speech content is required.')
+        self.assertFalse(Speech.objects.exists())
+
+    def test_edit_duplicate_name_is_rejected(self):
+        Speech.objects.create(owner=self.user, name='taken', content='first')
+        speech = Speech.objects.create(owner=self.user, name='mine', content='second')
+
+        self.client.post(reverse('speeches'), {
+            'action': 'edit', 'pk': speech.pk, 'name': 'taken', 'content': 'second',
+        })
+
+        speech.refresh_from_db()
+        self.assertEqual(speech.name, 'mine')
+
+    def test_edit_keeping_own_name_is_allowed(self):
+        speech = Speech.objects.create(owner=self.user, name='mine', content='before')
+
+        self.client.post(reverse('speeches'), {
+            'action': 'edit', 'pk': speech.pk, 'name': 'mine', 'content': 'after',
+        })
+
+        speech.refresh_from_db()
+        self.assertEqual(speech.content, 'after')
+
     def test_edit_speech_changes_category(self):
         speech = Speech.objects.create(
             owner=self.user, name='s', content='c', category='generic',

@@ -18,6 +18,35 @@ from django.db.models import Q
 from django.contrib.auth.models import User
 
 from ..models import Speech
+from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
+
+# Matches the model's CharField(max_length=255) on name and category. The forms
+# on the speeches page are bounded by the widget, but a JSON client is not, and
+# an over-long value would surface as a database error instead of a 400.
+SPEECH_FIELD_MAX_LENGTH = 255
+
+
+def _speech_validation_error(owner, name, content, category='', exclude_pk=None):
+    """Return an error message for invalid speech fields, or None if they are ok.
+
+    Shared by the speeches page and the analyzer's create API so the two can
+    never drift apart on what counts as a valid speech.
+    """
+    if not name:
+        return 'Speech name is required.'
+    if not content:
+        return 'Speech content is required.'
+    if len(name) > SPEECH_FIELD_MAX_LENGTH:
+        return f'Speech name must be at most {SPEECH_FIELD_MAX_LENGTH} characters.'
+    if len(category) > SPEECH_FIELD_MAX_LENGTH:
+        return f'Speech category must be at most {SPEECH_FIELD_MAX_LENGTH} characters.'
+
+    duplicates = Speech.objects.filter(owner=owner, name=name)
+    if exclude_pk is not None:
+        duplicates = duplicates.exclude(pk=exclude_pk)
+    if duplicates.exists():
+        return f'A speech named "{name}" already exists.'
+    return None
 
 
 @login_required
@@ -30,15 +59,12 @@ def speeches_view(request):
         if action == 'create':
             name = request.POST.get('name', '').strip()
             content = request.POST.get('content', '').strip()
-            if not name:
-                messages.error(request, 'Speech name is required.')
-            elif not content:
-                messages.error(request, 'Speech content is required.')
-            elif Speech.objects.filter(owner=request.user, name=name).exists():
-                messages.error(request, f'A speech named "{name}" already exists.')
+            category = request.POST.get('category', '').strip() or Speech.DEFAULT_CATEGORY
+            error = _speech_validation_error(request.user, name, content, category)
+            if error:
+                messages.error(request, error)
             else:
                 is_shared = request.POST.get('is_shared') == 'on'
-                category = request.POST.get('category', '').strip() or Speech.DEFAULT_CATEGORY
                 speech = Speech.objects.create(
                     owner=request.user, name=name, content=content,
                     is_shared=is_shared, category=category,
@@ -52,21 +78,19 @@ def speeches_view(request):
             speech = get_object_or_404(Speech, pk=pk, owner=request.user)
             name = request.POST.get('name', '').strip()
             content = request.POST.get('content', '').strip()
-            if not name:
-                messages.error(request, 'Speech name is required.')
-            elif not content:
-                messages.error(request, 'Speech content is required.')
+            category = request.POST.get('category', '').strip() or Speech.DEFAULT_CATEGORY
+            error = _speech_validation_error(
+                request.user, name, content, category, exclude_pk=speech.pk,
+            )
+            if error:
+                messages.error(request, error)
             else:
-                duplicate = Speech.objects.filter(owner=request.user, name=name).exclude(pk=speech.pk).exists()
-                if duplicate:
-                    messages.error(request, f'A speech named "{name}" already exists.')
-                else:
-                    speech.name = name
-                    speech.content = content
-                    speech.is_shared = request.POST.get('is_shared') == 'on'
-                    speech.category = request.POST.get('category', '').strip() or Speech.DEFAULT_CATEGORY
-                    speech.save(update_fields=['name', 'content', 'is_shared', 'category', 'updated_at'])
-                    messages.success(request, f'Speech "{name}" updated.')
+                speech.name = name
+                speech.content = content
+                speech.is_shared = request.POST.get('is_shared') == 'on'
+                speech.category = category
+                speech.save(update_fields=['name', 'content', 'is_shared', 'category', 'updated_at'])
+                messages.success(request, f'Speech "{name}" updated.')
             return redirect('speeches')
 
         if action == 'delete':
@@ -156,6 +180,57 @@ def speeches_toggle_analyzer_api(request):
         speech.analyzer_users.add(request.user)
         selected = True
     return JsonResponse({'selected': selected})
+
+
+@login_required
+@require_http_methods(["POST"])
+def speech_create_api(request):
+    """Create a speech from text marked in the analyzer's response panel.
+
+    Lets an analyst keep a paragraph worth reusing without leaving the analyzer.
+    The new speech is selected for the analyzer immediately, so it can be used
+    in the very next reply.
+    """
+    try:
+        payload = PayloadValidator.json_payload(request)
+    except PayloadTooLargeError as exc:
+        return PayloadValidator.error_response(str(exc), status=413)
+    except BadJsonError:
+        return PayloadValidator.error_response('Invalid JSON payload.')
+
+    if not isinstance(payload, dict):
+        return PayloadValidator.error_response('Invalid JSON payload.')
+
+    for field in ('name', 'content', 'category'):
+        if field in payload and not isinstance(payload[field], str):
+            return PayloadValidator.error_response(f'Field "{field}" must be a string.')
+
+    is_shared = payload.get('is_shared', False)
+    if not isinstance(is_shared, bool):
+        return PayloadValidator.error_response('Field "is_shared" must be a boolean.')
+
+    name = payload.get('name', '').strip()
+    content = payload.get('content', '').strip()
+    category = payload.get('category', '').strip() or Speech.DEFAULT_CATEGORY
+
+    error = _speech_validation_error(request.user, name, content, category)
+    if error:
+        return PayloadValidator.error_response(error)
+
+    speech = Speech.objects.create(
+        owner=request.user, name=name, content=content,
+        is_shared=is_shared, category=category,
+    )
+    speech.analyzer_users.add(request.user)
+
+    # Same shape speeches_api returns, so the analyzer can drop it straight into
+    # its speeches config and rebuild the dropdown without a refetch.
+    return JsonResponse({'speech': {
+        'id': speech.id,
+        'name': speech.name,
+        'category': speech.category,
+        'content': speech.content,
+    }})
 
 
 @login_required

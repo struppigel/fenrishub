@@ -39,7 +39,12 @@ from .views.log_type_rules import (
 )
 from .views.rules import add_rule_view, rules_view, test_rule_api
 from .views.snippets import snippets_api, snippets_toggle_analyzer_api, snippets_view
-from .views.speeches import speeches_api, speeches_toggle_analyzer_api, speeches_view
+from .views.speeches import (
+    speech_create_api,
+    speeches_api,
+    speeches_toggle_analyzer_api,
+    speeches_view,
+)
 from .views.statistics import statistics_view
 from .views.uploads import (
     diff_uploaded_logs_view,
@@ -100,6 +105,7 @@ urlpatterns = [
     path('api/snippets/', snippets_api, name='snippets_api'),
     path('api/snippets/toggle-analyzer/', snippets_toggle_analyzer_api, name='snippets_toggle_analyzer_api'),
     path('api/speeches/', speeches_api, name='speeches_api'),
+    path('api/speeches/create/', speech_create_api, name='speech_create_api'),
     path('api/speeches/toggle-analyzer/', speeches_toggle_analyzer_api, name='speeches_toggle_analyzer_api'),
     path('fixes/<int:pk>/', view_fixlist, name='view_fixlist'),
     path('share/<str:token>/', shared_fixlist_view, name='shared_fixlist'),

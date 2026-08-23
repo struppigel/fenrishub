@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <!--
-  Tests for applySpeechPlaceholders() in shared.js.
+  Tests for applySpeechPlaceholders() and reverseSpeechPlaceholders() in
+  shared.js.
 
   Speeches are canned prose inserted into the analyzer's response panel. They
   carry placeholders that are resolved at insert time, because {USERNAME}
@@ -11,13 +12,17 @@
   blanked. A visible {USERNAME} is a prompt to fill it in; a silent "Hi ," or an
   upload link missing its ?u= is a message you send to a user without noticing.
 
+  The reverse direction runs when a marked passage of a written reply is
+  captured as a new speech: this case's values have to become tokens again, or
+  the speech is a souvenir of one case rather than something reusable.
+
   Open this file directly in a browser (no build step needed).
   Pass = green row, Fail = red row with an error message.
 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>shared.js applySpeechPlaceholders tests</title>
+<title>shared.js speech placeholder tests</title>
 <style>
   body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
   h1   { font-size: 1rem; margin-bottom: 12px; }
@@ -27,7 +32,7 @@
 </style>
 </head>
 <body>
-<h1>shared.js – applySpeechPlaceholders tests</h1>
+<h1>shared.js – speech placeholder tests</h1>
 <ul id="results"></ul>
 <div id="summary"></div>
 
@@ -259,6 +264,124 @@ function assertEqual(description, actual, expected) {
     setCurrentForumUsername('{HELPERNAME}');
     assertEqual('a substituted value is not itself scanned for tokens',
         applySpeechPlaceholders('{USERNAME}'), '{HELPERNAME}');
+})();
+
+// ---------------------------------------------------------------------------
+// reverseSpeechPlaceholders(): capturing marked reply text as a new speech.
+// The values of THIS case have to become tokens again, or the speech is a
+// souvenir of one case rather than something reusable on the next.
+// ---------------------------------------------------------------------------
+(function testReverseBasics() {
+    setCurrentForumUsername('bob');
+
+    assertEqual('the loaded forum user becomes {USERNAME}',
+        reverseSpeechPlaceholders('Hi bob,'), 'Hi {USERNAME},');
+
+    assertEqual('the analyst becomes {HELPERNAME}',
+        reverseSpeechPlaceholders('- alice'), '- {HELPERNAME}');
+
+    assertEqual('the helper link becomes its token',
+        reverseSpeechPlaceholders('https://fenris.test/upload/alice/'),
+        '{UPLOADLINK_HELPER}');
+
+    assertEqual('the general link becomes its token',
+        reverseSpeechPlaceholders('https://fenris.test/upload/'),
+        '{UPLOADLINK_GENERAL}');
+
+    assertEqual('every occurrence is reversed, not just the first',
+        reverseSpeechPlaceholders('bob bob bob'), '{USERNAME} {USERNAME} {USERNAME}');
+
+    assertEqual('empty input stays empty', reverseSpeechPlaceholders(''), '');
+
+    assertEqual('text with nothing to reverse is unchanged',
+        reverseSpeechPlaceholders('Run FRST as admin.\nThen reboot.'),
+        'Run FRST as admin.\nThen reboot.');
+})();
+
+// ---------------------------------------------------------------------------
+// Ordering. A prefilled link contains its own base URL as a prefix AND the
+// forum username inside its ?u=; the general link is a prefix of the helper
+// link. Reverse in the wrong order and a half-tokenised URL comes out.
+// ---------------------------------------------------------------------------
+(function testReverseOrdering() {
+    setCurrentForumUsername('bob');
+
+    assertEqual('a prefilled helper link is reversed whole, not base-first',
+        reverseSpeechPlaceholders('https://fenris.test/upload/alice/?u=bob'),
+        '{UPLOADLINK_HELPER_PREFILLED}');
+
+    assertEqual('a prefilled general link is reversed whole too',
+        reverseSpeechPlaceholders('https://fenris.test/upload/?u=bob'),
+        '{UPLOADLINK_GENERAL_PREFILLED}');
+
+    assertEqual('the general link does not eat the helper link',
+        reverseSpeechPlaceholders('https://fenris.test/upload/alice/'),
+        '{UPLOADLINK_HELPER}');
+
+    assertEqual('links and names mixed in one passage',
+        reverseSpeechPlaceholders('Hi bob, upload to https://fenris.test/upload/alice/?u=bob - alice'),
+        'Hi {USERNAME}, upload to {UPLOADLINK_HELPER_PREFILLED} - {HELPERNAME}');
+
+    assert('no output leaves a bare username inside a tokenised link',
+        reverseSpeechPlaceholders('https://fenris.test/upload/alice/?u=bob')
+            .indexOf('fenris.test') === -1);
+})();
+
+// ---------------------------------------------------------------------------
+// Round-tripping: a captured speech must resolve back to what was written.
+// ---------------------------------------------------------------------------
+(function testReverseRoundTrip() {
+    setCurrentForumUsername('bob');
+
+    const written = 'Hi bob,\nUpload here: https://fenris.test/upload/alice/?u=bob\n'
+        + 'Or here: https://fenris.test/upload/?u=bob\n'
+        + 'Plain: https://fenris.test/upload/alice/ and https://fenris.test/upload/\n- alice';
+
+    const speech = reverseSpeechPlaceholders(written);
+    assertEqual('reverse then apply returns the original text',
+        applySpeechPlaceholders(speech), written);
+
+    assert('the stored speech itself holds tokens, not this case\'s values',
+        speech.indexOf('bob') === -1 && speech.indexOf('fenris.test') === -1);
+})();
+
+// ---------------------------------------------------------------------------
+// {COUNTER} is deliberately NOT reproduced: a digit in written prose is far
+// more likely to be a real number than a step counter, and silently
+// renumbering what the analyst wrote is worse than leaving it alone.
+// ---------------------------------------------------------------------------
+(function testReverseLeavesDigits() {
+    setCurrentForumUsername('bob');
+
+    assertEqual('digits are never turned back into {COUNTER}',
+        reverseSpeechPlaceholders('1. reboot\n2. rerun FRST'),
+        '1. reboot\n2. rerun FRST');
+
+    assertEqual('numbers inside prose survive untouched',
+        reverseSpeechPlaceholders('Wait 10 minutes, then reboot twice.'),
+        'Wait 10 minutes, then reboot twice.');
+})();
+
+// ---------------------------------------------------------------------------
+// No log loaded: there is no forum username to reverse, and nothing that
+// belongs to this case should be invented.
+// ---------------------------------------------------------------------------
+(function testReverseWithoutLog() {
+    setCurrentForumUsername('');
+
+    assertEqual('a name that happens to match nothing is left alone',
+        reverseSpeechPlaceholders('Hi bob,'), 'Hi bob,');
+
+    assertEqual('prefilled links cannot be recognised without a loaded user',
+        reverseSpeechPlaceholders('https://fenris.test/upload/alice/?u=bob'),
+        '{UPLOADLINK_HELPER}?u=bob');
+
+    assertEqual('the analyst name still reverses without a log',
+        reverseSpeechPlaceholders('- alice'), '- {HELPERNAME}');
+
+    setCurrentForumUsername('   ');
+    assertEqual('a whitespace-only forum username counts as absent',
+        reverseSpeechPlaceholders('Hi bob,'), 'Hi bob,');
 })();
 
 document.getElementById('summary').textContent =
