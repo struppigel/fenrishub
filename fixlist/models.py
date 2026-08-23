@@ -65,6 +65,15 @@ class Fixlist(models.Model):
     username = models.CharField(max_length=255)
     content = models.TextField()
     internal_note = models.TextField(blank=True)
+    # The reply written back to the infected user. Never rendered on the share
+    # page, in the download or the copy API, so the user themselves never sees it.
+    # Helpers do: it shows on the case timeline, which any authenticated helper
+    # holding the case link can read.
+    response = models.TextField(blank=True, default='')
+    # When the response was first written, so it can be placed on a case timeline
+    # by its own age rather than borrowing the fixlist's. Stamped on the save that
+    # turns an empty response into a non-empty one, cleared when it is emptied.
+    response_created_at = models.DateTimeField(null=True, blank=True, default=None)
     download_count = models.PositiveIntegerField(default=0)
     share_token = models.CharField(max_length=32, unique=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -94,6 +103,26 @@ class Fixlist(models.Model):
         """Generate a random secure share token."""
         alphabet = string.ascii_letters + string.digits
         return ''.join(secrets.choice(alphabet) for _ in range(32))
+
+    def set_response(self, text):
+        """Assign the response text, keeping `response_created_at` in step.
+
+        The stamp is set on the save that first gives the fixlist a response and
+        cleared when the response is emptied, so re-writing a response later gets
+        a fresh creation time instead of inheriting the old one. Returns the field
+        names it touched, for callers passing `update_fields`.
+        """
+        text = (text or '').strip()
+        self.response = text
+        if not text:
+            self.response_created_at = None
+        elif self.response_created_at is None:
+            self.response_created_at = timezone.now()
+            # Read by the auto-assign receiver below: only a freshly written
+            # response is auto-linked into cases, so a response someone unlinked
+            # on purpose does not come back on the next edit.
+            self._response_created_now = True
+        return ['response', 'response_created_at']
 
 
 class UserProfile(models.Model):
@@ -944,9 +973,34 @@ class InfectionCaseFixlist(models.Model):
         return f"{self.case.case_id}:{self.fixlist_id}"
 
 
+class InfectionCaseResponse(models.Model):
+    """A response's membership in a case.
+
+    The text lives on Fixlist.response, but inside a case the response is an item
+    in its own right: linked, unlinked and annotated independently of the fixlist
+    it belongs to.
+    """
+
+    case = models.ForeignKey(InfectionCase, on_delete=models.CASCADE, related_name='response_links')
+    fixlist = models.ForeignKey(Fixlist, on_delete=models.CASCADE, related_name='infection_case_response_links')
+    added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='added_case_responses')
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['added_at']
+        constraints = [
+            models.UniqueConstraint(fields=['case', 'fixlist'], name='unique_case_response'),
+        ]
+
+    def __str__(self):
+        return f"{self.case.case_id}:response:{self.fixlist_id}"
+
+
 class InfectionCaseNote(models.Model):
     case = models.ForeignKey(InfectionCase, on_delete=models.CASCADE, related_name='note_entries')
     anchor_log = models.ForeignKey('InfectionCaseLog', null=True, blank=True, on_delete=models.SET_NULL, related_name='pinned_notes')
+    anchor_fixlist = models.ForeignKey('InfectionCaseFixlist', null=True, blank=True, on_delete=models.SET_NULL, related_name='pinned_notes')
+    anchor_response = models.ForeignKey('InfectionCaseResponse', null=True, blank=True, on_delete=models.SET_NULL, related_name='pinned_notes')
     anchor_note = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='pinned_notes')
     content = models.TextField()
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='infection_case_notes')
@@ -1202,6 +1256,38 @@ def _auto_assign_new_fixlist_to_infection_cases(sender, instance, created, raw=F
     InfectionCaseFixlist.objects.bulk_create(
         [
             InfectionCaseFixlist(case=case, fixlist=instance, added_by=instance.owner)
+            for case in candidate_cases.only('id')
+        ],
+        ignore_conflicts=True,
+    )
+
+
+@receiver(post_save, sender=Fixlist)
+def _auto_assign_new_response_to_infection_cases(sender, instance, raw=False, **kwargs):
+    """Link a newly written response into the same cases a new fixlist would join.
+
+    Fires only on the save that first gives the fixlist a response (see
+    `Fixlist.set_response`), never on later edits, so unlinking a response from a
+    case is not silently undone the next time the text is touched.
+    """
+    if raw or not getattr(instance, '_response_created_now', False):
+        return
+    instance._response_created_now = False
+    if instance.deleted_at is not None:
+        return
+
+    candidate_cases = InfectionCase.objects.filter(
+        owner=instance.owner,
+        username=instance.username,
+        auto_assign_new_items=True,
+        is_training=False,
+        status=InfectionCase.STATUS_OPEN,
+        deleted_at__isnull=True,
+    )
+
+    InfectionCaseResponse.objects.bulk_create(
+        [
+            InfectionCaseResponse(case=case, fixlist=instance, added_by=instance.owner)
             for case in candidate_cases.only('id')
         ],
         ignore_conflicts=True,

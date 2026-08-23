@@ -34,6 +34,32 @@ class FixlistModelTests(TestCase):
 
         self.assertTrue(fixlist.is_public)
 
+    def test_response_defaults_to_empty_string(self):
+        user = User.objects.create_user(username="carol", password="password123")
+
+        fixlist = Fixlist.objects.create(
+            owner=user,
+            username="No Response",
+            content="line1",
+        )
+
+        self.assertEqual(fixlist.response, "")
+
+    def test_response_only_save_keeps_line_count_content_derived(self):
+        user = User.objects.create_user(username="dave", password="password123")
+        fixlist = Fixlist.objects.create(
+            owner=user,
+            username="Counted",
+            content="line1\nline2\n\nline3",
+        )
+        self.assertEqual(fixlist.line_count, 3)
+
+        fixlist.response = "a\nvery\nlong\nreply\nwith\nmany\nlines"
+        fixlist.save(update_fields=["response", "line_count", "updated_at"])
+        fixlist.refresh_from_db()
+
+        self.assertEqual(fixlist.line_count, 3)
+
 
 class UploadedLogModelTests(TestCase):
     def test_upload_id_defaults_to_two_words(self):

@@ -50,6 +50,60 @@ class TemplateMarkupTests(TestCase):
         self.assertNotIn("fenrishub_selected_rule_ids", content)
         self.assertNotIn("fenrishub_conflict_resolutions", content)
 
+    def test_help_page_uses_no_em_or_en_dashes(self):
+        """The help text is written with plain hyphens; long dashes stay out."""
+        content = self._read_template("help.html")
+
+        for dash, name in (("—", "em dash"), ("–", "en dash")):
+            with self.subTest(dash=name):
+                self.assertNotIn(dash, content, f"help.html must not contain a {name}")
+
+    def test_no_template_opens_a_multiline_hash_comment(self):
+        """
+        Django's {# #} comment is single-line only. An unclosed one renders its
+        text straight onto the page, so every {# must be closed on its own line.
+        Multi-line notes belong in {% comment %} blocks.
+        """
+        project_root = Path(__file__).resolve().parent.parent.parent
+        for template_path in sorted((project_root / "templates").rglob("*.html")):
+            for number, line in enumerate(template_path.read_text(encoding="utf-8").splitlines(), 1):
+                if "{#" in line and "#}" not in line:
+                    self.fail(
+                        f"{template_path.name}:{number} opens a {{# comment that is never "
+                        f"closed on the same line; use {{% comment %}} instead: {line.strip()}"
+                    )
+
+    def test_analyzer_template_no_longer_claims_the_response_is_browser_only(self):
+        content = self._read_template("log_analyzer.html")
+
+        self.assertIn("{{ initial_response_text }}", content)
+        self.assertNotIn("kept in this browser's draft, not saved to the server", content)
+        self.assertNotIn("save fix", content)
+        self.assertNotIn("update fix", content)
+
+    def test_help_template_no_longer_claims_the_response_stays_local(self):
+        content = self._read_template("help.html")
+
+        self.assertNotIn("it is never sent to the server", content)
+
+    def test_view_fixlist_template_tabs_have_no_required_textarea(self):
+        content = self._read_template("view_fixlist.html")
+
+        self.assertIn('name="response"', content)
+        self.assertIn('id="activeTabInput"', content)
+        self.assertIn('onclick="copyResponse(this)"', content)
+        # A hidden `required` control blocks form submission silently.
+        self.assertNotIn('id="content" name="content" required', content)
+
+    def test_infection_case_template_handles_response_before_fixlist_fallback(self):
+        content = self._read_template("view_infection_case.html")
+
+        response_branch = content.find("item.item_type == 'response'")
+        self.assertNotEqual(response_branch, -1)
+        # The fixlist branch is the {% else %} fallback, so the response branch
+        # must come first or response entries render as fixlists.
+        self.assertLess(response_branch, content.find("{% else %}\n        {% with fixlist=item.fixlist %}"))
+
     def test_profile_template_mentions_frstpath_placeholder(self):
         content = self._read_template("profile.html")
         self.assertIn("{FRSTPATH}", content)

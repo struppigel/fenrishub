@@ -57,6 +57,30 @@ class SharingAndDownloadTests(TestCase):
         self.assertEqual(response.json(), {"content": self.fixlist.content})
         self.assertEqual(AccessLog.objects.filter(fixlist=self.fixlist).count(), 1)
 
+    def test_shared_page_download_and_copy_never_expose_the_response(self):
+        # The response is the helper's private reply draft; nothing on the guest
+        # side of the app may leak it.
+        sentinel = "SENTINEL-RESPONSE-ONLY"
+        self.fixlist.response = sentinel
+        self.fixlist.save()
+
+        share_url = reverse("shared_fixlist", args=[self.fixlist.share_token])
+
+        anonymous = self.client.get(share_url)
+        self.assertEqual(anonymous.status_code, 200)
+        self.assertNotContains(anonymous, sentinel)
+
+        guest_preview = self.client.get(share_url, {"preview": "guest"})
+        self.assertEqual(guest_preview.status_code, 200)
+        self.assertNotContains(guest_preview, sentinel)
+
+        download = self.client.get(reverse("download_fixlist", args=[self.fixlist.share_token]))
+        self.assertEqual(download.content.decode("utf-8"), self.fixlist.content)
+        self.assertNotIn(sentinel, download.content.decode("utf-8"))
+
+        copied = self.client.post(reverse("copy_api", args=[self.fixlist.share_token]))
+        self.assertEqual(copied.json(), {"content": self.fixlist.content})
+
     def test_shared_view_marks_owner_in_context_when_logged_in(self):
         request = self.factory.get(reverse("shared_fixlist", args=[self.fixlist.share_token]))
         request.user = self.user

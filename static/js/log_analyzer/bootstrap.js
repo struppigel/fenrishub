@@ -499,21 +499,23 @@ function bindRightPanelMenu() {
     });
 }
 
-// Browsers restore form-control values on reload, so a fixlist the analyst
-// emptied stays empty even though the server re-rendered the starter template
-// into the markup. defaultValue still holds what was rendered, so a blank
-// textarea can be refilled from it — a reload puts the starter (or the fixlist
-// being edited) back.
-function restoreRenderedFixlistIfBlank() {
-    const selectedLinesElement = document.getElementById('selectedLines');
-    if (!selectedLinesElement || selectedLinesElement.value.trim()) {
-        return;
-    }
-    const rendered = selectedLinesElement.defaultValue || '';
-    if (!rendered.trim()) {
-        return;
-    }
-    selectedLinesElement.value = rendered;
+// Browsers restore form-control values on reload, so a right panel the analyst
+// emptied stays empty even though the server re-rendered text into the markup.
+// defaultValue still holds what was rendered, so a blank textarea can be refilled
+// from it — a reload puts the starter template (or the fixlist and response being
+// edited) back.
+function restoreRenderedRightPanelsIfBlank() {
+    ['selectedLines', 'responseText'].forEach((id) => {
+        const element = document.getElementById(id);
+        if (!element || element.value.trim()) {
+            return;
+        }
+        const rendered = element.defaultValue || '';
+        if (!rendered.trim()) {
+            return;
+        }
+        element.value = rendered;
+    });
 }
 
 function bindAnalyzerControls() {
@@ -710,7 +712,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initializePendingStatusChanges();
     // Before initDraftAutosave(), so the refilled text becomes the baseline the
     // draft compares against instead of looking like unsaved work.
-    restoreRenderedFixlistIfBlank();
+    restoreRenderedRightPanelsIfBlank();
     // Must follow initializePendingStatusChanges(), which wipes pending state on
     // every load; a restore before this point would be erased.
     initDraftAutosave();

@@ -78,11 +78,11 @@ Go to `/` and sign in with the account you created.
 
 Useful authenticated routes:
 
-- `/fixlists/`
+- `/fixes/`
 - `/uploads/`
 - `/analyze/`
 - `/rules/`
-- `/fixlists/snippets/`
+- `/fixes/snippets/`
 
 ## 5. Test the upload flow
 
@@ -133,7 +133,7 @@ Important behavior:
 
 ## 8. Create and share a fixlist
 
-Authenticated users can create fixlists at `/fixlists/create/` and manage them from `/fixlists/`.
+Authenticated users can create fixlists at `/fixes/create/` and manage them from `/fixes/`.
 
 Each fixlist:
 
@@ -166,7 +166,7 @@ Rules are owner-scoped and can be enabled or disabled.
 
 ### Snippets
 
-Go to `/fixlists/snippets/` to manage reusable fixlist snippets.
+Go to `/fixes/snippets/` to manage reusable fixlist snippets.
 
 Snippets can be:
 

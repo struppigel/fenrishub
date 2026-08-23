@@ -90,7 +90,7 @@
                     <li><a href="#analyze-right">Right side - fixlist editing</a></li>
                 </ul>
             </li>
-            <li><a href="#fixlists">Fixlists</a></li>
+            <li><a href="#fixlists">Fixes</a></li>
             <li><a href="#snippets">Snippets</a></li>
             <li><a href="#speeches">Speeches</a></li>
             <li><a href="#rules">Rules</a>
@@ -241,29 +241,35 @@
 
     <p><strong>snippets</strong> lets you choose a code snippet that you may want to include in the fixlist. This is probably empty at the beginning. The snippets can be managed in the snippets view.</p>
 
-    <p><strong>save fix</strong> will do two things:</p>
+    <p><strong>save</strong> will do two things:</p>
     <ol>
         <li>Ask you if you want to save rules, if you changed line verdicts</li>
-        <li>Open the fixlist creator with the current Fixlist contents</li>
+        <li>Save the fixlist and take you to its page</li>
     </ol>
 
-    <p>In the fixlist creation page, you can add internal notes, adjust the username, and change the contents.</p>
+    <p>Both right hand panels are saved together: the <strong>fixlist</strong> becomes the fixlist contents and the <strong>response</strong> becomes the reply stored alongside it. On the fixlist page you can then add internal notes, adjust the username, and edit either of the two in their tabs.</p>
 
-    <p>You need to click on <strong>Create</strong> on the bottom to finalize saving the fixlist. The Fixlist area is prefilled with a template. You can change this template in your profile settings.</p>
+    <p>The Fixlist area is prefilled with a template. You can change this template in your profile settings. The response area starts empty.</p>
 
-    <h2 id="fixlists">Fixlists</h2>
+    <h2 id="fixlists">Fixes</h2>
 
-    <p>The fixlist overview shows all fixlists that you created. Other people can only see fixlists if they have the share link or token and if the fixlist is public. The token is a unique identifier for the fixlist.</p>
+    <p>The <strong>fixes</strong> entry in the menu opens the fixlist overview. It shows all fixlists that you created. Other people can only see fixlists if they have the share link or token and if the fixlist is public. The token is a unique identifier for the fixlist.</p>
 
     <p>From the overview page you can hide individual fixlists, copy their link or delete them.</p>
 
     <p>If you are viewing an individual fixlist, you can also access the source log the list was based on (the source log is only available if the fixlist was created via the analyzer on an uploaded log).</p>
 
-    <p>Right next to <strong>view source log</strong> there is a <strong>reanalyze &amp; edit</strong> link. It reopens the fixlist in the analyzer with the source log loaded on the left and the fixlist contents loaded on the right, so you can re-classify lines, use the verdict picker, add snippets, and so on - the full analyzer instead of a plain text box. When you save from there, it <strong>updates the same fixlist</strong> instead of creating a new one (the save button reads <strong>update fix</strong> to make this clear), keeping its share link, token, username and internal note intact. This link only appears when the fixlist has an attached source log.</p>
+    <p>Right next to <strong>view source log</strong> there is a <strong>reanalyze &amp; edit</strong> link. It reopens the fixlist in the analyzer with the source log loaded on the left and the fixlist contents loaded on the right, so you can re-classify lines, use the verdict picker, add snippets, and so on - the full analyzer instead of a plain text box. When you save from there, it <strong>updates the same fixlist</strong> instead of creating a new one, keeping its share link, token, username and internal note intact. The stored response is loaded into the response panel too and re-saved with it. This link only appears when the fixlist has an attached source log.</p>
 
     <p>You can change the username from here.</p>
 
-    <p>You can edit the contents, even after sharing the fixlist link. So last minute changes are no problem. For small tweaks the text box on this page is enough; use <strong>reanalyze &amp; edit</strong> when you want the analyzer's full toolset against the original log.</p>
+    <p>The fixlist page has two tabs: <strong>fixlist</strong> holds the fix itself and <strong>response</strong> holds the reply you write back to the user. One <strong>save</strong> writes both. The response never appears on the share page, in the download or in <strong>copy</strong>, so the person you are helping only ever sees the fixlist. Other helpers can read it on the case timeline, the same way they can read the rest of a case you share the link to.</p>
+
+    <p>The copy buttons at the top follow the open tab. On the <strong>fixlist</strong> tab you get <strong>copy fix message</strong>, on the <strong>response</strong> tab you get <strong>copy response</strong>, which puts the whole reply into your clipboard ready to paste into the forum. <strong>copy response</strong> copies what is currently in the box, so it picks up edits you have not saved yet.</p>
+
+    <p>The internal note is not editable on this page anymore. The two tabs use that space instead. Your existing notes are untouched and saving here never clears them.</p>
+
+    <p>You can edit the contents, even after sharing the fixlist link. So last minute changes are no problem. For small tweaks the text boxes on this page are enough; use <strong>reanalyze &amp; edit</strong> when you want the analyzer's full toolset against the original log.</p>
 
     <p><strong>copy fix message</strong> will put a predefined message into the clipboard that instructs users how to fix. To change this predefined message template, click on your username on the top right, click on profile settings, and adjust the frst fix message. This frst fix message template has placeholders for the username, helpername (you), fixlist link and frst path, which will be automatically filled into the template. Some of these only work if the fixlist has an associated uploaded log, e.g., the FRST path is part of the FRST log and not the Fixlist. So if that is missing, it's probably because your Fixlist was created without a log.</p>
 
@@ -299,7 +305,7 @@
 
     <p>In the Analyze view, switch the right panel from <strong>fixlist</strong> to <strong>response</strong> using the panel picker. The bulk <strong>add B P J !</strong> buttons are replaced by a <strong>speeches</strong> picker, since those verdicts have nothing to add to prose. Pick a speech and it is inserted at your cursor. The <strong>snippets</strong> picker stays available in both panels.</p>
 
-    <p>The response text is part of the analyzer draft, so it survives a reload or an accidentally closed tab and is offered back to you together with the fixlist. That draft lives in your browser only - it is never sent to the server, so it will not follow you to another machine.</p>
+    <p>When you press <strong>save</strong>, the response is stored on the fixlist next to its contents, so it follows you to any machine and comes back when you reopen the fixlist or use <strong>reanalyze &amp; edit</strong>. Until then it is part of the analyzer draft in your browser, which survives a reload or an accidentally closed tab and is offered back to you together with the fixlist.</p>
 
     <h3 id="speech-placeholders">Placeholders in speeches</h3>
 
@@ -408,6 +414,10 @@
     <img src="{% static 'images/help/15-case-populated.png' %}" alt="Populated case view" loading="lazy">
 
     <p>This is how an actual case looks like after adding logs and fixlists. In an actual case (not training) new user logs will automatically appear in the case. The entries in the case view are sorted by upload or creation time.</p>
+
+    <p>A <strong>Response</strong> entry shows the full reply you wrote, so you can read back what you told the user without leaving the case. The small copy button copies the whole response, and the title links to the fixlist on its response tab. It is titled with the same token as its fixlist so the two are easy to match up, but that token belongs to the fixlist: a response is never shared and has no link of its own.</p>
+
+    <p>A response is its own item in the case, just like a log or a fixlist. It is added and removed on its own, it sorts by when you wrote it rather than sitting next to its fixlist, and you can pin notes to it with <strong>+</strong>. Unlinking a fixlist leaves its response in the case, and unlinking a response leaves the fixlist.</p>
 
     <p>The case view also supports adding notes, which I generally use to remind me of things I should still do.</p>
 

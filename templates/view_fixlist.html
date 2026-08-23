@@ -33,6 +33,17 @@
     .inline-action-link:hover {
         text-decoration: underline;
     }
+
+    .tab-active {
+        border-color: var(--la-focus);
+        color: var(--la-focus);
+    }
+
+    /* Double the base textarea height: this page is now the main editor for both. */
+    #content,
+    #response {
+        min-height: 440px;
+    }
 </style>
 {% endblock %}
 
@@ -55,7 +66,8 @@
         share link<br>
         <code>{{ share_url }}</code><br>
         <button type="button" onclick="copyShareLink('{{ share_url }}', this)" style="margin-top: 8px;">copy link</button>
-        <button type="button" onclick="copyFrstFixMessage(this)" style="margin-top: 8px; margin-left: 8px;">copy fix message</button>
+        <button type="button" id="copyFixMessageButton" onclick="copyFrstFixMessage(this)" style="margin-top: 8px; margin-left: 8px;{% if active_tab == 'response' %} display: none;{% endif %}">copy fix message</button>
+        <button type="button" id="copyResponseButton" onclick="copyResponse(this)" style="margin-top: 8px; margin-left: 8px;{% if active_tab != 'response' %} display: none;{% endif %}" title="copy the response text as currently written in the response tab">copy response</button>
         {% if source_uploaded_log %}
         <a href="{% url 'view_uploaded_log' source_uploaded_log.upload_id %}" class="inline-action-link" style="margin-left: 8px;">view source log</a>
         <a href="{% url 'log_analyzer' %}?upload_id={{ source_uploaded_log.upload_id|urlencode }}&amp;fixlist_id={{ fixlist.pk }}" class="inline-action-link" style="margin-left: 8px;">reanalyze &amp; edit</a>
@@ -63,26 +75,40 @@
         <a href="{{ guest_preview_url }}" target="_blank" rel="noopener" class="inline-action-link" style="margin-left: 8px;">preview guest view</a>
     </div>
 
-    <h3>content</h3>
+    <div class="button-group" style="margin-bottom: 12px;">
+        <button type="button" id="tabContent" onclick="switchTab('content')" class="{% if active_tab != 'response' %}tab-active{% endif %}">fixlist</button>
+        <button type="button" id="tabResponse" onclick="switchTab('response')" class="{% if active_tab == 'response' %}tab-active{% endif %}">response</button>
+    </div>
 
     <form method="post">
         {% csrf_token %}
         <input type="hidden" name="action" value="update">
+        <input type="hidden" name="tab" id="activeTabInput" value="{{ active_tab }}">
 
         <div class="form-group">
             <label for="username">username</label>
             <input type="text" id="username" name="username" value="{{ fixlist.username }}" required>
         </div>
 
-        <div class="form-group">
-            <label for="content">content</label>
-            <textarea id="content" name="content" required>{{ fixlist.content }}</textarea>
+        {% comment %}
+        Neither textarea may be `required`: a hidden required control silently
+        blocks submission. Emptiness is tolerated server-side instead.
+        {% endcomment %}
+        <div class="form-group" id="contentPanel"{% if active_tab == 'response' %} style="display: none;"{% endif %}>
+            <label for="content">fixlist</label>
+            <textarea id="content" name="content">{{ fixlist.content }}</textarea>
         </div>
 
-        <div class="form-group">
-            <label for="internal_note">internal note</label>
-            <textarea id="internal_note" name="internal_note" class="internal-note" rows="3">{{ fixlist.internal_note }}</textarea>
+        <div class="form-group" id="responsePanel"{% if active_tab != 'response' %} style="display: none;"{% endif %}>
+            <label for="response">response</label>
+            <textarea id="response" name="response" placeholder="Write the response for the user here...">{{ fixlist.response }}</textarea>
         </div>
+
+        {% comment %}
+        The internal note is deliberately not editable here — the two tabs get the
+        vertical space instead. The update branch preserves the stored note because
+        the field is absent from the POST.
+        {% endcomment %}
 
         <div class="button-group">
             <button type="submit" name="action" value="update">save</button>
@@ -104,7 +130,21 @@
 </div>
 
 <script>
-function copyShareLink(text, button) {
+// The server already rendered the correct tab, so this is only called on click.
+function switchTab(tab) {
+    const isResponse = tab === 'response';
+    document.getElementById('contentPanel').style.display = isResponse ? 'none' : '';
+    document.getElementById('responsePanel').style.display = isResponse ? '' : 'none';
+    document.getElementById('tabContent').classList.toggle('tab-active', !isResponse);
+    document.getElementById('tabResponse').classList.toggle('tab-active', isResponse);
+    document.getElementById('activeTabInput').value = isResponse ? 'response' : 'content';
+    // Each copy button belongs to the tab it copies from.
+    document.getElementById('copyFixMessageButton').style.display = isResponse ? 'none' : '';
+    document.getElementById('copyResponseButton').style.display = isResponse ? '' : 'none';
+}
+
+// Copies `text` and flashes the button label back to normal afterwards.
+function copyToClipboard(text, button) {
     const originalText = button.textContent;
     navigator.clipboard.writeText(text).then(function() {
         button.textContent = 'copied';
@@ -112,6 +152,19 @@ function copyShareLink(text, button) {
             button.textContent = originalText;
         }, 1200);
     });
+}
+
+function copyShareLink(text, button) {
+    copyToClipboard(text, button);
+}
+
+// Copies what is in the box, so unsaved edits are copied too.
+function copyResponse(button) {
+    const text = document.getElementById('response').value;
+    if (!text.trim()) {
+        return;
+    }
+    copyToClipboard(text, button);
 }
 
 function copyFrstFixMessage(button) {
@@ -128,13 +181,7 @@ function copyFrstFixMessage(button) {
         message = message.split(key).join(replacements[key]);
     });
 
-    const originalText = button.textContent;
-    navigator.clipboard.writeText(message).then(function() {
-        button.textContent = 'copied';
-        setTimeout(() => {
-            button.textContent = originalText;
-        }, 1200);
-    });
+    copyToClipboard(message, button);
 }
 </script>
 {% endblock %}

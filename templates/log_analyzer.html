@@ -203,7 +203,7 @@
                 <div class="snippet-menu-item panel-menu-item" data-panel-view="hidden" role="menuitemradio" aria-checked="false">hidden</div>
             </div>
         </div>
-        {% if not is_guest %}<button type="button" id="saveFixlistButton" class="save-fixlist-button">{% if initial_fixlist_id %}update fix{% else %}save fix{% endif %}</button>{% endif %}
+        {% if not is_guest %}<button type="button" id="saveFixlistButton" class="save-fixlist-button">save</button>{% endif %}
     </div>
 </div>
 
@@ -227,7 +227,7 @@
     </div>
     <div class="right-panel">
         <textarea id="selectedLines">{{ initial_selected_lines }}</textarea>
-        <textarea id="responseText" placeholder="Write the response for the user here..." title="kept in this browser's draft, not saved to the server" hidden></textarea>
+        <textarea id="responseText" placeholder="Write the response for the user here..." title="saved with the fixlist" hidden>{{ initial_response_text }}</textarea>
     </div>
 </div>
 

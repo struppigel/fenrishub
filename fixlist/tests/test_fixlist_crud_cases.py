@@ -158,6 +158,116 @@ class FixlistCrudViewTests(TestCase):
         self.assertEqual(fixlist.content, "new-content")
         self.assertEqual(fixlist.internal_note, "new-note")
 
+    def test_update_fixlist_changes_response(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Before",
+            content="old-content",
+            response="old response",
+        )
+
+        self.client.post(
+            reverse("view_fixlist", args=[fixlist.pk]),
+            {
+                "action": "update",
+                "username": "Before",
+                "content": "old-content",
+                "response": "  new response  ",
+            },
+        )
+
+        fixlist.refresh_from_db()
+        self.assertEqual(fixlist.response, "new response")
+
+    def test_update_fixlist_preserves_response_when_field_absent(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Before",
+            content="old-content",
+            response="old response",
+        )
+
+        self.client.post(
+            reverse("view_fixlist", args=[fixlist.pk]),
+            {
+                "action": "update",
+                "username": "Before",
+                "content": "new-content",
+            },
+        )
+
+        fixlist.refresh_from_db()
+        self.assertEqual(fixlist.response, "old response")
+
+    def test_update_fixlist_preserves_internal_note_absent_from_the_form(self):
+        # The fixlist page no longer renders an internal-note field, so a save
+        # from it must leave the stored note alone rather than blanking it.
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Noted",
+            content="old-content",
+            internal_note="keep this note",
+        )
+
+        self.client.post(
+            reverse("view_fixlist", args=[fixlist.pk]),
+            {
+                "action": "update",
+                "username": "Noted",
+                "content": "new-content",
+                "response": "reply",
+            },
+        )
+
+        fixlist.refresh_from_db()
+        self.assertEqual(fixlist.internal_note, "keep this note")
+        self.assertEqual(fixlist.content, "new-content")
+
+    def test_update_fixlist_redirects_back_to_response_tab(self):
+        fixlist = Fixlist.objects.create(owner=self.user, username="Tabbed", content="x")
+
+        response = self.client.post(
+            reverse("view_fixlist", args=[fixlist.pk]),
+            {
+                "action": "update",
+                "username": "Tabbed",
+                "content": "x",
+                "response": "reply text",
+                "tab": "response",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.url,
+            f'{reverse("view_fixlist", args=[fixlist.pk])}?tab=response',
+        )
+
+    def test_view_fixlist_renders_both_tabs(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Tabbed",
+            content="fix-content",
+            response="reply text",
+        )
+
+        response = self.client.get(reverse("view_fixlist", args=[fixlist.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["active_tab"], "content")
+        self.assertContains(response, 'name="response"')
+        self.assertContains(response, "reply text")
+        self.assertContains(response, "fix-content")
+
+    def test_view_fixlist_opens_response_tab_from_query(self):
+        fixlist = Fixlist.objects.create(owner=self.user, username="Tabbed", content="x")
+
+        response = self.client.get(
+            reverse("view_fixlist", args=[fixlist.pk]), {"tab": "response"}
+        )
+
+        self.assertEqual(response.context["active_tab"], "response")
+
     def test_delete_fixlist_moves_to_trash(self):
         fixlist = Fixlist.objects.create(owner=self.user, username="Delete Me", content="x")
 
@@ -358,7 +468,80 @@ class FixlistCrudViewTests(TestCase):
         # Content-only update preserves the other fields.
         self.assertEqual(fixlist.username, "Keep Me")
         self.assertEqual(fixlist.internal_note, "keep-note")
+        self.assertEqual(fixlist.response, "")
         self.assertEqual(fixlist.source_uploaded_log_id, upload.id)
+
+    def test_create_fixlist_persists_response(self):
+        self.client.post(
+            reverse("create_fixlist"),
+            {
+                "username": "With Response",
+                "content": "ioc-1",
+                "response": "  hello, run FRST please  ",
+            },
+        )
+
+        created = Fixlist.objects.get(username="With Response")
+        self.assertEqual(created.response, "hello, run FRST please")
+
+    def test_create_fixlist_update_branch_replaces_response(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Keep Me",
+            content="old-content",
+            response="old response",
+        )
+
+        self.client.post(
+            reverse("create_fixlist"),
+            {
+                "content": "new-content",
+                "response": "new response",
+                "fixlist_id": str(fixlist.pk),
+            },
+        )
+
+        fixlist.refresh_from_db()
+        self.assertEqual(fixlist.response, "new response")
+
+    def test_create_fixlist_update_branch_clears_response_when_posted_empty(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Keep Me",
+            content="old-content",
+            response="old response",
+        )
+
+        self.client.post(
+            reverse("create_fixlist"),
+            {
+                "content": "new-content",
+                "response": "",
+                "fixlist_id": str(fixlist.pk),
+            },
+        )
+
+        fixlist.refresh_from_db()
+        self.assertEqual(fixlist.response, "")
+
+    def test_create_fixlist_update_branch_preserves_response_when_field_absent(self):
+        fixlist = Fixlist.objects.create(
+            owner=self.user,
+            username="Keep Me",
+            content="old-content",
+            response="old response",
+        )
+
+        self.client.post(
+            reverse("create_fixlist"),
+            {
+                "content": "new-content",
+                "fixlist_id": str(fixlist.pk),
+            },
+        )
+
+        fixlist.refresh_from_db()
+        self.assertEqual(fixlist.response, "old response")
 
     def test_create_fixlist_ignores_other_users_fixlist_id(self):
         other = User.objects.create_user(username="mallory", password="password123")
@@ -424,6 +607,7 @@ class FixlistCrudViewTests(TestCase):
             source_uploaded_log=upload,
             username="Editable",
             content="fixlist-body-line",
+            response="stored reply text",
         )
 
         response = self.client.get(reverse("log_analyzer"), {"fixlist_id": str(fixlist.pk)})
@@ -431,6 +615,9 @@ class FixlistCrudViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["initial_fixlist_id"], str(fixlist.pk))
         self.assertEqual(response.context["initial_selected_lines"], "fixlist-body-line")
+        # Seeding the response panel is what stops the next save from wiping it.
+        self.assertEqual(response.context["initial_response_text"], "stored reply text")
+        self.assertContains(response, "stored reply text")
         # Source log auto-loads even without an explicit upload_id.
         self.assertEqual(response.context["initial_upload_id"], upload.upload_id)
 
@@ -452,6 +639,14 @@ class FixlistCrudViewTests(TestCase):
             response.context["initial_selected_lines"],
             response.context["fixlist_template"],
         )
+
+    def test_log_analyzer_view_response_is_empty_without_fixlist_id(self):
+        response = self.client.get(reverse("log_analyzer"))
+
+        self.assertEqual(response.status_code, 200)
+        # The fixlist panel falls back to a template; the response does not.
+        self.assertEqual(response.context["initial_response_text"], "")
+        self.assertNotEqual(response.context["fixlist_template"], "")
 
     def test_view_fixlist_shows_reanalyze_link_when_source_present(self):
         upload = UploadedLog.objects.create(

@@ -1,11 +1,12 @@
 // Autosave / restore for in-progress analyzer work.
 //
-// Nothing the analyst does between "load log" and "save fix" reaches the server:
-// the fixlist lives in the #selectedLines textarea, the reply to the user lives in
-// #responseText (which has no server-side home at all), and every manual
-// reclassification lives in the pendingStatusChanges Map. Closing the tab used to
-// destroy all of it. This module mirrors that state into localStorage on a debounce
-// and offers it back on the next visit.
+// Nothing the analyst does between "load log" and "save" reaches the server: the
+// fixlist lives in the #selectedLines textarea, the reply to the user lives in
+// #responseText, and every manual reclassification lives in the pendingStatusChanges
+// Map. Both textareas are written to the Fixlist row on save, but until then they
+// exist only in the browser. Closing the tab used to destroy all of it. This module
+// mirrors that state into localStorage on a debounce and offers it back on the next
+// visit.
 //
 // localStorage only, by design: it covers the accidental-tab-close case, and it is
 // the only option that also works for anonymous and guest sessions, which have no
@@ -198,8 +199,8 @@ function hasUnsavedAnalyzerWork() {
     if (pendingStatusChanges.size > 0) {
         return true;
     }
-    // The response is never written to the server, so any text in it at all is
-    // work that only the draft can preserve.
+    // Compared against the server-rendered baseline, same as selectedLines: a
+    // response loaded from a saved fixlist is not unsaved work, edits to it are.
     const responseTextEl = document.getElementById('responseText');
     if (responseTextEl && normalizeDraftNewlines(responseTextEl.value) !== draftInitialResponseText) {
         return true;

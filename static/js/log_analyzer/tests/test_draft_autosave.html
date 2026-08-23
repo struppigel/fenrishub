@@ -4,8 +4,9 @@
 
   Closing the analyzer tab used to destroy every manual reclassification (the
   pendingStatusChanges Map) and the whole fixlist being composed (the
-  #selectedLines textarea), because neither reaches the server until the final
-  "save fix" POST. draft_autosave.js mirrors that state into localStorage.
+  #selectedLines textarea) along with the reply being written (#responseText),
+  because none of it reaches the server until the final "save" POST.
+  draft_autosave.js mirrors that state into localStorage.
 
   These cover the parts that silently lose data when wrong: the save/restore
   round-trip of Map and Set state, key derivation, the CRLF-normalised dirty
@@ -132,17 +133,27 @@ async function main() {
     document.getElementById('selectedLines').value = 'CloseProcesses:\n';
     assert('an edited fixlist makes it dirty', hasUnsavedAnalyzerWork() === true);
 
-    // The response never reaches the server, so any text in it is unsaved work.
+    // The response is compared against the server-rendered baseline, same as the
+    // fixlist: only edits made since the last save count as unsaved work.
     document.getElementById('selectedLines').value = '';
     initDraftAutosave();
     assert('an empty response is not dirty', hasUnsavedAnalyzerWork() === false);
     document.getElementById('responseText').value = 'Hi, your machine is clean.';
     assert('a typed response makes it dirty', hasUnsavedAnalyzerWork() === true);
+
+    // Reopening a saved fixlist renders its response into the panel. That is the
+    // baseline, not unsaved work — otherwise every edit session starts dirty and
+    // the unload guard fires on a page nobody changed.
+    document.getElementById('responseText').value = 'Stored reply from the fixlist.';
+    initDraftAutosave();
+    assert('a server-rendered response is not dirty', hasUnsavedAnalyzerWork() === false);
+    document.getElementById('responseText').value = 'Stored reply from the fixlist. Edited.';
+    assert('editing a server-rendered response makes it dirty', hasUnsavedAnalyzerWork() === true);
 })();
 
 // ---------------------------------------------------------------------------
-// The response panel has no server-side home at all, so the draft is the only
-// thing standing between a written reply and a closed tab.
+// Between two saves the draft is the only thing standing between a written reply
+// and a closed tab, so it must round-trip the response panel too.
 // ---------------------------------------------------------------------------
 (function testResponseRoundTrip() {
     resetAnalyzerState();

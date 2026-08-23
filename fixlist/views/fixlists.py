@@ -15,6 +15,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse, HttpResponse, Http404
 from django.core.paginator import Paginator
 from django.db.models import F, Q
+from django.urls import reverse
 from django.utils import timezone
 
 from ..models import Fixlist, AccessLog, UploadedLog
@@ -211,14 +212,18 @@ def create_fixlist_view(request):
         username = (request.POST.get('username', '') or '').strip()
         content = request.POST.get('content', '')
         internal_note = request.POST.get('internal_note', '')
+        # An absent key means the caller does not manage the response, so the stored
+        # one is preserved. An empty string is a deliberate clear.
+        response_text = request.POST.get('response')
         source_upload_id = (request.POST.get('source_upload_id', '') or '').strip()
         fixlist_id = (request.POST.get('fixlist_id', '') or '').strip()
         source_uploaded_log = None
 
         # Editing an existing fixlist from the analyzer: update in place instead of
-        # creating a duplicate. Only the content is replaced; username / internal_note /
-        # source_uploaded_log / visibility are preserved. An unknown, non-owned or
-        # trashed id is ignored and falls through to the create path below.
+        # creating a duplicate. Only the content and (when posted) the response are
+        # replaced; username / internal_note / source_uploaded_log / visibility are
+        # preserved. An unknown, non-owned or trashed id is ignored and falls through
+        # to the create path below.
         if fixlist_id.isdigit():
             existing = Fixlist.objects.filter(
                 pk=int(fixlist_id),
@@ -227,7 +232,10 @@ def create_fixlist_view(request):
             ).first()
             if existing is not None:
                 existing.content = content
-                existing.save(update_fields=['content', 'line_count', 'updated_at'])
+                update_fields = ['content', 'line_count', 'updated_at']
+                if response_text is not None:
+                    update_fields.extend(existing.set_response(response_text))
+                existing.save(update_fields=update_fields)
                 return redirect('view_fixlist', pk=existing.pk)
 
         if source_upload_id:
@@ -241,7 +249,7 @@ def create_fixlist_view(request):
         if not username:
             username = 'Unknown'
 
-        fixlist = Fixlist.objects.create(
+        fixlist = Fixlist(
             owner=request.user,
             source_uploaded_log=source_uploaded_log,
             username=username,
@@ -249,6 +257,8 @@ def create_fixlist_view(request):
             internal_note=internal_note,
             is_public=True,
         )
+        fixlist.set_response(response_text)
+        fixlist.save()
 
         return redirect('view_fixlist', pk=fixlist.pk)
 
@@ -346,10 +356,15 @@ def view_fixlist(request, pk):
             fixlist.username = request.POST.get('username', fixlist.username)
             fixlist.content = request.POST.get('content', fixlist.content)
             fixlist.internal_note = request.POST.get('internal_note', fixlist.internal_note)
+            fixlist.set_response(request.POST.get('response', fixlist.response))
             fixlist.save()
             saved_at = timezone.localtime(fixlist.updated_at).strftime('%H:%M:%S')
             messages.success(request, f'fixlist saved at {saved_at}')
-            return redirect('view_fixlist', pk=fixlist.pk)
+            # Saving from the response tab must come back to the response tab.
+            target = reverse('view_fixlist', args=[fixlist.pk])
+            if request.POST.get('tab') == 'response':
+                target = f'{target}?tab=response'
+            return redirect(target)
         
         elif action == 'delete':
             if fixlist.is_protected:
@@ -408,6 +423,9 @@ def view_fixlist(request, pk):
         'frst_fix_message_template': frst_fix_message_template,
         'source_uploaded_log': fixlist.source_uploaded_log,
         'frst_run_path': frst_run_path,
+        # Rendering the open tab server-side avoids a flash and makes the
+        # ?tab=response deep link from the case timeline deterministic.
+        'active_tab': 'response' if request.GET.get('tab') == 'response' else 'content',
     }
     return render(request, 'view_fixlist.html', context)
 

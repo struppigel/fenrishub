@@ -5,7 +5,15 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from ..models import Fixlist, InfectionCase, InfectionCaseFixlist, InfectionCaseLog, InfectionCaseNote, UploadedLog
+from ..models import (
+    Fixlist,
+    InfectionCase,
+    InfectionCaseFixlist,
+    InfectionCaseLog,
+    InfectionCaseNote,
+    InfectionCaseResponse,
+    UploadedLog,
+)
 from ..views.infection_cases import _build_case_timeline
 from ..views.utils import _autoclose_stale_cases
 
@@ -448,6 +456,262 @@ class InfectionCaseViewTests(TestCase):
         self.assertEqual(timeline[1]['note'].content, 'anchored to early log')
         self.assertEqual(timeline[2]['item_type'], 'log')
         self.assertEqual(timeline[2]['uploaded_log'].upload_id, 'anchor-late')
+
+    def _case_with_response(self, response='reply text', content='fix', link_fixlist=True):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        fixlist = Fixlist(owner=self.user, username='target_user', content=content)
+        fixlist.set_response(response)
+        fixlist.save()
+        if link_fixlist:
+            InfectionCaseFixlist.objects.create(case=case, fixlist=fixlist, added_by=self.user)
+        InfectionCaseResponse.objects.create(case=case, fixlist=fixlist, added_by=self.user)
+        return case, fixlist
+
+    def test_response_sorts_by_its_own_creation_time(self):
+        case, fixlist = self._case_with_response()
+        uploaded_log = UploadedLog.objects.create(
+            upload_id='response-log',
+            forum_username='target_user',
+            original_filename='log.txt',
+            content='content',
+            recipient_user=self.user,
+        )
+        InfectionCaseLog.objects.create(case=case, uploaded_log=uploaded_log, added_by=self.user)
+
+        # Fixlist written first, log uploaded after it, response written last.
+        Fixlist.objects.filter(pk=fixlist.pk).update(
+            created_at=timezone.now() - timedelta(days=3),
+            response_created_at=timezone.now() - timedelta(days=1),
+        )
+        UploadedLog.objects.filter(pk=uploaded_log.pk).update(created_at=timezone.now() - timedelta(days=2))
+
+        timeline = _build_case_timeline(case)
+
+        self.assertEqual([item['item_type'] for item in timeline], ['fixlist', 'log', 'response'])
+
+    def test_response_is_linked_independently_of_its_fixlist(self):
+        case, fixlist = self._case_with_response(link_fixlist=False)
+
+        # The fixlist is not in the case at all, but its response is.
+        self.assertEqual([item['item_type'] for item in _build_case_timeline(case)], ['response'])
+
+    def test_response_entry_omitted_when_response_blank_or_whitespace(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        whitespace = Fixlist.objects.create(
+            owner=self.user, username='target_user', content='fix-b', response='   \n  '
+        )
+        InfectionCaseFixlist.objects.create(case=case, fixlist=whitespace, added_by=self.user)
+        InfectionCaseResponse.objects.create(case=case, fixlist=whitespace, added_by=self.user)
+
+        self.assertEqual([item['item_type'] for item in _build_case_timeline(case)], ['fixlist'])
+
+    def test_response_entry_disappears_with_soft_deleted_fixlist(self):
+        case, fixlist = self._case_with_response()
+
+        fixlist.deleted_at = timezone.now()
+        fixlist.save()
+
+        self.assertEqual(_build_case_timeline(case), [])
+
+    def test_response_entry_shows_text_and_links_to_the_response_tab(self):
+        case, fixlist = self._case_with_response()
+
+        html = self.client.get(reverse('view_infection_case', args=[case.case_id])).content.decode('utf-8')
+
+        self.assertIn('reply text', html)
+        self.assertIn(f'{reverse("view_fixlist", args=[fixlist.pk])}?tab=response', html)
+        # Titled with the fixlist's token, like the fixlist card, so the pair is
+        # easy to match up.
+        self.assertIn(fixlist.share_token, html)
+
+    def test_unlink_response_detaches_only_the_response(self):
+        case, fixlist = self._case_with_response(content='fix-a\nfix-b')
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'unlink_response', 'fixlist_id': str(fixlist.pk)},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        # Only the response link goes; the fixlist stays linked.
+        self.assertEqual([item['item_type'] for item in _build_case_timeline(case)], ['fixlist'])
+        self.assertTrue(InfectionCaseFixlist.objects.filter(case=case, fixlist=fixlist).exists())
+        self.assertFalse(InfectionCaseResponse.objects.filter(case=case, fixlist=fixlist).exists())
+        # Nothing is deleted: the response text is untouched.
+        fixlist.refresh_from_db()
+        self.assertEqual(fixlist.response, 'reply text')
+        self.assertEqual(fixlist.content, 'fix-a\nfix-b')
+        self.assertIsNone(fixlist.deleted_at)
+
+    def test_unlink_fixlist_leaves_its_response_in_the_case(self):
+        case, fixlist = self._case_with_response()
+
+        self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'unlink_fixlist', 'fixlist_id': str(fixlist.pk)},
+        )
+
+        self.assertEqual([item['item_type'] for item in _build_case_timeline(case)], ['response'])
+
+    def test_unlinked_response_can_be_added_back_from_the_add_items_dialog(self):
+        case, fixlist = self._case_with_response()
+        InfectionCaseResponse.objects.filter(case=case, fixlist=fixlist).delete()
+
+        html = self.client.get(reverse('view_infection_case', args=[case.case_id])).content.decode('utf-8')
+        self.assertIn('name="selected_response_ids"', html)
+
+        self.client.post(
+            reverse('infection_case_add_items', args=[case.case_id]),
+            {'selected_response_ids': [str(fixlist.pk)]},
+        )
+
+        self.assertTrue(InfectionCaseResponse.objects.filter(case=case, fixlist=fixlist).exists())
+        self.assertEqual([item['item_type'] for item in _build_case_timeline(case)], ['fixlist', 'response'])
+
+    def test_add_items_dialog_does_not_offer_an_already_linked_response(self):
+        case, fixlist = self._case_with_response()
+
+        html = self.client.get(reverse('view_infection_case', args=[case.case_id])).content.decode('utf-8')
+
+        self.assertNotIn('name="selected_response_ids"', html)
+
+    def test_case_list_item_count_matches_the_timeline_length(self):
+        case, _ = self._case_with_response()
+
+        listing = self.client.get(reverse('infection_cases'))
+        listed_case = next(c for c in listing.context['cases'] if c.pk == case.pk)
+
+        self.assertEqual(listed_case.item_count, len(_build_case_timeline(case)))
+        self.assertEqual(listed_case.item_count, 2)
+
+    def test_case_list_item_count_ignores_an_unlinked_response(self):
+        case, fixlist = self._case_with_response()
+        InfectionCaseResponse.objects.filter(case=case, fixlist=fixlist).delete()
+
+        listing = self.client.get(reverse('infection_cases'))
+        listed_case = next(c for c in listing.context['cases'] if c.pk == case.pk)
+
+        self.assertEqual(listed_case.item_count, 1)
+        self.assertEqual(listed_case.item_count, len(_build_case_timeline(case)))
+
+    def test_add_items_does_not_link_a_response_when_the_confirm_screen_appears(self):
+        # Bailing out to the username-confirm screen must leave nothing applied.
+        case, fixlist = self._case_with_response()
+        InfectionCaseResponse.objects.filter(case=case, fixlist=fixlist).delete()
+        mismatched = UploadedLog.objects.create(
+            upload_id='mismatch-log',
+            forum_username='someone_else',
+            original_filename='log.txt',
+            content='content',
+            recipient_user=self.user,
+        )
+
+        response = self.client.post(
+            reverse('infection_case_add_items', args=[case.case_id]),
+            {
+                'selected_upload_ids': [mismatched.upload_id],
+                'selected_response_ids': [str(fixlist.pk)],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'confirm username change')
+        self.assertFalse(InfectionCaseResponse.objects.filter(case=case, fixlist=fixlist).exists())
+        self.assertContains(response, 'name="selected_response_ids"')
+
+        confirmed = self.client.post(
+            reverse('infection_case_confirm_username_change', args=[case.case_id]),
+            {
+                'selected_upload_ids': [mismatched.upload_id],
+                'selected_response_ids': [str(fixlist.pk)],
+            },
+        )
+
+        self.assertEqual(confirmed.status_code, 302)
+        self.assertTrue(InfectionCaseResponse.objects.filter(case=case, fixlist=fixlist).exists())
+
+    def test_seed_username_items_links_responses_too(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        with_response = Fixlist(owner=self.user, username='target_user', content='fix-a')
+        with_response.set_response('reply text')
+        with_response.save()
+        without_response = Fixlist.objects.create(
+            owner=self.user, username='target_user', content='fix-b'
+        )
+
+        self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'seed_username_items'},
+        )
+
+        self.assertTrue(InfectionCaseResponse.objects.filter(case=case, fixlist=with_response).exists())
+        # A fixlist without response text contributes no response item.
+        self.assertFalse(InfectionCaseResponse.objects.filter(case=case, fixlist=without_response).exists())
+        self.assertEqual(
+            sorted(item['item_type'] for item in _build_case_timeline(case)),
+            ['fixlist', 'fixlist', 'response'],
+        )
+
+    def test_add_items_ignores_non_numeric_response_ids(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+
+        response = self.client.post(
+            reverse('infection_case_add_items', args=[case.case_id]),
+            {'selected_response_ids': ['not-a-number']},
+        )
+
+        self.assertEqual(response.status_code, 302)
+
+    def test_response_entry_offers_add_note_and_unlink_controls(self):
+        case, _ = self._case_with_response()
+
+        html = self.client.get(reverse('view_infection_case', args=[case.case_id])).content.decode('utf-8')
+
+        self.assertIn('note-toggle', html)
+        # The response detaches on its own; the fixlist keeps its separate unlink.
+        self.assertEqual(html.count('value="unlink_response"'), 1)
+        self.assertEqual(html.count('value="unlink_fixlist"'), 1)
+
+    def test_note_added_on_a_fixlist_is_pinned_directly_after_it(self):
+        # The bug this fixes: the note used to float to the end of the timeline
+        # and appear after the response instead of under its fixlist.
+        case, fixlist = self._case_with_response()
+        Fixlist.objects.filter(pk=fixlist.pk).update(
+            created_at=timezone.now() - timedelta(days=3),
+            response_created_at=timezone.now() - timedelta(days=2),
+        )
+
+        self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {
+                'action': 'add_note',
+                'note_content': 'about the fixlist',
+                'anchor_fixlist_id': str(fixlist.pk),
+            },
+        )
+
+        timeline = _build_case_timeline(case)
+
+        self.assertEqual([item['item_type'] for item in timeline], ['fixlist', 'note', 'response'])
+        self.assertEqual(timeline[1]['note'].content, 'about the fixlist')
+
+    def test_note_added_on_a_response_is_pinned_directly_after_it(self):
+        case, fixlist = self._case_with_response()
+
+        self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {
+                'action': 'add_note',
+                'note_content': 'about the reply',
+                'anchor_response_id': str(fixlist.pk),
+            },
+        )
+
+        timeline = _build_case_timeline(case)
+
+        self.assertEqual(timeline[-2]['item_type'], 'response')
+        self.assertEqual(timeline[-1]['item_type'], 'note')
+        self.assertEqual(timeline[-1]['note'].content, 'about the reply')
 
     def test_child_of_soft_deleted_note_rehomes_to_grandparent(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)

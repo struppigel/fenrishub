@@ -1824,7 +1824,7 @@ function addRemainingAsClean() {
 
 const PENDING_FIXLIST_PAYLOAD_KEY = 'fenrishub_pending_fixlist_payload';
 
-function submitFixlistDirectly({ content, sourceUploadId, fixlistId }) {
+function submitFixlistDirectly({ content, sourceUploadId, fixlistId, responseText }) {
     if (!CREATE_FIXLIST_URL) {
         alert('Fixlist endpoint is not configured.');
         return;
@@ -1843,6 +1843,9 @@ function submitFixlistDirectly({ content, sourceUploadId, fixlistId }) {
 
     addField('csrfmiddlewaretoken', getCookie('csrftoken') || '');
     addField('content', content || '');
+    // Always posted, even when empty: the server treats an absent field as
+    // "preserve", so clearing the response has to send the empty string.
+    addField('response', responseText || '');
     if (sourceUploadId) {
         addField('source_upload_id', sourceUploadId);
     }
@@ -1911,10 +1914,12 @@ function goToCreateFixlist() {
 
     const uploadSelect = document.getElementById('uploadSourceSelect');
     const sourceUploadId = uploadSelect ? (uploadSelect.value || '').trim() : '';
+    const responseElement = document.getElementById('responseText');
+    const responseText = responseElement ? responseElement.value : '';
 
     sessionStorage.setItem(
         PENDING_FIXLIST_PAYLOAD_KEY,
-        JSON.stringify({ content: selected, sourceUploadId, fixlistId: EDIT_FIXLIST_ID }),
+        JSON.stringify({ content: selected, sourceUploadId, fixlistId: EDIT_FIXLIST_ID, responseText }),
     );
     beginRuleWorkflow(RULE_SUBMIT_TARGET_CREATE_FIXLIST);
 }

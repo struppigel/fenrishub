@@ -16,6 +16,7 @@ from ..models import (
     InfectionCaseFixlist,
     InfectionCaseLog,
     InfectionCaseNote,
+    InfectionCaseResponse,
     UploadedLog,
 )
 from ..upload_utils import execute_merge, resolve_ordered_logs_for_merge
@@ -62,16 +63,44 @@ def _build_case_timeline(case):
             }
         )
 
+    # InfectionCaseFixlist / InfectionCaseResponse pks whose target is still
+    # present, for the same anchor-resolution reason as the logs above.
+    present_fixlist_link_pks = set()
+    present_response_link_pks = set()
+
     for link in case.fixlist_links.select_related('fixlist').defer('fixlist__content').all():
         fixlist = link.fixlist
         if fixlist.deleted_at is not None:
             continue
+        present_fixlist_link_pks.add(link.pk)
         base_items.append(
             {
                 'item_type': 'fixlist',
                 'created_at': fixlist.created_at,
                 'fixlist': fixlist,
                 'line_count': fixlist.line_count,
+                '_fixlist_link_pk': link.pk,
+            }
+        )
+
+    # A response is its own item: it has its own link row and sorts by when it was
+    # written, not by anything about the fixlist it belongs to.
+    for link in case.response_links.select_related('fixlist').defer('fixlist__content').all():
+        fixlist = link.fixlist
+        if fixlist.deleted_at is not None or not (fixlist.response or '').strip():
+            continue
+        present_response_link_pks.add(link.pk)
+        # A response cannot predate the fixlist it belongs to, so clamp to the
+        # fixlist's creation time. Without this a response saved together with a
+        # brand-new fixlist sorts microseconds ahead of it, because the stamp is
+        # taken just before the row gets its auto_now_add created_at.
+        written_at = fixlist.response_created_at or fixlist.updated_at
+        base_items.append(
+            {
+                'item_type': 'response',
+                'created_at': max(written_at, fixlist.created_at),
+                'fixlist': fixlist,
+                '_response_link_pk': link.pk,
             }
         )
 
@@ -80,14 +109,24 @@ def _build_case_timeline(case):
     # their children re-home to the nearest surviving item instead of vanishing.
     notes_by_pk = {
         note.pk: note
-        for note in case.note_entries.select_related('anchor_log', 'anchor_note').all()
+        for note in case.note_entries.select_related(
+            'anchor_log', 'anchor_fixlist', 'anchor_response', 'anchor_note'
+        ).all()
     }
 
     def _resolve_anchor(note, seen):
-        # -> ('log', link_pk) | ('note', live_note_pk) | ('float', None)
+        # -> ('log'|'fixlist'|'response', link_pk) | ('note', live_note_pk) | ('float', None)
         if note.anchor_log_id is not None:
             if note.anchor_log_id in present_log_link_pks:
                 return ('log', note.anchor_log_id)
+            return ('float', None)
+        if note.anchor_fixlist_id is not None:
+            if note.anchor_fixlist_id in present_fixlist_link_pks:
+                return ('fixlist', note.anchor_fixlist_id)
+            return ('float', None)
+        if note.anchor_response_id is not None:
+            if note.anchor_response_id in present_response_link_pks:
+                return ('response', note.anchor_response_id)
             return ('float', None)
         if note.anchor_note_id is not None:
             parent = notes_by_pk.get(note.anchor_note_id)
@@ -101,8 +140,17 @@ def _build_case_timeline(case):
 
     # Separate anchored and unanchored notes by their *effective* anchor.
     log_anchored_notes = {}  # InfectionCaseLog pk -> list of note dicts
+    fixlist_anchored_notes = {}  # InfectionCaseFixlist pk -> list of note dicts
+    response_anchored_notes = {}  # InfectionCaseResponse pk -> list of note dicts
     note_anchored_notes = {}  # live InfectionCaseNote pk -> list of note dicts
     unanchored_notes = []
+
+    anchored_by_kind = {
+        'log': log_anchored_notes,
+        'fixlist': fixlist_anchored_notes,
+        'response': response_anchored_notes,
+        'note': note_anchored_notes,
+    }
 
     for note in notes_by_pk.values():
         if note.deleted_at is not None:
@@ -113,10 +161,8 @@ def _build_case_timeline(case):
             'note': note,
         }
         kind, target_pk = _resolve_anchor(note, set())
-        if kind == 'log':
-            log_anchored_notes.setdefault(target_pk, []).append(note_dict)
-        elif kind == 'note':
-            note_anchored_notes.setdefault(target_pk, []).append(note_dict)
+        if kind in anchored_by_kind:
+            anchored_by_kind[kind].setdefault(target_pk, []).append(note_dict)
         else:
             unanchored_notes.append(note_dict)
 
@@ -125,10 +171,9 @@ def _build_case_timeline(case):
 
     # Promoted children and original children share a sibling list, so sort each
     # by creation time to keep the spliced order chronological.
-    for pinned_notes in log_anchored_notes.values():
-        pinned_notes.sort(key=lambda item: item['created_at'])
-    for pinned_notes in note_anchored_notes.values():
-        pinned_notes.sort(key=lambda item: item['created_at'])
+    for anchored_notes in anchored_by_kind.values():
+        for pinned_notes in anchored_notes.values():
+            pinned_notes.sort(key=lambda item: item['created_at'])
 
     # Recursively collect notes anchored to a given note.
     def _collect_note_children(note_pk):
@@ -139,19 +184,29 @@ def _build_case_timeline(case):
         return children
 
     # Splice anchored notes immediately after their anchor entry.
+    anchor_key_by_type = {
+        'log': ('_log_link_pk', log_anchored_notes),
+        'fixlist': ('_fixlist_link_pk', fixlist_anchored_notes),
+        'response': ('_response_link_pk', response_anchored_notes),
+    }
+
     timeline_items = []
     for item in base_items:
         timeline_items.append(item)
-        if item['item_type'] == 'log':
-            for pinned in log_anchored_notes.get(item['_log_link_pk'], []):
+        anchor = anchor_key_by_type.get(item['item_type'])
+        if anchor is not None:
+            link_key, anchored_notes = anchor
+            for pinned in anchored_notes.get(item[link_key], []):
                 timeline_items.append(pinned)
                 timeline_items.extend(_collect_note_children(pinned['note'].pk))
         if item['item_type'] == 'note':
             timeline_items.extend(_collect_note_children(item['note'].pk))
 
-    # Strip internal helper key before returning.
+    # Strip internal helper keys before returning.
     for item in timeline_items:
         item.pop('_log_link_pk', None)
+        item.pop('_fixlist_link_pk', None)
+        item.pop('_response_link_pk', None)
 
     return timeline_items
 
@@ -175,6 +230,35 @@ def _link_case_items(case, logs, fixlists, added_by):
         unassigned_log_pks = [log.pk for log in logs if log.recipient_user_id is None]
         if unassigned_log_pks:
             UploadedLog.objects.filter(pk__in=unassigned_log_pks).update(recipient_user=case.owner)
+
+
+def _selected_response_ids(request):
+    """Fixlist pks whose response entry should be put back on the timeline.
+
+    Non-numeric values are dropped rather than passed to the ORM, which would
+    raise ValueError on the pk lookup.
+    """
+    return [
+        value.strip()
+        for value in request.POST.getlist('selected_response_ids')
+        if value.strip().isdigit()
+    ]
+
+
+def _link_case_responses(case, response_ids, added_by):
+    """Link responses to a case. The response text itself is never touched."""
+    if not response_ids:
+        return 0
+    fixlists = Fixlist.objects.filter(
+        owner=case.owner,
+        deleted_at__isnull=True,
+        pk__in=response_ids,
+    ).exclude(response='').only('id')
+    created = InfectionCaseResponse.objects.bulk_create(
+        [InfectionCaseResponse(case=case, fixlist=fixlist, added_by=added_by) for fixlist in fixlists],
+        ignore_conflicts=True,
+    )
+    return len(created)
 
 
 def _case_log_queryset(case):
@@ -248,6 +332,7 @@ def infection_cases_view(request):
         .prefetch_related(
             Prefetch('log_links__uploaded_log', queryset=UploadedLog.objects.defer('content')),
             Prefetch('fixlist_links__fixlist', queryset=Fixlist.objects.defer('content')),
+            Prefetch('response_links__fixlist', queryset=Fixlist.objects.defer('content')),
             'note_entries',
         )
     )
@@ -263,12 +348,21 @@ def infection_cases_view(request):
             for link in case.fixlist_links.all()
             if link.fixlist.deleted_at is None
         ]
+        # Responses are timeline items of their own, so they must count here too
+        # or this number disagrees with the "N linked items" on the case itself.
+        visible_responses = [
+            link.fixlist
+            for link in case.response_links.all()
+            if link.fixlist.deleted_at is None and (link.fixlist.response or '').strip()
+        ]
         visible_notes = [
             note
             for note in case.note_entries.all()
             if note.deleted_at is None
         ]
-        case.item_count = len(visible_logs) + len(visible_fixlists) + len(visible_notes)
+        case.item_count = (
+            len(visible_logs) + len(visible_fixlists) + len(visible_responses) + len(visible_notes)
+        )
         case.last_activity = max(
             [
                 case.created_at,
@@ -402,10 +496,15 @@ def view_infection_case(request, case_id):
                     username=infection_case.username,
                 )
             )
-            _link_case_items(infection_case, scoped_logs, owned_fixlists, request.user)
+            # Responses are separate items, so seeding has to link them too or
+            # "add all items" quietly leaves them out.
+            response_ids = [fixlist.pk for fixlist in owned_fixlists if (fixlist.response or '').strip()]
+            with transaction.atomic():
+                _link_case_items(infection_case, scoped_logs, owned_fixlists, request.user)
+                _link_case_responses(infection_case, response_ids, request.user)
             messages.success(
                 request,
-                f'Added logs/fixlists for u/{infection_case.username} to this case.',
+                f'Added logs, fixlists and responses for u/{infection_case.username} to this case.',
             )
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
@@ -415,13 +514,27 @@ def view_infection_case(request, case_id):
                 messages.error(request, 'Note cannot be empty.')
                 return redirect('view_infection_case', case_id=infection_case.case_id)
             anchor_log_upload_id = (request.POST.get('anchor_log_upload_id') or '').strip()
+            anchor_fixlist_id = (request.POST.get('anchor_fixlist_id') or '').strip()
+            anchor_response_id = (request.POST.get('anchor_response_id') or '').strip()
             anchor_note_id = (request.POST.get('anchor_note_id') or '').strip()
             anchor_log = None
+            anchor_fixlist = None
+            anchor_response = None
             anchor_note = None
             if anchor_log_upload_id:
                 anchor_log = InfectionCaseLog.objects.filter(
                     case=infection_case,
                     uploaded_log__upload_id=anchor_log_upload_id,
+                ).first()
+            elif anchor_fixlist_id.isdigit():
+                anchor_fixlist = InfectionCaseFixlist.objects.filter(
+                    case=infection_case,
+                    fixlist__pk=anchor_fixlist_id,
+                ).first()
+            elif anchor_response_id.isdigit():
+                anchor_response = InfectionCaseResponse.objects.filter(
+                    case=infection_case,
+                    fixlist__pk=anchor_response_id,
                 ).first()
             elif anchor_note_id:
                 anchor_note = InfectionCaseNote.objects.filter(
@@ -433,6 +546,8 @@ def view_infection_case(request, case_id):
                 case=infection_case,
                 content=note_content,
                 anchor_log=anchor_log,
+                anchor_fixlist=anchor_fixlist,
+                anchor_response=anchor_response,
                 anchor_note=anchor_note,
                 created_by=request.user,
             )
@@ -461,6 +576,20 @@ def view_infection_case(request, case_id):
                 messages.success(request, f'Fixlist #{fixlist_id} was removed from this case.')
             else:
                 messages.error(request, 'The selected fixlist is not linked to this case.')
+            return redirect('view_infection_case', case_id=infection_case.case_id)
+
+        if action == 'unlink_response':
+            # Detaches only the response. The fixlist stays in the case and the
+            # response text itself is never touched.
+            fixlist_id = (request.POST.get('fixlist_id') or '').strip()
+            updated, _ = InfectionCaseResponse.objects.filter(
+                case=infection_case,
+                fixlist__pk=fixlist_id,
+            ).delete()
+            if updated:
+                messages.success(request, f'Response of fixlist #{fixlist_id} was removed from this case.')
+            else:
+                messages.error(request, 'The selected response is not linked to this case.')
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
         if action == 'edit_note':
@@ -573,6 +702,7 @@ def view_infection_case(request, case_id):
 
     selectable_uploads = UploadedLog.objects.none()
     selectable_fixlists = Fixlist.objects.none()
+    selectable_responses = Fixlist.objects.none()
     if can_edit:
         if infection_case.is_training:
             available_uploads = UploadedLog.objects.filter(deleted_at__isnull=True).defer('content')
@@ -585,6 +715,15 @@ def view_infection_case(request, case_id):
 
         selectable_uploads = available_uploads.exclude(upload_id__in=linked_upload_ids)
         selectable_fixlists = available_fixlists.exclude(pk__in=linked_fixlist_ids)
+
+        # Any of the helper's responses that this case does not hold yet. Listed
+        # separately from fixlists because the two are linked independently.
+        linked_response_ids = set(
+            infection_case.response_links.values_list('fixlist_id', flat=True)
+        )
+        selectable_responses = (
+            available_fixlists.exclude(response='').exclude(pk__in=linked_response_ids)
+        )
 
     # Upload link handed to the affected user: it targets the case owner's
     # channel so new logs land with the helper who owns the case, and prefills
@@ -603,6 +742,7 @@ def view_infection_case(request, case_id):
             'timeline_items': timeline_items,
             'selectable_uploads': selectable_uploads,
             'selectable_fixlists': selectable_fixlists,
+            'selectable_responses': selectable_responses,
             'case_status_choices': InfectionCase.STATUS_CHOICES,
             'show_metadata_edit': show_metadata_edit,
             'can_edit': can_edit,
@@ -643,7 +783,13 @@ def infection_case_add_items_view(request, case_id):
     infection_case = get_object_or_404(_case_queryset_for_user(request.user), case_id=case_id)
     selection = _selected_items_for_case_request(request, infection_case)
 
-    if not selection['logs'] and not selection['fixlists']:
+    # Re-attaching a previously unlinked response only flips a flag on a link row
+    # that already exists, so it needs none of the username-mismatch handling below.
+    # It is applied with the rest of the selection, never before it: bailing out to
+    # the confirm screen must not leave a half-applied change behind.
+    response_ids = _selected_response_ids(request)
+
+    if not selection['logs'] and not selection['fixlists'] and not response_ids:
         messages.error(request, 'Select at least one item to add.')
         return redirect('view_infection_case', case_id=infection_case.case_id)
 
@@ -655,6 +801,7 @@ def infection_case_add_items_view(request, case_id):
                 'infection_case': infection_case,
                 'selected_upload_ids': selection['selected_upload_ids'],
                 'selected_fixlist_ids': selection['selected_fixlist_ids'],
+                'selected_response_ids': response_ids,
                 'mismatched_logs': selection['mismatched_logs'],
                 'mismatched_fixlists': selection['mismatched_fixlists'],
             },
@@ -662,6 +809,7 @@ def infection_case_add_items_view(request, case_id):
 
     with transaction.atomic():
         _link_case_items(infection_case, selection['logs'], selection['fixlists'], request.user)
+        _link_case_responses(infection_case, response_ids, request.user)
 
     messages.success(request, 'Selected items were added to this infection case.')
     return redirect('view_infection_case', case_id=infection_case.case_id)
@@ -687,6 +835,7 @@ def infection_case_confirm_username_change_view(request, case_id):
             fixlist.save(update_fields=['username', 'updated_at'])
 
         _link_case_items(infection_case, selection['logs'], selection['fixlists'], request.user)
+        _link_case_responses(infection_case, _selected_response_ids(request), request.user)
 
     messages.success(
         request,

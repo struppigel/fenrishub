@@ -29,6 +29,9 @@
     {% for fixlist_id in selected_fixlist_ids %}
     <input type="hidden" name="selected_fixlist_ids" value="{{ fixlist_id }}">
     {% endfor %}
+    {% for fixlist_id in selected_response_ids %}
+    <input type="hidden" name="selected_response_ids" value="{{ fixlist_id }}">
+    {% endfor %}
 
     <div class="button-group">
         <button type="submit">confirm username change and add</button>

@@ -53,6 +53,7 @@ def log_analyzer_view(request):
                 'initial_upload_id': '',
                 'initial_fixlist_id': '',
                 'initial_selected_lines': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
+                'initial_response_text': '',
                 'is_superuser': False,
                 'snippets_json': mark_safe('[]'),
                 'speeches_json': mark_safe('[]'),
@@ -104,9 +105,14 @@ def log_analyzer_view(request):
     )
 
     # Editing an existing fixlist from the analyzer: preload its content into the fixlist
-    # panel and, absent an explicit upload_id, auto-load its source log for re-analysis.
+    # panel and its response into the response panel and, absent an explicit upload_id,
+    # auto-load its source log for re-analysis. Seeding the response is load-bearing:
+    # the save posts whatever the panel holds, so an unseeded panel would wipe it.
     initial_fixlist_id = ''
     initial_selected_lines = fixlist_template
+    # The fixlist panel falls back to the user's template; the response has no
+    # template and simply starts empty.
+    initial_response_text = ''
     requested_fixlist_id = (request.GET.get('fixlist_id') or '').strip()
     if requested_fixlist_id.isdigit():
         editing_fixlist = Fixlist.objects.filter(
@@ -117,6 +123,7 @@ def log_analyzer_view(request):
         if editing_fixlist is not None:
             initial_fixlist_id = str(editing_fixlist.pk)
             initial_selected_lines = editing_fixlist.content
+            initial_response_text = editing_fixlist.response
             if not initial_upload_id and editing_fixlist.source_uploaded_log:
                 initial_upload_id = editing_fixlist.source_uploaded_log.upload_id
 
@@ -128,6 +135,7 @@ def log_analyzer_view(request):
             'initial_upload_id': initial_upload_id,
             'initial_fixlist_id': initial_fixlist_id,
             'initial_selected_lines': initial_selected_lines,
+            'initial_response_text': initial_response_text,
             'is_superuser': request.user.is_superuser,
             'snippets_json': snippets_json,
             'speeches_json': speeches_json,

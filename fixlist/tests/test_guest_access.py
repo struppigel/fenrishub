@@ -52,6 +52,8 @@ class GuestAnalyzerAccessTests(TestCase):
         # Guest token must be exposed to JS for API calls.
         self.assertIn(f'guestToken: "{GUEST_TOKEN}"', body)
         self.assertNotIn('id="speechMenu"', body)
+        # A guest has no fixlist to load a response from.
+        self.assertEqual(response.context['initial_response_text'], '')
 
     def test_guest_gets_no_per_helper_upload_link(self):
         """A guest has no username, so the {UPLOADLINK_HELPER*} tokens must stay literal."""

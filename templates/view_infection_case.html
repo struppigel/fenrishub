@@ -454,7 +454,7 @@
                 <div class="button-group inline-unlink">
                     <a href="{% url 'log_analyzer' %}?upload_id={{ uploaded_log.upload_id|urlencode }}" class="add-note-button analyzer-link-button" title="open this log in the analyzer" aria-label="open in analyzer"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg></a>
                     {% if can_edit %}
-                    <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note anchored to {{ uploaded_log.upload_id }}">+</button>
+                    <button type="button" class="add-note-button note-toggle" onclick="toggleNoteForm(this)" title="add note anchored to {{ uploaded_log.upload_id }}">+</button>
                     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="unlink_log">
@@ -478,7 +478,7 @@
                             <input type="hidden" name="anchor_log_upload_id" value="{{ uploaded_log.upload_id }}">
                             <textarea name="note_content" placeholder="write your note..."></textarea>
                             <div class="note-form-buttons">
-                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.add-note-button'))">cancel</button>
+                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.note-toggle'))">cancel</button>
                                 <button type="submit">save</button>
                             </div>
                         </form>
@@ -511,7 +511,7 @@
                 </div>
                 {% if can_edit %}
                 <div class="button-group inline-unlink">
-                    <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note">+</button>
+                    <button type="button" class="add-note-button note-toggle" onclick="toggleNoteForm(this)" title="add note">+</button>
                     <button type="button" class="add-note-button" onclick="toggleEditNote('{{ note.pk }}')" title="edit note">&#9998;</button>
                     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                         {% csrf_token %}
@@ -536,7 +536,57 @@
                             <input type="hidden" name="anchor_note_id" value="{{ note.pk }}">
                             <textarea name="note_content" placeholder="write your note..."></textarea>
                             <div class="note-form-buttons">
-                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.add-note-button'))">cancel</button>
+                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.note-toggle'))">cancel</button>
+                                <button type="submit">save</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% endwith %}
+        {% elif item.item_type == 'response' %}
+        {% comment %}
+        Titled with its fixlist's share token so the card reads like the others and
+        the pair is easy to match up by eye. The token identifies the fixlist, not
+        the response, which is never shared and has no token of its own.
+        {% endcomment %}
+        {% with fixlist=item.fixlist %}
+        <div class="timeline-entry fixlist">
+        <div class="fixlist-item">
+            <div style="flex: 1;">
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">Response</span><a href="{% url 'view_fixlist' fixlist.pk %}?tab=response">{{ fixlist.share_token }}</a></div>
+                <div class="fixlist-meta">{{ fixlist.username }} | {{ item.created_at|date:"Y-m-d H:i" }}</div>
+                <div class="fixlist-meta response-text" style="white-space: pre-wrap; word-break: break-word;">{{ fixlist.response }}</div>
+                <div class="button-group inline-unlink">
+                    <button type="button" class="add-note-button" onclick="copyResponseText(this)" title="copy the whole response" aria-label="copy response">&#9112;</button>
+                    {% if can_edit %}
+                    <button type="button" class="add-note-button note-toggle" onclick="toggleNoteForm(this)" title="add note">+</button>
+                    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="unlink_response">
+                        <input type="hidden" name="fixlist_id" value="{{ fixlist.pk }}">
+                        <button type="submit" class="unlink-x-button" aria-label="unlink response" title="unlink response">&times;</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        </div>
+        {% if can_edit %}
+        <div class="note-form-wrapper">
+            <div class="timeline-entry fixlist">
+                <div class="fixlist-item">
+                    <div style="flex: 1;">
+                        <div class="fixlist-title"><span class="timeline-type-badge fixlist">NOTE</span><span style="color: var(--la-text-muted);">now</span></div>
+                        <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="add_note">
+                            <input type="hidden" name="anchor_response_id" value="{{ fixlist.pk }}">
+                            <textarea name="note_content" placeholder="write your note..."></textarea>
+                            <div class="note-form-buttons">
+                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.note-toggle'))">cancel</button>
                                 <button type="submit">save</button>
                             </div>
                         </form>
@@ -556,7 +606,7 @@
                 <div class="fixlist-meta">lines {{ item.line_count }}</div>
                 {% if can_edit %}
                 <div class="button-group inline-unlink">
-                    <button type="button" class="add-note-button" onclick="toggleNoteForm(this)" title="add note">+</button>
+                    <button type="button" class="add-note-button note-toggle" onclick="toggleNoteForm(this)" title="add note">+</button>
                     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="unlink_fixlist">
@@ -577,9 +627,10 @@
                         <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}" style="display: contents;">
                             {% csrf_token %}
                             <input type="hidden" name="action" value="add_note">
+                            <input type="hidden" name="anchor_fixlist_id" value="{{ fixlist.pk }}">
                             <textarea name="note_content" placeholder="write your note..."></textarea>
                             <div class="note-form-buttons">
-                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.add-note-button'))">cancel</button>
+                                <button type="button" onclick="toggleNoteForm(this.closest('.note-form-wrapper').previousElementSibling.querySelector('.note-toggle'))">cancel</button>
                                 <button type="submit">save</button>
                             </div>
                         </form>
@@ -619,6 +670,13 @@
                     <span class="add-items-row-details">{{ fixlist.share_token }} | {{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }}</span>
                 </label>
                 {% endfor %}
+                {% for fixlist in selectable_responses %}
+                <label class="add-items-row" data-search="{{ fixlist.share_token }} {{ fixlist.username }} response">
+                    <input type="checkbox" name="selected_response_ids" value="{{ fixlist.pk }}">
+                    <span class="timeline-type-badge fixlist">Response</span>
+                    <span class="add-items-row-details">{{ fixlist.share_token }} | {{ fixlist.username }} | {{ fixlist.response_created_at|date:"Y-m-d H:i" }}</span>
+                </label>
+                {% endfor %}
             </div>
             <div class="button-group" style="margin-top: 10px;">
                 <button type="submit">add selected</button>
@@ -630,6 +688,21 @@
 {% endif %}
 
 <script>
+// Reads the reply straight off the rendered block, so the text is not duplicated
+// into a data attribute on every response entry.
+function copyResponseText(button) {
+    const block = button.closest('.fixlist-item').querySelector('.response-text');
+    const text = block ? block.textContent : '';
+    if (!text.trim()) {
+        return;
+    }
+    navigator.clipboard.writeText(text).then(function() {
+        const original = button.textContent;
+        button.textContent = '✓';
+        setTimeout(() => { button.textContent = original; }, 1200);
+    });
+}
+
 function copyUploadUrl(button) {
     navigator.clipboard.writeText(button.dataset.url).then(function() {
         const original = button.textContent;
@@ -685,7 +758,9 @@ function toggleEditNote(noteId) {
 }
 
 document.addEventListener('click', function(event) {
-    const isButton = event.target.classList && event.target.classList.contains('add-note-button');
+    // Only the + toggles count. Other .add-note-button controls (copy, open in
+    // analyzer) share the styling but must not keep an open note form alive.
+    const isButton = event.target.classList && event.target.classList.contains('note-toggle');
     const isFormChild = event.target.closest('.note-form-wrapper');
 
     if (!isButton && !isFormChild) {

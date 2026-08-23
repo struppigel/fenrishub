@@ -219,11 +219,11 @@ When `DEBUG` is false, WhiteNoise is enabled for static file serving and secure 
 
 - `/` login page
 - `/upload/` public upload form
-- `/fixlists/` authenticated fixlist dashboard
+- `/fixes/` authenticated fixlist dashboard
 - `/uploads/` uploaded log management
 - `/analyze/` log analyzer UI
 - `/rules/` classification rule management
-- `/fixlists/snippets/` snippet management
+- `/fixes/snippets/` snippet management
 - `/share/<token>/` public fixlist view
 - `/download/<token>/` fixlist text download
 
