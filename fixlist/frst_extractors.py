@@ -448,10 +448,21 @@ def extract_process(line):
     return extract_frst_entry(line, regexp, group_map, entry_type="process")
 
 
+# group(3): extension name, group(4): extension directory. The filepath group
+# stops at the first `[` so none of FRST's trailing tags ([date],
+# [UpdateUrl:0], ...) end up in the path. Shared with
+# browser_extension_snippet, which needs the same fields off the same line but
+# keeps the path literal. Only the `<BROWSER> Extension: (Name) - <path>` form
+# is covered - the registry-forced `CHR HKLM\...\Chrome\Extension: [id]` lines
+# carry no path and FRST removes them as written.
+_BROWSER_EXTENSION_RE = r"(Edge|CHR|FF|BRA) (Extension): \((.*)\) - ([^\[]*)(\[(.*)\])?"
+
+
 def extract_browser_extension(line):
-    regexp = r"(Edge|CHR|FF|BRA) (Extension): \((.*)\) - ([^\[]*)(\[(.*)\])?"
     group_map = {"name": 3, "filepath": 4, "date": 6}
-    return extract_frst_entry(line, regexp, group_map, entry_type="browser_extension")
+    return extract_frst_entry(
+        line, _BROWSER_EXTENSION_RE, group_map, entry_type="browser_extension"
+    )
 
 
 def extract_bho(line):
@@ -585,16 +596,6 @@ def defender_exclusion_snippet(line):
     return None
 
 
-# group(1): extension name, group(2): extension directory. Only the
-# `<BROWSER> Extension: (Name) - <path> [date]` form is covered — the
-# registry-forced `CHR HKLM\...\Chrome\Extension: [id]` lines carry no path
-# and FRST removes them as written.
-_BROWSER_EXTENSION_RE = re.compile(
-    r"(?i)^(?:Edge|CHR|FF|BRA)\s+Extension:\s+\((.*)\)\s+-\s+(.+?)"
-    r"\s*(?:\[[^\]]*\])?\s*(?:<====.*)?$"
-)
-
-
 def browser_extension_snippet(line):
     r"""Return the fixlist form of a browser extension line, or None if the line
     isn't one.
@@ -609,16 +610,18 @@ def browser_extension_snippet(line):
     is emitted on its own to have the extension folder deleted, with the name
     kept as a comment so the fixlist stays readable.
 
-    The path is taken literally from the line (no normalize_path) so the
-    generated fixlist targets the actual machine path.
+    Shares _BROWSER_EXTENSION_RE with extract_browser_extension, but reads the
+    path straight off the match instead of going through extract_frst_entry:
+    that would normalize_path() the real username away, and the fixlist has to
+    target the actual machine path.
     """
     if not line:
         return None
-    match = _BROWSER_EXTENSION_RE.match(line.strip())
+    match = re.match(_BROWSER_EXTENSION_RE, strip_description(line.strip()))
     if not match:
         return None
-    name = match.group(1).strip()
-    filepath = match.group(2).strip()
+    name = (match.group(3) or "").strip()
+    filepath = _strip_frst_filepath_markers((match.group(4) or "").strip())
     if not filepath or "(No File)" in filepath:
         return None
     return f"Comment: Browser extension - {name}\n{filepath}"

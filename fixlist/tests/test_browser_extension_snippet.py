@@ -61,6 +61,32 @@ class BrowserExtensionSnippetTests(TestCase):
             "Comment: Browser extension - Bad Ext\n" + r"C:\ext\abcd",
         )
 
+    def test_attention_marker_without_date(self):
+        line = r"CHR Extension: (Bad Ext) - C:\ext\abcd <==== ATTENTION"
+        self.assertEqual(
+            browser_extension_snippet(line),
+            "Comment: Browser extension - Bad Ext\n" + r"C:\ext\abcd",
+        )
+
+    def test_no_file_marker_returns_none(self):
+        self.assertIsNone(
+            browser_extension_snippet(r"CHR Extension: (Some Ext) - (No File)")
+        )
+
+    def test_multiple_trailing_bracket_tags_are_stripped(self):
+        # FRST appends tags such as [UpdateUrl:0] after the date; every trailing
+        # bracket group has to come off, not just the last one.
+        line = (
+            r"CHR Extension: (Save to Google Drive) - "
+            r"C:\Users\angel7\AppData\Local\HQgflmYAuy [2024-10-30] "
+            r"[UpdateUrl:0] <==== ATTENTION"
+        )
+        self.assertEqual(
+            browser_extension_snippet(line),
+            "Comment: Browser extension - Save to Google Drive\n"
+            r"C:\Users\angel7\AppData\Local\HQgflmYAuy",
+        )
+
     def test_real_username_is_preserved(self):
         # The path must be literal — never normalized to "username" — so the
         # fixlist deletes the folder on the actual machine.
