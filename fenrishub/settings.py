@@ -44,6 +44,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'fixlist.middleware.ActionLogMiddleware',
     'fixlist.middleware.OnlineUsersMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -163,7 +164,11 @@ LOGGING = {
     'loggers': {
         'fixlist': {
             'handlers': ['console'],
-            'level': os.getenv('FIXLIST_LOG_LEVEL', 'INFO'),
+            # Per-action breadcrumbs (see ActionLogMiddleware) are wanted in
+            # production but would flood the test runner, which drives hundreds
+            # of POSTs. assertLogs sets its own level, so tests that assert on
+            # these records still work with the logger quietened here.
+            'level': os.getenv('FIXLIST_LOG_LEVEL', 'WARNING' if TESTING else 'INFO'),
             'propagate': False,
         },
     },

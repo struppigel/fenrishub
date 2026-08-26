@@ -896,6 +896,7 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
         ClassificationRule.MATCH_PARSED_ENTRY: [],
         ClassificationRule.MATCH_SCRIPT: [],
         "__filepath_any": [],
+        "__parsed_entry_index": {},
         "__parsed_filepath_exclusions": parsed_filepath_exclusions,
         "__regex_set": None,
         "__regex_set_rules": [],
@@ -970,8 +971,28 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
 
         buckets[rule.match_type].append(rule)
 
+    _build_parsed_entry_index(buckets)
     _build_regex_matchers(buckets, pending_regex_rules)
     return buckets
+
+
+def _build_parsed_entry_index(buckets):
+    """Index parsed-entry rules by their FrstEntry so line matching is a dict
+    lookup instead of a scan over every parsed rule.
+
+    This is sound because ``FrstEntry.__hash__`` is consistent with its
+    ``__eq__``: the only field ``__eq__`` compares conditionally is ``clsid``
+    (skipped when either side's entry_type is system-specific), and ``__eq__``
+    also requires both entry_types to be equal -- so "either is system-specific"
+    and "both are" coincide, which is exactly the case ``__hash__`` folds away.
+
+    Built from the list bucket rather than during the rule loop so the two can
+    never drift, and so rules under one key keep their bucket order.
+    """
+    index = {}
+    for rule, parsed_entry in buckets[ClassificationRule.MATCH_PARSED_ENTRY]:
+        index.setdefault(parsed_entry, []).append(rule)
+    buckets["__parsed_entry_index"] = index
 
 
 REGEX_ADVERSARIAL_INPUTS = (
@@ -1344,10 +1365,11 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
             parsed_entries.append(entry)
 
     if parsed_entries:
+        parsed_entry_index = buckets["__parsed_entry_index"]
         seen_rule_ids = set()
         for entry in parsed_entries:
-            for rule, parsed_rule_entry in buckets[ClassificationRule.MATCH_PARSED_ENTRY]:
-                if entry == parsed_rule_entry and rule.id not in seen_rule_ids:
+            for rule in parsed_entry_index.get(entry, ()):
+                if rule.id not in seen_rule_ids:
                     seen_rule_ids.add(rule.id)
                     groups["parsed_entry"].append(
                         (rule, f"matched {entry.entry_type or 'parsed'} entry", "parsed_entry")

@@ -5,15 +5,18 @@ from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.dispatch import receiver
+import logging
 import secrets
 import string
 import re
+import time
 
 import mmh3
 from django.utils import timezone
 
 from .status_types import STATUS_CHOICES as _STATUS_CHOICES, STATUS_CSS_CLASS
 
+logger = logging.getLogger(__name__)
 
 PRIORITY_MIN = 0
 PRIORITY_MAX = 20
@@ -733,11 +736,24 @@ class UploadedLog(models.Model):
         if self.log_type in self.ANALYZED_LOG_TYPES:
             from .analyzer import analyze_log_text, _detect_incomplete_log_warning
             content = self.content or ''
+            # Analysis is linear in line count and is the single most expensive
+            # thing this app does. Recording size and duration together makes a
+            # creeping regression visible in the logs before it starts timing
+            # out requests -- and identifies the log when one does.
+            started = time.monotonic()
             shared_payload = analyze_log_text(content, SHARED_RULE_SET_KEY)
             if effective_key == SHARED_RULE_SET_KEY:
                 effective_payload = shared_payload
             else:
                 effective_payload = analyze_log_text(content, effective_key)
+            logger.info(
+                'analysed upload_id=%s type=%s lines=%s rule_set=%s in %.1fs',
+                self.upload_id,
+                self.log_type,
+                shared_payload.get('summary', {}).get('total_lines', 0),
+                effective_key,
+                time.monotonic() - started,
+            )
             self.apply_analysis_summary(effective_payload.get('summary', {}))
             self.is_incomplete = _detect_incomplete_log_warning(content) is not None
             for field_name in self.FIXLOG_STAT_FIELDS:

@@ -121,7 +121,7 @@ def execute_merge(
     - Retains the upload_id of the first log
     - Moves other logs to trash (rename with -trsh suffix, with counter on collision)
     - Creates merged record with combined content
-    - Recalculates analysis stats for merged record (best-effort)
+    - Schedules analysis stats for merged record (best-effort, off-thread)
 
     Returns the merged UploadedLog instance.
     """
@@ -149,11 +149,19 @@ def execute_merge(
 
     # Best-effort stat recalculation; failures here must not invalidate the merge,
     # so this runs outside the atomic block.
+    #
+    # A merged log is the largest content in the system (every source log
+    # concatenated), and analysis is linear in line count -- running it inline
+    # blew Gunicorn's worker timeout and killed the request with a 500 *after*
+    # the merge had already committed. Log type and scan date are cheap and are
+    # persisted here because the recalc thread re-reads the row by pk and needs
+    # log_type to decide whether to analyse at all; the analysis itself goes
+    # off-thread, exactly as every upload path already does.
     try:
         merged_log.recalculate_log_type()
         merged_log.recalculate_scan_date()
-        merged_log.recalculate_analysis_stats()
     except Exception:
-        logger.exception("Failed to recalculate stats for merged upload %s", retained_id)
+        logger.exception("Failed to recalculate log type/scan date for merged upload %s", retained_id)
+    schedule_analysis_stats_recalc(merged_log)
 
     return merged_log
