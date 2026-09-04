@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<!--
+  Tests for the legend status filter (bootstrap.js toggleStatusVisibility +
+  the .hide-status-* rules in log_analyzer.css) against real rendered markup.
+
+  The legend counts lines by VERDICT (dominant_status). The filter therefore has
+  to hide/show by verdict too. It used to select on the .status-* paint class,
+  which for a filepath-fallback match is deliberately 'status-unknown' even
+  though the verdict is B -- so a log with 5 B lines showed "B (5)" in the
+  legend but only the non-fallback one survived a "B only" filter.
+  renderLogLines() now stamps data-verdict-class and the CSS matches on that.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>log analyzer legend filter tests</title>
+<link rel="stylesheet" href="../../../css/log_analyzer.css">
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>log analyzer &ndash; legend filter tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<!-- The container renderLogLines() fills and the filter toggles classes on -->
+<div id="logLines" class="log-lines-container"></div>
+
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Tiny test harness (same shape as test_legend_counts.html)
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+const container = document.getElementById('logLines');
+
+// Mirrors toggleStatusVisibility()/toggleAllStatusVisibility() in bootstrap.js,
+// which is not loaded here because it self-initialises on DOMContentLoaded.
+function showOnly(statusClass) {
+    ALL_LEGEND_STATUS_CLASSES.forEach((sc) => {
+        container.classList.toggle(HIDE_CLASS_PREFIX + sc, sc !== statusClass);
+    });
+}
+
+function visibleLines() {
+    return [...container.querySelectorAll('.log-line')].filter(
+        (el) => getComputedStyle(el).display !== 'none'
+    );
+}
+
+function visibleTexts() {
+    return visibleLines().map((el) => el.querySelector('.line-text').textContent);
+}
+
+// A log with five malware verdicts: four matched only via the weak filepath
+// fallback (painted 'status-unknown'), one matched outright (painted B).
+analyzedLines = [
+    { line: 'B fallback 1', dominant_status: 'B', css_class: 'status-unknown' },
+    { line: 'B fallback 2', dominant_status: 'B', css_class: 'status-unknown' },
+    { line: 'B fallback 3', dominant_status: 'B', css_class: 'status-unknown' },
+    { line: 'B fallback 4', dominant_status: 'B', css_class: 'status-unknown' },
+    { line: 'B direct', dominant_status: 'B', css_class: 'status-b' },
+    { line: 'clean line', dominant_status: 'C', css_class: 'status-c' },
+    { line: 'mystery line', dominant_status: '?', css_class: 'status-unknown' },
+];
+renderLogLines();
+
+// ---------------------------------------------------------------------------
+// renderLogLines stamps the verdict, not the paint class
+// ---------------------------------------------------------------------------
+(function testVerdictAttributeStamped() {
+    const divs = [...container.querySelectorAll('.log-line')];
+    const fallback = divs[0];
+
+    assert(
+        'a fallback-only B line keeps its unknown paint class',
+        fallback.classList.contains('status-unknown'),
+        'classes: ' + fallback.className
+    );
+    assert(
+        'a fallback-only B line is stamped with data-verdict-class="status-b"',
+        fallback.dataset.verdictClass === 'status-b',
+        'got ' + fallback.dataset.verdictClass
+    );
+    assert(
+        'a genuinely unknown line is stamped with data-verdict-class="status-unknown"',
+        divs[6].dataset.verdictClass === 'status-unknown',
+        'got ' + divs[6].dataset.verdictClass
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Filtering to B shows every B verdict, not just the directly-painted one
+// ---------------------------------------------------------------------------
+(function testFilterShowsAllMalwareVerdicts() {
+    showOnly('status-b');
+
+    assert(
+        'filtering to B shows all 5 malware verdicts, not only the 1 painted B',
+        visibleLines().length === 5,
+        'visible: ' + JSON.stringify(visibleTexts())
+    );
+    assert(
+        'filtering to B hides the clean and unknown lines',
+        !visibleTexts().includes('clean line') && !visibleTexts().includes('mystery line'),
+        'visible: ' + JSON.stringify(visibleTexts())
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// The unknown filter no longer sweeps up fallback-matched malware
+// ---------------------------------------------------------------------------
+(function testUnknownFilterExcludesFallbackMalware() {
+    showOnly('status-unknown');
+
+    assert(
+        'filtering to unknown shows only the 1 genuinely unknown line',
+        visibleTexts().length === 1 && visibleTexts()[0] === 'mystery line',
+        'visible: ' + JSON.stringify(visibleTexts())
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Hiding a single status still works for lines whose paint matches the verdict
+// ---------------------------------------------------------------------------
+(function testHideSingleStatus() {
+    ALL_LEGEND_STATUS_CLASSES.forEach((sc) => {
+        container.classList.remove(HIDE_CLASS_PREFIX + sc);
+    });
+    container.classList.add(HIDE_CLASS_PREFIX + 'status-b');
+
+    assert(
+        'hiding B removes all 5 malware verdicts and keeps the other 2 lines',
+        visibleTexts().length === 2
+            && visibleTexts().includes('clean line')
+            && visibleTexts().includes('mystery line'),
+        'visible: ' + JSON.stringify(visibleTexts())
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+const summary = document.getElementById('summary');
+summary.textContent = passed + ' passed, ' + failed + ' failed';
+summary.style.color = failed === 0 ? '#6f9' : '#f66';
+</script>
+</body>
+</html>

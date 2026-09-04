@@ -1519,6 +1519,10 @@ function renderLogLines() {
         lineDiv.className = copiedLineIndexes.has(index)
             ? `log-line ${cssClass} copied`
             : `log-line ${cssClass}`;
+        // The legend filter hides lines by VERDICT, so it reads this attribute
+        // rather than cssClass -- a fallback-only match is styled 'status-unknown'
+        // but its verdict (and its legend count) is the badge's status.
+        lineDiv.dataset.verdictClass = badgeClass;
 
         const badge = document.createElement('button');
         badge.type = 'button';

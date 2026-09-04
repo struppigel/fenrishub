@@ -135,6 +135,38 @@ class TemplateMarkupTests(TestCase):
             with self.subTest(placeholder=placeholder):
                 self.assertIn(f"'{placeholder}'", content)
 
+    def test_legend_filter_hides_lines_by_verdict_not_by_paint_class(self):
+        """
+        The legend counts lines by verdict (dominant_status), so its filter has to
+        hide them by verdict too. A filepath-fallback match is deliberately painted
+        `status-unknown` while its verdict is e.g. B, so selecting on the .status-*
+        paint class made those lines vanish under a "B only" filter -- the legend
+        said B (5) and only the one directly-painted B line stayed visible.
+        renderLogLines() stamps data-verdict-class; the CSS must match on that.
+        """
+        project_root = Path(__file__).resolve().parent.parent.parent
+        css = (project_root / "static" / "css" / "log_analyzer.css").read_text(encoding="utf-8")
+        analysis_js = (
+            project_root / "static" / "js" / "log_analyzer" / "analysis.js"
+        ).read_text(encoding="utf-8")
+        template = self._read_template("log_analyzer.html")
+
+        self.assertIn("lineDiv.dataset.verdictClass = badgeClass;", analysis_js)
+
+        legend_classes = set(re.findall(r'class="legend-item" data-status-class="([\w-]+)"', template))
+        self.assertIn("status-b", legend_classes)
+
+        for status_class in sorted(legend_classes):
+            with self.subTest(status_class=status_class):
+                self.assertIn(
+                    f'.log-lines-container.hide-{status_class} > '
+                    f'.log-line[data-verdict-class="{status_class}"]',
+                    css,
+                )
+
+        stale = re.findall(r"\.hide-status-[\w-]+ > \.log-line\.status-[\w-]+", css)
+        self.assertEqual(stale, [], f"legend filter still selects on the paint class: {stale}")
+
     def test_speech_placeholder_tokens_cannot_collide_by_prefix(self):
         """
         {UPLOADLINK_HELPER} is a prefix of {UPLOADLINK_HELPER_PREFILLED} apart from
