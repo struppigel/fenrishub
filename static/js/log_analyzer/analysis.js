@@ -1098,6 +1098,11 @@ const IPV6_RE = new RegExp(
 // malware reports. The defanged form is refanged before being handed to lookup
 // services so VT/who.is/urlscan resolve the real URL.
 const URL_RE = /\b(?:https?|hxxps?):\/\/[^\s"'<>()\[\]]+/gi;
+// Punctuation that ends the surrounding log text rather than the URL itself.
+// FRST joins several URLs on one line with "; " (e.g. `FF Notifications: ... ->
+// hxxps://a.example; hxxps://b.example`), and sentences/lists leave a trailing
+// `.`, `,` or `:` glued to the match — none of it belongs in a VT/urlscan lookup.
+const URL_TRAILING_PUNCT_RE = /[;,.:!?]+$/;
 
 function refangUrl(v) {
     return v.replace(/^hxxp(s?):\/\//i, 'http$1://');
@@ -1184,6 +1189,23 @@ function collectRegexSpans(re, line, type) {
             end: m.index + m[0].length,
             type,
             text: m[0],
+        });
+    }
+    return out;
+}
+
+function collectUrlSpans(line) {
+    const out = [];
+    URL_RE.lastIndex = 0;
+    let m;
+    while ((m = URL_RE.exec(line)) !== null) {
+        const text = m[0].replace(URL_TRAILING_PUNCT_RE, '');
+        if (!text) continue;
+        out.push({
+            start: m.index,
+            end: m.index + text.length,
+            type: 'url',
+            text,
         });
     }
     return out;
@@ -1293,7 +1315,7 @@ function findHighlightSpans(line) {
 
     const extIdKind = EDGE_EXT_LINE_RE.test(line) ? 'edge-ext-id' : 'chrome-ext-id';
     spans.push(...collectRegexSpans(CHROME_EXT_ID_RE, line, extIdKind));
-    spans.push(...collectRegexSpans(URL_RE, line, 'url'));
+    spans.push(...collectUrlSpans(line));
     spans.push(...collectIpv4Spans(line));
     spans.push(...collectRegexSpans(IPV6_RE, line, 'ipv6'));
     spans.push(...collectDnsDomainSpans(line));

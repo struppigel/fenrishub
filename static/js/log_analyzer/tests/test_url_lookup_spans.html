@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<!--
+  Tests for URL span detection in analysis.js (findHighlightSpans + LOOKUP_KINDS).
+
+  FRST puts several URLs on one line separated by "; " — e.g.
+    FF Notifications: ...default-release -> hxxps://a.example; hxxps://b.example
+  The URL matcher stops at whitespace, so the first match used to swallow the
+  separating semicolon and the VirusTotal/urlscan lookup searched for
+  "...example%3B". Trailing punctuation must be trimmed off the span.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>analysis.js URL lookup span tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>analysis.js – URL lookup span tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Tiny test harness (same shape as test_legend_counts.html)
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+function urlSpans(line) {
+    return findHighlightSpans(line).filter((s) => s.type === 'url');
+}
+
+function vtUrlFor(value) {
+    return LOOKUP_KINDS.url.items.find((i) => i.label === 'virustotal').url(value);
+}
+
+// ---------------------------------------------------------------------------
+// Semicolon-separated FF Notifications line
+// ---------------------------------------------------------------------------
+(function testSemicolonSeparatedUrls() {
+    const line = 'FF Notifications: Mozilla\\Firefox\\Profiles\\n760fe3d.default-release '
+        + '-> hxxps://d3cmnn8hubcc73dfimeg.trovixnero.co.in; hxxps://k1jrlcw3xoggsd.trovixnero.co.in';
+    const spans = urlSpans(line);
+
+    assert(
+        'both URLs on a "; "-separated line are detected',
+        spans.length === 2,
+        'got ' + spans.length
+    );
+    assert(
+        'first URL span excludes the separating semicolon',
+        spans[0] && spans[0].text === 'hxxps://d3cmnn8hubcc73dfimeg.trovixnero.co.in',
+        'got ' + (spans[0] && spans[0].text)
+    );
+    assert(
+        'second URL span is intact',
+        spans[1] && spans[1].text === 'hxxps://k1jrlcw3xoggsd.trovixnero.co.in',
+        'got ' + (spans[1] && spans[1].text)
+    );
+    assert(
+        'VirusTotal lookup does not search for an encoded semicolon',
+        spans[0] && vtUrlFor(spans[0].text).indexOf('%3B') === -1,
+        'got ' + (spans[0] && vtUrlFor(spans[0].text))
+    );
+    assert(
+        'VirusTotal lookup refangs hxxps:// to https://',
+        spans[0] && vtUrlFor(spans[0].text)
+            === 'https://www.virustotal.com/gui/search?query='
+                + encodeURIComponent('https://d3cmnn8hubcc73dfimeg.trovixnero.co.in'),
+        'got ' + (spans[0] && vtUrlFor(spans[0].text))
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Other trailing punctuation
+// ---------------------------------------------------------------------------
+(function testTrailingPunctuation() {
+    const cases = [
+        ['see hxxps://evil.example/path, then reboot', 'hxxps://evil.example/path'],
+        ['report at https://good.example/report.', 'https://good.example/report'],
+        ['ref: https://good.example/a:', 'https://good.example/a'],
+    ];
+    for (const [line, expected] of cases) {
+        const spans = urlSpans(line);
+        assert(
+            'trailing punctuation trimmed in: ' + line,
+            spans.length === 1 && spans[0].text === expected,
+            'got ' + spans.map((s) => s.text).join(', ')
+        );
+    }
+})();
+
+// ---------------------------------------------------------------------------
+// Legitimate URL shapes stay intact
+// ---------------------------------------------------------------------------
+(function testUrlsLeftIntact() {
+    const cases = [
+        'https://good.example/a/b/',
+        'https://good.example/path?a=1&b=2',
+        'hxxps://good.example/download.exe',
+    ];
+    for (const url of cases) {
+        const spans = urlSpans('CHR HomePage: ' + url + ' extra');
+        assert(
+            'URL kept intact: ' + url,
+            spans.length === 1 && spans[0].text === url,
+            'got ' + spans.map((s) => s.text).join(', ')
+        );
+    }
+})();
+
+// ---------------------------------------------------------------------------
+// Span offsets must still line up with the rendered text
+// ---------------------------------------------------------------------------
+(function testSpanOffsetsMatchText() {
+    const line = 'FF Notifications: profile -> hxxps://a.example; hxxps://b.example';
+    const bad = urlSpans(line).filter((s) => line.slice(s.start, s.end) !== s.text);
+    assert(
+        'span start/end always slice back to span.text',
+        bad.length === 0,
+        bad.map((s) => JSON.stringify(s)).join(' ')
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+const summary = document.getElementById('summary');
+summary.textContent = passed + ' passed, ' + failed + ' failed';
+summary.style.color = failed === 0 ? '#6f9' : '#f66';
+</script>
+</body>
+</html>
