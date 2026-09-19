@@ -633,6 +633,29 @@ def fixlist_replacement(line):
     return defender_exclusion_snippet(line) or browser_extension_snippet(line)
 
 
+# A line that is nothing but a filesystem path: a drive root (`C:\`) or a UNC
+# share root (`\\server\`) followed by the rest of the path. FRST emits these in
+# its file-search results, and analysts paste them straight out of fixlist
+# drafts. The character class rules out `: * ? " < > |` — none are legal in a
+# Windows path — so a line that still carries one after the argument split
+# (`C:\a\b.txt -> C:\c\d.txt`, `C:\a\b.txt [2026-01-01 12:00]`) is some other
+# entry shape and we don't guess a path out of it.
+_BARE_PATH_LINE_RE = re.compile(r'^(?:[A-Za-z]:\\|\\\\[^\\/:*?"<>|]+\\)[^:*?"<>|]+$')
+
+
+def _extract_bare_path_line(line):
+    """Return the path of a line that is just a filesystem path, else None."""
+    core = _strip_frst_filepath_markers(strip_description(line))
+    # `C:\...\app.exe -silent` and `"C:\Program Files\app\app.exe" /q` keep only
+    # the binary; a path with no executable extension is left whole, so folder
+    # names containing spaces survive intact.
+    path, _arguments = _split_binary_and_args(core)
+    path = path.strip()
+    if _BARE_PATH_LINE_RE.match(path):
+        return path
+    return None
+
+
 def extract_any_frst_path(line):
     filepath_prefix = "FILEPATH:"
     if line.startswith(filepath_prefix):
@@ -642,4 +665,11 @@ def extract_any_frst_path(line):
         entry = extractor(line)
         if entry and entry.filepath and "(No File)" not in line:
             return entry.filepath
-    return None
+
+    # Last resort, so a line that any extractor recognizes still parses through
+    # that extractor first. `(No File)` keeps the meaning it has in the loop
+    # above: FRST already reported the file as absent, so there is no path to
+    # match on.
+    if "(No File)" in line:
+        return None
+    return _extract_bare_path_line(line)
