@@ -1419,6 +1419,17 @@ function appendLineTextWithDateHighlight(textEl, line, filepathHighlight = null)
 let lookupMenuEl = null;
 let lookupMenuTrigger = null;
 
+// Statuses offerable as a rule from the lookup menu. `?` is dropped from
+// EDITABLE_STATUSES because a `?` rule carries no classification and is
+// discarded server-side as a no-op.
+const LOOKUP_RULE_STATUSES = EDITABLE_STATUSES.filter((status) => status !== '?');
+
+// Guests can queue nothing — the persist endpoint rejects them — so the rule
+// item is hidden rather than offered and then failing at save time.
+function canCreateLookupRules() {
+    return Boolean(CURRENT_USERNAME) && !GUEST_TOKEN && Boolean(PERSIST_RULE_CHANGES_URL);
+}
+
 function ensureLookupMenu() {
     if (lookupMenuEl && document.body.contains(lookupMenuEl)) {
         return lookupMenuEl;
@@ -1444,30 +1455,89 @@ function closeLookupMenu() {
     }
 }
 
-function openLookupMenu(trigger, value, kind) {
-    if (lookupMenuTrigger === trigger && lookupMenuEl && !lookupMenuEl.hidden) {
-        closeLookupMenu();
-        return;
+function positionLookupMenu(menu, trigger) {
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth || 220;
+    const menuHeight = menu.offsetHeight || 0;
+    let left = rect.left;
+    if (left + menuWidth > window.innerWidth - 8) {
+        left = window.innerWidth - menuWidth - 8;
     }
+    if (left < 8) left = 8;
+    let top = rect.bottom + 4;
+    if (top + menuHeight > window.innerHeight - 8) {
+        top = Math.max(8, rect.top - menuHeight - 4);
+    }
+    menu.style.left = `${left + window.scrollX}px`;
+    menu.style.top = `${top + window.scrollY}px`;
+}
 
+function appendLookupMenuHeader(menu, text) {
+    const header = document.createElement('div');
+    header.className = 'lookup-menu-header';
+    header.textContent = text;
+    menu.appendChild(header);
+}
+
+function createLookupMenuButton(label, extraClass = '') {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = extraClass ? `lookup-menu-item ${extraClass}` : 'lookup-menu-item';
+    btn.setAttribute('role', 'menuitem');
+    btn.textContent = label;
+    return btn;
+}
+
+// Second page of the same popup: the lookup items are swapped out for the status
+// list in place, so the menu keeps the positioning and dismissal wiring it
+// already has instead of needing a nested popup.
+function renderLookupStatusMenu(menu, trigger, value, kind) {
+    menu.innerHTML = '';
+    appendLookupMenuHeader(menu, 'queue substring rule as');
+
+    LOOKUP_RULE_STATUSES.forEach((status) => {
+        const label = `${status}  ${STATUS_LABEL_MAP[status] || 'unknown'}`;
+        const btn = createLookupMenuButton(label, STATUS_CLASS_MAP[status] || 'status-unknown');
+        btn.setAttribute('aria-label', `Queue substring rule with status ${STATUS_LABEL_MAP[status] || 'unknown'}`);
+        btn.addEventListener('click', (event) => {
+            event.preventDefault();
+            if (btn.disabled) return;
+            btn.disabled = true;
+            // Queued, not written: the rule is persisted with everything else
+            // when the analyst saves rules, so it still goes through the preview
+            // and conflict review first. It classifies the current lines right
+            // away all the same, so the effect is visible before saving.
+            queueTokenRule(value, status);
+            applyPendingOverrides();
+            updateSummary(summarizeEffectiveStatuses(analyzedLines), analyzedLines.length);
+            renderLogLines();
+            scheduleDraftSave();
+            btn.textContent = 'queued for save';
+            setTimeout(() => closeLookupMenu(), 800);
+        });
+        menu.appendChild(btn);
+    });
+
+    const back = createLookupMenuButton('back', 'lookup-menu-separator');
+    back.addEventListener('click', (event) => {
+        event.preventDefault();
+        renderLookupItemsMenu(menu, trigger, value, kind);
+    });
+    menu.appendChild(back);
+
+    positionLookupMenu(menu, trigger);
+}
+
+function renderLookupItemsMenu(menu, trigger, value, kind) {
     const config = LOOKUP_KINDS[kind];
     if (!config) return;
 
-    const menu = ensureLookupMenu();
     menu.innerHTML = '';
-
-    const header = document.createElement('div');
-    header.className = 'lookup-menu-header';
-    header.textContent = config.menuHeader;
-    menu.appendChild(header);
+    appendLookupMenuHeader(menu, config.menuHeader);
 
     config.items.forEach((item) => {
         if (item.copy) {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'lookup-menu-item';
-            btn.setAttribute('role', 'menuitem');
-            btn.textContent = item.label;
+            const btn = createLookupMenuButton(item.label);
             btn.addEventListener('click', (event) => {
                 event.preventDefault();
                 navigator.clipboard.writeText(value).then(() => {
@@ -1492,6 +1562,31 @@ function openLookupMenu(trigger, value, kind) {
         menu.appendChild(link);
     });
 
+    // `value` is the token exactly as the log line carries it, never the
+    // refanged form: refangUrl exists to make external lookups resolve, but a
+    // rule has to match the text that is actually in the log.
+    if (canCreateLookupRules()) {
+        const ruleBtn = createLookupMenuButton('queue substring rule', 'lookup-menu-separator');
+        ruleBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            renderLookupStatusMenu(menu, trigger, value, kind);
+        });
+        menu.appendChild(ruleBtn);
+    }
+
+    positionLookupMenu(menu, trigger);
+}
+
+function openLookupMenu(trigger, value, kind) {
+    if (lookupMenuTrigger === trigger && lookupMenuEl && !lookupMenuEl.hidden) {
+        closeLookupMenu();
+        return;
+    }
+
+    if (!LOOKUP_KINDS[kind]) return;
+
+    const menu = ensureLookupMenu();
+
     if (lookupMenuTrigger && lookupMenuTrigger !== trigger) {
         lookupMenuTrigger.setAttribute('aria-expanded', 'false');
     }
@@ -1499,20 +1594,7 @@ function openLookupMenu(trigger, value, kind) {
     trigger.setAttribute('aria-expanded', 'true');
 
     menu.hidden = false;
-    const rect = trigger.getBoundingClientRect();
-    const menuWidth = menu.offsetWidth || 220;
-    const menuHeight = menu.offsetHeight || 0;
-    let left = rect.left;
-    if (left + menuWidth > window.innerWidth - 8) {
-        left = window.innerWidth - menuWidth - 8;
-    }
-    if (left < 8) left = 8;
-    let top = rect.bottom + 4;
-    if (top + menuHeight > window.innerHeight - 8) {
-        top = Math.max(8, rect.top - menuHeight - 4);
-    }
-    menu.style.left = `${left + window.scrollX}px`;
-    menu.style.top = `${top + window.scrollY}px`;
+    renderLookupItemsMenu(menu, trigger, value, kind);
 }
 
 function setupLookupMenu() {

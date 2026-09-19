@@ -164,6 +164,7 @@ function buildDraftPayload(now) {
         responseText: responseTextEl ? responseTextEl.value : '',
         speechCounter: getSpeechCounter(),
         pendingStatusChanges: [...pendingStatusChanges.entries()],
+        pendingTokenRules: [...pendingTokenRules.entries()],
         pendingChangeSequence,
         ruleDescriptionOverrides: serializeRuleDescriptionOverrides(),
         hiddenStatuses: [...hiddenStatuses],
@@ -185,6 +186,7 @@ function draftFingerprint() {
     const responseTextEl = document.getElementById('responseText');
     return [
         pendingStatusChanges.size,
+        pendingTokenRules.size,
         pendingChangeSequence,
         ruleDescriptionOverrides.size,
         hiddenStatuses.size,
@@ -196,7 +198,7 @@ function draftFingerprint() {
 
 // True when there is analyst work that only exists in the browser.
 function hasUnsavedAnalyzerWork() {
-    if (pendingStatusChanges.size > 0) {
+    if (totalPendingChangeCount() > 0) {
         return true;
     }
     // Compared against the server-rendered baseline, same as selectedLines: a
@@ -235,6 +237,7 @@ function persistDraftPayload(key, payload) {
         responseText: payload.responseText,
         speechCounter: payload.speechCounter,
         pendingStatusChanges: payload.pendingStatusChanges,
+        pendingTokenRules: payload.pendingTokenRules,
         pendingChangeSequence: payload.pendingChangeSequence,
         ruleDescriptionOverrides: payload.ruleDescriptionOverrides,
         hiddenStatuses: [],
@@ -348,12 +351,19 @@ function readDraftAt(key) {
     }
 }
 
+// Line overrides plus token rules. pendingTokenRules is absent from drafts
+// written before token rules existed, so it is counted defensively.
+function draftPendingChangeCount(payload) {
+    const lineChanges = Array.isArray(payload.pendingStatusChanges) ? payload.pendingStatusChanges.length : 0;
+    const tokenRules = Array.isArray(payload.pendingTokenRules) ? payload.pendingTokenRules.length : 0;
+    return lineChanges + tokenRules;
+}
+
 function draftIsWorthOffering(payload) {
     if (!payload) {
         return false;
     }
-    const changeCount = Array.isArray(payload.pendingStatusChanges) ? payload.pendingStatusChanges.length : 0;
-    if (changeCount > 0) {
+    if (draftPendingChangeCount(payload) > 0) {
         return true;
     }
     if (normalizeDraftNewlines(payload.responseText).trim().length > 0) {
@@ -392,7 +402,7 @@ function formatDraftTimestamp(savedAt) {
 }
 
 function describeDraft(payload) {
-    const changeCount = Array.isArray(payload.pendingStatusChanges) ? payload.pendingStatusChanges.length : 0;
+    const changeCount = draftPendingChangeCount(payload);
     const fixlistLineCount = normalizeDraftNewlines(payload.selectedLines)
         .split('\n')
         .filter((segment) => segment.trim().length > 0).length;
@@ -488,6 +498,11 @@ function hydratePendingStateFromDraft(payload) {
     const entries = Array.isArray(payload.pendingStatusChanges) ? payload.pendingStatusChanges : [];
     pendingStatusChanges = new Map(
         entries.filter((entry) => Array.isArray(entry) && entry.length === 2),
+    );
+    // Absent from drafts written before token rules existed, hence the guard.
+    const tokenEntries = Array.isArray(payload.pendingTokenRules) ? payload.pendingTokenRules : [];
+    pendingTokenRules = new Map(
+        tokenEntries.filter((entry) => Array.isArray(entry) && entry.length === 2),
     );
     pendingChangeSequence = Number(payload.pendingChangeSequence) || 0;
 

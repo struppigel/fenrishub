@@ -204,6 +204,7 @@ async function loadInitialUploadForAnalyzer() {
 function initializePendingStatusChanges() {
     sessionStorage.removeItem(PENDING_STATUS_STORAGE_KEY);
     pendingStatusChanges = new Map();
+    pendingTokenRules = new Map();
     pendingChangeSequence = 0;
     recomputePendingChangeSequence();
     updateSaveChangesButtonState();

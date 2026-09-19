@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<!--
+  Tests for the "queue substring rule" item in the entity lookup menu
+  (analysis.js renderLookupItemsMenu / renderLookupStatusMenu, shared.js
+  queueTokenRule / tokenRuleStatusForEntry / applyPendingOverrides).
+
+  Two things are pinned down here:
+
+  1. The payload. A token rule has no endpoint of its own — it rides the normal
+     pending-change flow, and the server's parse_rule_line only makes it a
+     substring rule because the line carries a `SUBSTRING:` prefix. Lose the
+     prefix and the analyzer silently starts writing exact-line rules instead.
+     The Django-side half of that contract lives in
+     fixlist/tests/test_analyzer_substring_rule_creation.py.
+
+  2. The preview. A queued rule reclassifies the current lines before it is
+     saved, but only where a real substring rule (default priority 7) would
+     actually win — otherwise the analyzer would promise a verdict the engine
+     overrules on the next scan.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>analysis.js lookup rule menu tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>analysis.js – lookup rule menu tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<div id="logLines"></div>
+
+<script>
+// Read by shared.js at load time, so it has to be set before the script tag.
+// A username with no guest token is what unlocks the rule item.
+window.logAnalyzerConfig = {
+    analyzeLogUrl: '/fake/analyze/',
+    lineDetailsUrl: '/fake/details/',
+    persistRuleChangesUrl: '/fake/persist/',
+    currentUsername: 'tester',
+    guestToken: '',
+};
+
+// Defined in draft_autosave.js / bootstrap.js, which are not loaded here.
+function scheduleDraftSave() {}
+</script>
+
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+
+<script>
+// Picking a status repaints the analyzer. That repaint needs the full analyzer
+// DOM, which is not built here, so it is stubbed out and the resulting state is
+// asserted directly instead.
+renderLogLines = function () {};
+updateSummary = function () {};
+
+// ---------------------------------------------------------------------------
+// Tiny test harness (same shape as test_url_lookup_spans.html)
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+function reset() {
+    closeLookupMenu();
+    pendingTokenRules = new Map();
+    pendingStatusChanges = new Map();
+    pendingChangeSequence = 0;
+    analyzedLines = [];
+}
+
+function makeTrigger() {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    document.body.appendChild(btn);
+    return btn;
+}
+
+function menuItems() {
+    return Array.from(document.querySelectorAll('.lookup-menu .lookup-menu-item'));
+}
+
+function menuLabels() {
+    return menuItems().map((el) => el.textContent);
+}
+
+function ruleItem() {
+    return menuItems().find((el) => el.textContent === 'queue substring rule');
+}
+
+// A server-shaped analysis payload run through the same keying the analyzer uses.
+function loadLines(lines) {
+    analyzedLines = attachLineKeys(lines);
+}
+
+function line(text, status, matcher) {
+    return {
+        line: text,
+        dominant_status: status || '?',
+        status_codes: status || '?',
+        matcher: matcher || '',
+        reasons: [],
+        matched: Boolean(status) && status !== '?',
+    };
+}
+
+function statusOf(index) {
+    return analyzedLines[index].dominant_status;
+}
+
+// ---------------------------------------------------------------------------
+// Queued payload — the SUBSTRING: prefix is the whole contract
+// ---------------------------------------------------------------------------
+(function testQueuedPayloadShape() {
+    reset();
+    queueTokenRule('1.2.3.4', 'B');
+    const payload = getPendingStatusChangesPayload();
+
+    assert('one change is queued', payload.length === 1, 'got ' + payload.length);
+    assert(
+        'line carries the SUBSTRING: prefix',
+        payload[0].line === 'SUBSTRING:1.2.3.4',
+        'got ' + payload[0].line
+    );
+    assert('new_status is the chosen status', payload[0].new_status === 'B', 'got ' + payload[0].new_status);
+    assert('original_status is unknown', payload[0].original_status === '?', 'got ' + payload[0].original_status);
+    assert('the queued rule counts as pending work', totalPendingChangeCount() === 1);
+})();
+
+// A rule has to match the text the log actually carries, so the defanged form is
+// kept verbatim — refangUrl exists only to make external lookups resolve.
+(function testDefangedUrlKeptVerbatim() {
+    reset();
+    queueTokenRule('hxxps://evil.example/a', 'B');
+    assert(
+        'defanged URL is not refanged into the rule pattern',
+        getPendingStatusChangesPayload()[0].line === 'SUBSTRING:hxxps://evil.example/a',
+        'got ' + getPendingStatusChangesPayload()[0].line
+    );
+})();
+
+(function testQueueingIsIdempotent() {
+    reset();
+    queueTokenRule('1.2.3.4', 'B');
+    queueTokenRule('1.2.3.4', 'B');
+    assert('the same token and status queues once', pendingTokenRules.size === 1, 'got ' + pendingTokenRules.size);
+
+    queueTokenRule('1.2.3.4', 'P');
+    assert('a different status queues separately', pendingTokenRules.size === 2, 'got ' + pendingTokenRules.size);
+})();
+
+// ---------------------------------------------------------------------------
+// Queued rules classify the current lines before they are saved
+// ---------------------------------------------------------------------------
+(function testQueuedRuleClassifiesUnmatchedLines() {
+    reset();
+    loadLines([
+        line('R2 evilsvc; C:\\Windows\\1.2.3.4\\bad.exe [X]'),
+        line('Hosts: 1.2.3.4 evil.example'),
+        line('R2 goodsvc; C:\\Windows\\good.exe [X]'),
+    ]);
+
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert('first matching line is reclassified', statusOf(0) === 'B', 'got ' + statusOf(0));
+    assert('second matching line is reclassified', statusOf(1) === 'B', 'got ' + statusOf(1));
+    assert('a non-matching line is untouched', statusOf(2) === '?', 'got ' + statusOf(2));
+    assert(
+        'the override is spelled out in the line reasons',
+        analyzedLines[0].reasons.some((r) => r.indexOf('pending substring rule') !== -1),
+        analyzedLines[0].reasons.join(' | ')
+    );
+    assert(
+        'the reclassified line counts as matched',
+        analyzedLines[0].matched === true
+    );
+})();
+
+(function testQueuedRuleIsSubstringAndCaseSensitive() {
+    reset();
+    loadLines([
+        line('CHR Extension: (Bad) - C:\\path\\abcdefghijklmnopabcdefghijklmnop [2026-01-01]'),
+        line('CHR Extension: (Shouty) - C:\\path\\ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP [2026-01-01]'),
+    ]);
+
+    queueTokenRule('abcdefghijklmnopabcdefghijklmnop', 'B');
+    applyPendingOverrides();
+
+    assert('the token matches anywhere in the line', statusOf(0) === 'B', 'got ' + statusOf(0));
+    assert(
+        'matching is case-sensitive, as it is server-side',
+        statusOf(1) === '?',
+        'got ' + statusOf(1)
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// The preview must not promise a verdict the engine would overrule
+// ---------------------------------------------------------------------------
+(function testHigherTierMatchesWin() {
+    reset();
+    loadLines([
+        line('R2 evil; C:\\bad\\1.2.3.4.exe [X]', 'C', 'exact'),
+        line('R2 evil; C:\\bad\\1.2.3.4.dll [X]', 'C', 'parsed_entry'),
+        line('R2 evil; C:\\bad\\1.2.3.4.sys [X]', 'C', 'filepath'),
+        line('R2 evil; C:\\bad\\1.2.3.4.dat [X]', 'C', 'regex'),
+    ]);
+
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert('an exact match outranks the queued rule', statusOf(0) === 'C', 'got ' + statusOf(0));
+    assert('a parsed-entry match outranks it', statusOf(1) === 'C', 'got ' + statusOf(1));
+    assert('a filepath match outranks it', statusOf(2) === 'C', 'got ' + statusOf(2));
+    assert('a regex match is outranked by it', statusOf(3) === 'B', 'got ' + statusOf(3));
+})();
+
+(function testSameTierBreaksOnStatusPrecedence() {
+    reset();
+    loadLines([
+        line('R2 a; C:\\bad\\1.2.3.4.exe [X]', 'C', 'substring'),
+        line('R2 b; C:\\bad\\1.2.3.4.dll [X]', 'B', 'substring'),
+    ]);
+
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert(
+        'a stronger verdict takes over at the same tier',
+        statusOf(0) === 'B',
+        'got ' + statusOf(0)
+    );
+    assert(
+        'an equally strong existing verdict is left alone',
+        statusOf(1) === 'B',
+        'got ' + statusOf(1)
+    );
+})();
+
+(function testExplicitLineOverrideWins() {
+    reset();
+    loadLines([line('Hosts: 1.2.3.4 evil.example')]);
+
+    pendingChangeSequence += 1;
+    pendingStatusChanges.set(pendingOverrideKeyForEntry(analyzedLines[0]), {
+        id: String(pendingChangeSequence),
+        order: pendingChangeSequence,
+        line: analyzedLines[0].line,
+        original_status: '?',
+        new_status: 'C',
+    });
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert(
+        'a per-line override beats a queued token rule',
+        statusOf(0) === 'C',
+        'got ' + statusOf(0)
+    );
+})();
+
+(function testStrongestQueuedRuleWins() {
+    reset();
+    loadLines([line('Hosts: 1.2.3.4 evil.example')]);
+
+    queueTokenRule('evil.example', 'P');
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert(
+        'the strongest of several matching queued rules wins',
+        statusOf(0) === 'B',
+        'got ' + statusOf(0)
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// The menu itself
+// ---------------------------------------------------------------------------
+(function testItemOfferedForEveryKind() {
+    const kinds = ['chrome-ext-id', 'edge-ext-id', 'ipv4', 'ipv6', 'url', 'domain'];
+    for (const kind of kinds) {
+        reset();
+        openLookupMenu(makeTrigger(), 'sample-value', kind);
+        assert('rule item offered for kind: ' + kind, Boolean(ruleItem()), menuLabels().join(' | '));
+    }
+    reset();
+})();
+
+(function testStatusSubmenu() {
+    reset();
+    openLookupMenu(makeTrigger(), '1.2.3.4', 'ipv4');
+    const beforeCount = menuItems().length;
+    ruleItem().click();
+
+    const labels = menuLabels();
+    const statusCodes = labels.slice(0, -1).map((text) => text.trim().charAt(0));
+
+    assert(
+        'status list offers B P C ! G S J',
+        statusCodes.join('') === 'BPC!GSJ',
+        'got ' + statusCodes.join('')
+    );
+    assert('unknown is not offered (it would be a no-op rule)', statusCodes.indexOf('?') === -1);
+    assert('informational is not offered (rejected server-side)', statusCodes.indexOf('I') === -1);
+    assert('last item is back', labels[labels.length - 1] === 'back', 'got ' + labels[labels.length - 1]);
+    assert(
+        'status buttons carry their status colour class',
+        menuItems()[0].classList.contains('status-b'),
+        menuItems()[0].className
+    );
+
+    menuItems()[menuItems().length - 1].click();
+    assert(
+        'back restores the lookup items',
+        menuItems().length === beforeCount && Boolean(ruleItem()),
+        menuLabels().join(' | ')
+    );
+    reset();
+})();
+
+(function testPickingAStatusQueuesRatherThanSaves() {
+    reset();
+    loadLines([line('Hosts: 1.2.3.4 evil.example')]);
+    openLookupMenu(makeTrigger(), '1.2.3.4', 'ipv4');
+    ruleItem().click();
+
+    const malwareButton = menuItems()[0];
+    malwareButton.click();
+
+    assert('the rule is queued', pendingTokenRules.size === 1, 'got ' + pendingTokenRules.size);
+    assert(
+        'the queued rule carries the chosen status',
+        getPendingStatusChangesPayload()[0].new_status === 'B',
+        'got ' + getPendingStatusChangesPayload()[0].new_status
+    );
+    assert(
+        'the button says it is queued, not saved',
+        malwareButton.textContent === 'queued for save',
+        'got ' + malwareButton.textContent
+    );
+    assert(
+        'the matching line is reclassified right away',
+        statusOf(0) === 'B',
+        'got ' + statusOf(0)
+    );
+    reset();
+})();
+
+(function testGuestGating() {
+    assert('rule item is offered while signed in', canCreateLookupRules() === true);
+})();
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+const summary = document.getElementById('summary');
+summary.textContent = passed + ' passed, ' + failed + ' failed';
+summary.style.color = failed === 0 ? '#6f9' : '#f66';
+</script>
+</body>
+</html>

@@ -200,6 +200,12 @@ const RULE_SUBMIT_TARGET_CREATE_FIXLIST = 'create_fixlist';
 const RULE_SUBMIT_TARGET_RESCAN = 'rescan';
 let statusPickerBusy = false;
 let pendingStatusChanges = new Map();
+// Rules queued from the entity lookup menu (a substring rule for an extension
+// id, IP, url or domain). They share the pending-change lifecycle — preview,
+// conflict review, "save rules" — but not the storage: pendingStatusChanges is
+// keyed per log line and drives that line's displayed status, while a token rule
+// belongs to no line and must survive a re-analysis that drops its log line.
+let pendingTokenRules = new Map();
 let pendingChangeSequence = 0;
 let ruleDescriptionOverrides = new Map();
 let removedRuleCandidateIds = new Set();
@@ -303,7 +309,7 @@ function safeParseJson(input, fallback) {
 
 function recomputePendingChangeSequence() {
     let maxSequence = 0;
-    pendingStatusChanges.forEach((change) => {
+    const visit = (change) => {
         const orderValue = Number(change && change.order);
         const idValue = Number(change && change.id);
         if (Number.isFinite(orderValue)) {
@@ -312,8 +318,114 @@ function recomputePendingChangeSequence() {
         if (Number.isFinite(idValue)) {
             maxSequence = Math.max(maxSequence, idValue);
         }
-    });
+    };
+    pendingStatusChanges.forEach(visit);
+    pendingTokenRules.forEach(visit);
     pendingChangeSequence = maxSequence;
+}
+
+// Everything the analyst has queued but not yet saved, line overrides and token
+// rules alike. Drives the save button, the counter and the unsaved-work guard.
+function totalPendingChangeCount() {
+    return pendingStatusChanges.size + pendingTokenRules.size;
+}
+
+// Same key for the same (token, status) pair, so picking a status twice replaces
+// the entry instead of queueing a duplicate.
+function pendingTokenRuleKey(value, status) {
+    return `${status}\u0000${value}`;
+}
+
+const TOKEN_RULE_LINE_PREFIX = 'SUBSTRING:';
+// Mirrors DEFAULT_PRIORITY_BY_MATCH_TYPE in models.py, keyed by the `matcher`
+// each analyzed line reports. A queued token rule is previewed only where a real
+// substring rule would actually win, so the analyzer never shows a verdict the
+// engine would overrule once the rule is saved.
+const MATCHER_DEFAULT_PRIORITY = {
+    exact: 19,
+    parsed_entry: 15,
+    filepath: 11,
+    substring: 7,
+    script: 3,
+    regex: 3,
+};
+const SUBSTRING_RULE_PRIORITY = MATCHER_DEFAULT_PRIORITY.substring;
+const UNMATCHED_LINE_PRIORITY = -1;
+
+function statusPrecedenceRank(status) {
+    const rank = STATUS_PRECEDENCE_ORDER.indexOf(status);
+    return rank === -1 ? STATUS_PRECEDENCE_ORDER.length : rank;
+}
+
+function tokenRuleValue(change) {
+    const line = (change && change.line) || '';
+    return line.startsWith(TOKEN_RULE_LINE_PREFIX)
+        ? line.slice(TOKEN_RULE_LINE_PREFIX.length)
+        : '';
+}
+
+// The status a queued token rule would give this line, or '' if none applies.
+// Substring matching is case-sensitive server-side (`source_text in line`), so
+// it is here too.
+function tokenRuleStatusForEntry(entry) {
+    if (!pendingTokenRules.size) {
+        return '';
+    }
+    const line = (entry && entry.line) || '';
+    if (!line) {
+        return '';
+    }
+
+    const baseStatus = (entry && entry._baseDominantStatus) || '?';
+    const basePriority = baseStatus === '?'
+        ? UNMATCHED_LINE_PRIORITY
+        : (MATCHER_DEFAULT_PRIORITY[entry && entry._baseMatcher] ?? UNMATCHED_LINE_PRIORITY);
+
+    if (SUBSTRING_RULE_PRIORITY < basePriority) {
+        return '';
+    }
+
+    let winner = '';
+    pendingTokenRules.forEach((change) => {
+        const value = tokenRuleValue(change);
+        if (!value || line.indexOf(value) === -1) {
+            return;
+        }
+        // Same tier as the line's existing match: the engine breaks that tie on
+        // status precedence, so only a stronger verdict takes over.
+        if (SUBSTRING_RULE_PRIORITY === basePriority
+            && statusPrecedenceRank(baseStatus) <= statusPrecedenceRank(change.new_status)) {
+            return;
+        }
+        if (winner && statusPrecedenceRank(winner) <= statusPrecedenceRank(change.new_status)) {
+            return;
+        }
+        winner = change.new_status;
+    });
+
+    return winner;
+}
+
+function queueTokenRule(value, status) {
+    const key = pendingTokenRuleKey(value, status);
+    const existing = pendingTokenRules.get(key);
+    if (existing) {
+        return existing;
+    }
+
+    pendingChangeSequence += 1;
+    const change = {
+        id: String(pendingChangeSequence),
+        order: pendingChangeSequence,
+        // The persist endpoint runs every pending change through parse_rule_line,
+        // which forces match_type `substring` on a `SUBSTRING:` prefix. Without
+        // it a bare token would be stored as an exact-line rule and match nothing.
+        line: `SUBSTRING:${value}`,
+        original_status: '?',
+        new_status: status,
+    };
+    pendingTokenRules.set(key, change);
+    return change;
 }
 
 function normalizePendingChangesForCurrentLines() {
@@ -338,7 +450,8 @@ function normalizePendingChangesForCurrentLines() {
     recomputePendingChangeSequence();
 
     const validChangeIds = new Set(
-        [...pendingStatusChanges.values()].map((change) => String(change && change.id))
+        [...pendingStatusChanges.values(), ...pendingTokenRules.values()]
+            .map((change) => String(change && change.id))
     );
     [...ruleDescriptionOverrides.keys()].forEach((changeId) => {
         if (!validChangeIds.has(String(changeId))) {
@@ -405,7 +518,7 @@ function initializeCursorPosition() {
 
 function updateSaveChangesButtonState() {
     const saveChangesButton = document.getElementById('saveRulesRescanButton');
-    const hasPendingChanges = pendingStatusChanges.size > 0;
+    const hasPendingChanges = totalPendingChangeCount() > 0;
     if (saveChangesButton) {
         saveChangesButton.classList.toggle('has-pending-changes', hasPendingChanges);
     }
@@ -414,7 +527,7 @@ function updateSaveChangesButtonState() {
     if (bannerStatisticsEl && bannerStatisticsEl.textContent) {
         bannerStatisticsEl.textContent = bannerStatisticsEl.textContent.replace(
             /pending status changes: \d+/,
-            `pending status changes: ${pendingStatusChanges.size}`
+            `pending status changes: ${totalPendingChangeCount()}`
         );
     }
 }
@@ -423,7 +536,7 @@ function updateSummary(summary, fallbackTotal = 0) {
     const totalLines = Number(summary.total_lines || fallbackTotal);
     const matchedLines = Number(summary.matched_lines || 0);
     const unknownLines = Number(summary.unknown_lines || 0);
-    const pendingChanges = pendingStatusChanges.size;
+    const pendingChanges = totalPendingChangeCount();
     const summaryEl = document.getElementById('analysisSummary');
     const bannerStatisticsEl = document.getElementById('bannerStatistics');
     const legendEl = document.getElementById('statusLegend');
@@ -503,6 +616,7 @@ function attachLineKeys(lines) {
             _baseCssClass: entry.css_class || STATUS_CLASS_MAP[baseStatus] || 'status-unknown',
             _baseStatusLabel: entry.status_label || STATUS_LABEL_MAP[baseStatus] || 'unknown',
             _baseReasons: baseReasons,
+            _baseMatcher: entry.matcher || '',
             _baseFilepathHighlight: entry.filepath_highlight || null,
         };
     });
@@ -525,6 +639,22 @@ function applyPendingOverrides() {
         const pending = pendingStatusChanges.get(pendingOverrideKeyForEntry(entry));
 
         if (!pending) {
+            // An explicit per-line override wins over a queued token rule, so
+            // token rules are only consulted when the line has none.
+            const tokenStatus = tokenRuleStatusForEntry(entry);
+            if (tokenStatus) {
+                return {
+                    ...entry,
+                    dominant_status: tokenStatus,
+                    status_codes: tokenStatus,
+                    css_class: STATUS_CLASS_MAP[tokenStatus] || 'status-unknown',
+                    status_label: STATUS_LABEL_MAP[tokenStatus] || 'unknown',
+                    reasons: [...baseReasons, `pending substring rule -> ${tokenStatus}`],
+                    matched: true,
+                    filepath_highlight: null,
+                };
+            }
+
             return {
                 ...entry,
                 dominant_status: baseStatus,
@@ -553,7 +683,7 @@ function applyPendingOverrides() {
 }
 
 function getPendingStatusChangesPayload() {
-    return [...pendingStatusChanges.values()]
+    return [...pendingStatusChanges.values(), ...pendingTokenRules.values()]
         .sort((left, right) => left.order - right.order)
         .map((change) => {
             const payload = {
@@ -583,6 +713,7 @@ function applyAnalysisPayload(payload, options = {}) {
         copiedLineIndexes = new Set();
         if (!preservePendingChanges) {
             pendingStatusChanges.clear();
+            pendingTokenRules.clear();
             pendingChangeSequence = 0;
             ruleDescriptionOverrides.clear();
             removedRuleCandidateIds.clear();
@@ -592,6 +723,7 @@ function applyAnalysisPayload(payload, options = {}) {
         copiedLineIndexes = new Set();
         if (!preservePendingChanges) {
             pendingStatusChanges.clear();
+            pendingTokenRules.clear();
             pendingChangeSequence = 0;
             ruleDescriptionOverrides.clear();
             removedRuleCandidateIds.clear();
@@ -624,6 +756,7 @@ function setRuleSubmitTarget(nextTarget) {
 
 function clearPendingAnalyzerChanges() {
     pendingStatusChanges.clear();
+    pendingTokenRules.clear();
     pendingChangeSequence = 0;
     ruleDescriptionOverrides.clear();
     removedRuleCandidateIds.clear();
