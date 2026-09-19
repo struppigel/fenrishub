@@ -57,7 +57,10 @@ from .views.uploads import (
 )
 
 urlpatterns = [
-    path('', login_view, name='login'),
+    # The landing page is the public upload form; login lives on its own URL so
+    # visitors are never greeted by a credentials prompt.
+    path('', upload_log_view, name='home'),
+    path('login/', login_view, name='login'),
     path('upload/<str:helper_username>/', upload_log_view, name='upload_log_for_helper'),
     path('upload/', upload_log_view, name='upload_log'),
     path('account/password/', change_password_view, name='change_password'),

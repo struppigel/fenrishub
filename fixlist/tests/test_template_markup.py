@@ -29,12 +29,18 @@ class TemplateMarkupTests(TestCase):
         project_root = Path(__file__).resolve().parent.parent.parent
         return (project_root / "templates" / template_name).read_text(encoding="utf-8")
 
-    def test_base_template_navigation_omits_upload_link(self):
+    def test_authenticated_navigation_omits_upload_link(self):
+        """
+        Helpers get 'uploads' (the listing), never a link to the public upload
+        form. Anonymous visitors do land on that form, so scope the guard to the
+        authenticated branch: everything before the `{% elif is_guest %}` arm.
+        """
         content = self._read_template("base.html")
+        authenticated_nav = content.split('{% elif is_guest %}')[0]
 
         self.assertIn('{% url \'uploaded_logs\' %}', content)
         self.assertIn('{% url \'profile\' %}', content)
-        self.assertNotIn('>upload</a>', content)
+        self.assertNotIn('>upload</a>', authenticated_nav)
 
     def test_create_fixlist_template_only_uses_prefill_handoff(self):
         content = self._read_template("create_fixlist.html")

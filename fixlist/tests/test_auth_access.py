@@ -23,6 +23,27 @@ class AuthenticationAndAccessTests(TestCase):
             internal_note="Sensitive internal note",
         )
 
+    def test_landing_page_is_the_upload_form_not_the_login_form(self):
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(reverse("home"), "/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "upload_log.html")
+        self.assertNotContains(response, 'name="password"')
+
+    def test_landing_page_links_to_the_login_form(self):
+        response = self.client.get(reverse("home"))
+
+        self.assertContains(response, f'href="{reverse("login")}"')
+
+    def test_login_form_lives_on_its_own_url(self):
+        response = self.client.get(reverse("login"))
+
+        self.assertEqual(reverse("login"), "/login/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "login.html")
+        self.assertContains(response, 'name="password"')
+
     def test_dashboard_requires_login(self):
         response = self.client.get(reverse("dashboard"))
 

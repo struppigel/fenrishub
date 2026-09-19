@@ -74,7 +74,7 @@ The helper script can create, list, and delete users.
 
 ## 4. First login
 
-Go to `/` and sign in with the account you created.
+Go to `/login/` (or click "login" in the nav on `/`) and sign in with the account you created.
 
 Useful authenticated routes:
 
@@ -86,7 +86,7 @@ Useful authenticated routes:
 
 ## 5. Test the upload flow
 
-FenrisHub accepts uploads from unauthenticated users at `/upload/`.
+FenrisHub accepts uploads from unauthenticated users at `/` and `/upload/`.
 
 You can test either of these:
 

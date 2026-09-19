@@ -33,16 +33,6 @@
 </style>
 {% endblock %}
 
-{% block nav %}
-{% if not user.is_authenticated %}
-<div class="nav">
-    <div class="nav-right">
-        <button type="button" class="profile-btn" onclick="document.getElementById('faqModal').classList.add('show')">what is this?</button>
-    </div>
-</div>
-{% endif %}
-{% endblock %}
-
 {% block content %}
 <div class="upload-log-page">
 <h2>log upload</h2>

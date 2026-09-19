@@ -779,7 +779,10 @@
             {% else %}
             {% block nav %}
             <div class="nav">
-                <a href="{% url 'login' %}">Login</a>
+                <div class="nav-left">
+                    <a href="{% url 'home' %}">upload</a>
+                    <a href="{% url 'login' %}">login</a>
+                </div>
                 <div class="nav-right">
                     <button type="button" class="profile-btn" onclick="document.getElementById('faqModal').classList.add('show')">what is this?</button>
                 </div>

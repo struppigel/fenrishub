@@ -217,8 +217,9 @@ When `DEBUG` is false, WhiteNoise is enabled for static file serving and secure 
 
 ## Key Routes
 
-- `/` login page
-- `/upload/` public upload form
+- `/` public upload form (landing page)
+- `/login/` login page
+- `/upload/` public upload form (canonical URL used in helper links)
 - `/fixes/` authenticated fixlist dashboard
 - `/uploads/` uploaded log management
 - `/analyze/` log analyzer UI
