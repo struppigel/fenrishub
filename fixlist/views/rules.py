@@ -18,7 +18,7 @@ from django.db.models import Q, Case, When
 from .. import script_matcher
 from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
-    evaluate_regex_pattern,
+    evaluate_regex_pattern, REPARSE_FIELDS,
 )
 from ..models import (
     ClassificationRule,
@@ -130,6 +130,200 @@ def _split_patterns(source_text: str) -> list:
     return patterns
 
 
+def _sanitize_return_q(raw) -> str:
+    """Re-encode a caller-supplied rules-list query string, dropping anything that
+    is not a valid key=value pair. A hostile value like `//evil.com` yields nothing,
+    so callers fall back to the plain rules URL."""
+    value = (raw or '').strip()
+    if not value:
+        return ''
+    return urlencode(parse_qsl(value, keep_blank_values=True), doseq=True)
+
+
+def _rules_redirect(return_q):
+    """Back to the rules list, keeping the filter/search the user came from."""
+    safe_query = _sanitize_return_q(return_q)
+    if safe_query:
+        return redirect(f"{reverse('rules')}?{safe_query}")
+    return redirect('rules')
+
+
+def _rule_form_from_post(request) -> dict:
+    """Read the shared rule-form fields out of a POST."""
+    return {
+        'status': request.POST.get('status', '').strip(),
+        'match_type': request.POST.get('match_type', '').strip(),
+        'source_text': request.POST.get('source_text', '').strip(),
+        'description': request.POST.get('description', '').strip(),
+        'is_enabled': request.POST.get('is_enabled') == 'on',
+        'whole_log': request.POST.get('whole_log') == 'on',
+        # Kept as a string: the template selects an option with `form_priority == value`
+        # against the str-keyed `_priority_choices()`, and an int would never compare
+        # equal -- leaving the select unselected and letting the page's JS overwrite
+        # the rule's hand-tuned priority with the match-type default.
+        'priority': request.POST.get('priority', '').strip(),
+    }
+
+
+def _rule_form_from_rule(rule) -> dict:
+    """Form state for an existing rule. See _rule_form_from_post on the priority str."""
+    return {
+        'status': rule.status,
+        'match_type': rule.match_type,
+        'source_text': rule.source_text,
+        'description': rule.description,
+        'is_enabled': rule.is_enabled,
+        'whole_log': rule.whole_log,
+        'priority': '' if rule.priority is None else str(rule.priority),
+    }
+
+
+def _warn_about_unassignable_values(request, rule) -> None:
+    """Warn when a rule holds a status or match type the current user cannot assign.
+
+    The form offers only what a user may author, so such a value has no option to
+    select, the browser falls back to the first one, and saving would rewrite the
+    rule. These values should not occur -- `?` rules in particular are not supposed
+    to exist -- so the editor says so out loud rather than quietly offering them.
+    """
+    if rule.status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
+        label = dict(ClassificationRule.STATUS_CHOICES).get(rule.status, rule.status)
+        messages.warning(
+            request,
+            f'This rule has status "{rule.status} - {label}", which cannot be '
+            f'assigned here. Saving will change it to the status shown below.',
+        )
+    if rule.match_type not in dict(_creatable_match_type_choices(request.user)):
+        label = dict(ClassificationRule.MATCH_TYPE_CHOICES).get(
+            rule.match_type, rule.match_type
+        )
+        messages.warning(
+            request,
+            f'This rule has match type "{label}", which you cannot assign. '
+            f'Saving will change it to the match type shown below.',
+        )
+
+
+def _assign_parsed_metadata(rule, form: dict) -> None:
+    """Refresh the parsed metadata columns from the rule's current source text.
+
+    Every field is assigned, including the empty ones, so changing a filepath rule's
+    path does not leave the previous `normalized_filepath` behind still matching the
+    old path. Same field set and semantics as the `reparse_rules` command.
+    """
+    parsed = parse_rule_line(form['source_text'], status=form['status'])
+    if parsed and form['match_type'] in (
+        ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH
+    ):
+        parsed['match_type'] = form['match_type']
+    for field in REPARSE_FIELDS:
+        if parsed is None:
+            blank = False if field in ('file_not_signed', 'is_hidden') else ''
+            setattr(rule, field, blank)
+        else:
+            setattr(rule, field, parsed.get(field))
+
+
+def _apply_rule_edit(rule, form: dict, user) -> str | None:
+    """Validate and save an edit to one rule. Returns an error message, or None.
+
+    Shared by the quick-edit panel on the rules list and the full-page editor so the
+    two cannot drift. `source_text` is a single value -- never split per line -- so a
+    script rule keeps its newlines and one rule in stays one rule out.
+    """
+    priority = _coerce_priority(form['priority'], form['match_type'])
+    script_error = _script_rule_error(
+        form['match_type'], form['source_text'], user, form['whole_log']
+    )
+    whole_log_error = _whole_log_error(form['whole_log'], form['status'], form['match_type'])
+
+    if not form['source_text']:
+        return 'Rule source text is required.'
+    if form['status'] not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
+        return 'Invalid status.'
+    if form['match_type'] not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
+        return 'Invalid match type.'
+    # An edit saves one rule, so line breaks would be stored inside a single
+    # source_text and that rule would then never match a real log line. Script
+    # rules are a genuine multi-line snippet and are exempt.
+    if form['match_type'] != ClassificationRule.MATCH_SCRIPT and (
+        '\n' in form['source_text'] or '\r' in form['source_text']
+    ):
+        return (
+            'A rule matches a single line. Remove the line breaks, or use '
+            '"add rule" to create one rule per line.'
+        )
+    if whole_log_error:
+        return whole_log_error
+    if script_error:
+        return script_error
+
+    duplicate = ClassificationRule.objects.filter(
+        owner=user, status=form['status'], match_type=form['match_type'],
+        source_text=form['source_text'], whole_log=form['whole_log'],
+    ).exclude(pk=rule.pk).exists()
+    if duplicate:
+        return 'A rule with this status, match type, and source text already exists.'
+
+    rule.status = form['status']
+    rule.match_type = form['match_type']
+    rule.source_text = form['source_text']
+    rule.description = form['description']
+    rule.is_enabled = form['is_enabled']
+    rule.priority = priority
+    rule.whole_log = form['whole_log']
+    _assign_parsed_metadata(rule, form)
+    rule.save(update_fields=[
+        'status', 'match_type', 'source_text', 'description',
+        'is_enabled', 'priority', 'whole_log', *REPARSE_FIELDS, 'updated_at',
+    ])
+    invalidate_for_rule_owner(user)
+    return None
+
+
+def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', rule=None) -> dict:
+    """Context for add_rule.html, which serves both the add page and the editor."""
+    cancel_url = reverse('rules')
+    if return_q:
+        cancel_url = f"{cancel_url}?{return_q}"
+
+    return {
+        'editing': editing,
+        'rule': rule,
+        'return_q': return_q,
+        'cancel_url': cancel_url,
+        'status_choices': ClassificationRule.STATUS_CHOICES,
+        'creatable_status_choices': ClassificationRule.CREATABLE_STATUS_CHOICES,
+        'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
+        'creatable_match_type_choices': _creatable_match_type_choices(user),
+        'form_status': form['status'],
+        'form_match_type': form['match_type'],
+        'form_source_text': form['source_text'],
+        'form_description': form['description'],
+        'form_priority': form['priority'],
+        'form_whole_log': form['whole_log'],
+        'form_is_enabled': form['is_enabled'],
+        'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
+        'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
+        'priority_min': PRIORITY_MIN,
+        'priority_max': PRIORITY_MAX,
+        'priority_choices': _priority_choices(),
+    }
+
+
+def _owned_rule_id(raw, user):
+    """Coerce a caller-supplied rule id, keeping it only if `user` owns that rule."""
+    if raw is None or raw == '':
+        return None
+    try:
+        rule_id = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if not ClassificationRule.objects.filter(pk=rule_id, owner=user).exists():
+        return None
+    return rule_id
+
+
 def _format_skipped(skipped: list, limit: int = 5) -> str:
     """Format a short summary of skipped patterns for a user-facing message."""
     if not skipped:
@@ -216,52 +410,12 @@ def rules_view(request):
         if action == 'edit':
             pk = request.POST.get('pk', '').strip()
             rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
-            status = request.POST.get('status', '').strip()
-            match_type = request.POST.get('match_type', '').strip()
-            source_text = request.POST.get('source_text', '').strip()
-            description = request.POST.get('description', '').strip()
-            is_enabled = request.POST.get('is_enabled') == 'on'
-            whole_log = request.POST.get('whole_log') == 'on'
-            priority = _coerce_priority(request.POST.get('priority'), match_type)
-            script_error = _script_rule_error(match_type, source_text, request.user, whole_log)
-            whole_log_error = _whole_log_error(whole_log, status, match_type)
-            if not source_text:
-                messages.error(request, 'Rule source text is required.')
-            elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
-                messages.error(request, 'Invalid status.')
-            elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
-                messages.error(request, 'Invalid match type.')
-            elif whole_log_error:
-                messages.error(request, whole_log_error)
-            elif script_error:
-                messages.error(request, script_error)
+            error = _apply_rule_edit(rule, _rule_form_from_post(request), request.user)
+            if error:
+                messages.error(request, error)
             else:
-                duplicate = ClassificationRule.objects.filter(
-                    owner=request.user, status=status, match_type=match_type,
-                    source_text=source_text, whole_log=whole_log,
-                ).exclude(pk=rule.pk).exists()
-                if duplicate:
-                    messages.error(request, 'A rule with this status, match type, and source text already exists.')
-                else:
-                    rule.status = status
-                    rule.match_type = match_type
-                    rule.source_text = source_text
-                    rule.description = description
-                    rule.is_enabled = is_enabled
-                    rule.priority = priority
-                    rule.whole_log = whole_log
-                    rule.save(update_fields=[
-                        'status', 'match_type', 'source_text', 'description',
-                        'is_enabled', 'priority', 'whole_log', 'updated_at',
-                    ])
-                    invalidate_for_rule_owner(request.user)
-                    messages.success(request, 'Rule updated.')
-            return_q = request.POST.get('return_q', '').strip()
-            if return_q:
-                safe_query = urlencode(parse_qsl(return_q, keep_blank_values=True), doseq=True)
-                if safe_query:
-                    return redirect(f"{reverse('rules')}?{safe_query}")
-            return redirect('rules')
+                messages.success(request, 'Rule updated.')
+            return _rules_redirect(request.POST.get('return_q', ''))
 
         if action == 'delete':
             pk = request.POST.get('pk', '').strip()
@@ -269,12 +423,7 @@ def rules_view(request):
             rule.delete()
             invalidate_for_rule_owner(request.user)
             messages.success(request, 'Rule deleted.')
-            return_q = request.POST.get('return_q', '').strip()
-            if return_q:
-                safe_query = urlencode(parse_qsl(return_q, keep_blank_values=True), doseq=True)
-                if safe_query:
-                    return redirect(f"{reverse('rules')}?{safe_query}")
-            return redirect('rules')
+            return _rules_redirect(request.POST.get('return_q', ''))
 
         if action == 'toggle':
             pk = request.POST.get('pk', '').strip()
@@ -470,24 +619,55 @@ def add_rule_view(request):
                     f'No rules created. {m} duplicate{"" if m == 1 else "s"} skipped: {summary}',
                 )
 
-    context = {
-        'status_choices': ClassificationRule.STATUS_CHOICES,
-        'creatable_status_choices': ClassificationRule.CREATABLE_STATUS_CHOICES,
-        'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
-        'creatable_match_type_choices': _creatable_match_type_choices(request.user),
-        'form_status': form_status,
-        'form_match_type': form_match_type,
-        'form_source_text': form_source_text,
-        'form_description': form_description,
-        'form_priority': form_priority,
-        'form_whole_log': form_whole_log,
-        'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
-        'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
-        'priority_min': PRIORITY_MIN,
-        'priority_max': PRIORITY_MAX,
-        'priority_choices': _priority_choices(),
+    form = {
+        'status': form_status,
+        'match_type': form_match_type,
+        'source_text': form_source_text,
+        'description': form_description,
+        'priority': form_priority,
+        'whole_log': form_whole_log,
+        # New rules are always created enabled; the add form has no such field.
+        'is_enabled': True,
     }
-    return render(request, 'add_rule.html', context)
+    return render(
+        request, 'add_rule.html', _rule_form_context(request.user, form, editing=False)
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def edit_rule_view(request, pk: int):
+    """Full-page editor for one rule: the add-rule form plus its live line preview.
+
+    Shares `add_rule.html` with `add_rule_view` (the same way `edit_log_type_rule_view`
+    shares its template) and saves through `_apply_rule_edit`, so the quick-edit panel
+    on the rules list and this page apply identical rules.
+    """
+    rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
+
+    if request.method == 'POST':
+        return_q = request.POST.get('return_q', '')
+        form = _rule_form_from_post(request)
+        # The quick-edit panel hands over by POSTing its own form here so whatever the
+        # user had typed survives the jump. That hand-off only prefills this page --
+        # it never saves. Its own field name, so it cannot collide with the `action`
+        # the quick-edit form already carries for `rules_view`.
+        if not request.POST.get('open_editor'):
+            error = _apply_rule_edit(rule, form, request.user)
+            if error:
+                messages.error(request, error)
+            else:
+                messages.success(request, 'Rule updated.')
+                return _rules_redirect(return_q)
+    else:
+        return_q = request.GET.get('return_q', '')
+        form = _rule_form_from_rule(rule)
+
+    _warn_about_unassignable_values(request, rule)
+    return render(request, 'add_rule.html', _rule_form_context(
+        request.user, form,
+        editing=True, return_q=_sanitize_return_q(return_q), rule=rule,
+    ))
 
 
 @login_required
@@ -505,6 +685,11 @@ def test_rule_api(request):
     lines = payload.get('lines', [])
     raw_priority = payload.get('priority')
     whole_log = bool(payload.get('whole_log'))
+    # The rule editor passes the rule it is editing so the preview reports the lines
+    # as they would look without it -- otherwise the saved copy shows up as an
+    # existing match and can appear to shadow the user's own pending edit. Honoured
+    # only for a rule the caller owns.
+    exclude_rule_id = _owned_rule_id(payload.get('exclude_rule_id'), request.user)
 
     if not isinstance(lines, list) or len(lines) > 500:
         return JsonResponse({'error': 'Field "lines" must be a list with at most 500 entries.'}, status=400)
@@ -568,30 +753,16 @@ def test_rule_api(request):
         return JsonResponse(result_payload)
 
     try:
-        first_payload = build_rule_test_results(
-            source_text=patterns[0],
+        response_payload = build_rule_test_results(
+            patterns=patterns,
             status=status,
             match_type=match_type,
             lines=lines,
             priority=priority,
+            exclude_rule_id=exclude_rule_id,
         )
-        aggregated_results = list(first_payload['results'])
-        for pattern in patterns[1:]:
-            extra = build_rule_test_results(
-                source_text=pattern,
-                status=status,
-                match_type=match_type,
-                lines=lines,
-                priority=priority,
-            )
-            for idx, item in enumerate(extra['results']):
-                if item.get('matched') and not aggregated_results[idx].get('matched'):
-                    aggregated_results[idx] = item
     except ValueError as exc:
         return JsonResponse({'error': str(exc)}, status=400)
-
-    response_payload = dict(first_payload)
-    response_payload['results'] = aggregated_results
 
     if match_type == ClassificationRule.MATCH_REGEX:
         # Invalid patterns are already rejected with HTTP 400 by

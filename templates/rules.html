@@ -345,6 +345,12 @@
             </div>
             <div class="button-group">
                 <button type="submit">save</button>
+                {% comment %}
+                Submits this form to the full editor instead of saving, so whatever
+                is typed above survives the jump -- including a multi-line script
+                snippet, which a query string could not carry safely.
+                {% endcomment %}
+                <button type="submit" id="editOpenFull" name="open_editor" value="1" formnovalidate>open full editor</button>
                 <button type="button" onclick="cancelForm()">cancel</button>
             </div>
         </form>
@@ -447,6 +453,8 @@
 
 <script>
 const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
+/* reverse('edit_rule', args=[0]) -> /rules/0/edit/; startEdit swaps in the real pk. */
+const EDIT_RULE_URL_TEMPLATE = "{% url 'edit_rule' 0 %}";
 
 function syncEditSourceTextMode() {
     const isScript = document.getElementById('editMatchType').value === 'script';
@@ -498,6 +506,8 @@ function startEdit(pk, status, matchType, sourceText, description, isEnabled, pr
     document.getElementById('editPriority').value = String(priority);
     document.getElementById('editPriority').dataset.userTouched = 'true';
     document.getElementById('editWholeLog').checked = !!wholeLog;
+    document.getElementById('editOpenFull').formAction =
+        EDIT_RULE_URL_TEMPLATE.replace(/\/0\/edit\/$/, '/' + pk + '/edit/');
     document.getElementById('editSection').style.display = 'block';
     syncEditSourceTextMode();
     syncEditWholeLogMode();

@@ -202,6 +202,13 @@ def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
 # FRST prints drive lines either bare ("Drive c: ...") or prefixed with the
 # physical disk ("Disk 0 - Drive c: ...").
 _DRIVE_LINE_RE = re.compile(r"(?:Disk\s+\d+\s*-\s*)?Drive\s")
+_DRIVE_LETTER_RE = re.compile(r"Drive\s+([a-zA-Z]):", re.IGNORECASE)
+# Some FRST builds emit the unit twice -- `(Total:465.13 GB GB) (Free:61.04 GB GB)`.
+# Accepting one or more unit tokens keeps those sizes readable; requiring exactly
+# one made both captures fail, so free space came out unknown and every such log
+# was reported as "Memory information incomplete".
+_DRIVE_FREE_RE = re.compile(r"\(Free:\s*(\d+(?:\.\d+)?)\s*(?:GB\s*)+\)", re.IGNORECASE)
+_DRIVE_TOTAL_RE = re.compile(r"\(Total:\s*(\d+(?:\.\d+)?)\s*(?:GB\s*)+\)", re.IGNORECASE)
 
 
 def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
@@ -228,9 +235,9 @@ def _detect_low_memory_warning(raw_log_text: str) -> dict | None:
                 total_mb = float(match.group(1))
         elif _DRIVE_LINE_RE.match(line):
             saw_memory_context = True
-            drive_match = re.search(r"Drive\s+([a-zA-Z]):", line, re.IGNORECASE)
-            free_match = re.search(r"\(Free:\s*(\d+(?:\.\d+)?)\s*GB\)", line, re.IGNORECASE)
-            total_match = re.search(r"\(Total:\s*(\d+(?:\.\d+)?)\s*GB\)", line, re.IGNORECASE)
+            drive_match = _DRIVE_LETTER_RE.search(line)
+            free_match = _DRIVE_FREE_RE.search(line)
+            total_match = _DRIVE_TOTAL_RE.search(line)
             if drive_match and free_match:
                 drive_letter = drive_match.group(1).upper()
                 drive_free_space_by_letter[drive_letter] = float(free_match.group(1))
@@ -1465,9 +1472,15 @@ def _match_precedence_sort_key(entry):
     return (-_effective_match_priority(rule, matcher), status_rank, rule.id)
 
 
-def _collect_effective_and_shadowed_matches_for_line(line: str, buckets):
+def _collect_effective_and_shadowed_matches_for_line(line: str, buckets, exclude_rule_id=None):
     groups = _collect_match_groups_for_line(line, buckets)
     flat = _dedupe_matches_by_rule(m for matches in groups.values() for m in matches)
+
+    # Dropped before the priority split rather than filtered out of the result, so
+    # the effective/shadowed groups are what they would be without this rule at all.
+    # Used by the rule editor's preview: a rule must not shadow its own edit.
+    if exclude_rule_id is not None:
+        flat = [m for m in flat if m[0].id != exclude_rule_id]
 
     if not flat:
         return [], [], "unknown", None
@@ -1528,7 +1541,12 @@ def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]
     return serialized_matches, reasons
 
 
-def inspect_line_matches(line: str, buckets=None, rule_set_key: str = SHARED_RULE_SET_KEY) -> dict:
+def inspect_line_matches(
+    line: str,
+    buckets=None,
+    rule_set_key: str = SHARED_RULE_SET_KEY,
+    exclude_rule_id=None,
+) -> dict:
     line_value = (line or "").strip()
     if not line_value:
         return {
@@ -1545,7 +1563,9 @@ def inspect_line_matches(line: str, buckets=None, rule_set_key: str = SHARED_RUL
         shadowed_matches,
         effective_matcher,
         effective_priority,
-    ) = _collect_effective_and_shadowed_matches_for_line(line_value, active_buckets)
+    ) = _collect_effective_and_shadowed_matches_for_line(
+        line_value, active_buckets, exclude_rule_id=exclude_rule_id
+    )
 
     statuses = [rule.status for rule, _, _ in effective_matches]
     status_codes = _ordered_status_codes(statuses)

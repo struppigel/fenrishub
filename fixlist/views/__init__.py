@@ -52,6 +52,7 @@ from .speeches import (
 from .rules import (
     rules_view,
     add_rule_view,
+    edit_rule_view,
     test_rule_api,
 )
 
@@ -107,6 +108,7 @@ __all__ = [
     'speeches_api',
     'rules_view',
     'add_rule_view',
+    'edit_rule_view',
     'test_rule_api',
     'infection_cases_view',
     'create_infection_case_view',

@@ -37,7 +37,7 @@ from .views.log_type_rules import (
     test_log_type_api,
     toggle_log_type_rule_view,
 )
-from .views.rules import add_rule_view, rules_view, test_rule_api
+from .views.rules import add_rule_view, edit_rule_view, rules_view, test_rule_api
 from .views.snippets import snippets_api, snippets_toggle_analyzer_api, snippets_view
 from .views.speeches import (
     speech_create_api,
@@ -95,6 +95,7 @@ urlpatterns = [
     path('speeches/', speeches_view, name='speeches'),
     path('rules/', rules_view, name='rules'),
     path('rules/add/', add_rule_view, name='add_rule'),
+    path('rules/<int:pk>/edit/', edit_rule_view, name='edit_rule'),
     path('api/rules/test/', test_rule_api, name='test_rule_api'),
     path('log-types/', log_type_rules_view, name='log_type_rules'),
     path('log-types/add/', add_log_type_rule_view, name='add_log_type_rule'),

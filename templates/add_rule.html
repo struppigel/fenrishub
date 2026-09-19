@@ -1,8 +1,8 @@
 {% extends 'base.html' %}
 
-{% block title %}Add Rule - Fenris{% endblock %}
+{% block title %}{% if editing %}Edit{% else %}Add{% endif %} Rule - Fenris{% endblock %}
 
-{% block page_context_label %}rules / add{% endblock %}
+{% block page_context_label %}rules / {% if editing %}edit{% else %}add{% endif %}{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -252,9 +252,10 @@
 {% block content %}
 <div class="add-rule-top">
     <div class="rule-form-panel">
-        <h2>add rule</h2>
+        <h2>{% if editing %}edit{% else %}add{% endif %} rule</h2>
         <form method="post" id="addRuleForm">
             {% csrf_token %}
+            {% if editing %}<input type="hidden" name="return_q" value="{{ return_q }}">{% endif %}
             <div class="form-group">
                 <label for="ruleStatus">status</label>
                 <select id="ruleStatus" name="status" required>
@@ -280,7 +281,11 @@
             <div class="form-group" id="rulePriorityGroup">
                 <label for="rulePriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
                 <select id="rulePriority" name="priority">
-                    <option value="" {% if form_priority == '' %}selected{% endif %}>auto from match type</option>
+                    {% comment %}
+                    Editing a rule always has a concrete priority; offering "auto"
+                    there would quietly discard a hand-tuned value, so it is add-only.
+                    {% endcomment %}
+                    {% if not editing %}<option value="" {% if form_priority == '' %}selected{% endif %}>auto from match type</option>{% endif %}
                     {% for value, label in priority_choices %}
                     <option value="{{ value }}" {% if form_priority == value %}selected{% endif %}>{{ label }}</option>
                     {% endfor %}
@@ -288,8 +293,9 @@
                 <div style="font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">only change this if there is a problem</div>
             </div>
             <div class="form-group">
-                <label for="ruleSourceText" id="ruleSourceTextLabel">match line or pattern (one per line &mdash; each line creates a separate rule)</label>
-                <textarea id="ruleSourceText" name="source_text" placeholder="One pattern per line. All lines share the status, match type, priority, and description above." required>{{ form_source_text }}</textarea>
+                <label for="ruleSourceText" id="ruleSourceTextLabel">match line or pattern{% if not editing %} (one per line &mdash; each line creates a separate rule){% endif %}</label>
+                <textarea id="ruleSourceText" name="source_text" placeholder="{% if editing %}The line or pattern this rule matches.{% else %}One pattern per line. All lines share the status, match type, priority, and description above.{% endif %}" required>{{ form_source_text }}</textarea>
+                {% if editing %}<div id="ruleMultilineWarning" class="regex-warning" style="display: none; margin-top: 6px; margin-bottom: 0;"></div>{% endif %}
                 <div id="ruleScriptHelp" style="display: none; font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">
                     Python snippet (one rule). <code>line</code> holds the log line as a string and the <code>re</code> module is available; set <code>result</code> to a truthy value or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.
                 </div>
@@ -298,9 +304,21 @@
                 <label for="ruleDescription">description (optional)</label>
                 <input type="text" id="ruleDescription" name="description" value="{{ form_description }}" placeholder="What this rule matches...">
             </div>
+            {% if editing %}
+            {% comment %}
+            An unchecked checkbox is simply absent from POST, so the editor must
+            render this field -- without it every save would disable the rule.
+            {% endcomment %}
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;">
+                    <input type="checkbox" id="ruleIsEnabled" name="is_enabled" {% if form_is_enabled %}checked{% endif %} style="width: auto;">
+                    enabled
+                </label>
+            </div>
+            {% endif %}
             <div class="button-group">
-                <button type="submit">create</button>
-                <a href="{% url 'rules' %}"><button type="button">cancel</button></a>
+                <button type="submit">{% if editing %}save{% else %}create{% endif %}</button>
+                <a href="{{ cancel_url }}"><button type="button">cancel</button></a>
             </div>
         </form>
     </div>
@@ -332,6 +350,12 @@
 (function () {
     const TEST_RULE_URL = "{% url 'test_rule_api' %}";
     const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
+    const EDITING = {% if editing %}true{% else %}false{% endif %};
+    /* Editing: hide the saved copy of this rule from the preview's existing-match
+     * report, so it is not listed as already matching and cannot appear to shadow
+     * the user's own pending edit. */
+    const EXCLUDE_RULE_ID = {% if editing %}{{ rule.pk }}{% else %}null{% endif %};
+    const RULE_NOUN = EDITING ? 'this rule' : 'new rule';
     let debounceTimer = null;
     let fetchController = null;
     const DEBOUNCE_MS = 300;
@@ -512,7 +536,7 @@
 
     function setMatchCount(matched, total) {
         document.getElementById('matchCount').textContent =
-            matched + ' of ' + total + ' line' + (total === 1 ? '' : 's') + ' matched by new rule';
+            matched + ' of ' + total + ' line' + (total === 1 ? '' : 's') + ' matched by ' + RULE_NOUN;
     }
 
     function clearPreview() {
@@ -574,7 +598,7 @@
             const resp = await fetch(TEST_RULE_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
-                body: JSON.stringify({ source_text: sourceText, status: status, match_type: matchType, priority: priority, lines: lines }),
+                body: JSON.stringify({ source_text: sourceText, status: status, match_type: matchType, priority: priority, lines: lines, exclude_rule_id: EXCLUDE_RULE_ID }),
                 signal: fetchController.signal,
             });
 
@@ -634,14 +658,14 @@
                 if (result.new_rule_shadowed) {
                     const notice = document.createElement('div');
                     notice.className = 'new-rule-notice';
-                    notice.textContent = 'new rule (priority ' + result.new_rule_priority +
+                    notice.textContent = RULE_NOUN + ' (priority ' + result.new_rule_priority +
                         ') matched but is shadowed by an existing higher-priority rule (' +
                         result.new_rule_shadowed_by + ') \u2014 it will have no effect on this line';
                     wrapper.appendChild(notice);
                 } else if (result.new_rule_outranked) {
                     const notice = document.createElement('div');
                     notice.className = 'new-rule-notice';
-                    notice.textContent = 'new rule matched but its status is outranked by ' +
+                    notice.textContent = RULE_NOUN + ' matched but its status is outranked by ' +
                         result.new_rule_outranked_by + ' at the same priority \u2014 ' +
                         result.combined_status_label + ' (' + result.combined_status +
                         ') takes precedence over this rule\u2019s status';
@@ -771,6 +795,13 @@
             textarea.style.fontFamily = 'var(--la-font-mono, monospace)';
             textarea.style.minHeight = '160px';
             help.style.display = '';
+        } else if (EDITING) {
+            /* One rule in, one rule out -- the editor never splits per line. */
+            label.innerHTML = 'match line or pattern';
+            textarea.placeholder = 'The line or pattern this rule matches.';
+            textarea.style.fontFamily = '';
+            textarea.style.minHeight = '';
+            help.style.display = 'none';
         } else {
             label.innerHTML = 'match line or pattern (one per line &mdash; each line creates a separate rule)';
             textarea.placeholder = 'One pattern per line. All lines share the status, match type, priority, and description above.';
@@ -814,12 +845,30 @@
         }
     }
 
+    /* Editing saves one rule, so line breaks would be stored inside a single
+     * source_text and that rule would never match a real log line. The server
+     * rejects it either way; this just says so before the user hits save, since
+     * the preview below tests each line separately and would look fine. */
+    function syncMultilineWarning() {
+        const box = document.getElementById('ruleMultilineWarning');
+        if (!box) return false;
+        const isScript = document.getElementById('ruleMatchType').value === 'script';
+        const multiline = /[\r\n]/.test(document.getElementById('ruleSourceText').value.trim());
+        const show = multiline && !isScript;
+        box.textContent = show
+            ? 'This rule matches a single line — remove the line breaks, or use "add rule" to create one rule per line. Saving is blocked until then.'
+            : '';
+        box.style.display = show ? '' : 'none';
+        return show;
+    }
+
     function isWholeLogActive() {
         return document.getElementById('ruleWholeLog').checked &&
             document.getElementById('ruleWholeLogGroup').style.display !== 'none';
     }
 
     function updatePreview() {
+        syncMultilineWarning();
         const sourceText = document.getElementById('ruleSourceText').value.trim();
         const matchType = document.getElementById('ruleMatchType').value;
         const logText = document.getElementById('logLinesInput').value.replace(/\r\n/g, '\n');
@@ -852,11 +901,16 @@
 
     /* ── event listeners ── */
 
-    document.getElementById('ruleSourceText').addEventListener('input', schedulePreviewUpdate);
+    document.getElementById('ruleSourceText').addEventListener('input', function () {
+        /* Ahead of the debounce so the notice tracks the keystroke, not the preview. */
+        syncMultilineWarning();
+        schedulePreviewUpdate();
+    });
     document.getElementById('ruleMatchType').addEventListener('change', function () {
         syncPriorityPlaceholder();
         syncSourceTextMode();
         syncWholeLogMode();
+        syncMultilineWarning();
         schedulePreviewUpdate();
     });
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
@@ -881,6 +935,7 @@
     syncPriorityPlaceholder();
     syncSourceTextMode();
     syncWholeLogMode();
+    syncMultilineWarning();
 })();
 </script>
 {% endblock %}

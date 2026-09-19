@@ -533,6 +533,53 @@ class RulePreviewApiTests(TestCase):
         self.assertTrue(data["results"][2]["matched"])
         self.assertFalse(data["results"][3]["matched"])
 
+    def test_multiple_patterns_highlight_every_match_on_a_line(self):
+        # A line hit by two patterns must show both spans. Keeping only the first
+        # matching pattern's ranges made the highlight depend on pattern order.
+        response = self._post({
+            "source_text": "alpha\nbeta",
+            "match_type": "substring",
+            "status": "B",
+            "lines": ["line with alpha and beta"],
+        })
+        result = response.json()["results"][0]
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["match_ranges"], [[10, 15], [20, 24]])
+
+    def test_multiple_patterns_highlight_is_order_independent(self):
+        forward = self._post({
+            "source_text": "alpha\nbeta",
+            "match_type": "substring",
+            "status": "B",
+            "lines": ["line with alpha and beta"],
+        }).json()["results"][0]
+        reversed_ = self._post({
+            "source_text": "beta\nalpha",
+            "match_type": "substring",
+            "status": "B",
+            "lines": ["line with alpha and beta"],
+        }).json()["results"][0]
+        self.assertEqual(forward["match_ranges"], reversed_["match_ranges"])
+
+    def test_overlapping_patterns_produce_merged_spans(self):
+        response = self._post({
+            "source_text": "abcd\nbcde",
+            "match_type": "substring",
+            "status": "B",
+            "lines": ["xxabcdexx"],
+        })
+        # 'abcd' at 2-6 and 'bcde' at 3-7 union into one span.
+        self.assertEqual(response.json()["results"][0]["match_ranges"], [[2, 7]])
+
+    def test_multiple_regex_patterns_highlight_every_match(self):
+        response = self._post({
+            "source_text": r"a\d+\nb\d+".replace(r"\n", "\n"),
+            "match_type": "regex",
+            "status": "B",
+            "lines": ["a12 and b34"],
+        })
+        self.assertEqual(response.json()["results"][0]["match_ranges"], [[0, 3], [8, 11]])
+
     def test_multiple_patterns_rejects_over_limit(self):
         response = self._post({
             "source_text": "\n".join(f"pattern-{i}" for i in range(101)),
@@ -541,3 +588,83 @@ class RulePreviewApiTests(TestCase):
             "lines": ["x"],
         })
         self.assertEqual(response.status_code, 400)
+
+    # -- exclude_rule_id (used by the full-page rule editor) --
+
+    def _existing_rule_payload(self, **overrides):
+        payload = {
+            "source_text": "known-good",
+            "match_type": "substring",
+            "status": "B",
+            "lines": ["this has known-good inside"],
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_excluded_rule_is_dropped_from_existing_matches(self):
+        rule = make_rule(
+            "known-good",
+            owner=self.user,
+            status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+        )
+        result = self._post(
+            self._existing_rule_payload(exclude_rule_id=rule.pk)
+        ).json()["results"][0]
+        # Without the exclusion this rule would report itself as an existing match.
+        self.assertEqual(result["existing_matches"], [])
+        self.assertEqual(result["existing_status"], "?")
+        self.assertIsNone(result["existing_priority"])
+        self.assertFalse(result["new_rule_shadowed"])
+        self.assertEqual(result["combined_status"], "B")
+
+    def test_without_exclusion_the_rule_still_matches_itself(self):
+        make_rule(
+            "known-good",
+            owner=self.user,
+            status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+        )
+        result = self._post(self._existing_rule_payload()).json()["results"][0]
+        self.assertEqual(result["existing_status"], "C")
+        self.assertTrue(result["existing_matches"])
+
+    def test_excluding_a_higher_priority_rule_unshadows_the_edit(self):
+        rule = make_rule(
+            "known-good",
+            owner=self.user,
+            status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+            priority=20,
+        )
+        payload = self._existing_rule_payload(priority=5)
+        self.assertTrue(self._post(payload).json()["results"][0]["new_rule_shadowed"])
+
+        payload["exclude_rule_id"] = rule.pk
+        self.assertFalse(self._post(payload).json()["results"][0]["new_rule_shadowed"])
+
+    def test_another_users_rule_id_is_ignored(self):
+        other = make_user("bob")
+        rule = make_rule(
+            "known-good",
+            owner=other,
+            status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+        )
+        result = self._post(
+            self._existing_rule_payload(exclude_rule_id=rule.pk)
+        ).json()["results"][0]
+        self.assertEqual(result["existing_status"], "C")
+
+    def test_garbage_exclude_rule_id_is_ignored(self):
+        make_rule(
+            "known-good",
+            owner=self.user,
+            status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+        )
+        for value in ("not-a-number", None, "", 999999):
+            result = self._post(
+                self._existing_rule_payload(exclude_rule_id=value)
+            ).json()["results"][0]
+            self.assertEqual(result["existing_status"], "C", f"for {value!r}")

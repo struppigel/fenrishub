@@ -276,6 +276,66 @@ class LogAnalyzerApiWarningTests(LogAnalyzerApiBaseTestCase):
             warnings_by_code["low_memory"]["message"],
         )
 
+    def test_analyze_api_reads_drive_sizes_when_frst_repeats_the_unit(self):
+        """Some FRST builds write `(Total:465.13 GB GB) (Free:61.04 GB GB)`.
+
+        Requiring exactly one unit made both captures fail, so free space read as
+        unknown and the report was padded with "Memory information incomplete".
+        """
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Percentage of memory in use: 82%\n"
+                    "Total physical RAM: 16334.61 MB\n"
+                    "Available physical RAM: 2814.36 MB\n"
+                    "Disk 1 - Drive c: () (Fixed) (Total:465.13 GB GB) (Free:61.04 GB GB) (Model: WDBRPG5000ANC-WRSN) NTFS\n"
+                    "Disk 0 - Drive d: (New Volume) (Fixed) (Total:931.51 GB GB) (Free:112.03 GB GB) (Model: WDC WD10EZEX-22MFCA0) NTFS\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        warnings_by_code = {warning["code"]: warning for warning in payload["warnings"]}
+
+        self.assertEqual(response.status_code, 200)
+        warning = warnings_by_code["low_memory"]
+        self.assertNotIn("Memory information incomplete", warning["message"])
+        self.assertIn("RAM usage above 80%", warning["message"])
+        self.assertIn(
+            "System drive free space: 61.04 GB of 465.13 GB (13.1%)",
+            warning["details"],
+        )
+
+    def test_analyze_api_warns_on_low_free_space_when_frst_repeats_the_unit(self):
+        self.client.login(username="analyzer", password="password123")
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps(
+                {
+                    "log": "Percentage of memory in use: 48%\n"
+                    "Total physical RAM: 16384 MB\n"
+                    "Disk 1 - Drive c: () (Fixed) (Total:465.13 GB GB) (Free:12.5 GB GB) NTFS\n"
+                }
+            ),
+            content_type="application/json",
+        )
+
+        warnings_by_code = {w["code"]: w for w in response.json()["warnings"]}
+        self.assertIn("low_memory", warnings_by_code)
+        self.assertIn(
+            "Free space on Windows partition below",
+            warnings_by_code["low_memory"]["message"],
+        )
+        self.assertNotIn(
+            "Memory information incomplete",
+            warnings_by_code["low_memory"]["message"],
+        )
+
     def test_analyze_api_warns_when_multiple_enabled_av_entries_found(self):
         self.client.login(username="analyzer", password="password123")
 

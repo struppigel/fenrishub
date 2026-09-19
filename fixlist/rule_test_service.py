@@ -8,6 +8,22 @@ from .analyzer import STATUS_LABELS, STATUS_PRECEDENCE, _load_rule_buckets, insp
 from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
 
 
+def _merge_ranges(ranges: list) -> list:
+    """Collapse overlapping/adjacent highlight spans into a clean, ordered set.
+
+    Several patterns can match the same region, and a line can be matched by more
+    than one of them, so the spans they produce have to be unioned before the
+    client renders them.
+    """
+    merged = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
 def build_wholelog_rule_test_result(
     patterns: list,
     match_type: str,
@@ -29,14 +45,7 @@ def build_wholelog_rule_test_result(
             ranges.extend(
                 [m.start(), m.end()] for m in compiled.finditer(log_text) if m.end() > m.start()
             )
-        # Merge overlapping spans (multiple patterns can match the same region) so
-        # the client renders a clean, non-overlapping set of highlights.
-        merged = []
-        for start, end in sorted(ranges):
-            if merged and start <= merged[-1][1]:
-                merged[-1][1] = max(merged[-1][1], end)
-            else:
-                merged.append([start, end])
+        merged = _merge_ranges(ranges)
         return {
             'whole_log': True,
             'log': log_text,
@@ -61,14 +70,8 @@ def build_wholelog_rule_test_result(
     raise ValueError('Whole-log preview supports only regex and script match types.')
 
 
-def build_rule_test_results(
-    source_text: str,
-    status: str,
-    match_type: str,
-    lines: list,
-    priority: int | None = None,
-) -> dict:
-    """Build per-line rule test results for the rules test API."""
+def _compile_pattern(source_text: str, status: str, match_type: str) -> dict:
+    """Pre-compute the per-pattern state needed to test lines against it."""
     parsed_rule = parse_rule_line(source_text, status=status)
 
     if match_type == 'regex':
@@ -84,7 +87,6 @@ def build_rule_test_results(
         # Raises ValueError on syntax/restriction errors -> HTTP 400 in the view.
         script_code = script_matcher.compile_script(source_text)
 
-    # Pre-compute match-type-specific state once.
     rule_entry = None
     rule_norm_path = ''
     if match_type == 'parsed':
@@ -109,6 +111,104 @@ def build_rule_test_results(
     elif match_type not in ('exact', 'substring', 'regex', 'script'):
         raise ValueError(f'Unsupported match_type: {match_type}')
 
+    return {
+        'source_text': source_text,
+        'parsed_rule': parsed_rule,
+        'compiled': compiled,
+        'script_code': script_code,
+        'rule_entry': rule_entry,
+        'rule_norm_path': rule_norm_path,
+    }
+
+
+def _match_line(pattern: dict, match_type: str, line: str) -> dict:
+    """Test one line against one pattern.
+
+    Returns ``matched`` plus, where the match type provides them, the highlight
+    ``ranges``, the line's ``parsed`` breakdown, and any ``script_error``.
+    """
+    outcome = {'matched': False, 'ranges': [], 'parsed': None, 'script_error': None}
+    source_text = pattern['source_text']
+
+    if match_type == 'exact':
+        outcome['matched'] = line == source_text.strip()
+
+    elif match_type == 'substring':
+        # Case-sensitive, mirroring the analyzer's `rule.source_text in line`.
+        if source_text:
+            idx = 0
+            while idx < len(line):
+                pos = line.find(source_text, idx)
+                if pos == -1:
+                    break
+                outcome['ranges'].append([pos, pos + len(source_text)])
+                idx = pos + len(source_text)
+        outcome['matched'] = bool(outcome['ranges'])
+
+    elif match_type == 'regex':
+        outcome['ranges'] = [
+            [m.start(), m.end()]
+            for m in pattern['compiled'].finditer(line)
+            if m.end() > m.start()
+        ]
+        outcome['matched'] = bool(outcome['ranges'])
+
+    elif match_type == 'parsed':
+        if line:
+            line_entry = ex.get_frst_entry(line)
+            if line_entry:
+                outcome['parsed'] = {
+                    'entry_type': line_entry.entry_type,
+                    'clsid': line_entry.clsid,
+                    'name': line_entry.name,
+                    'filepath': line_entry.filepath,
+                    'filename': line_entry.filename,
+                    'company': line_entry.company,
+                    'arguments': line_entry.arguments,
+                }
+            rule_entry = pattern['rule_entry']
+            outcome['matched'] = bool(rule_entry and line_entry and line_entry == rule_entry)
+
+    elif match_type == 'filepath':
+        line_path = ex.extract_any_frst_path(line)
+        if line_path:
+            line_norm = ex.normalize_path(line_path).lower().strip()
+            rule_norm_path = pattern['rule_norm_path']
+            outcome['matched'] = line_norm == rule_norm_path and bool(rule_norm_path)
+            outcome['parsed'] = {'filepath': line_path, 'normalized_filepath': line_norm}
+
+    elif match_type == 'script':
+        matched, error = script_matcher.run_script(pattern['script_code'], line)
+        outcome['matched'] = matched
+        outcome['script_error'] = error
+
+    return outcome
+
+
+def build_rule_test_results(
+    patterns: list,
+    status: str,
+    match_type: str,
+    lines: list,
+    priority: int | None = None,
+    exclude_rule_id=None,
+) -> dict:
+    """Build per-line rule test results for the rules test API.
+
+    ``patterns`` is the list the add page's textarea produces -- one rule per line,
+    or a single element for the editor and for script rules. Every pattern is tested
+    against every line in one pass so a line matched by several of them reports the
+    union of their highlights, and so the (pattern-independent) existing-rule lookup
+    runs once per line rather than once per line per pattern.
+
+    ``exclude_rule_id`` hides one saved rule from the "existing matches" side of the
+    report. The rule editor passes the rule being edited so it is not listed as an
+    existing match of itself, nor reported as shadowing its own pending edit.
+    """
+    compiled_patterns = [
+        _compile_pattern(pattern, status, match_type) for pattern in patterns
+    ]
+
     if priority is None:
         new_priority = ClassificationRule.default_priority_for(match_type)
     else:
@@ -122,60 +222,24 @@ def build_rule_test_results(
         line = (raw_line or '').strip() if match_type in ('exact', 'parsed', 'filepath') else (raw_line or '')
         result = {'line': line, 'matched': False, 'parsed': None, 'match_ranges': None}
 
-        if match_type == 'exact':
-            result['matched'] = line == source_text.strip()
-
-        elif match_type == 'substring':
-            # Case-sensitive, mirroring the analyzer's `rule.source_text in line`.
-            ranges = []
-            if source_text:
-                idx = 0
-                while idx < len(line):
-                    pos = line.find(source_text, idx)
-                    if pos == -1:
-                        break
-                    ranges.append([pos, pos + len(source_text)])
-                    idx = pos + len(source_text)
-            result['matched'] = len(ranges) > 0
-            result['match_ranges'] = ranges or None
-
-        elif match_type == 'regex':
-            ranges = [[m.start(), m.end()] for m in compiled.finditer(line) if m.end() > m.start()]
-            result['matched'] = len(ranges) > 0
-            result['match_ranges'] = ranges or None
-
-        elif match_type == 'parsed':
-            if line:
-                line_entry = ex.get_frst_entry(line)
-                if line_entry:
-                    result['parsed'] = {
-                        'entry_type': line_entry.entry_type,
-                        'clsid': line_entry.clsid,
-                        'name': line_entry.name,
-                        'filepath': line_entry.filepath,
-                        'filename': line_entry.filename,
-                        'company': line_entry.company,
-                        'arguments': line_entry.arguments,
-                    }
-                result['matched'] = bool(rule_entry and line_entry and line_entry == rule_entry)
-
-        elif match_type == 'filepath':
-            line_path = ex.extract_any_frst_path(line)
-            if line_path:
-                line_norm = ex.normalize_path(line_path).lower().strip()
-                result['matched'] = line_norm == rule_norm_path and bool(rule_norm_path)
-                result['parsed'] = {'filepath': line_path, 'normalized_filepath': line_norm}
-
-        elif match_type == 'script':
-            matched, error = script_matcher.run_script(script_code, line)
-            result['matched'] = matched
-            if error:
-                result['script_error'] = error
+        ranges = []
+        for pattern in compiled_patterns:
+            outcome = _match_line(pattern, match_type, line)
+            if outcome['matched']:
+                result['matched'] = True
+            ranges.extend(outcome['ranges'])
+            if result['parsed'] is None and outcome['parsed'] is not None:
+                result['parsed'] = outcome['parsed']
+            if outcome['script_error'] and 'script_error' not in result:
+                result['script_error'] = outcome['script_error']
+        result['match_ranges'] = _merge_ranges(ranges) or None
 
         # Inspect existing rule matches for this line.
         stripped = line.strip()
         if stripped:
-            inspection = inspect_line_matches(stripped, buckets=buckets)
+            inspection = inspect_line_matches(
+                stripped, buckets=buckets, exclude_rule_id=exclude_rule_id
+            )
             result['existing_status'] = inspection['dominant_status']
             result['existing_status_label'] = STATUS_LABELS.get(inspection['dominant_status'], 'unknown')
             result['existing_matches'] = inspection['matches']
@@ -245,7 +309,10 @@ def build_rule_test_results(
         results.append(result)
 
     return {
-        'rule': parsed_rule,
+        # The first pattern's parse, kept for API compatibility. With several
+        # patterns there is no single rule to describe; the client renders from
+        # the per-line results instead.
+        'rule': compiled_patterns[0]['parsed_rule'] if compiled_patterns else None,
         'results': results,
         'status_labels': STATUS_LABELS,
         'status_precedence': STATUS_PRECEDENCE,
