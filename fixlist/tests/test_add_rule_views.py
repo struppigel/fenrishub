@@ -280,6 +280,29 @@ class AddRuleViewTests(TestCase):
         # The next rule in a batch starts from the same choice.
         self.assertIn("color_whole_line=1", response.url)
 
+    def test_create_file_path_rule_with_color_whole_line(self):
+        self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_FILEPATH,
+                "source_text": r"C:\Windows\evil.exe",
+                "color_whole_line": "on",
+            },
+        )
+        self.assertTrue(ClassificationRule.objects.get(source_text=r"C:\Windows\evil.exe").color_whole_line)
+
+    def test_create_file_path_rule_defaults_to_the_path_only(self):
+        self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_FILEPATH,
+                "source_text": r"C:\Windows\evil.exe",
+            },
+        )
+        self.assertFalse(ClassificationRule.objects.get(source_text=r"C:\Windows\evil.exe").color_whole_line)
+
     def test_create_non_substring_rule_ignores_color_whole_line(self):
         self.client.post(
             reverse("add_rule"),
@@ -437,6 +460,16 @@ class EditRuleViewTests(TestCase):
         self.client.post(self._url(), self._post_body())
         self.rule.refresh_from_db()
         self.assertFalse(self.rule.color_whole_line)
+
+    def test_edit_saves_color_whole_line_for_a_file_path_rule(self):
+        self.client.post(self._url(), self._post_body(
+            match_type=ClassificationRule.MATCH_FILEPATH,
+            source_text=r"C:\Windows\evil.exe",
+            color_whole_line="on",
+        ))
+        self.rule.refresh_from_db()
+        self.assertEqual(self.rule.match_type, ClassificationRule.MATCH_FILEPATH)
+        self.assertTrue(self.rule.color_whole_line)
 
     def test_edit_drops_color_whole_line_for_other_match_types(self):
         self.client.post(self._url(), self._post_body(

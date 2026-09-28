@@ -337,24 +337,9 @@ function pendingTokenRuleKey(value, status) {
 }
 
 const TOKEN_RULE_LINE_PREFIX = 'SUBSTRING:';
-// Mirrors DEFAULT_PRIORITY_BY_MATCH_TYPE in models.py, keyed by the `matcher`
-// each analyzed line reports. A queued token rule is previewed only where a real
-// substring rule would actually win, so the analyzer never shows a verdict the
-// engine would overrule once the rule is saved.
-const MATCHER_DEFAULT_PRIORITY = {
-    exact: 19,
-    parsed_entry: 15,
-    filepath: 11,
-    substring: 7,
-    script: 3,
-    regex: 3,
-};
-const SUBSTRING_RULE_PRIORITY = MATCHER_DEFAULT_PRIORITY.substring;
-const UNMATCHED_LINE_PRIORITY = -1;
-// Mirrors _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY in analyzer.py. A line that only
-// matched through a parsed rule's stored filepath reports matcher `filepath`, but
-// the engine ranks that match below every real one, substring included.
-const FILEPATH_FALLBACK_PRIORITY = 1;
+// A queued token rule is saved as a substring rule with the default priority
+// (DEFAULT_PRIORITY_BY_MATCH_TYPE in models.py) and color_whole_line off.
+const SUBSTRING_RULE_PRIORITY = 7;
 
 function statusPrecedenceRank(status) {
     const rank = STATUS_PRECEDENCE_ORDER.indexOf(status);
@@ -368,46 +353,99 @@ function tokenRuleValue(change) {
         : '';
 }
 
-// Mirrors _build_substring_highlights in analyzer.py: each range keeps its own
-// status, and where ranges overlap the stronger status keeps those characters.
-// Returns sorted, non-overlapping {start, end, status, css_class} segments.
-function resolveHighlightSegments(ranges, lineLength) {
-    const painted = new Array(lineLength).fill(null);
-    [...ranges]
-        .sort((a, b) => statusPrecedenceRank(a.status) - statusPrecedenceRank(b.status))
-        .forEach((range) => {
-            const end = Math.min(range.end, lineLength);
-            for (let index = Math.max(0, range.start); index < end; index += 1) {
-                if (painted[index] === null) {
-                    painted[index] = range.status;
-                }
-            }
-        });
-
-    const segments = [];
-    painted.forEach((status, index) => {
-        if (status === null) {
-            return;
-        }
-        const last = segments[segments.length - 1];
-        if (last && last.end === index && last.status === status) {
-            last.end = index + 1;
-        } else {
-            segments.push({
-                start: index,
-                end: index + 1,
-                status,
-                css_class: STATUS_CLASS_MAP[status] || 'status-unknown',
-            });
-        }
-    });
-    return segments;
+function strongestStatus(statuses) {
+    return statuses.reduce((best, candidate) => (
+        statusPrecedenceRank(candidate) < statusPrecedenceRank(best) ? candidate : best
+    ));
 }
 
-// What the queued token rules would do to this line, or null if none applies:
-// the verdict, and the text they would colour. Queued rules are saved with
-// color_whole_line off, so they colour only their own token -- unless the line
-// already has a same-tier substring match that colours the whole line.
+// Paint order of the analyzer's line colouring (_resolve_line_paint in
+// analyzer.py): every matching rule paints the line, lowest priority first, and
+// at one priority the stronger status goes on top. Sorts top-down.
+function comparePaintTopDown(a, b) {
+    if (a.priority !== b.priority) {
+        return b.priority - a.priority;
+    }
+    return statusPrecedenceRank(a.status) - statusPrecedenceRank(b.status);
+}
+
+function paintsAbove(layer, other) {
+    return comparePaintTopDown(layer, other) < 0;
+}
+
+// Parts of [start, end) not in `covered` (sorted, disjoint [start, end] pairs).
+function uncoveredParts(covered, start, end) {
+    const parts = [];
+    let cursor = start;
+    for (const [coveredStart, coveredEnd] of covered) {
+        if (coveredEnd <= cursor) continue;
+        if (coveredStart >= end) break;
+        if (coveredStart > cursor) {
+            parts.push([cursor, coveredStart]);
+        }
+        cursor = coveredEnd;
+        if (cursor >= end) break;
+    }
+    if (cursor < end) {
+        parts.push([cursor, end]);
+    }
+    return parts;
+}
+
+function addCovered(covered, start, end) {
+    const merged = [];
+    let index = 0;
+    while (index < covered.length && covered[index][1] < start) {
+        merged.push(covered[index]);
+        index += 1;
+    }
+    while (index < covered.length && covered[index][0] <= end) {
+        start = Math.min(start, covered[index][0]);
+        end = Math.max(end, covered[index][1]);
+        index += 1;
+    }
+    merged.push([start, end]);
+    return merged.concat(covered.slice(index));
+}
+
+// Adds partial paints to a line coloured by the server. `highlights` are the
+// server's visible spans on top of `paintBase` (the whole-line colour, or null),
+// each carrying the priority it was painted at; `layers` are the new
+// {start, end, status, priority} paints. A new paint shows wherever it goes on
+// top of what is visible there now -- adding paint can only cover, never reveal,
+// so what the server left out is never needed. Returns the visible spans.
+function overlayPartialPaint(paintBase, highlights, layers) {
+    const candidates = [...highlights, ...layers].sort(comparePaintTopDown);
+    let covered = [];
+    const spans = [];
+    for (const layer of candidates) {
+        if (paintBase && !paintsAbove(layer, paintBase)) {
+            break;  // this and everything after it is under the whole-line colour
+        }
+        uncoveredParts(covered, layer.start, layer.end).forEach(([start, end]) => {
+            spans.push({ start, end, status: layer.status, priority: layer.priority });
+        });
+        covered = addCovered(covered, layer.start, layer.end);
+    }
+
+    spans.sort((a, b) => a.start - b.start);
+    const merged = [];
+    spans.forEach((span) => {
+        const previous = merged[merged.length - 1];
+        if (previous && previous.end === span.start
+            && previous.status === span.status && previous.priority === span.priority) {
+            previous.end = span.end;
+        } else {
+            merged.push(span);
+        }
+    });
+    return merged;
+}
+
+// What the queued token rules would do to this line, or null when none of their
+// tokens occurs in it. They are saved as matched-part substring rules at priority
+// 7, so they always paint their tokens (where nothing higher covers them), but
+// only take part in the verdict when priority 7 reaches the line's winning tier.
 // Substring matching is case-sensitive server-side (`source_text in line`), so
 // it is here too.
 function tokenRuleEffectForEntry(entry) {
@@ -419,19 +457,7 @@ function tokenRuleEffectForEntry(entry) {
         return null;
     }
 
-    const baseStatus = entry._baseDominantStatus || '?';
-    let basePriority = UNMATCHED_LINE_PRIORITY;
-    if (baseStatus !== '?') {
-        basePriority = entry._baseFilepathHighlight
-            ? FILEPATH_FALLBACK_PRIORITY
-            : (MATCHER_DEFAULT_PRIORITY[entry._baseMatcher] ?? UNMATCHED_LINE_PRIORITY);
-    }
-
-    if (SUBSTRING_RULE_PRIORITY < basePriority) {
-        return null;
-    }
-
-    const ranges = [];
+    const layers = [];
     pendingTokenRules.forEach((change) => {
         const value = tokenRuleValue(change);
         if (!value) {
@@ -440,31 +466,36 @@ function tokenRuleEffectForEntry(entry) {
         let from = 0;
         let pos;
         while ((pos = line.indexOf(value, from)) !== -1) {
-            ranges.push({ start: pos, end: pos + value.length, status: change.new_status });
+            layers.push({
+                start: pos,
+                end: pos + value.length,
+                status: change.new_status,
+                priority: SUBSTRING_RULE_PRIORITY,
+            });
             from = pos + value.length;
         }
     });
-    if (!ranges.length) {
+    if (!layers.length) {
         return null;
     }
 
-    // Same tier as the line's existing substring match: the engine puts both in
-    // the winning group, so the verdict is the strongest status among them all.
-    const sameTier = SUBSTRING_RULE_PRIORITY === basePriority;
-    const statuses = ranges.map((range) => range.status);
-    if (sameTier) {
-        statuses.push(baseStatus);
+    const baseStatus = entry._baseDominantStatus || '?';
+    const basePriority = entry._baseVerdictPriority;
+    const tokenStatus = strongestStatus(layers.map((layer) => layer.status));
+    let status = baseStatus;
+    let affectsVerdict = true;
+    if (baseStatus === '?' || basePriority == null || SUBSTRING_RULE_PRIORITY > basePriority) {
+        status = tokenStatus;  // the tokens form the new winning tier
+    } else if (SUBSTRING_RULE_PRIORITY === basePriority) {
+        status = strongestStatus([baseStatus, tokenStatus]);  // they join it
+    } else {
+        affectsVerdict = false;  // a higher tier decides; the tokens only paint
     }
-    const status = statuses.reduce((best, candidate) => (
-        statusPrecedenceRank(candidate) < statusPrecedenceRank(best) ? candidate : best
-    ));
 
-    const baseHighlights = sameTier ? (entry._baseSubstringHighlights || []) : [];
-    const wholeLine = sameTier && !baseHighlights.length;
     return {
         status,
-        wholeLine,
-        highlights: wholeLine ? [] : resolveHighlightSegments([...baseHighlights, ...ranges], line.length),
+        affectsVerdict,
+        highlights: overlayPartialPaint(entry._basePaintBase, entry._baseHighlights || [], layers),
     };
 }
 
@@ -621,10 +652,10 @@ function updateSummary(summary, fallbackTotal = 0) {
 function updateLegendCounts() {
     const counts = Object.create(null);
     analyzedLines.forEach((line) => {
-        // css_class is presentational (a fallback-only match stays 'status-unknown'
-        // so the whole line isn't coloured). The verdict is dominant_status — count
-        // by that so the legend agrees with the uploads count, the matched summary,
-        // and the bulk buttons.
+        // css_class is presentational (the line text's colour, e.g. 'status-unknown'
+        // when only a substring or path is coloured). The verdict is dominant_status —
+        // count by that so the legend agrees with the uploads count, the matched
+        // summary, and the bulk buttons.
         const cls = STATUS_CLASS_MAP[line.dominant_status] || 'status-unknown';
         counts[cls] = (counts[cls] || 0) + 1;
     });
@@ -678,11 +709,10 @@ function attachLineKeys(lines) {
             _baseCssClass: entry.css_class || STATUS_CLASS_MAP[baseStatus] || 'status-unknown',
             _baseStatusLabel: entry.status_label || STATUS_LABEL_MAP[baseStatus] || 'unknown',
             _baseReasons: baseReasons,
-            _baseMatcher: entry.matcher || '',
-            _baseFilepathHighlight: entry.filepath_highlight || null,
-            _baseSubstringHighlights: Array.isArray(entry.substring_highlights)
-                ? entry.substring_highlights
-                : [],
+            _basePaintBase: entry.paint_base || null,
+            _baseHighlights: Array.isArray(entry.highlights) ? entry.highlights : [],
+            _baseVerdictPriority: Number.isInteger(entry.verdict_priority) ? entry.verdict_priority : null,
+            _baseFallbackOnly: Boolean(entry.fallback_only),
         };
     });
 }
@@ -706,27 +736,7 @@ function applyPendingOverrides() {
         if (!pending) {
             // An explicit per-line override wins over a queued token rule, so
             // token rules are only consulted when the line has none.
-            const tokenEffect = tokenRuleEffectForEntry(entry);
-            if (tokenEffect) {
-                const tokenStatus = tokenEffect.status;
-                return {
-                    ...entry,
-                    dominant_status: tokenStatus,
-                    status_codes: tokenStatus,
-                    // Presentation only, as server-side: a matched-part line keeps
-                    // an unknown paint class and colours just its highlights.
-                    css_class: tokenEffect.wholeLine
-                        ? (STATUS_CLASS_MAP[tokenStatus] || 'status-unknown')
-                        : 'status-unknown',
-                    status_label: STATUS_LABEL_MAP[tokenStatus] || 'unknown',
-                    reasons: [...baseReasons, `pending substring rule -> ${tokenStatus}`],
-                    matched: true,
-                    filepath_highlight: null,
-                    substring_highlights: tokenEffect.highlights,
-                };
-            }
-
-            return {
+            const base = {
                 ...entry,
                 dominant_status: baseStatus,
                 status_codes: entry._baseStatusCodes || baseStatus,
@@ -734,8 +744,28 @@ function applyPendingOverrides() {
                 status_label: entry._baseStatusLabel || STATUS_LABEL_MAP[baseStatus] || 'unknown',
                 reasons: baseReasons,
                 matched: baseStatus !== '?',
-                filepath_highlight: entry._baseFilepathHighlight || null,
-                substring_highlights: entry._baseSubstringHighlights || [],
+                highlights: entry._baseHighlights || [],
+                fallback_only: Boolean(entry._baseFallbackOnly),
+            };
+
+            const tokenEffect = tokenRuleEffectForEntry(entry);
+            if (!tokenEffect) {
+                return base;
+            }
+            // Partial paint only: the whole-line colour (css_class) stays as is.
+            if (!tokenEffect.affectsVerdict) {
+                return { ...base, highlights: tokenEffect.highlights };
+            }
+            const tokenStatus = tokenEffect.status;
+            return {
+                ...base,
+                dominant_status: tokenStatus,
+                status_codes: tokenStatus,
+                status_label: STATUS_LABEL_MAP[tokenStatus] || 'unknown',
+                reasons: [...baseReasons, `pending substring rule -> ${tokenStatus}`],
+                matched: true,
+                highlights: tokenEffect.highlights,
+                fallback_only: false,
             };
         }
 
@@ -748,8 +778,10 @@ function applyPendingOverrides() {
             status_label: STATUS_LABEL_MAP[overrideStatus] || 'unknown',
             reasons: [...baseReasons, `manual override: ${pending.original_status} -> ${pending.new_status}`],
             matched: overrideStatus !== '?',
-            filepath_highlight: null,
-            substring_highlights: [],
+            // The rule saved for it matches the whole line at a high priority, so
+            // it will paint over everything.
+            highlights: [],
+            fallback_only: false,
         };
     });
     recomputeDateClusters();

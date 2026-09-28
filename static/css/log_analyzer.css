@@ -388,8 +388,8 @@ body.clean-cursor-mode .line-text {
 }
 
 /* Badge always reflects its own status colour so the verdict is visible even
-   when the surrounding line is rendered as `status-unknown` (e.g. parsed-entry
-   filepath-fallback matches). */
+   when the surrounding line is coloured differently (e.g. only a matched
+   substring or path is coloured, or a lower-priority rule colours the line). */
 .log-line .status-badge.status-b { color: var(--la-status-b); }
 .log-line .status-badge.status-p { color: var(--la-status-p); }
 .log-line .status-badge.status-c { color: var(--la-status-c); }
@@ -965,7 +965,7 @@ textarea.speech-capture-field {
 
 /* Legend toggle: hide log lines by status via container class.
    Matches on data-verdict-class (the verdict / dominant_status), NOT on the
-   presentational .status-* class -- a filepath-fallback match is painted
+   presentational .status-* class -- a line coloured only in part is painted
    'status-unknown' while its verdict is e.g. B, and the legend counts it as B.
    Filtering by the paint class made those lines vanish under a "B only" filter. */
 .log-lines-container.hide-status-b > .log-line[data-verdict-class="status-b"],
@@ -1093,8 +1093,8 @@ textarea.speech-capture-field {
     white-space: nowrap;
 }
 
-/* Text coloured on its own instead of the whole line: filepath-fallback matches
-   and matched-part substring rules (see collectPartialHighlights). */
+/* Text coloured on its own, on top of the line's colour: matched substrings and
+   file paths, and pending rules' tokens (see collectPartialHighlights). */
 .partial-highlight { color: inherit; }
 .partial-highlight.status-b { color: var(--la-status-b); }
 .partial-highlight.status-p { color: var(--la-status-p); }

@@ -91,9 +91,10 @@ def _whole_log_error(whole_log: bool, status: str, match_type: str) -> str | Non
 
 
 def _color_whole_line_for(color_whole_line: bool, match_type: str) -> bool:
-    """Only substring rules can opt into colouring the whole analyzer line; every
-    other match type already does, so the flag is dropped rather than rejected."""
-    return bool(color_whole_line) and match_type == ClassificationRule.MATCH_SUBSTRING
+    """Only substring and file path rules can opt into colouring the whole analyzer
+    line; every other match type already does, so the flag is dropped rather than
+    rejected."""
+    return bool(color_whole_line) and match_type in ClassificationRule.COLOR_WHOLE_LINE_MATCH_TYPES
 
 
 def _script_rule_error(match_type: str, source_text: str, user, whole_log: bool = False) -> str | None:

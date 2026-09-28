@@ -311,6 +311,10 @@ class ClassificationRule(models.Model):
     MATCH_PARSED_ENTRY = 'parsed'
     MATCH_SCRIPT = 'script'
 
+    # Match types that colour only the text they matched unless `color_whole_line`
+    # is set; every other match type always colours the whole analyzer line.
+    COLOR_WHOLE_LINE_MATCH_TYPES = frozenset({MATCH_SUBSTRING, MATCH_FILEPATH})
+
     MATCH_TYPE_CHOICES = [
         (MATCH_EXACT, 'Exact line'),
         (MATCH_SUBSTRING, 'Substring'),
@@ -338,7 +342,7 @@ class ClassificationRule(models.Model):
     )
     color_whole_line = models.BooleanField(
         default=False,
-        help_text='Substring rules only: colour the whole analyzer line instead of just the matched text.',
+        help_text='Substring and file path rules only: colour the whole analyzer line instead of just the matched text.',
     )
 
     # Optional parsed metadata, populated for parsed/filepath rules.

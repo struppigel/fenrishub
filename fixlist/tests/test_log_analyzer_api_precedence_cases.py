@@ -111,13 +111,17 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(analyze_payload["lines"][0]["dominant_status"], ClassificationRule.STATUS_MALWARE)
         # Parsed-entry rule's filepath fallback: badge (dominant_status) carries
         # the verdict, but `css_class` stays unknown so the line text isn't
-        # coloured — only the filepath substring (via filepath_highlight) is.
-        self.assertEqual(analyze_payload["lines"][1]["dominant_status"], ClassificationRule.STATUS_MALWARE)
-        self.assertEqual(analyze_payload["lines"][1]["css_class"], "status-unknown")
+        # coloured — only the file path is, as a highlight at fallback priority.
+        fallback_line = analyze_payload["lines"][1]
+        self.assertEqual(fallback_line["dominant_status"], ClassificationRule.STATUS_MALWARE)
+        self.assertTrue(fallback_line["fallback_only"])
+        self.assertEqual(fallback_line["css_class"], "status-unknown")
+        path_start = same_path_line.index("C:\\")
         self.assertEqual(
-            analyze_payload["lines"][1]["filepath_highlight"]["status"],
-            ClassificationRule.STATUS_MALWARE,
+            fallback_line["highlights"],
+            [{"start": path_start, "end": len(same_path_line), "status": "B", "priority": 1}],
         )
+        self.assertFalse(analyze_payload["lines"][0]["fallback_only"])
 
     def test_parsed_fallback_filepath_respects_exclusion_list(self):
         self.client.login(username="analyzer", password="password123")
@@ -315,9 +319,10 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
             self.assertEqual(line["dominant_status"], ClassificationRule.STATUS_MALWARE)
             self.assertTrue(line["matched"])
             # Presentational only: the line text isn't coloured; the path is.
+            self.assertTrue(line["fallback_only"])
             self.assertEqual(line["css_class"], "status-unknown")
             self.assertEqual(
-                line["filepath_highlight"]["status"], ClassificationRule.STATUS_MALWARE
+                [h["status"] for h in line["highlights"]], [ClassificationRule.STATUS_MALWARE]
             )
 
         # The count consumer (uploads listing reads status_counts) reflects the
@@ -587,6 +592,8 @@ class LogAnalyzerApiPrecedenceTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(
             line_result["dominant_status"], ClassificationRule.STATUS_MALWARE
         )
-        # When the parsed_entry rule wins, no filepath_highlight should be set —
-        # the whole line carries the verdict, not just the path substring.
-        self.assertIsNone(line_result.get("filepath_highlight"))
+        # When the parsed_entry rule wins, the whole line carries the verdict, not
+        # just the path substring.
+        self.assertFalse(line_result["fallback_only"])
+        self.assertEqual(line_result["css_class"], "status-b")
+        self.assertEqual(line_result["highlights"], [])

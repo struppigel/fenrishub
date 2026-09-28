@@ -1212,8 +1212,10 @@ def _build_line_result(
     alert_descriptions: list[str] | None = None,
     dates: list[str] | None = None,
     parsed_entry=None,
-    filepath_highlight: dict | None = None,
-    substring_highlights: list[dict] | None = None,
+    paint_base: dict | None = None,
+    highlights: list[dict] | None = None,
+    verdict_priority: int | None = None,
+    fallback_only: bool = False,
 ):
     dominant_status = _dominant_status(status_codes)
     components = {}
@@ -1234,48 +1236,37 @@ def _build_line_result(
         "status_codes": status_codes,
         "dominant_status": dominant_status,
         "status_label": STATUS_LABELS.get(dominant_status, "unknown"),
-        "css_class": STATUS_CSS_CLASS.get(dominant_status, "status-unknown"),
+        # PRESENTATION ONLY -- the colour of the line text, which need not be the
+        # verdict's (see _resolve_line_paint). Never derive a verdict/count from it.
+        "css_class": STATUS_CSS_CLASS.get(paint_base["status"], "status-unknown") if paint_base else "status-unknown",
+        "paint_base": paint_base,
+        "highlights": highlights or [],
+        "verdict_priority": verdict_priority,
+        "fallback_only": fallback_only,
         "entry_type": entry_type,
         "reasons": reasons,
         "matcher": matcher,
         "matched": dominant_status != "?",
         "dates": dates or [],
         "components": components,
-        "filepath_highlight": filepath_highlight,
-        "substring_highlights": substring_highlights or [],
         "fixlist_replacement": ex.fixlist_replacement(line),
         "_alert_descriptions": alert_descriptions or [],
     }
 
 
-def _build_filepath_highlight_payload(line: str, status_codes: str) -> dict:
-    dominant_status = _dominant_status(status_codes)
-    payload = {
-        "status": dominant_status,
-        "css_class": STATUS_CSS_CLASS.get(dominant_status, "status-unknown"),
-    }
-    filepath_value = ex.extract_any_frst_path(line)
-    if not filepath_value:
-        return payload
-    pos = ex.find_value_position(filepath_value, line, "filepath")
-    if pos:
-        payload["start"] = pos[0]
-        payload["end"] = pos[1]
-    return payload
+def _is_filepath_fallback(rule, matcher: str) -> bool:
+    """A match through the file path stored with a rule that is not itself a file
+    path rule -- typically a parsed rule whose entry did not match the line shape."""
+    return matcher == "filepath" and rule.match_type != ClassificationRule.MATCH_FILEPATH
 
 
-def _all_matches_are_parsed_entry_filepath_fallback(matches) -> bool:
-    """A parsed-entry fallback is a match where the rule's own type is
-    `parsed_entry` but the line only matched via the rule's stored filepath.
-    Those matches should colour just the filepath rather than flip the verdict —
-    the rule's parsed entry didn't actually match the line shape."""
+def _all_matches_are_filepath_fallback(matches) -> bool:
+    """True when a line's verdict rests only on filepath fallbacks. Such a line
+    keeps its own parsed entry type, and the analyzer lets the user persist a
+    full rule for it (`fallback_only`)."""
     if not matches:
         return False
-    return all(
-        matcher == "filepath"
-        and rule.match_type != ClassificationRule.MATCH_FILEPATH
-        for rule, _reason, matcher in matches
-    )
+    return all(_is_filepath_fallback(rule, matcher) for rule, _reason, matcher in matches)
 
 
 def find_substring_ranges(line: str, needle: str) -> list[list[int]]:
@@ -1296,49 +1287,131 @@ def find_substring_ranges(line: str, needle: str) -> list[list[int]]:
     return ranges
 
 
-def _all_matches_are_partial_substring(matches) -> bool:
-    """Substring rules colour only the text they matched unless they opt into
-    `color_whole_line`. Like the filepath fallback above, the line is painted
-    partially only when every winning match wants that -- a single whole-line
-    rule in the winning group colours the whole line."""
-    if not matches:
-        return False
-    return all(
-        matcher == "substring"
-        and rule.match_type == ClassificationRule.MATCH_SUBSTRING
-        and not rule.color_whole_line
-        for rule, _reason, matcher in matches
-    )
+# How a matching rule colours its line in the analyzer.
+_PAINT_LINE = "line"  # the whole line
+_PAINT_TEXT = "text"  # every occurrence of the rule's substring
+_PAINT_PATH = "path"  # the line's file path
+
+_PATH_NOT_LOCATED = object()
 
 
-def _build_substring_highlights(line: str, matches) -> list[dict]:
-    """Coloured segments for every occurrence of every matched substring.
+def _paint_kind(rule, matcher: str) -> str:
+    if _is_filepath_fallback(rule, matcher):
+        # The rule only matched through its stored path, so only the path says
+        # anything about this line -- whatever the rule's own colouring choice.
+        return _PAINT_PATH
+    if rule.color_whole_line:
+        return _PAINT_LINE
+    if matcher == "substring" and rule.match_type == ClassificationRule.MATCH_SUBSTRING:
+        return _PAINT_TEXT
+    if matcher == "filepath":
+        return _PAINT_PATH
+    return _PAINT_LINE
 
-    Each occurrence takes its own rule's status. Where occurrences overlap, the
-    stronger rule (by match precedence) keeps the overlapping characters, so the
-    segments come out sorted and non-overlapping.
-    """
-    painted = [None] * len(line)
-    for rule, _reason, _matcher in sorted(matches, key=_match_precedence_sort_key):
-        for start, end in find_substring_ranges(line, rule.source_text):
-            for index in range(start, end):
-                if painted[index] is None:
-                    painted[index] = rule.status
 
-    segments = []
-    for index, status in enumerate(painted):
-        if status is None:
+def _locate_line_path(line: str):
+    """[start, end) of the line's file path, or None when there is none or it
+    cannot be found in the line's own spelling."""
+    path = ex.extract_any_frst_path(line)
+    if not path:
+        return None
+    return ex.find_value_position(path, line, "filepath")
+
+
+def _uncovered_parts(covered: list, start: int, end: int) -> list:
+    """The parts of [start, end) not in `covered` (sorted, disjoint intervals)."""
+    parts = []
+    cursor = start
+    for covered_start, covered_end in covered:
+        if covered_end <= cursor:
             continue
-        if segments and segments[-1]["end"] == index and segments[-1]["status"] == status:
-            segments[-1]["end"] = index + 1
+        if covered_start >= end:
+            break
+        if covered_start > cursor:
+            parts.append((cursor, covered_start))
+        cursor = covered_end
+        if cursor >= end:
+            break
+    if cursor < end:
+        parts.append((cursor, end))
+    return parts
+
+
+def _add_covered(covered: list, start: int, end: int) -> list:
+    """`covered` with [start, end) merged in, still sorted and disjoint."""
+    merged = []
+    index = 0
+    while index < len(covered) and covered[index][1] < start:
+        merged.append(covered[index])
+        index += 1
+    while index < len(covered) and covered[index][0] <= end:
+        start = min(start, covered[index][0])
+        end = max(end, covered[index][1])
+        index += 1
+    merged.append((start, end))
+    merged.extend(covered[index:])
+    return merged
+
+
+def _resolve_line_paint(line: str, matches_top_down) -> tuple[dict | None, list[dict]]:
+    """How the analyzer colours a line: every matching rule paints it, lowest
+    priority first, so the highest priority ends up on top.
+
+    Each rule paints either the whole line or just its match (see _paint_kind),
+    in its own status. The same result is computed top-down, which lets most of
+    the work be skipped: a part of the line, once painted, cannot change any more,
+    so only still-uncovered parts are filled, and the first whole-line paint
+    finishes the line -- everything below it is hidden. Ties at one priority put
+    the stronger status on top, the same order that decides the verdict.
+
+    `matches_top_down` must be sorted strongest first (_match_precedence_sort_key).
+    Returns the base colour of the line text as {status, priority} (None when no
+    whole-line paint shows) and the visible partial paints on top of it as sorted,
+    non-overlapping {start, end, status, priority} spans. The priorities let the
+    analyzer page place a pending rule's paint correctly.
+    """
+    line_length = len(line)
+    covered = []
+    spans = []
+    path_range = _PATH_NOT_LOCATED
+    base = None
+
+    for rule, _reason, matcher in matches_top_down:
+        kind = _paint_kind(rule, matcher)
+        priority = _effective_match_priority(rule, matcher)
+        if kind == _PAINT_TEXT:
+            ranges = find_substring_ranges(line, rule.source_text)
+        elif kind == _PAINT_PATH:
+            if path_range is _PATH_NOT_LOCATED:
+                path_range = _locate_line_path(line)
+            if path_range is not None:
+                ranges = [path_range]
+            elif _is_filepath_fallback(rule, matcher):
+                # Nothing to point at, and a fallback is too weak a match to
+                # colour the whole line.
+                continue
+            else:
+                kind = _PAINT_LINE
+        if kind == _PAINT_LINE:
+            base = {"status": rule.status, "priority": priority}
+            break
+
+        for start, end in ranges:
+            for part_start, part_end in _uncovered_parts(covered, start, end):
+                spans.append((part_start, part_end, rule.status, priority))
+            covered = _add_covered(covered, start, end)
+        if len(covered) == 1 and covered[0][0] <= 0 and covered[0][1] >= line_length:
+            break  # every character is painted; nothing below can show
+
+    highlights = []
+    for start, end, status, priority in sorted(spans):
+        previous = highlights[-1] if highlights else None
+        if (previous and previous["end"] == start
+                and previous["status"] == status and previous["priority"] == priority):
+            previous["end"] = end
         else:
-            segments.append({
-                "start": index,
-                "end": index + 1,
-                "status": status,
-                "css_class": STATUS_CSS_CLASS.get(status, "status-unknown"),
-            })
-    return segments
+            highlights.append({"start": start, "end": end, "status": status, "priority": priority})
+    return base, highlights
 
 
 _MATCHER_ENTRY_TYPE_LABELS = {
@@ -1367,7 +1440,7 @@ def _analyze_single_line(line: str, buckets):
     parsed_entry = ex.get_frst_entry(line)
     dates = _extract_dates(line, parsed_entry)
 
-    effective_matches, _shadowed, matcher_label, _top_priority = (
+    effective_matches, shadowed_matches, matcher_label, top_priority = (
         _collect_effective_and_shadowed_matches_for_line(line, buckets)
     )
 
@@ -1378,50 +1451,21 @@ def _analyze_single_line(line: str, buckets):
             dates=dates, parsed_entry=parsed_entry,
         )
 
+    # The verdict comes from the winning priority tier alone.
     status_codes, reasons, alert_descriptions = _status_and_reason_from_matches(
         [(rule, reason) for rule, reason, _matcher in effective_matches]
     )
+    fallback_only = _all_matches_are_filepath_fallback(effective_matches)
+    if fallback_only:
+        # The rules' own entries did not match the line shape, so it keeps its own.
+        entry_type = parsed_entry.entry_type if parsed_entry else ""
+    else:
+        entry_type = _entry_type_for_winning_group(effective_matches, parsed_entry)
 
-    if _all_matches_are_parsed_entry_filepath_fallback(effective_matches):
-        fallback_entry_type = parsed_entry.entry_type if parsed_entry else ""
-        result = _build_line_result(
-            line,
-            status_codes,
-            fallback_entry_type,
-            reasons,
-            "filepath",
-            alert_descriptions,
-            dates=dates,
-            parsed_entry=parsed_entry,
-            filepath_highlight=_build_filepath_highlight_payload(line, status_codes),
-        )
-        # The verdict is `dominant_status` (the badge shows the rule's status, and
-        # it is what counts/bulk/uploads read). `css_class` here is PRESENTATION
-        # ONLY: it is forced to unknown so the surrounding line text is not tinted
-        # with the verdict colour — only the filepath substring is, via
-        # filepath_highlight. Never derive a verdict/count from css_class.
-        result["css_class"] = STATUS_CSS_CLASS.get("?", "status-unknown")
-        return result
-
-    entry_type = _entry_type_for_winning_group(effective_matches, parsed_entry)
-
-    if _all_matches_are_partial_substring(effective_matches):
-        result = _build_line_result(
-            line,
-            status_codes,
-            entry_type,
-            reasons,
-            matcher_label,
-            alert_descriptions,
-            dates=dates,
-            parsed_entry=parsed_entry,
-            substring_highlights=_build_substring_highlights(line, effective_matches),
-        )
-        # PRESENTATION ONLY, as in the fallback branch above: the verdict stays
-        # `dominant_status`; only the matched substrings are coloured, via
-        # substring_highlights.
-        result["css_class"] = STATUS_CSS_CLASS.get("?", "status-unknown")
-        return result
+    # The colouring comes from every match. Both lists are sorted strongest first
+    # and every effective match outranks every shadowed one, so together they are
+    # already in top-down paint order.
+    paint_base, highlights = _resolve_line_paint(line, effective_matches + shadowed_matches)
 
     return _build_line_result(
         line,
@@ -1432,6 +1476,10 @@ def _analyze_single_line(line: str, buckets):
         alert_descriptions,
         dates=dates,
         parsed_entry=parsed_entry,
+        paint_base=paint_base,
+        highlights=highlights,
+        verdict_priority=top_priority,
+        fallback_only=fallback_only,
     )
 
 
@@ -1669,6 +1717,12 @@ def inspect_line_matches(
     }
 
 
+# Bumped whenever the per-line payload changes shape, so payloads cached by an
+# older version are not handed to a page that expects the new one.
+# 2: line colouring as paint_base + highlights (replacing filepath_highlight).
+ANALYSIS_PAYLOAD_FORMAT = 2
+
+
 def analyze_log_text(raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY) -> dict:
     buckets = _get_cached_rule_buckets(rule_set_key)
     analyzed_lines = []
@@ -1698,6 +1752,7 @@ def analyze_log_text(raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY)
     }
 
     return {
+        "format": ANALYSIS_PAYLOAD_FORMAT,
         "lines": analyzed_lines,
         "summary": summary,
         "warnings": warnings,

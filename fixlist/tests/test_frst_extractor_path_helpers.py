@@ -66,6 +66,22 @@ class FindValuePositionDenormalizedTests(TestCase):
         start, end = result
         self.assertEqual(source[start:end], r"C:\Users\Lucian\Raxec")
 
+    def test_path_ending_in_the_user_folder_matches_the_original_user(self):
+        # normalize_path rewrites "C:\Users\Default User" to "C:\Users\username";
+        # with no backslash after the user, the name runs to the end of the path.
+        source = r"2026-07-20 12:10 - 2026-07-20 12:10 - 000000000 _SHDL C:\Users\Default User"
+        result = find_value_position(r"C:\Users\username", source, field_name="filepath")
+        self.assertIsNotNone(result)
+        start, end = result
+        self.assertEqual(source[start:end], r"C:\Users\Default User")
+
+    def test_path_ending_in_the_user_folder_stops_before_frst_details(self):
+        source = r"Task: {9ADF6FEE} - System32\Tasks\X => C:\Users\Tuan [213708 2026-07-07] () [File not signed]"
+        result = find_value_position(r"C:\Users\username", source, field_name="filepath")
+        self.assertIsNotNone(result)
+        start, end = result
+        self.assertEqual(source[start:end], r"C:\Users\Tuan")
+
     def test_drive_letter_normalization_matches_other_drive(self):
         # normalize_path forces the drive to C:; original line had D:.
         source = "FRST line referring to D:\\Tools\\bad.exe"

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<!--
+  Render benchmark for the log analyzer (not a pass/fail test).
+
+  Times, on a real analysis payload, what the browser does with it:
+    parse   - JSON.parse of the payload text
+    apply   - applyAnalysisPayload (keying, pending overrides, full line render)
+    layout  - the forced layout of the rendered lines
+    tokens  - queueing 3 lookup-menu substring rules and repainting every line
+
+  Produce a payload with
+    python manage.py benchmark_analyzer --upload-id <id> --dump-payload payload.js
+  then open this page with ?payload=<file URL of payload.js>, e.g. headless:
+    chrome --headless=new --allow-file-access-from-files --dump-dom "file:///.../bench_render.html?payload=file:///.../payload.js"
+  Results (median of 5 runs, ms) are written into <pre id="benchResults">.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>log analyzer render benchmark</title>
+<link rel="stylesheet" href="../../../css/theme.css">
+<link rel="stylesheet" href="../../../css/log_analyzer.css">
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  #logLines { height: 600px; }
+</style>
+</head>
+<body>
+<pre id="benchResults">running...</pre>
+<div id="analysisWarnings" hidden></div>
+<div id="logLines" class="log-lines-container"></div>
+
+<script>
+window.logAnalyzerConfig = {
+    analyzeLogUrl: '/fake/analyze/',
+    lineDetailsUrl: '/fake/details/',
+    persistRuleChangesUrl: '/fake/persist/',
+    currentUsername: 'bench',
+    guestToken: '',
+};
+// Defined in draft_autosave.js, which is not loaded here.
+function scheduleDraftSave() {}
+</script>
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+
+<script>
+// Frequent tokens, so the repaint touches many lines rather than a handful.
+const BENCH_TOKENS = ['Microsoft', '.dll', '\\Users\\'];
+const RUNS = 5;
+
+function median(values) {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+}
+
+function time(fn) {
+    const start = performance.now();
+    fn();
+    return performance.now() - start;
+}
+
+function runBenchmark() {
+    const out = document.getElementById('benchResults');
+    if (typeof window.BENCH_PAYLOAD_TEXT !== 'string') {
+        out.textContent = 'ERROR: no payload (pass ?payload=<file URL of a --dump-payload file>)';
+        return;
+    }
+    const container = document.getElementById('logLines');
+    const samples = { parse: [], apply: [], layout: [], tokens: [], tokensLayout: [] };
+    let lineCount = 0;
+    let tokenLines = 0;
+
+    for (let run = 0; run < RUNS; run += 1) {
+        let payload;
+        samples.parse.push(time(() => { payload = JSON.parse(window.BENCH_PAYLOAD_TEXT); }));
+        lineCount = payload.lines.length;
+        samples.apply.push(time(() => applyAnalysisPayload(payload, { resetCopied: true })));
+        samples.layout.push(time(() => container.offsetHeight));
+
+        samples.tokens.push(time(() => {
+            BENCH_TOKENS.forEach((token) => queueTokenRule(token, 'B'));
+            applyPendingOverrides();
+            renderLogLines();
+        }));
+        samples.tokensLayout.push(time(() => container.offsetHeight));
+        tokenLines = analyzedLines.filter((entry) => BENCH_TOKENS.some((t) => entry.line.includes(t))).length;
+        pendingTokenRules.clear();
+    }
+
+    const result = { lines: lineCount, tokenLines, runs: RUNS };
+    Object.keys(samples).forEach((key) => { result[key] = Math.round(median(samples[key])); });
+    out.textContent = JSON.stringify(result);
+}
+
+(function loadPayload() {
+    const src = new URLSearchParams(location.search).get('payload');
+    if (!src) {
+        runBenchmark();
+        return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.onload = runBenchmark;
+    script.onerror = () => { document.getElementById('benchResults').textContent = 'ERROR: cannot load ' + src; };
+    document.head.appendChild(script);
+})();
+</script>
+</body>
+</html>

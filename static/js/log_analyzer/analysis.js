@@ -739,11 +739,11 @@ async function saveStatusSelection(index, newStatus) {
     }
     const currentStatus = entry.dominant_status || '?';
     const baseStatus = entry._baseDominantStatus || currentStatus;
-    // Lines whose only base match was a parsed-entry filepath fallback show the
-    // rule's verdict on the badge but no full match exists yet. Clicking even
-    // the same status must register an override so the workflow can persist a
-    // full parsed_entry rule for this line.
-    const hasFilepathFallback = Boolean(entry._baseFilepathHighlight);
+    // Lines whose verdict rests only on filepath fallbacks show the rule's verdict
+    // on the badge but no full match exists yet. Clicking even the same status
+    // must register an override so the workflow can persist a full parsed_entry
+    // rule for this line.
+    const hasFilepathFallback = Boolean(entry._baseFallbackOnly);
 
     if (currentStatus === newStatus && !hasFilepathFallback) {
         closeStatusPicker();
@@ -1363,29 +1363,20 @@ function buildInnerHighlightNode(span) {
     return createLookupTrigger(span.text, span.type);
 }
 
-// The parts of a line the server coloured on their own instead of tinting the
-// whole line: the filepath-fallback range and the substring_highlights segments.
-// Clamped to the line, sorted, and trimmed so no two overlap. Payloads cached
-// before substring_highlights existed simply contribute none.
+// The parts of a line coloured on their own, on top of the line's own colour
+// (css_class): matched substrings, file paths, and pending rules' tokens. Clamped
+// to the line, sorted, and trimmed so no two overlap.
 function collectPartialHighlights(entry) {
-    if (!entry) {
+    if (!entry || !Array.isArray(entry.highlights)) {
         return [];
     }
     const line = entry.line || '';
-    const candidates = [];
-    if (entry.filepath_highlight) {
-        candidates.push(entry.filepath_highlight);
-    }
-    if (Array.isArray(entry.substring_highlights)) {
-        candidates.push(...entry.substring_highlights);
-    }
-
-    const clamped = candidates
+    const clamped = entry.highlights
         .filter((hl) => hl && Number.isInteger(hl.start) && Number.isInteger(hl.end))
         .map((hl) => ({
             start: Math.max(0, Math.min(hl.start, line.length)),
             end: Math.max(0, Math.min(hl.end, line.length)),
-            css_class: hl.css_class || '',
+            css_class: STATUS_CLASS_MAP[hl.status] || 'status-unknown',
         }))
         .filter((hl) => hl.end > hl.start)
         .sort((a, b) => a.start - b.start);
@@ -1649,7 +1640,8 @@ function renderLogLines() {
         const cssClass = entry.css_class || 'status-unknown';
         const status = entry.dominant_status || '?';
         // Badge always reflects the verdict's colour even when the line itself is
-        // styled as unknown (e.g. parsed-entry filepath-fallback matches).
+        // coloured differently (e.g. only a matched substring or path is coloured,
+        // or a lower-priority rule colours the line).
         const badgeClass = STATUS_CLASS_MAP[status] || 'status-unknown';
 
         const lineDiv = document.createElement('div');
@@ -1657,8 +1649,8 @@ function renderLogLines() {
             ? `log-line ${cssClass} copied`
             : `log-line ${cssClass}`;
         // The legend filter hides lines by VERDICT, so it reads this attribute
-        // rather than cssClass -- a fallback-only match is styled 'status-unknown'
-        // but its verdict (and its legend count) is the badge's status.
+        // rather than cssClass -- a line coloured only in part is styled
+        // 'status-unknown' but its verdict (and its legend count) is the badge's status.
         lineDiv.dataset.verdictClass = badgeClass;
 
         const badge = document.createElement('button');

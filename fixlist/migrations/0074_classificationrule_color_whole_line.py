@@ -22,7 +22,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='classificationrule',
             name='color_whole_line',
-            field=models.BooleanField(default=False, help_text='Substring rules only: colour the whole analyzer line instead of just the matched text.'),
+            field=models.BooleanField(default=False, help_text='Substring and file path rules only: colour the whole analyzer line instead of just the matched text.'),
         ),
         migrations.RunPython(
             keep_existing_informational_substring_rules_whole_line,

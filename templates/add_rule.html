@@ -851,12 +851,13 @@
         }
     }
 
-    /* Only substring rules colour just their match; every other type already
-     * colours the whole line, so the choice is offered for substring alone. */
+    /* Only substring and file path rules colour just their match; every other
+     * type already colours the whole line, so the choice is offered for those two. */
+    const COLOR_WHOLE_LINE_MATCH_TYPES = ['substring', 'filepath'];
     function syncColorWholeLineMode() {
-        const isSubstring = document.getElementById('ruleMatchType').value === 'substring';
-        document.getElementById('ruleColorWholeLineGroup').style.display = isSubstring ? '' : 'none';
-        if (!isSubstring) {
+        const offered = COLOR_WHOLE_LINE_MATCH_TYPES.includes(document.getElementById('ruleMatchType').value);
+        document.getElementById('ruleColorWholeLineGroup').style.display = offered ? '' : 'none';
+        if (!offered) {
             document.getElementById('ruleColorWholeLine').checked = false;
         }
     }

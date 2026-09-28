@@ -374,6 +374,8 @@
 
     <p>A line can have only one verdict, but several rules may match on one line. If that happens, the analyzer has to decide which rule comes first to form a verdict based on it. The rule with the highest priority will win in that case. But what happens if there are two or more matching rules with the same priority? In that case, the analyzer chooses the verdict based on verdict precedence, which is the same order as the legend in the analyzer: B &lt; P &lt; C &lt; A &lt; ! &lt; G &lt; S &lt; I &lt; J &lt; ?</p>
 
+    <p>The colors in the log analyzer work a bit differently: every matching rule colors the line, not only the one that decides the verdict. Think of it as painting in layers. The rule with the lowest priority paints first and the rule with the highest priority paints last, on top of everything else. Most rules paint the whole line. Substring and file path rules paint only the text they matched, unless they have "color the whole line" ticked. So a line can show a red substring on top of a yellow line from a lower priority rule. The status badge at the start of the line always shows the verdict.</p>
+
     <h3 id="match-types">Match types</h3>
 
     <p>The following match types are possible:</p>
@@ -384,7 +386,7 @@
 
     <p><strong>Regex</strong> - the line must match the regex. I recommend <a href="https://regex101.com/" target="_blank" rel="noopener">https://regex101.com/</a> for writing and testing regex. Change the flavor on regex101 to Python. If you want case insensitive patterns, prepend <code>(?i)</code> to the regex.</p>
 
-    <p><strong>File path</strong> - the line is a file path. The path will be normalized, e.g., drive letter, username, Firefox profile, and Chromium-based browser profile (Chrome/Edge/Brave <code>User Data\Default</code>, <code>Profile 1</code>, ...) are internally substituted for path comparisons that make sense. This is the main difference to Substring, where these normalizations would not happen.</p>
+    <p><strong>File path</strong> - the line is a file path. The path will be normalized, e.g., drive letter, username, Firefox profile, and Chromium-based browser profile (Chrome/Edge/Brave <code>User Data\Default</code>, <code>Profile 1</code>, ...) are internally substituted for path comparisons that make sense. This is the main difference to Substring, where these normalizations would not happen. The log analyzer colors only the file path, unless the rule has "color the whole line" ticked.</p>
 
     <p><strong>Parsed</strong> - Fenris automatically parses known log lines into components like file path, timestamp, company, name, clsid. When comparing parsed lines these lines must match for these components except the timestamp. Furthermore, file paths are extracted from parsed entries and matched by the analyzer with lowest priority (with hardcoded exceptions for execution environments like cmd, powershell).</p>
 

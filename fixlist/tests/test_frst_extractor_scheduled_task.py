@@ -7,7 +7,7 @@ Covers the two shapes FRST emits for `Task:` lines:
 
 The command form has no real path; before this fix, the binary extractor's
 regex backtracked through `Command(1):` and emitted `filepath="Command"`,
-which then polluted the filepath bucket and `filepath_highlight` colorisation.
+which then polluted the filepath bucket and the analyzer's file path colouring.
 """
 
 from django.test import TestCase

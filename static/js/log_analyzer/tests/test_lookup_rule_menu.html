@@ -118,15 +118,40 @@ function loadLines(lines) {
     analyzedLines = attachLineKeys(lines);
 }
 
+// Default priority per match type (DEFAULT_PRIORITY_BY_MATCH_TYPE in models.py).
+const DEFAULT_PRIORITY = { exact: 19, parsed_entry: 15, filepath: 11, substring: 7, regex: 3 };
+
+// A line as the server reports it when one whole-line rule decides it: the rule's
+// status is both the verdict and the colour of the whole line. `matcher` picks
+// the priority; pass a number for a rule with a custom one.
 function line(text, status, matcher) {
+    const matched = Boolean(status) && status !== '?';
+    const priority = typeof matcher === 'number' ? matcher : DEFAULT_PRIORITY[matcher];
     return {
         line: text,
         dominant_status: status || '?',
         status_codes: status || '?',
-        matcher: matcher || '',
+        matcher: typeof matcher === 'string' ? matcher : '',
         reasons: [],
-        matched: Boolean(status) && status !== '?',
+        matched,
+        css_class: matched ? STATUS_CLASS_MAP[status] : 'status-unknown',
+        paint_base: matched ? { status, priority } : null,
+        highlights: [],
+        verdict_priority: matched ? priority : null,
+        fallback_only: false,
     };
+}
+
+// The coloured parts of a line as "start-end:status:priority ...".
+function highlightShape(index) {
+    return (analyzedLines[index].highlights || [])
+        .map((h) => `${h.start}-${h.end}:${h.status}:${h.priority}`)
+        .join(' ');
+}
+
+function tokenSpan(text, token, status, priority) {
+    const start = text.indexOf(token);
+    return `${start}-${start + token.length}:${status}:${priority}`;
 }
 
 function statusOf(index) {
@@ -239,6 +264,45 @@ function statusOf(index) {
     assert('a parsed-entry match outranks it', statusOf(1) === 'C', 'got ' + statusOf(1));
     assert('a filepath match outranks it', statusOf(2) === 'C', 'got ' + statusOf(2));
     assert('a regex match is outranked by it', statusOf(3) === 'B', 'got ' + statusOf(3));
+    assert(
+        'under a higher whole-line colour the token does not show',
+        highlightShape(0) === '' && analyzedLines[0].css_class === 'status-c',
+        'got ' + highlightShape(0) + ' ' + analyzedLines[0].css_class
+    );
+    assert(
+        'over a lower whole-line colour the token is painted on top of it',
+        highlightShape(3) === tokenSpan(analyzedLines[3].line, '1.2.3.4', 'B', 7)
+            && analyzedLines[3].css_class === 'status-c',
+        'got ' + highlightShape(3) + ' ' + analyzedLines[3].css_class
+    );
+})();
+
+(function testCustomPriorityDecidesTheVerdict() {
+    reset();
+    // A substring rule raised to priority 9 decides this line and colours only
+    // "Microsoft"; the queued rule (priority 7) cannot change the verdict.
+    const text = 'Microsoft loads 1.2.3.4';
+    loadLines([{
+        ...line(text, 'C', 9),
+        css_class: 'status-unknown',
+        paint_base: null,
+        highlights: [{ start: 0, end: 9, status: 'C', priority: 9 }],
+    }]);
+
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert('the higher-priority verdict stays', statusOf(0) === 'C', 'got ' + statusOf(0));
+    assert(
+        'the token is still painted where nothing covers it',
+        highlightShape(0) === '0-9:C:9 16-23:B:7',
+        'got ' + highlightShape(0)
+    );
+    assert(
+        'painting alone adds no pending-rule reason',
+        analyzedLines[0].reasons.length === 0,
+        analyzedLines[0].reasons.join(' | ')
+    );
 })();
 
 (function testSameTierBreaksOnStatusPrecedence() {
@@ -301,14 +365,9 @@ function statusOf(index) {
 })();
 
 // ---------------------------------------------------------------------------
-// Queued rules are saved matched-part-only, so they colour just their token
+// Queued rules are saved matched-part-only, so they paint just their token, on
+// top of whatever lower-priority rules painted
 // ---------------------------------------------------------------------------
-function highlightShape(index) {
-    return (analyzedLines[index].substring_highlights || [])
-        .map((h) => `${h.start}-${h.end}:${h.status}:${h.css_class}`)
-        .join(' ');
-}
-
 (function testQueuedRuleColoursOnlyItsToken() {
     reset();
     loadLines([line('Hosts: 1.2.3.4 evil.example')]);
@@ -322,7 +381,7 @@ function highlightShape(index) {
         analyzedLines[0].css_class === 'status-unknown',
         'got ' + analyzedLines[0].css_class
     );
-    assert('only the token is coloured', highlightShape(0) === '7-14:B:status-b', 'got ' + highlightShape(0));
+    assert('only the token is coloured', highlightShape(0) === '7-14:B:7', 'got ' + highlightShape(0));
 })();
 
 (function testEveryOccurrenceIsColoured() {
@@ -334,14 +393,14 @@ function highlightShape(index) {
 
     assert(
         'each occurrence of the token is coloured',
-        highlightShape(0) === '0-7:B:status-b 11-18:B:status-b',
+        highlightShape(0) === '0-7:B:7 11-18:B:7',
         'got ' + highlightShape(0)
     );
 })();
 
-(function testSameTierWholeLineBaseStaysWholeLine() {
+(function testSameTierTokenPaintsOverAWeakerWholeLineColour() {
     reset();
-    // A substring match without substring_highlights coloured the whole line.
+    // A whole-line substring rule (C, priority 7) colours this line.
     loadLines([line('R2 a; C:\\bad\\1.2.3.4.exe [X]', 'C', 'substring')]);
 
     queueTokenRule('1.2.3.4', 'B');
@@ -349,11 +408,26 @@ function highlightShape(index) {
 
     assert('the stronger verdict takes over', statusOf(0) === 'B', 'got ' + statusOf(0));
     assert(
-        'the whole line is still coloured',
-        analyzedLines[0].css_class === 'status-b',
+        'the line keeps its colour',
+        analyzedLines[0].css_class === 'status-c',
         'got ' + analyzedLines[0].css_class
     );
-    assert('no partial highlight is added', highlightShape(0) === '', 'got ' + highlightShape(0));
+    assert(
+        'the stronger token is painted on top of it',
+        highlightShape(0) === tokenSpan(analyzedLines[0].line, '1.2.3.4', 'B', 7),
+        'got ' + highlightShape(0)
+    );
+})();
+
+(function testSameTierTokenUnderAStrongerWholeLineColour() {
+    reset();
+    loadLines([line('R2 a; C:\\bad\\1.2.3.4.exe [X]', 'B', 'substring')]);
+
+    queueTokenRule('1.2.3.4', 'C');
+    applyPendingOverrides();
+
+    assert('the stronger existing verdict stays', statusOf(0) === 'B', 'got ' + statusOf(0));
+    assert('the weaker token is hidden', highlightShape(0) === '', 'got ' + highlightShape(0));
 })();
 
 (function testSameTierPartialBaseKeepsItsHighlight() {
@@ -362,7 +436,8 @@ function highlightShape(index) {
     loadLines([{
         ...line(text, 'C', 'substring'),
         css_class: 'status-unknown',
-        substring_highlights: [{ start: 0, end: 9, status: 'C', css_class: 'status-c' }],
+        paint_base: null,
+        highlights: [{ start: 0, end: 9, status: 'C', priority: 7 }],
     }]);
 
     queueTokenRule('1.2.3.4', 'B');
@@ -371,7 +446,7 @@ function highlightShape(index) {
     assert('the stronger verdict takes over', statusOf(0) === 'B', 'got ' + statusOf(0));
     assert(
         'the existing and the queued match are both coloured, each in its own status',
-        highlightShape(0) === '0-9:C:status-c 16-23:B:status-b',
+        highlightShape(0) === '0-9:C:7 16-23:B:7',
         'got ' + highlightShape(0)
     );
 
@@ -379,7 +454,7 @@ function highlightShape(index) {
     applyPendingOverrides();
     assert(
         'dropping the queued rule restores the line as analyzed',
-        statusOf(0) === 'C' && highlightShape(0) === '0-9:C:status-c',
+        statusOf(0) === 'C' && highlightShape(0) === '0-9:C:7',
         'got ' + statusOf(0) + ' ' + highlightShape(0)
     );
 })();
@@ -388,22 +463,28 @@ function highlightShape(index) {
     reset();
     const text = 'R2 evil; C:\\bad\\1.2.3.4.sys [X]';
     const pathStart = text.indexOf('C:');
+    const pathEnd = pathStart + 'C:\\bad\\1.2.3.4.sys'.length;
+    const tokenStart = text.indexOf('1.2.3.4');
     loadLines([{
-        ...line(text, 'C', 'filepath'),
+        ...line(text, 'C', 1),
+        matcher: 'filepath',
         css_class: 'status-unknown',
-        filepath_highlight: { start: pathStart, end: pathStart + 19, status: 'C', css_class: 'status-c' },
+        paint_base: null,
+        highlights: [{ start: pathStart, end: pathEnd, status: 'C', priority: 1 }],
+        fallback_only: true,
     }]);
 
     queueTokenRule('1.2.3.4', 'B');
     applyPendingOverrides();
 
-    // The engine ranks a parsed rule's filepath fallback below a substring rule.
+    // The engine ranks a filepath fallback (priority 1) below a substring rule.
     assert('the queued rule wins over the fallback', statusOf(0) === 'B', 'got ' + statusOf(0));
     assert(
-        'the fallback highlight gives way to the token',
-        analyzedLines[0].filepath_highlight === null && highlightShape(0) === `${text.indexOf('1.2.3.4')}-${text.indexOf('1.2.3.4') + 7}:B:status-b`,
-        'got ' + JSON.stringify(analyzedLines[0].filepath_highlight) + ' ' + highlightShape(0)
+        'the token is painted over the fallback path, which stays around it',
+        highlightShape(0) === `${pathStart}-${tokenStart}:C:1 ${tokenStart}-${tokenStart + 7}:B:7 ${tokenStart + 7}-${pathEnd}:C:1`,
+        'got ' + highlightShape(0)
     );
+    assert('the line no longer rests on the fallback', analyzedLines[0].fallback_only === false);
 })();
 
 // ---------------------------------------------------------------------------

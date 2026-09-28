@@ -22,7 +22,7 @@ from django.utils.safestring import mark_safe
 
 from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
-    VALID_STATUSES,
+    ANALYSIS_PAYLOAD_FORMAT, VALID_STATUSES,
 )
 from ..models import ClassificationRule, Fixlist, FixlistSnippet, Speech, UploadedLog, UploadedLogAnalysis
 from ..rule_sets import (
@@ -229,7 +229,14 @@ def uploaded_log_cached_analysis_api(request, upload_id):
     cached = UploadedLogAnalysis.objects.filter(
         upload=uploaded_log, rule_set_key=viewer_key,
     ).first()
-    if cached is None or cached.source_content_hash != uploaded_log.content_hash:
+    # A payload written by an older analyzer has a shape the page no longer reads;
+    # the page re-analyses anyway, and that run replaces the cache.
+    if (
+        cached is None
+        or cached.source_content_hash != uploaded_log.content_hash
+        or not isinstance(cached.payload, dict)
+        or cached.payload.get('format') != ANALYSIS_PAYLOAD_FORMAT
+    ):
         return JsonResponse({'has_cache': False, 'payload': None, 'source_content_hash': None})
     return JsonResponse({
         'has_cache': True,

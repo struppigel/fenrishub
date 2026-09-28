@@ -3,6 +3,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
+from ..analyzer import ANALYSIS_PAYLOAD_FORMAT
 from ..models import (
     UploadedLog,
     UploadedLogAnalysis,
@@ -26,13 +27,13 @@ class CachedAnalysisApiViewerScopedTests(TestCase):
         UploadedLogAnalysis.objects.create(
             upload=self.log,
             rule_set_key='shared',
-            payload={'lines': [], 'summary': {'tag': 'shared'}, 'warnings': []},
+            payload={'format': ANALYSIS_PAYLOAD_FORMAT, 'lines': [], 'summary': {'tag': 'shared'}, 'warnings': []},
             source_content_hash=self.log.content_hash,
         )
         UploadedLogAnalysis.objects.create(
             upload=self.log,
             rule_set_key=f'private:{self.private_user.id}',
-            payload={'lines': [], 'summary': {'tag': 'private'}, 'warnings': []},
+            payload={'format': ANALYSIS_PAYLOAD_FORMAT, 'lines': [], 'summary': {'tag': 'private'}, 'warnings': []},
             source_content_hash=self.log.content_hash,
         )
 

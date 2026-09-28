@@ -165,6 +165,32 @@ class RulesViewTests(TestCase):
         )
         self.assertTrue(ClassificationRule.objects.get(source_text="evil").color_whole_line)
 
+    def test_create_file_path_rule_with_color_whole_line(self):
+        self.client.post(
+            reverse("rules"),
+            {
+                "action": "create",
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_FILEPATH,
+                "source_text": r"C:\Windows\evil.exe",
+                "color_whole_line": "on",
+            },
+        )
+        self.assertTrue(ClassificationRule.objects.get(source_text=r"C:\Windows\evil.exe").color_whole_line)
+
+    def test_create_regex_rule_drops_color_whole_line(self):
+        self.client.post(
+            reverse("rules"),
+            {
+                "action": "create",
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_REGEX,
+                "source_text": "evil",
+                "color_whole_line": "on",
+            },
+        )
+        self.assertFalse(ClassificationRule.objects.get(source_text="evil").color_whole_line)
+
     def test_quick_edit_sets_and_clears_color_whole_line(self):
         rule = ClassificationRule.objects.create(
             owner=self.user,

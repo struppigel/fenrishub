@@ -112,6 +112,7 @@ def normalize_path(path):
 
 _PATH_DRIVE_MARK = "\x00DRIVE\x00"
 _PATH_USER_MARK = "\x00USER\x00"
+_PATH_USER_END_MARK = "\x00USEREND\x00"
 _PATH_FFPROFILE_MARK = "\x00FFPROFILE\x00"
 _PATH_CHROMIUMPROFILE_MARK = "\x00CHROMIUMPROFILE\x00"
 
@@ -138,6 +139,11 @@ def _denormalize_path_pattern(normalized_path):
         work,
     )
     work = re.sub(
+        r"(?i)(\\Users\\)username$",
+        r"\1" + _PATH_USER_END_MARK,
+        work,
+    )
+    work = re.sub(
         r"(?i)(\\Mozilla\\Firefox\\Profiles\\)profile",
         r"\1" + _PATH_FFPROFILE_MARK,
         work,
@@ -151,6 +157,13 @@ def _denormalize_path_pattern(normalized_path):
     pattern = re.escape(work)
     pattern = pattern.replace(re.escape(_PATH_DRIVE_MARK), r"[A-Za-z]:")
     pattern = pattern.replace(re.escape(_PATH_USER_MARK), r"[^\\]+")
+    # A user folder that ends the path has no backslash after it to stop at, and
+    # FRST often follows a path with " [size date]" and the like. So stop at a
+    # character Windows does not allow in user names, and leave trailing
+    # whitespace out (user names may contain spaces, e.g. "Default User").
+    pattern = pattern.replace(
+        re.escape(_PATH_USER_END_MARK), r'[^\\/\[\]:;|=,+*?<>"]*[^\\/\[\]:;|=,+*?<>"\s]'
+    )
     pattern = pattern.replace(re.escape(_PATH_FFPROFILE_MARK), r"[^\\]+")
     pattern = pattern.replace(re.escape(_PATH_CHROMIUMPROFILE_MARK), r"[^\\]+")
     return pattern

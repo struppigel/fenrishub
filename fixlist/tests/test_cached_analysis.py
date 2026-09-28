@@ -151,6 +151,24 @@ class UploadedLogCachedAnalysisApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(payload['has_cache'])
 
+    def test_reports_no_cache_for_a_payload_in_an_older_format(self):
+        # Written before line colouring became paint_base + highlights; the page
+        # would misread it, and re-analyses anyway.
+        log = self._make_cached_log()
+        cached = UploadedLogAnalysis.objects.get(upload=log)
+        cached.payload = {key: value for key, value in cached.payload.items() if key != 'format'}
+        cached.save(update_fields=['payload'])
+        self.client.login(username='analyzer', password='pw')
+
+        response = self.client.get(
+            reverse('uploaded_log_cached_analysis_api', args=[log.upload_id]),
+        )
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(payload['has_cache'])
+        self.assertIsNone(payload['payload'])
+
     def test_returns_404_for_unknown_upload(self):
         self.client.login(username='analyzer', password='pw')
         response = self.client.get(
