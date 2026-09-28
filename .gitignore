@@ -62,6 +62,7 @@ Fenris/
 htmlcov/
 testfile.txt
 badlog.txt
+badlog2.txt
 
 # Local sync scripts
 scripts/

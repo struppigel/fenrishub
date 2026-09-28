@@ -336,6 +336,10 @@ class ClassificationRule(models.Model):
         default=False,
         help_text='Alert rules only: evaluate once against the whole log instead of per line.',
     )
+    color_whole_line = models.BooleanField(
+        default=False,
+        help_text='Substring rules only: colour the whole analyzer line instead of just the matched text.',
+    )
 
     # Optional parsed metadata, populated for parsed/filepath rules.
     entry_type = models.CharField(max_length=64, blank=True)

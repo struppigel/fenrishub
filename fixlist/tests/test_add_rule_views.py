@@ -253,6 +253,51 @@ class AddRuleViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(ClassificationRule.objects.filter(owner=self.user).count(), 2)
 
+    # -- color_whole_line --
+
+    def test_create_substring_rule_defaults_to_matched_part_only(self):
+        self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "evil",
+            },
+        )
+        self.assertFalse(ClassificationRule.objects.get(source_text="evil").color_whole_line)
+
+    def test_create_substring_rule_with_color_whole_line(self):
+        response = self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "evil",
+                "color_whole_line": "on",
+            },
+        )
+        self.assertTrue(ClassificationRule.objects.get(source_text="evil").color_whole_line)
+        # The next rule in a batch starts from the same choice.
+        self.assertIn("color_whole_line=1", response.url)
+
+    def test_create_non_substring_rule_ignores_color_whole_line(self):
+        self.client.post(
+            reverse("add_rule"),
+            {
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_EXACT,
+                "source_text": "EXACT-LINE",
+                "color_whole_line": "on",
+            },
+        )
+        self.assertFalse(ClassificationRule.objects.get(source_text="EXACT-LINE").color_whole_line)
+
+    def test_add_page_prefills_color_whole_line_from_query(self):
+        response = self.client.get(
+            reverse("add_rule"), {"match_type": "substring", "color_whole_line": "1"}
+        )
+        self.assertTrue(response.context["form_color_whole_line"])
+
     # -- rules.html links to add page --
 
     def test_rules_page_links_to_add_rule(self):
@@ -382,6 +427,32 @@ class EditRuleViewTests(TestCase):
         self.client.post(self._url(), self._post_body(is_enabled=""))
         self.rule.refresh_from_db()
         self.assertFalse(self.rule.is_enabled)
+
+    def test_edit_saves_color_whole_line_for_a_substring_rule(self):
+        self.client.post(self._url(), self._post_body(color_whole_line="on"))
+        self.rule.refresh_from_db()
+        self.assertTrue(self.rule.color_whole_line)
+
+        # Unticking it (the checkbox is then absent from POST) goes back to matched-part.
+        self.client.post(self._url(), self._post_body())
+        self.rule.refresh_from_db()
+        self.assertFalse(self.rule.color_whole_line)
+
+    def test_edit_drops_color_whole_line_for_other_match_types(self):
+        self.client.post(self._url(), self._post_body(
+            match_type=ClassificationRule.MATCH_REGEX, color_whole_line="on",
+        ))
+        self.rule.refresh_from_db()
+        self.assertEqual(self.rule.match_type, ClassificationRule.MATCH_REGEX)
+        self.assertFalse(self.rule.color_whole_line)
+
+    def test_edit_page_prechecks_color_whole_line(self):
+        self.rule.match_type = ClassificationRule.MATCH_SUBSTRING
+        self.rule.color_whole_line = True
+        self.rule.save(update_fields=["match_type", "color_whole_line"])
+        response = self.client.get(self._url())
+        self.assertTrue(response.context["form_color_whole_line"])
+        self.assertContains(response, 'id="ruleColorWholeLine"')
 
     def test_edit_preserves_priority_when_another_field_changes(self):
         self.rule.priority = 7
@@ -548,7 +619,7 @@ class EditRuleViewTests(TestCase):
 
     def test_quick_edit_and_full_editor_produce_the_same_rule(self):
         twin = make_rule("EDIT-ME-TOO", owner=self.user)
-        body = self._post_body(source_text="SAME-RESULT")
+        body = self._post_body(source_text="SAME-RESULT", color_whole_line="on")
 
         self.client.post(self._url(), body)
         self.client.post(
@@ -558,7 +629,11 @@ class EditRuleViewTests(TestCase):
 
         self.rule.refresh_from_db()
         twin.refresh_from_db()
-        fields = ("status", "match_type", "description", "is_enabled", "priority", "whole_log")
+        self.assertTrue(self.rule.color_whole_line)
+        fields = (
+            "status", "match_type", "description", "is_enabled", "priority", "whole_log",
+            "color_whole_line",
+        )
         for field in fields:
             self.assertEqual(
                 getattr(self.rule, field), getattr(twin, field), f"{field} drifted"

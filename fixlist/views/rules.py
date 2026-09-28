@@ -90,6 +90,12 @@ def _whole_log_error(whole_log: bool, status: str, match_type: str) -> str | Non
     return None
 
 
+def _color_whole_line_for(color_whole_line: bool, match_type: str) -> bool:
+    """Only substring rules can opt into colouring the whole analyzer line; every
+    other match type already does, so the flag is dropped rather than rejected."""
+    return bool(color_whole_line) and match_type == ClassificationRule.MATCH_SUBSTRING
+
+
 def _script_rule_error(match_type: str, source_text: str, user, whole_log: bool = False) -> str | None:
     """Validate a script rule before save. Returns an error message, or None if OK.
 
@@ -157,6 +163,7 @@ def _rule_form_from_post(request) -> dict:
         'description': request.POST.get('description', '').strip(),
         'is_enabled': request.POST.get('is_enabled') == 'on',
         'whole_log': request.POST.get('whole_log') == 'on',
+        'color_whole_line': request.POST.get('color_whole_line') == 'on',
         # Kept as a string: the template selects an option with `form_priority == value`
         # against the str-keyed `_priority_choices()`, and an int would never compare
         # equal -- leaving the select unselected and letting the page's JS overwrite
@@ -174,6 +181,7 @@ def _rule_form_from_rule(rule) -> dict:
         'description': rule.description,
         'is_enabled': rule.is_enabled,
         'whole_log': rule.whole_log,
+        'color_whole_line': rule.color_whole_line,
         'priority': '' if rule.priority is None else str(rule.priority),
     }
 
@@ -272,10 +280,11 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
     rule.is_enabled = form['is_enabled']
     rule.priority = priority
     rule.whole_log = form['whole_log']
+    rule.color_whole_line = _color_whole_line_for(form['color_whole_line'], form['match_type'])
     _assign_parsed_metadata(rule, form)
     rule.save(update_fields=[
         'status', 'match_type', 'source_text', 'description',
-        'is_enabled', 'priority', 'whole_log', *REPARSE_FIELDS, 'updated_at',
+        'is_enabled', 'priority', 'whole_log', 'color_whole_line', *REPARSE_FIELDS, 'updated_at',
     ])
     invalidate_for_rule_owner(user)
     return None
@@ -302,6 +311,7 @@ def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', r
         'form_description': form['description'],
         'form_priority': form['priority'],
         'form_whole_log': form['whole_log'],
+        'form_color_whole_line': form['color_whole_line'],
         'form_is_enabled': form['is_enabled'],
         'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
         'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
@@ -351,6 +361,9 @@ def rules_view(request):
             source_text = request.POST.get('source_text', '').strip()
             description = request.POST.get('description', '').strip()
             whole_log = request.POST.get('whole_log') == 'on'
+            color_whole_line = _color_whole_line_for(
+                request.POST.get('color_whole_line') == 'on', match_type
+            )
             priority = _coerce_priority(request.POST.get('priority'), match_type)
             patterns = _patterns_for(match_type, source_text)
             script_error = _script_rule_error(match_type, source_text, request.user, whole_log)
@@ -384,6 +397,7 @@ def rules_view(request):
                         description=description,
                         priority=priority,
                         whole_log=whole_log,
+                        color_whole_line=color_whole_line,
                     )
                     for pattern in patterns if pattern not in existing
                 ]
@@ -521,6 +535,7 @@ def add_rule_view(request):
     form_description = ''
     form_priority = ''
     form_whole_log = request.GET.get('whole_log') == '1'
+    form_color_whole_line = request.GET.get('color_whole_line') == '1'
 
     if form_status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
         form_status = ClassificationRule.STATUS_MALWARE
@@ -533,6 +548,9 @@ def add_rule_view(request):
         source_text = request.POST.get('source_text', '').strip()
         description = request.POST.get('description', '').strip()
         whole_log = request.POST.get('whole_log') == 'on'
+        color_whole_line = _color_whole_line_for(
+            request.POST.get('color_whole_line') == 'on', match_type
+        )
         raw_priority = request.POST.get('priority', '').strip()
         form_status = status
         form_match_type = match_type
@@ -540,6 +558,7 @@ def add_rule_view(request):
         form_description = description
         form_priority = raw_priority
         form_whole_log = whole_log
+        form_color_whole_line = color_whole_line
         patterns = _patterns_for(match_type, source_text)
         script_error = _script_rule_error(match_type, source_text, request.user, whole_log)
         whole_log_error = _whole_log_error(whole_log, status, match_type)
@@ -586,6 +605,7 @@ def add_rule_view(request):
                     'description': description,
                     'priority': priority,
                     'whole_log': whole_log,
+                    'color_whole_line': color_whole_line,
                 }
                 if parsed:
                     for field in ('entry_type', 'clsid', 'name', 'filepath', 'normalized_filepath',
@@ -609,6 +629,8 @@ def add_rule_view(request):
                 keep_params = {'status': status, 'match_type': match_type}
                 if whole_log:
                     keep_params['whole_log'] = '1'
+                if color_whole_line:
+                    keep_params['color_whole_line'] = '1'
                 keep_qs = urlencode(keep_params)
                 return redirect(f"{reverse('add_rule')}?{keep_qs}")
             else:
@@ -626,6 +648,7 @@ def add_rule_view(request):
         'description': form_description,
         'priority': form_priority,
         'whole_log': form_whole_log,
+        'color_whole_line': form_color_whole_line,
         # New rules are always created enabled; the add form has no such field.
         'is_enabled': True,
     }

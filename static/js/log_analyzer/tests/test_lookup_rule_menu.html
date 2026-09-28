@@ -2,7 +2,7 @@
 <!--
   Tests for the "queue substring rule" item in the entity lookup menu
   (analysis.js renderLookupItemsMenu / renderLookupStatusMenu, shared.js
-  queueTokenRule / tokenRuleStatusForEntry / applyPendingOverrides).
+  queueTokenRule / tokenRuleEffectForEntry / applyPendingOverrides).
 
   Two things are pinned down here:
 
@@ -297,6 +297,112 @@ function statusOf(index) {
         'the strongest of several matching queued rules wins',
         statusOf(0) === 'B',
         'got ' + statusOf(0)
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Queued rules are saved matched-part-only, so they colour just their token
+// ---------------------------------------------------------------------------
+function highlightShape(index) {
+    return (analyzedLines[index].substring_highlights || [])
+        .map((h) => `${h.start}-${h.end}:${h.status}:${h.css_class}`)
+        .join(' ');
+}
+
+(function testQueuedRuleColoursOnlyItsToken() {
+    reset();
+    loadLines([line('Hosts: 1.2.3.4 evil.example')]);
+
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert('the verdict is the queued status', statusOf(0) === 'B', 'got ' + statusOf(0));
+    assert(
+        'the line itself is not tinted',
+        analyzedLines[0].css_class === 'status-unknown',
+        'got ' + analyzedLines[0].css_class
+    );
+    assert('only the token is coloured', highlightShape(0) === '7-14:B:status-b', 'got ' + highlightShape(0));
+})();
+
+(function testEveryOccurrenceIsColoured() {
+    reset();
+    loadLines([line('1.2.3.4 -> 1.2.3.4')]);
+
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert(
+        'each occurrence of the token is coloured',
+        highlightShape(0) === '0-7:B:status-b 11-18:B:status-b',
+        'got ' + highlightShape(0)
+    );
+})();
+
+(function testSameTierWholeLineBaseStaysWholeLine() {
+    reset();
+    // A substring match without substring_highlights coloured the whole line.
+    loadLines([line('R2 a; C:\\bad\\1.2.3.4.exe [X]', 'C', 'substring')]);
+
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert('the stronger verdict takes over', statusOf(0) === 'B', 'got ' + statusOf(0));
+    assert(
+        'the whole line is still coloured',
+        analyzedLines[0].css_class === 'status-b',
+        'got ' + analyzedLines[0].css_class
+    );
+    assert('no partial highlight is added', highlightShape(0) === '', 'got ' + highlightShape(0));
+})();
+
+(function testSameTierPartialBaseKeepsItsHighlight() {
+    reset();
+    const text = 'Microsoft loads 1.2.3.4';
+    loadLines([{
+        ...line(text, 'C', 'substring'),
+        css_class: 'status-unknown',
+        substring_highlights: [{ start: 0, end: 9, status: 'C', css_class: 'status-c' }],
+    }]);
+
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    assert('the stronger verdict takes over', statusOf(0) === 'B', 'got ' + statusOf(0));
+    assert(
+        'the existing and the queued match are both coloured, each in its own status',
+        highlightShape(0) === '0-9:C:status-c 16-23:B:status-b',
+        'got ' + highlightShape(0)
+    );
+
+    pendingTokenRules.clear();
+    applyPendingOverrides();
+    assert(
+        'dropping the queued rule restores the line as analyzed',
+        statusOf(0) === 'C' && highlightShape(0) === '0-9:C:status-c',
+        'got ' + statusOf(0) + ' ' + highlightShape(0)
+    );
+})();
+
+(function testQueuedRuleOutranksAFilepathFallback() {
+    reset();
+    const text = 'R2 evil; C:\\bad\\1.2.3.4.sys [X]';
+    const pathStart = text.indexOf('C:');
+    loadLines([{
+        ...line(text, 'C', 'filepath'),
+        css_class: 'status-unknown',
+        filepath_highlight: { start: pathStart, end: pathStart + 19, status: 'C', css_class: 'status-c' },
+    }]);
+
+    queueTokenRule('1.2.3.4', 'B');
+    applyPendingOverrides();
+
+    // The engine ranks a parsed rule's filepath fallback below a substring rule.
+    assert('the queued rule wins over the fallback', statusOf(0) === 'B', 'got ' + statusOf(0));
+    assert(
+        'the fallback highlight gives way to the token',
+        analyzedLines[0].filepath_highlight === null && highlightShape(0) === `${text.indexOf('1.2.3.4')}-${text.indexOf('1.2.3.4') + 7}:B:status-b`,
+        'got ' + JSON.stringify(analyzedLines[0].filepath_highlight) + ' ' + highlightShape(0)
     );
 })();
 

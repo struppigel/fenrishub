@@ -1213,6 +1213,7 @@ def _build_line_result(
     dates: list[str] | None = None,
     parsed_entry=None,
     filepath_highlight: dict | None = None,
+    substring_highlights: list[dict] | None = None,
 ):
     dominant_status = _dominant_status(status_codes)
     components = {}
@@ -1241,6 +1242,7 @@ def _build_line_result(
         "dates": dates or [],
         "components": components,
         "filepath_highlight": filepath_highlight,
+        "substring_highlights": substring_highlights or [],
         "fixlist_replacement": ex.fixlist_replacement(line),
         "_alert_descriptions": alert_descriptions or [],
     }
@@ -1274,6 +1276,69 @@ def _all_matches_are_parsed_entry_filepath_fallback(matches) -> bool:
         and rule.match_type != ClassificationRule.MATCH_FILEPATH
         for rule, _reason, matcher in matches
     )
+
+
+def find_substring_ranges(line: str, needle: str) -> list[list[int]]:
+    """Every non-overlapping occurrence of `needle` in `line`, as [start, end).
+
+    Case-sensitive, mirroring the analyzer's `rule.source_text in line`.
+    """
+    ranges = []
+    if not needle:
+        return ranges
+    idx = 0
+    while idx < len(line):
+        pos = line.find(needle, idx)
+        if pos == -1:
+            break
+        ranges.append([pos, pos + len(needle)])
+        idx = pos + len(needle)
+    return ranges
+
+
+def _all_matches_are_partial_substring(matches) -> bool:
+    """Substring rules colour only the text they matched unless they opt into
+    `color_whole_line`. Like the filepath fallback above, the line is painted
+    partially only when every winning match wants that -- a single whole-line
+    rule in the winning group colours the whole line."""
+    if not matches:
+        return False
+    return all(
+        matcher == "substring"
+        and rule.match_type == ClassificationRule.MATCH_SUBSTRING
+        and not rule.color_whole_line
+        for rule, _reason, matcher in matches
+    )
+
+
+def _build_substring_highlights(line: str, matches) -> list[dict]:
+    """Coloured segments for every occurrence of every matched substring.
+
+    Each occurrence takes its own rule's status. Where occurrences overlap, the
+    stronger rule (by match precedence) keeps the overlapping characters, so the
+    segments come out sorted and non-overlapping.
+    """
+    painted = [None] * len(line)
+    for rule, _reason, _matcher in sorted(matches, key=_match_precedence_sort_key):
+        for start, end in find_substring_ranges(line, rule.source_text):
+            for index in range(start, end):
+                if painted[index] is None:
+                    painted[index] = rule.status
+
+    segments = []
+    for index, status in enumerate(painted):
+        if status is None:
+            continue
+        if segments and segments[-1]["end"] == index and segments[-1]["status"] == status:
+            segments[-1]["end"] = index + 1
+        else:
+            segments.append({
+                "start": index,
+                "end": index + 1,
+                "status": status,
+                "css_class": STATUS_CSS_CLASS.get(status, "status-unknown"),
+            })
+    return segments
 
 
 _MATCHER_ENTRY_TYPE_LABELS = {
@@ -1339,6 +1404,25 @@ def _analyze_single_line(line: str, buckets):
         return result
 
     entry_type = _entry_type_for_winning_group(effective_matches, parsed_entry)
+
+    if _all_matches_are_partial_substring(effective_matches):
+        result = _build_line_result(
+            line,
+            status_codes,
+            entry_type,
+            reasons,
+            matcher_label,
+            alert_descriptions,
+            dates=dates,
+            parsed_entry=parsed_entry,
+            substring_highlights=_build_substring_highlights(line, effective_matches),
+        )
+        # PRESENTATION ONLY, as in the fallback branch above: the verdict stays
+        # `dominant_status`; only the matched substrings are coloured, via
+        # substring_highlights.
+        result["css_class"] = STATUS_CSS_CLASS.get("?", "status-unknown")
+        return result
+
     return _build_line_result(
         line,
         status_codes,

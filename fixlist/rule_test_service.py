@@ -4,7 +4,14 @@ import re
 
 from . import frst_extractors as ex
 from . import script_matcher
-from .analyzer import STATUS_LABELS, STATUS_PRECEDENCE, _load_rule_buckets, inspect_line_matches, parse_rule_line
+from .analyzer import (
+    STATUS_LABELS,
+    STATUS_PRECEDENCE,
+    _load_rule_buckets,
+    find_substring_ranges,
+    inspect_line_matches,
+    parse_rule_line,
+)
 from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
 
 
@@ -134,15 +141,7 @@ def _match_line(pattern: dict, match_type: str, line: str) -> dict:
         outcome['matched'] = line == source_text.strip()
 
     elif match_type == 'substring':
-        # Case-sensitive, mirroring the analyzer's `rule.source_text in line`.
-        if source_text:
-            idx = 0
-            while idx < len(line):
-                pos = line.find(source_text, idx)
-                if pos == -1:
-                    break
-                outcome['ranges'].append([pos, pos + len(source_text)])
-                idx = pos + len(source_text)
+        outcome['ranges'] = find_substring_ranges(line, source_text)
         outcome['matched'] = bool(outcome['ranges'])
 
     elif match_type == 'regex':

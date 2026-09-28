@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<!--
+  Tests for partial line colouring in the log analyzer (analysis.js
+  collectPartialHighlights / appendLineTextWithDateHighlight, shared.js
+  resolveHighlightSegments).
+
+  Some matches colour only part of a line instead of the whole of it: the
+  parsed-entry filepath fallback (filepath_highlight) and substring rules
+  without color_whole_line (substring_highlights). Colour is the innermost
+  layer of the rendered line, so a coloured range may start or stop anywhere --
+  even inside a lookup trigger -- and the trigger still comes out whole.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>analysis.js partial highlight tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>analysis.js – partial highlight tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Tiny test harness (same shape as test_url_lookup_spans.html)
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+function render(line, highlights) {
+    const el = document.createElement('span');
+    appendLineTextWithDateHighlight(el, line, highlights);
+    return el;
+}
+
+function pieces(el) {
+    return Array.from(el.querySelectorAll('.partial-highlight'))
+        .map((node) => `${node.className}=${node.textContent}`);
+}
+
+function hl(line, text, cssClass, status) {
+    const start = line.indexOf(text);
+    return { start, end: start + text.length, status: status || 'B', css_class: cssClass || 'status-b' };
+}
+
+// ---------------------------------------------------------------------------
+// collectPartialHighlights
+// ---------------------------------------------------------------------------
+(function testLegacyPayloadHasNoHighlights() {
+    // Cached analysis payloads from before substring_highlights existed.
+    const got = collectPartialHighlights({ line: 'some evil line', filepath_highlight: null });
+    assert('a payload without substring_highlights yields none', got.length === 0, JSON.stringify(got));
+})();
+
+(function testFilepathFallbackWithoutOffsetsIsSkipped() {
+    const got = collectPartialHighlights({
+        line: 'R2 svc; C:\\x\\bad.exe [X]',
+        filepath_highlight: { status: 'B', css_class: 'status-b' },
+        substring_highlights: [],
+    });
+    assert('a filepath highlight whose path was not located yields none', got.length === 0, JSON.stringify(got));
+})();
+
+(function testFilepathFallbackIsCollected() {
+    const line = 'R2 svc; C:\\x\\bad.exe [X]';
+    const got = collectPartialHighlights({
+        line,
+        filepath_highlight: hl(line, 'C:\\x\\bad.exe'),
+        substring_highlights: [],
+    });
+    assert(
+        'the filepath fallback range is collected',
+        got.length === 1 && got[0].start === 8 && got[0].css_class === 'status-b',
+        JSON.stringify(got)
+    );
+})();
+
+(function testSubstringHighlightsAreSortedClampedAndTrimmed() {
+    const line = 'abcdefghij';
+    const got = collectPartialHighlights({
+        line,
+        substring_highlights: [
+            { start: 6, end: 50, status: 'C', css_class: 'status-c' },
+            { start: 0, end: 3, status: 'B', css_class: 'status-b' },
+            { start: 2, end: 5, status: 'P', css_class: 'status-p' },
+            { start: 4, end: 4, status: 'B', css_class: 'status-b' },
+        ],
+    });
+    const shape = got.map((h) => `${h.start}-${h.end}:${h.css_class}`).join(' ');
+    assert(
+        'ranges are sorted, clamped to the line, trimmed of overlap, and empty ones dropped',
+        shape === '0-3:status-b 3-5:status-p 6-10:status-c',
+        shape
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// appendLineTextWithDateHighlight
+// ---------------------------------------------------------------------------
+(function testPlainLineStaysPlain() {
+    const el = render('nothing to see here', []);
+    assert('a line with nothing to highlight is plain text', el.children.length === 0 && el.textContent === 'nothing to see here');
+})();
+
+(function testOnlyTheMatchIsColoured() {
+    const line = 'some evil line';
+    const el = render(line, [hl(line, 'evil')]);
+    assert('the full line text is kept', el.textContent === line, el.textContent);
+    assert(
+        'only the matched text is wrapped in a coloured span',
+        pieces(el).join(' | ') === 'partial-highlight status-b=evil',
+        pieces(el).join(' | ')
+    );
+})();
+
+(function testSeveralRangesKeepTheirOwnColour() {
+    const line = 'Microsoft loads evil.exe';
+    const el = render(line, [hl(line, 'Microsoft', 'status-c', 'C'), hl(line, 'evil.exe')]);
+    assert(
+        'each range is coloured in its own status',
+        pieces(el).join(' | ') === 'partial-highlight status-c=Microsoft | partial-highlight status-b=evil.exe',
+        pieces(el).join(' | ')
+    );
+    assert('the full line text is kept', el.textContent === line, el.textContent);
+})();
+
+(function testHighlightInsideAUrlKeepsTheTriggerWhole() {
+    const url = 'hxxps://evil.example/a';
+    const line = `FF Notifications: x -> ${url}`;
+    const el = render(line, [hl(line, 'evil.example')]);
+    const trigger = el.querySelector('.lookup-trigger-url');
+
+    assert('the URL lookup trigger is still rendered', Boolean(trigger));
+    assert('the trigger shows the whole URL', trigger && trigger.textContent === url, trigger && trigger.textContent);
+    assert('the trigger still looks up the whole URL', trigger && trigger.dataset.lookupValue === url);
+    assert(
+        'the matched domain is coloured inside the trigger',
+        trigger && pieces(trigger).join(' | ') === 'partial-highlight status-b=evil.example',
+        trigger && pieces(trigger).join(' | ')
+    );
+    assert('the full line text is kept', el.textContent === line, el.textContent);
+})();
+
+(function testHighlightCrossingATriggerEdge() {
+    const url = 'hxxps://evil.example/a';
+    const line = `go -> ${url} now`;
+    // From the arrow into the middle of the URL.
+    const start = line.indexOf('->');
+    const end = line.indexOf('evil') + 4;
+    const el = render(line, [{ start, end, status: 'B', css_class: 'status-b' }]);
+    const trigger = el.querySelector('.lookup-trigger-url');
+
+    assert(
+        'a trigger that a highlight only partly covers is kept whole',
+        trigger && trigger.textContent === url,
+        trigger && trigger.textContent
+    );
+    assert(
+        'the highlight is split at the trigger edge without losing text',
+        pieces(el).map((p) => p.split('=')[1]).join('') === line.slice(start, end),
+        pieces(el).join(' | ')
+    );
+    assert('the full line text is kept', el.textContent === line, el.textContent);
+})();
+
+// ---------------------------------------------------------------------------
+// resolveHighlightSegments (shared.js)
+// ---------------------------------------------------------------------------
+(function testOverlapGoesToTheStrongerStatus() {
+    const got = resolveHighlightSegments([
+        { start: 1, end: 7, status: 'C' },
+        { start: 3, end: 5, status: 'B' },
+    ], 8);
+    const shape = got.map((s) => `${s.start}-${s.end}:${s.status}:${s.css_class}`).join(' ');
+    assert(
+        'overlapping characters take the stronger status',
+        shape === '1-3:C:status-c 3-5:B:status-b 5-7:C:status-c',
+        shape
+    );
+})();
+
+(function testAdjacentSameStatusRangesMerge() {
+    const got = resolveHighlightSegments([
+        { start: 0, end: 2, status: 'B' },
+        { start: 2, end: 4, status: 'B' },
+    ], 4);
+    assert('touching ranges of one status merge into one segment', got.length === 1 && got[0].end === 4, JSON.stringify(got));
+})();
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+const summary = document.getElementById('summary');
+summary.textContent = passed + ' passed, ' + failed + ' failed';
+summary.style.color = failed === 0 ? '#6f9' : '#f66';
+</script>
+</body>
+</html>

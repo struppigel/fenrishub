@@ -1363,56 +1363,89 @@ function buildInnerHighlightNode(span) {
     return createLookupTrigger(span.text, span.type);
 }
 
-function appendLineTextWithDateHighlight(textEl, line, filepathHighlight = null) {
-    const innerSpans = findHighlightSpans(line);
-    const fp = filepathHighlight
-        && Number.isInteger(filepathHighlight.start)
-        && Number.isInteger(filepathHighlight.end)
-        && filepathHighlight.end > filepathHighlight.start
-        ? filepathHighlight
-        : null;
+// The parts of a line the server coloured on their own instead of tinting the
+// whole line: the filepath-fallback range and the substring_highlights segments.
+// Clamped to the line, sorted, and trimmed so no two overlap. Payloads cached
+// before substring_highlights existed simply contribute none.
+function collectPartialHighlights(entry) {
+    if (!entry) {
+        return [];
+    }
+    const line = entry.line || '';
+    const candidates = [];
+    if (entry.filepath_highlight) {
+        candidates.push(entry.filepath_highlight);
+    }
+    if (Array.isArray(entry.substring_highlights)) {
+        candidates.push(...entry.substring_highlights);
+    }
 
-    function emitChunk(parent, start, end) {
+    const clamped = candidates
+        .filter((hl) => hl && Number.isInteger(hl.start) && Number.isInteger(hl.end))
+        .map((hl) => ({
+            start: Math.max(0, Math.min(hl.start, line.length)),
+            end: Math.max(0, Math.min(hl.end, line.length)),
+            css_class: hl.css_class || '',
+        }))
+        .filter((hl) => hl.end > hl.start)
+        .sort((a, b) => a.start - b.start);
+
+    const highlights = [];
+    let lastEnd = 0;
+    for (const hl of clamped) {
+        const start = Math.max(hl.start, lastEnd);
+        if (start >= hl.end) continue;
+        highlights.push({ ...hl, start });
+        lastEnd = hl.end;
+    }
+    return highlights;
+}
+
+function appendLineTextWithDateHighlight(textEl, line, highlights = []) {
+    const innerSpans = findHighlightSpans(line);
+
+    if (!innerSpans.length && !highlights.length) {
+        textEl.textContent = line;
+        return;
+    }
+
+    // Colour is the innermost layer: [start, end) goes out as text split at the
+    // highlight edges. A highlight can then begin or end anywhere -- even inside
+    // a lookup trigger -- and the trigger still comes out whole and clickable.
+    function appendColouredText(parent, start, end) {
         let cursor = start;
-        for (const span of innerSpans) {
-            if (span.end <= cursor) continue;
-            if (span.start >= end) break;
-            if (span.start < start || span.end > end) continue;
-            if (span.start > cursor) {
-                parent.appendChild(document.createTextNode(line.slice(cursor, span.start)));
+        for (const hl of highlights) {
+            if (hl.end <= cursor) continue;
+            if (hl.start >= end) break;
+            const from = Math.max(hl.start, cursor);
+            const to = Math.min(hl.end, end);
+            if (from > cursor) {
+                parent.appendChild(document.createTextNode(line.slice(cursor, from)));
             }
-            parent.appendChild(buildInnerHighlightNode(span));
-            cursor = span.end;
+            const piece = document.createElement('span');
+            piece.className = `partial-highlight ${hl.css_class || ''}`.trim();
+            piece.textContent = line.slice(from, to);
+            parent.appendChild(piece);
+            cursor = to;
         }
         if (cursor < end) {
             parent.appendChild(document.createTextNode(line.slice(cursor, end)));
         }
     }
 
-    if (!innerSpans.length && !fp) {
-        textEl.textContent = line;
-        return;
+    let cursor = 0;
+    for (const span of innerSpans) {
+        if (span.start > cursor) {
+            appendColouredText(textEl, cursor, span.start);
+        }
+        const node = buildInnerHighlightNode(span);
+        node.textContent = '';
+        appendColouredText(node, span.start, span.end);
+        textEl.appendChild(node);
+        cursor = span.end;
     }
-
-    if (!fp) {
-        emitChunk(textEl, 0, line.length);
-        return;
-    }
-
-    const fpStart = Math.max(0, Math.min(fp.start, line.length));
-    const fpEnd = Math.max(fpStart, Math.min(fp.end, line.length));
-
-    if (fpStart > 0) {
-        emitChunk(textEl, 0, fpStart);
-    }
-    if (fpEnd > fpStart) {
-        const wrapper = document.createElement('span');
-        wrapper.className = `filepath-highlight ${fp.css_class || ''}`.trim();
-        emitChunk(wrapper, fpStart, fpEnd);
-        textEl.appendChild(wrapper);
-    }
-    if (fpEnd < line.length) {
-        emitChunk(textEl, fpEnd, line.length);
+    if (cursor < line.length) {
+        appendColouredText(textEl, cursor, line.length);
     }
 }
 
@@ -1655,7 +1688,7 @@ function renderLogLines() {
 
         const text = document.createElement('span');
         text.className = 'line-text';
-        appendLineTextWithDateHighlight(text, line, entry.filepath_highlight);
+        appendLineTextWithDateHighlight(text, line, collectPartialHighlights(entry));
 
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';

@@ -329,6 +329,9 @@
             <div class="form-group" id="editWholeLogGroup" style="display: none;">
                 <label class="checkbox-label"><input type="checkbox" name="whole_log" id="editWholeLog"> run once against the whole log</label>
             </div>
+            <div class="form-group" id="editColorWholeLineGroup" style="display: none;">
+                <label class="checkbox-label"><input type="checkbox" name="color_whole_line" id="editColorWholeLine"> color the whole line in the analyzer</label>
+            </div>
             <div class="form-group">
                 <label for="editSourceText" id="editSourceTextLabel">source text</label>
                 <textarea id="editSourceText" name="source_text" required></textarea>
@@ -410,13 +413,14 @@
                 <span class="rule-status-badge {{ rule.status_css_class }}">{{ rule.status }}</span>
                 <span class="rule-match-type">{{ rule.get_match_type_display }}</span>
                 {% if rule.whole_log %}<span class="rule-match-type" title="evaluated once against the whole log">whole log</span>{% endif %}
+                {% if rule.color_whole_line and rule.match_type == 'substring' %}<span class="rule-match-type" title="colors the whole analyzer line">whole line</span>{% endif %}
                 <span class="rule-priority" title="priority">p{{ rule.priority }}</span>
                 <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
                 {% if filter_mode != 'own' %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
                 {% if rule.owner_id == request.user.id %}
                 <div class="rule-actions">
                     <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
-                    <button type="button" class="rule-act" onclick="startEdit({{ rule.pk }}, '{{ rule.status|escapejs }}', '{{ rule.match_type|escapejs }}', '{{ rule.source_text|escapejs }}', '{{ rule.description|escapejs }}', {{ rule.is_enabled|yesno:'true,false' }}, {{ rule.priority }}, {{ rule.whole_log|yesno:'true,false' }})">edit</button>
+                    <button type="button" class="rule-act" onclick="startEdit({{ rule.pk }}, '{{ rule.status|escapejs }}', '{{ rule.match_type|escapejs }}', '{{ rule.source_text|escapejs }}', '{{ rule.description|escapejs }}', {{ rule.is_enabled|yesno:'true,false' }}, {{ rule.priority }}, {{ rule.whole_log|yesno:'true,false' }}, {{ rule.color_whole_line|yesno:'true,false' }})">edit</button>
                     <form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act rule-act-del" onclick="return confirm('Delete this rule?');">delete</button></form>
                 </div>
                 {% endif %}
@@ -496,7 +500,17 @@ function syncEditWholeLogMode() {
     }
 }
 
-function startEdit(pk, status, matchType, sourceText, description, isEnabled, priority, wholeLog) {
+/* Only substring rules colour just their match; every other type already
+ * colours the whole line, so the choice is offered for substring alone. */
+function syncEditColorWholeLineMode() {
+    const isSubstring = document.getElementById('editMatchType').value === 'substring';
+    document.getElementById('editColorWholeLineGroup').style.display = isSubstring ? '' : 'none';
+    if (!isSubstring) {
+        document.getElementById('editColorWholeLine').checked = false;
+    }
+}
+
+function startEdit(pk, status, matchType, sourceText, description, isEnabled, priority, wholeLog, colorWholeLine) {
     document.getElementById('editPk').value = pk;
     document.getElementById('editStatus').value = status;
     document.getElementById('editMatchType').value = matchType;
@@ -506,11 +520,13 @@ function startEdit(pk, status, matchType, sourceText, description, isEnabled, pr
     document.getElementById('editPriority').value = String(priority);
     document.getElementById('editPriority').dataset.userTouched = 'true';
     document.getElementById('editWholeLog').checked = !!wholeLog;
+    document.getElementById('editColorWholeLine').checked = !!colorWholeLine;
     document.getElementById('editOpenFull').formAction =
         EDIT_RULE_URL_TEMPLATE.replace(/\/0\/edit\/$/, '/' + pk + '/edit/');
     document.getElementById('editSection').style.display = 'block';
     syncEditSourceTextMode();
     syncEditWholeLogMode();
+    syncEditColorWholeLineMode();
     document.getElementById('editSourceText').focus();
 }
 
@@ -524,6 +540,7 @@ document.getElementById('editMatchType').addEventListener('change', function () 
     }
     syncEditSourceTextMode();
     syncEditWholeLogMode();
+    syncEditColorWholeLineMode();
 });
 
 document.getElementById('editStatus').addEventListener('change', syncEditWholeLogMode);

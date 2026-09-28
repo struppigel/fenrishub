@@ -166,6 +166,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                     'description',
                     'source_name',
                     'is_enabled',
+                    'color_whole_line',
                 )
             },
         ),

@@ -88,11 +88,11 @@
 <form method="get" action="{% url 'log_search' %}" class="search-filter-form">
     <input type="text" name="q" value="{{ search_query }}" placeholder="search log contents" class="search-filter-input" autofocus>
     <label class="search-mode-label" title="match with a regular expression instead of a plain substring">
-        <input class="select-checkbox" type="checkbox" name="regex" value="1" {% if use_regex %}checked{% endif %}>
+        <input type="checkbox" name="regex" value="1" {% if use_regex %}checked{% endif %}>
         regex
     </label>
     <label class="search-mode-label" title="only match lines with the exact same upper/lower case">
-        <input class="select-checkbox" type="checkbox" name="case" value="1" {% if case_sensitive %}checked{% endif %}>
+        <input type="checkbox" name="case" value="1" {% if case_sensitive %}checked{% endif %}>
         case sensitive
     </label>
     <select name="type" class="search-filter-select" title="only search logs of this type">
@@ -148,7 +148,7 @@
 <div class="fixlist-item">
     <div style="flex: 1;">
         <div class="fixlist-title">
-            <input class="upload-select select-checkbox" form="downloadSelectedForm" type="checkbox" name="selected_upload_ids" value="{{ result.log.upload_id }}" aria-label="select {{ result.log.upload_id }} for download">
+            <input class="upload-select" form="downloadSelectedForm" type="checkbox" name="selected_upload_ids" value="{{ result.log.upload_id }}" aria-label="select {{ result.log.upload_id }} for download">
             <span class="timeline-type-badge log log-type-{{ result.log.log_type|log_type_css_slug }}">{% if result.log.log_type == 'Unknown' %}Unknown Log{% else %}{{ result.log.log_type }}{% endif %}</span>
             <a class="upload-id-link log-type-{{ result.log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' result.log.upload_id %}">{{ result.log.upload_id }}</a>
             {% if result.log.recipient_user %}

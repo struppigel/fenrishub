@@ -152,6 +152,56 @@ class RulesViewTests(TestCase):
         self.assertEqual(rule.description, "new desc")
         self.assertTrue(rule.is_enabled)
 
+    def test_create_substring_rule_with_color_whole_line(self):
+        self.client.post(
+            reverse("rules"),
+            {
+                "action": "create",
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_SUBSTRING,
+                "source_text": "evil",
+                "color_whole_line": "on",
+            },
+        )
+        self.assertTrue(ClassificationRule.objects.get(source_text="evil").color_whole_line)
+
+    def test_quick_edit_sets_and_clears_color_whole_line(self):
+        rule = ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+            source_text="evil",
+        )
+        body = {
+            "action": "edit",
+            "pk": rule.pk,
+            "status": ClassificationRule.STATUS_MALWARE,
+            "match_type": ClassificationRule.MATCH_SUBSTRING,
+            "source_text": "evil",
+            "is_enabled": "on",
+        }
+
+        self.client.post(reverse("rules"), {**body, "color_whole_line": "on"})
+        rule.refresh_from_db()
+        self.assertTrue(rule.color_whole_line)
+
+        self.client.post(reverse("rules"), body)
+        rule.refresh_from_db()
+        self.assertFalse(rule.color_whole_line)
+
+    def test_rules_list_passes_color_whole_line_to_quick_edit(self):
+        ClassificationRule.objects.create(
+            owner=self.user,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_SUBSTRING,
+            source_text="evil",
+            color_whole_line=True,
+        )
+        response = self.client.get(reverse("rules"))
+        self.assertContains(response, 'id="editColorWholeLine"')
+        self.assertContains(response, "false, true)\">edit</button>")
+        self.assertContains(response, ">whole line</span>")
+
     def test_edit_can_disable_rule(self):
         rule = ClassificationRule.objects.create(
             owner=self.user,

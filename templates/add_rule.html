@@ -274,8 +274,14 @@
             </div>
             <div class="form-group" id="ruleWholeLogGroup" style="display: none;">
                 <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;">
-                    <input type="checkbox" id="ruleWholeLog" name="whole_log" {% if form_whole_log %}checked{% endif %} style="width: auto;">
+                    <input type="checkbox" id="ruleWholeLog" name="whole_log" {% if form_whole_log %}checked{% endif %}>
                     run once against the whole log
+                </label>
+            </div>
+            <div class="form-group" id="ruleColorWholeLineGroup" style="display: none;">
+                <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;">
+                    <input type="checkbox" id="ruleColorWholeLine" name="color_whole_line" {% if form_color_whole_line %}checked{% endif %}>
+                    color the whole line in the analyzer
                 </label>
             </div>
             <div class="form-group" id="rulePriorityGroup">
@@ -311,7 +317,7 @@
             {% endcomment %}
             <div class="form-group">
                 <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;">
-                    <input type="checkbox" id="ruleIsEnabled" name="is_enabled" {% if form_is_enabled %}checked{% endif %} style="width: auto;">
+                    <input type="checkbox" id="ruleIsEnabled" name="is_enabled" {% if form_is_enabled %}checked{% endif %}>
                     enabled
                 </label>
             </div>
@@ -845,6 +851,16 @@
         }
     }
 
+    /* Only substring rules colour just their match; every other type already
+     * colours the whole line, so the choice is offered for substring alone. */
+    function syncColorWholeLineMode() {
+        const isSubstring = document.getElementById('ruleMatchType').value === 'substring';
+        document.getElementById('ruleColorWholeLineGroup').style.display = isSubstring ? '' : 'none';
+        if (!isSubstring) {
+            document.getElementById('ruleColorWholeLine').checked = false;
+        }
+    }
+
     /* Editing saves one rule, so line breaks would be stored inside a single
      * source_text and that rule would never match a real log line. The server
      * rejects it either way; this just says so before the user hits save, since
@@ -910,6 +926,7 @@
         syncPriorityPlaceholder();
         syncSourceTextMode();
         syncWholeLogMode();
+        syncColorWholeLineMode();
         syncMultilineWarning();
         schedulePreviewUpdate();
     });
@@ -935,6 +952,7 @@
     syncPriorityPlaceholder();
     syncSourceTextMode();
     syncWholeLogMode();
+    syncColorWholeLineMode();
     syncMultilineWarning();
 })();
 </script>

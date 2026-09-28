@@ -375,8 +375,9 @@
             color: var(--la-status-s);
         }
 
-        /* Dark-theme checkbox used by every listing selection and filter toggle. */
-        .select-checkbox {
+        /* Dark-theme checkbox, applied to every checkbox in the app -- the browser's
+           default white box does not fit the theme. */
+        input[type="checkbox"] {
             appearance: none;
             -webkit-appearance: none;
             width: 13px;
@@ -392,21 +393,17 @@
             flex-shrink: 0;
         }
 
-        .select-checkbox:hover {
-            border-color: var(--la-text-muted);
-        }
-
-        .select-checkbox:focus-visible {
+        input[type="checkbox"]:focus-visible {
             outline: 1px solid var(--la-text-primary);
             outline-offset: 1px;
         }
 
-        .select-checkbox:checked {
+        input[type="checkbox"]:checked {
             background: var(--la-text-primary);
             border-color: var(--la-text-primary);
         }
 
-        .select-checkbox:checked::after {
+        input[type="checkbox"]:checked::after {
             content: '';
             position: absolute;
             left: 3px;

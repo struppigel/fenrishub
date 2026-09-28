@@ -1093,17 +1093,22 @@ textarea.speech-capture-field {
     white-space: nowrap;
 }
 
-.filepath-highlight { color: inherit; }
-.filepath-highlight.status-b { color: var(--la-status-b); }
-.filepath-highlight.status-p { color: var(--la-status-p); }
-.filepath-highlight.status-c { color: var(--la-status-c); }
-.filepath-highlight.status-w { color: var(--la-status-w); }
-.filepath-highlight.status-a { color: var(--la-status-a); }
-.filepath-highlight.status-g { color: var(--la-status-g); }
-.filepath-highlight.status-s { color: var(--la-status-s); }
-.filepath-highlight.status-i { color: var(--la-status-i); }
-.filepath-highlight.status-j { color: var(--la-status-j); }
-.filepath-highlight.status-unknown { color: var(--la-status-unknown); }
+/* Text coloured on its own instead of the whole line: filepath-fallback matches
+   and matched-part substring rules (see collectPartialHighlights). */
+.partial-highlight { color: inherit; }
+.partial-highlight.status-b { color: var(--la-status-b); }
+.partial-highlight.status-p { color: var(--la-status-p); }
+.partial-highlight.status-c { color: var(--la-status-c); }
+.partial-highlight.status-w { color: var(--la-status-w); }
+.partial-highlight.status-a { color: var(--la-status-a); }
+.partial-highlight.status-g { color: var(--la-status-g); }
+.partial-highlight.status-s { color: var(--la-status-s); }
+.partial-highlight.status-i { color: var(--la-status-i); }
+.partial-highlight.status-j { color: var(--la-status-j); }
+.partial-highlight.status-unknown { color: var(--la-status-unknown); }
+/* Copied lines grey out entirely -- including the parts coloured on their own,
+   which set an explicit colour and would otherwise ignore .line-text's. */
+.log-line.copied .partial-highlight { color: var(--la-text-disabled); }
 
 .lookup-trigger {
     display: inline;
