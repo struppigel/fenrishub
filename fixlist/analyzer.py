@@ -44,7 +44,9 @@ PARSER_ORDER = [
     ex.extract_frst_shortcut,
     ex.extract_frst_scheduled_task_command,
     ex.extract_frst_scheduled_task,
+    ex.extract_frst_scheduled_task_job,
     ex.extract_frst_startup,
+    ex.extract_frst_startup_dir,
     ex.extract_firewall_rule,
     ex.extract_onemonth,
     ex.extract_process,
@@ -813,6 +815,66 @@ def reparse_rules(queryset, *, apply: bool = False):
     }
 
 
+def convert_exact_rules_to_parsed(queryset, entry_types):
+    """Turn exact rules into parsed rules where their `source_text` now parses as
+    one of `entry_types`.
+
+    Exact rules are what a line becomes while no extractor understands it. Once
+    one does, the same line saved today would be a parsed rule, which also
+    matches the entry in other logs (other user, other casing). `reparse_rules`
+    deliberately never changes `match_type`, so this is the explicit step for it.
+    A rule whose parsed twin (same owner, status, text, whole_log) already exists
+    is deleted instead, which keeps the unique constraint intact.
+
+    Returns {"converted": n, "deleted": n}.
+    """
+    converted = 0
+    deleted = 0
+    model = queryset.model
+
+    for rule in queryset.filter(match_type=ClassificationRule.MATCH_EXACT).iterator():
+        parsed = parse_rule_line(rule.source_text, rule.status, rule.source_name)
+        if (
+            parsed is None
+            or parsed["match_type"] != ClassificationRule.MATCH_PARSED_ENTRY
+            or parsed["entry_type"] not in entry_types
+        ):
+            continue
+
+        twin_exists = (
+            model.objects
+            .filter(
+                owner_id=rule.owner_id,
+                status=rule.status,
+                match_type=ClassificationRule.MATCH_PARSED_ENTRY,
+                source_text=rule.source_text,
+                whole_log=rule.whole_log,
+            )
+            .exclude(pk=rule.pk)
+            .exists()
+        )
+        if twin_exists:
+            rule.delete()
+            deleted += 1
+            continue
+
+        # A rule still on the exact-line default moves to the parsed default; a
+        # priority the user picked is kept.
+        exact_default = ClassificationRule.default_priority_for(ClassificationRule.MATCH_EXACT)
+        if rule.priority is None or rule.priority == exact_default:
+            rule.priority = ClassificationRule.default_priority_for(ClassificationRule.MATCH_PARSED_ENTRY)
+        rule.match_type = ClassificationRule.MATCH_PARSED_ENTRY
+        for field in REPARSE_FIELDS:
+            setattr(rule, field, parsed.get(field))
+        rule.save(update_fields=["match_type", "priority", *REPARSE_FIELDS, "updated_at"])
+        converted += 1
+
+    if converted or deleted:
+        invalidate_rule_buckets_cache()
+
+    return {"converted": converted, "deleted": deleted}
+
+
 def find_rule_duplicates(queryset):
     """Group rules whose comparison-relevant fields AND status are identical.
 
@@ -1220,10 +1282,18 @@ def _build_line_result(
     dominant_status = _dominant_status(status_codes)
     components = {}
     if parsed_entry is not None:
-        for key in ("clsid", "name", "company", "arguments"):
+        for key in ("clsid", "company", "arguments"):
             value = getattr(parsed_entry, key, "") or ""
             if value:
                 components[key] = value
+        # A process parent or .job path is stored normalized and lowercased, so
+        # copy the line's own spelling. A .job name with a masked ID is not in
+        # the line and is left out, like an unlocated filepath below.
+        name = parsed_entry.name or ""
+        if name:
+            pos = ex.find_value_position(name, line, "filepath")
+            if pos:
+                components["name"] = line[pos[0]:pos[1]]
         path_start = ex.path_search_start(line)
         for key in ("filepath", "filename"):
             normalized = getattr(parsed_entry, key, "") or ""

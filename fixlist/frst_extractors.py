@@ -1,6 +1,6 @@
 import ntpath
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 DESCRIPTION_SEP = "|||Description:"
 FIREFOX_PROFILE_RE = re.compile(r"(?i)(\\mozilla\\firefox\\profiles\\)[^\\]+")
@@ -108,6 +108,30 @@ def normalize_path(path):
     path = re.sub(r"(?i)(C:\\Users\\)[^\\]+", r"\1" + default_username, path)
     path = FIREFOX_PROFILE_RE.sub(r"\1profile", path)
     return CHROMIUM_PROFILE_RE.sub(r"\1profile", path)
+
+
+def _comparable_path(value):
+    """A path stored in `name` (process parent, .job file), in the form compared
+    across logs: drive, user and profile normalized like file paths, and lowercased
+    because FrstEntry compares `name` case-sensitively."""
+    return normalize_path(value).lower()
+
+
+# Per-install parts of legacy task names: EPSON `{GUID}`, a user SID, updater
+# GUIDs, timestamps. Masked so the same task on two machines is one entry. Run
+# in order on a lowercased name -- GUIDs and SIDs contain digit runs.
+_JOB_NAME_ID_MASKS = (
+    (re.compile(r"\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?"), "{guid}"),
+    (re.compile(r"s-1-5-21(?:-\d+)+"), "{sid}"),
+    (re.compile(r"\d{10,}"), "{n}"),
+)
+
+
+def _normalize_job_name(job_path):
+    value = _comparable_path(job_path)
+    for pattern, placeholder in _JOB_NAME_ID_MASKS:
+        value = pattern.sub(placeholder, value)
+    return value
 
 
 _PATH_DRIVE_MARK = "\x00DRIVE\x00"
@@ -249,6 +273,20 @@ def _strip_frst_filepath_markers(value: str) -> str:
     return value
 
 
+# FRST writes the not-signed tag in the language of the scanned system.
+# `[File not signed?]` is left out: what FRST means by it is unclear.
+_FILE_NOT_SIGNED_TAGS = (
+    "[File not signed]",
+    "[Archivo no firmado]",
+    "[Arquivo não assinado]",
+    "[Fichier non signé]",
+    "[Datei ist nicht signiert]",
+    "[Brak podpisu cyfrowego]",
+    "[Файл не подписан]",
+    "[文件未签名]",
+)
+
+
 def extract_frst_entry(line, regexp, group_map, entry_type=""):
     pattern = re.compile(regexp)
     no_desc_line = strip_description(line)
@@ -272,7 +310,7 @@ def extract_frst_entry(line, regexp, group_map, entry_type=""):
     date = get_value("date")
     company = get_value("company")
     attributes = get_value("attributes")
-    file_not_signed = "[File not signed]" in line
+    file_not_signed = any(tag in line for tag in _FILE_NOT_SIGNED_TAGS)
     # The Hidden suffix is currently only meaningful for the Installed Programs
     # section. Scoped by entry_type so unrelated lines that happen to end with
     # ") Hidden" can never flip the flag.
@@ -399,18 +437,31 @@ def extract_frst_scheduled_task(line):
 
 def extract_frst_scheduled_task_job(line):
     # Classic Windows AT-style scheduled tasks (.job format, pre-Vista, but FRST
-    # still surfaces them on modern systems for legacy installers like X-Rite or
-    # EPSON Scan). Shape: `Task: <path>.job => <binary>` with no GUID. The
-    # `<binary>` sometimes has raw bytes from the .job file appended directly
-    # with no whitespace separator (description blob, machine name, etc.) — the
-    # non-greedy capture truncates at the first executable extension so that
-    # trailing noise is dropped.
-    regexp = (
-        r'Task:\s+(.+?\.job)\s*=>\s*'
-        r'"?(.+?\.(?:' + _BINARY_PATH_ENDINGS + r'))"?'
+    # still surfaces them on modern systems, e.g. Windows' own
+    # CreateExplorerShellUnelevatedTask, EPSON, MATLAB). Shape:
+    # `Task: <path>.job => <binary><rest>` with no GUID. FRST writes the rest of
+    # the .job file's fields right after the binary, often with no separator:
+    # arguments, working directory, the creating PC\user and the description
+    # (`E_YTSYXE.EXE:/EXE:{GUID} /F:UpdateWORKGROUP\PC$` + description). The
+    # binary ends at the first executable extension, matched in any case. The
+    # rest goes into `arguments` and so takes part in matching -- which makes a
+    # rule for such a line match only that PC. FRST's `<==== ATTENTION` marker
+    # is not part of it. A `{GUID}` right after `Task:` is the GUID form, even
+    # with a name ending in `.job`, and is left to extract_frst_scheduled_task.
+    job_path = r'Task:\s+([^\s{].*?\.job)\s*=>\s*'
+    rest = r'(.*?)\s*(?:<====.*)?$'
+    regexp = job_path + r'"?(.+?\.(?i:' + _BINARY_PATH_ENDINGS + r'))"?' + rest
+    entry = extract_frst_entry(
+        line, regexp, {"name": 1, "filepath": 2, "arguments": 3}, entry_type="scheduled_task"
     )
-    group_map = {"name": 1, "filepath": 2}
-    return extract_frst_entry(line, regexp, group_map, entry_type="scheduled_task")
+    if entry is None:
+        # No program path after `=>`: a bare command (`sc start <service>`) or
+        # nothing at all. As with the GUID form's `Command(N):`, the command goes
+        # into `arguments` and the job path alone names the task.
+        entry = extract_frst_entry(line, job_path + rest, {"name": 1, "arguments": 2}, entry_type="scheduled_task")
+    if entry is None:
+        return None
+    return replace(entry, name=_normalize_job_name(entry.name))
 
 
 def extract_frst_startup(line):
@@ -425,6 +476,15 @@ def extract_frst_startup(line):
     )
     group_map = {"filepath": 1, "date": 2}
     return extract_frst_entry(line, regexp, group_map, entry_type="startup")
+
+
+def extract_frst_startup_dir(line):
+    # A Startup folder redirected away from its default location. The line holds
+    # only the folder, optionally followed by `<==== ATTENTION`. A trailing
+    # backslash is left out so `...\folder\` and `...\folder` give the same entry.
+    regexp = r"StartupDir: (.+?)\\?\s*(?:<====.*)?$"
+    group_map = {"filepath": 1}
+    return extract_frst_entry(line, regexp, group_map, entry_type="startup_dir")
 
 
 def extract_installed_software(line):
@@ -456,9 +516,16 @@ def extract_onemonth(line):
 
 
 def extract_process(line):
-    regexp = r"(\((.* )->\) )?\((.*)\) (\w:\\[^\<]*?)( \<\d+\>)?$"
+    # `(<parent> ->) (<company>) [tags] <path>`. FRST puts tags such as
+    # `[File not signed]` (in the system's language) or `[File is in use]`
+    # between the company and the path. The parent goes into `name`, normalized
+    # like a path so the same process tree matches across users and casings.
+    regexp = r"(\((.* )->\) )?\((.*)\)(?:\s+\[[^\]]*\])*\s+(\w:\\[^\<]*?)( \<\d+\>)?$"
     group_map = {"name": 2, "company": 3, "filepath": 4}
-    return extract_frst_entry(line, regexp, group_map, entry_type="process")
+    entry = extract_frst_entry(line, regexp, group_map, entry_type="process")
+    if entry is None or not entry.name:
+        return entry
+    return replace(entry, name=_comparable_path(entry.name))
 
 
 # group(3): extension name, group(4): extension directory. The filepath group
@@ -563,6 +630,7 @@ _ALL_EXTRACTORS = (
     extract_frst_scheduled_task,
     extract_frst_scheduled_task_job,
     extract_frst_startup,
+    extract_frst_startup_dir,
     extract_firewall_rule,
     extract_onemonth,
     extract_process,

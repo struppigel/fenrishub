@@ -247,3 +247,117 @@ class ReparseRulesAdminActionTests(TestCase):
         self.assertEqual(self.broken_rule.filepath, CORRECT_FILEPATH)
         self.assertEqual(second.filepath, r"C:\Emoji\blinkdagger.mp3")
         self.assertEqual(second.company, "")
+
+
+# An unsigned process from two different user folders: before the process
+# parser understood `[File not signed]`, each became its own exact rule.
+UNSIGNED_TOR_LINE = (
+    r"(C:\Users\Dazai\AppData\Local\CloudHandler\runtime\node.exe ->) () [File not signed] "
+    r"C:\Users\Dazai\AppData\Local\CloudHandler\runtime\tor\tor\tor.exe"
+)
+
+
+class ProcessAndJobRuleMigrationHelperTests(TestCase):
+    """The helpers that migration 0075 runs over existing rules."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="migrator", password="pw")
+
+    def _exact(self, source_text, status=ClassificationRule.STATUS_MALWARE, **extra):
+        return ClassificationRule.objects.create(
+            owner=self.user, status=status, match_type=ClassificationRule.MATCH_EXACT,
+            source_text=source_text, **extra,
+        )
+
+    def test_reparse_normalizes_a_stored_process_parent(self):
+        from ..analyzer import reparse_rules
+
+        line = r"(C:\WINDOWS\Explorer.EXE ->) (Foo Inc) C:\Program Files\Foo\foo.exe"
+        rule = ClassificationRule.objects.create(
+            owner=self.user, status=ClassificationRule.STATUS_CLEAN,
+            match_type=ClassificationRule.MATCH_PARSED_ENTRY, source_text=line,
+            entry_type="process", name=r"C:\WINDOWS\Explorer.EXE",
+            filepath=r"C:\Program Files\Foo\foo.exe",
+            normalized_filepath=r"c:\program files\foo\foo.exe",
+            filename="foo.exe", company="Foo Inc",
+        )
+
+        reparse_rules(ClassificationRule.objects.all(), apply=True)
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.name, r"c:\windows\explorer.exe")
+
+    def test_convert_turns_unsigned_process_exact_rule_into_parsed(self):
+        from ..analyzer import convert_exact_rules_to_parsed
+
+        rule = self._exact(UNSIGNED_TOR_LINE, priority=19)
+
+        result = convert_exact_rules_to_parsed(ClassificationRule.objects.all(), entry_types=("process",))
+
+        self.assertEqual(result, {"converted": 1, "deleted": 0})
+        rule.refresh_from_db()
+        self.assertEqual(rule.match_type, ClassificationRule.MATCH_PARSED_ENTRY)
+        self.assertEqual(rule.entry_type, "process")
+        self.assertEqual(rule.filename, "tor.exe")
+        self.assertTrue(rule.file_not_signed)
+        self.assertEqual(rule.priority, ClassificationRule.default_priority_for(ClassificationRule.MATCH_PARSED_ENTRY))
+        self.assertEqual(rule.source_text, UNSIGNED_TOR_LINE)
+
+    def test_convert_keeps_a_custom_priority(self):
+        from ..analyzer import convert_exact_rules_to_parsed
+
+        rule = self._exact(UNSIGNED_TOR_LINE, priority=20)
+        convert_exact_rules_to_parsed(ClassificationRule.objects.all(), entry_types=("process",))
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.priority, 20)
+
+    def test_convert_deletes_exact_rule_when_parsed_twin_exists(self):
+        from ..analyzer import convert_exact_rules_to_parsed, parse_rule_line
+
+        exact = self._exact(UNSIGNED_TOR_LINE)
+        twin = ClassificationRule.objects.create(
+            owner=self.user, **parse_rule_line(UNSIGNED_TOR_LINE, ClassificationRule.STATUS_MALWARE),
+        )
+
+        result = convert_exact_rules_to_parsed(ClassificationRule.objects.all(), entry_types=("process",))
+
+        self.assertEqual(result, {"converted": 0, "deleted": 1})
+        self.assertFalse(ClassificationRule.objects.filter(pk=exact.pk).exists())
+        self.assertTrue(ClassificationRule.objects.filter(pk=twin.pk).exists())
+
+    def test_migration_only_converts_lines_the_old_parser_could_not_read(self):
+        from importlib import import_module
+
+        newly_parseable = import_module(
+            "fixlist.migrations.0075_reparse_process_and_job_rules"
+        )._newly_parseable
+
+        self.assertTrue(newly_parseable(UNSIGNED_TOR_LINE))
+        self.assertTrue(newly_parseable(
+            r"Task: C:\WINDOWS\Tasks\EPSON L120 Series Update {E56FDE2B-2E47-4955-9D1B-6EBE295D17DA}.job"
+            r" => C:\WINDOWS\system32\spool\DRIVERS\x64\3\E_YTSLUE.EXE"
+        ))
+        self.assertTrue(newly_parseable(r"StartupDir: C:\Users\bob\AppData\Local\Temp\6fb2af726d\ "))
+
+        # Already parseable before: stored as exact on purpose or for another reason.
+        self.assertFalse(newly_parseable(r"(explorer.exe ->) (Foo Inc) C:\Program Files\Foo\foo.exe"))
+        self.assertFalse(newly_parseable(r"Task: C:\WINDOWS\Tasks\update-sys.job => C:\Program Files (x86)\Skillbrains\Updater\Updater.exe"))
+        self.assertFalse(newly_parseable(ASUS_LINE))
+
+    def test_convert_leaves_other_exact_rules_alone(self):
+        from ..analyzer import convert_exact_rules_to_parsed
+
+        # Parses as a service, which is not one of the requested entry types.
+        service = self._exact(
+            r"R2 FooSvc; C:\Program Files\Foo\foo.exe [123 2026-01-01] (Foo Inc -> Foo Inc)"
+        )
+        unparseable = self._exact("just some text")
+
+        result = convert_exact_rules_to_parsed(ClassificationRule.objects.all(), entry_types=("process",))
+
+        self.assertEqual(result, {"converted": 0, "deleted": 0})
+        service.refresh_from_db()
+        unparseable.refresh_from_db()
+        self.assertEqual(service.match_type, ClassificationRule.MATCH_EXACT)
+        self.assertEqual(unparseable.match_type, ClassificationRule.MATCH_EXACT)

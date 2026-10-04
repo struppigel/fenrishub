@@ -12,6 +12,7 @@ which then polluted the filepath bucket and the analyzer's file path colouring.
 
 from django.test import TestCase
 
+from ..analyzer import analyze_log_text, parse_rule_line
 from ..frst_extractors import (
     extract_any_frst_path,
     extract_frst_scheduled_task,
@@ -19,6 +20,8 @@ from ..frst_extractors import (
     extract_frst_scheduled_task_job,
     get_frst_entry,
 )
+from ..models import ClassificationRule
+from .log_analyzer_api_shared import LogAnalyzerApiBaseTestCase
 
 
 COMMAND_LINE = (
@@ -301,8 +304,9 @@ class ScheduledTaskJobFormTests(TestCase):
     """Classic AT-style `.job` scheduled tasks (no GUID). FRST emits these as
     `Task: C:\\Windows\\Tasks\\<name>.job => <binary>` for legacy installers like
     X-Rite Device Services and EPSON Scan. The trailing portion after the binary
-    can contain raw bytes from the .job file (description, machine name, ...)
-    with no separator — the extractor must truncate at the executable extension."""
+    can contain raw fields from the .job file (arguments, machine name,
+    description, ...) with no separator — the binary ends at the executable
+    extension, and the rest is kept as `arguments` so it takes part in matching."""
 
     XRITE_LINE = (
         r"Task: C:\Windows\Tasks\X-Rite Device Services Software Updater.job => "
@@ -323,7 +327,7 @@ class ScheduledTaskJobFormTests(TestCase):
         self.assertEqual(entry.entry_type, "scheduled_task")
         self.assertEqual(
             entry.name,
-            r"C:\Windows\Tasks\X-Rite Device Services Software Updater.job",
+            r"c:\windows\tasks\x-rite device services software updater.job",
         )
         self.assertEqual(
             entry.filepath,
@@ -331,12 +335,12 @@ class ScheduledTaskJobFormTests(TestCase):
         )
         self.assertEqual(entry.filename, "XRD Software Update.exe")
 
-    def test_epson_truncates_trailing_job_blob(self):
+    def test_epson_keeps_trailing_job_data_as_arguments(self):
         entry = extract_frst_scheduled_task_job(self.EPSON_LINE)
         self.assertIsNotNone(entry)
         self.assertEqual(
             entry.name,
-            r"C:\Windows\Tasks\EPSON FF-680W Update.job",
+            r"c:\windows\tasks\epson ff-680w update.job",
         )
         self.assertEqual(
             entry.filepath,
@@ -345,6 +349,11 @@ class ScheduledTaskJobFormTests(TestCase):
         self.assertEqual(entry.filename, "e_dtsksd.exe")
         self.assertNotIn("EXE_S", entry.filepath)
         self.assertNotIn("EPSON FF-680W", entry.filepath)
+        self.assertEqual(
+            entry.arguments,
+            "0/EXE_S:EPSON FF-680W,ES0170.DAT /F:UpdateDESKTOP-NM9SJCD\\pablo"
+            "ĊSearches for EPSON software updates, and notifies you when updates are available.",
+        )
 
     def test_guid_extractor_does_not_match_job_form(self):
         self.assertIsNone(extract_frst_scheduled_task(self.XRITE_LINE))
@@ -368,6 +377,206 @@ class ScheduledTaskJobFormTests(TestCase):
             extract_any_frst_path(self.EPSON_LINE),
             r"C:\Program Files (x86)\epson\Epson Scan 2\Update\e_dtsksd.exe",
         )
+
+    def test_job_folder_casing_and_drive_do_not_matter(self):
+        target = r" => C:\WINDOWS\explorer.exe"
+        entries = [
+            extract_frst_scheduled_task_job(r"Task: C:\WINDOWS\Tasks\CreateExplorerShellUnelevatedTask.job" + target),
+            extract_frst_scheduled_task_job(r"Task: C:\Windows\Tasks\CreateExplorerShellUnelevatedTask.job" + target),
+            extract_frst_scheduled_task_job(r"Task: D:\windows\Tasks\CreateExplorerShellUnelevatedTask.job" + target),
+        ]
+        self.assertEqual(entries[0], entries[1])
+        self.assertEqual(entries[0], entries[2])
+
+    def test_per_install_ids_in_job_names_are_masked(self):
+        def job(name, target=r"C:\Program Files (x86)\App\app.exe"):
+            return extract_frst_scheduled_task_job(rf"Task: C:\Windows\Tasks\{name}.job => {target}")
+
+        epson_target = r"C:\WINDOWS\system32\spool\DRIVERS\x64\3\E_YTSYXE.EXE"
+        epson_a = job("EPSON L3210 Series Update {AF6E14DC-0890-4A39-8C42-9CB318E4BA46}", epson_target)
+        epson_b = job("EPSON L3210 Series Update {28F69C72-592D-4803-B8A5-54397702634D}", epson_target)
+        self.assertEqual(epson_a, epson_b)
+        self.assertEqual(epson_a.name, r"c:\windows\tasks\epson l3210 series update {guid}.job")
+
+        sid_a = job("update-S-1-5-21-829818332-700746577-1875891700-1001")
+        sid_b = job("update-S-1-5-21-1111111111-2222222222-3333333333-1002")
+        self.assertEqual(sid_a, sid_b)
+        self.assertEqual(sid_a.name, r"c:\windows\tasks\update-{sid}.job")
+
+        intel = job("IntelSURQC-Upgrade-86621605-2a0b-4128-8ffc-15514c247132")
+        self.assertEqual(intel.name, r"c:\windows\tasks\intelsurqc-upgrade-{guid}.job")
+
+        wps_a = job("WpsExternal_20161117083023")
+        wps_b = job("WpsExternal_20190305121500")
+        self.assertEqual(wps_a, wps_b)
+        self.assertEqual(wps_a.name, r"c:\windows\tasks\wpsexternal_{n}.job")
+
+    def test_different_job_names_stay_distinct(self):
+        target = r" => C:\Program Files (x86)\X-Rite\Devices\Services\XRD Software Update.exe"
+        self.assertNotEqual(
+            extract_frst_scheduled_task_job(r"Task: C:\Windows\Tasks\X-Rite Updater.job" + target),
+            extract_frst_scheduled_task_job(r"Task: C:\Windows\Tasks\Evil Updater.job" + target),
+        )
+
+    def test_uppercase_extension_parses(self):
+        line = (
+            r"Task: C:\WINDOWS\Tasks\EPSON L120 Series Invitation {E56FDE2B-2E47-4955-9D1B-6EBE295D17DA}.job"
+            r" => C:\WINDOWS\system32\spool\DRIVERS\x64\3\E_YTSLUE.EXE:/EXE:{E56FDE2B} /F:Update"
+        )
+        entry = extract_frst_scheduled_task_job(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.filepath, r"C:\WINDOWS\system32\spool\DRIVERS\x64\3\E_YTSLUE.EXE")
+        self.assertEqual(entry.filename, "E_YTSLUE.EXE")
+        self.assertEqual(entry.arguments, ":/EXE:{E56FDE2B} /F:Update")
+
+    # Real lines from fenris_search_logs.zip, user and PC names replaced.
+
+    def test_attention_marker_is_not_an_argument(self):
+        line = (
+            r"Task: C:\WINDOWS\Tasks\com_pro_connector.job => "
+            r"C:\Users\alice\AppData\Local\Temp\288dg1Oym0YT4j6O\Hub-Distributed.exe <==== ATTENTION"
+        )
+        entry = extract_frst_scheduled_task_job(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(
+            entry.filepath, r"C:\Users\username\AppData\Local\Temp\288dg1Oym0YT4j6O\Hub-Distributed.exe"
+        )
+        self.assertEqual(entry.arguments, "")
+        self.assertEqual(entry, extract_frst_scheduled_task_job(line.replace(" <==== ATTENTION", "")))
+
+    def test_glued_arguments_after_binary(self):
+        line = (
+            r"Task: C:\Windows\Tasks\WpsExternal_Personal_interval.job => "
+            r"F:\Kingsoft\WPS Office\12.1.0.29162\office6\wpscloudsvr.exe"
+            r"/wpscloudlaunch /run_plugin /plugin_name=ktaskschdtool /plugin_entry=ktaskschdtool.dll"
+        )
+        entry = extract_frst_scheduled_task_job(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.filepath, r"C:\Kingsoft\WPS Office\12.1.0.29162\office6\wpscloudsvr.exe")
+        self.assertEqual(
+            entry.arguments,
+            "/wpscloudlaunch /run_plugin /plugin_name=ktaskschdtool /plugin_entry=ktaskschdtool.dll",
+        )
+
+    def test_working_folder_and_creator_after_a_space(self):
+        line = (
+            r"Task: C:\WINDOWS\Tasks\MATLAB R2024b Startup Accelerator.job => "
+            r"C:\Program Files\MATLAB\R2024b\bin\win64\MATLABStartupAccelerator.exe "
+            r"C:\Program Files\MATLAB\R2024bDESKTOP-TEST01\Admin.Sta"
+        )
+        entry = extract_frst_scheduled_task_job(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.filename, "MATLABStartupAccelerator.exe")
+        self.assertEqual(entry.arguments, r"C:\Program Files\MATLAB\R2024bDESKTOP-TEST01\Admin.Sta")
+
+    def test_guid_named_job_with_installer_arguments(self):
+        line = (
+            r"Task: C:\WINDOWS\Tasks\{5E9C47D5-C2A3-4B5B-9646-23F9F5362F1A}.job => "
+            r"C:\Program Files (x86)\Wizards of the Coast\MTGA\MTGALauncher\Updates\MTGAInstaller_1.0.95.exe"
+            "\u03e5"
+            r"/i C:\Users\alice\AppData\Local\Temp\MTGAinstall\MTGAInstaller.msi"
+        )
+        entry = extract_frst_scheduled_task_job(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, r"c:\windows\tasks\{guid}.job")
+        self.assertEqual(entry.filename, "MTGAInstaller_1.0.95.exe")
+        self.assertTrue(entry.arguments.startswith("\u03e5/i C:\\Users\\"))
+
+    def test_different_trailing_data_gives_different_entries(self):
+        job = r"Task: C:\WINDOWS\Tasks\EPSON XP-235 Series Update {1FA5611D-389C-4414-B6FE-A8F27C24EF78}.job => "
+        binary = r"C:\WINDOWS\system32\spool\DRIVERS\x64\3\E_YTSPFE.EXE"
+        tail = r":/EXE:{1FA5611D-389C-4414-B6FE-A8F27C24EF78} /F:UpdateWORKGROUP\DESKTOP-TEST01$"
+        self.assertNotEqual(
+            extract_frst_scheduled_task_job(job + binary + tail),
+            extract_frst_scheduled_task_job(job + binary + tail.replace("TEST01", "TEST02")),
+        )
+
+    def test_command_target_goes_into_arguments(self):
+        line = (
+            r"Task: C:\WINDOWS\Tasks\AcerDeviceInfoAgentServiceDelayStart.job => "
+            r"sc start AcerDeviceInfoAgentService Changing Information Technology Inc "
+            r"Delay start for Acer device info service"
+        )
+        entry = extract_frst_scheduled_task_job(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, r"c:\windows\tasks\acerdeviceinfoagentservicedelaystart.job")
+        self.assertEqual(entry.filepath, "")
+        self.assertTrue(entry.arguments.startswith("sc start AcerDeviceInfoAgentService"))
+        self.assertIsNone(extract_any_frst_path(line))
+
+    def test_empty_target_still_parses(self):
+        entry = extract_frst_scheduled_task_job(r"Task: C:\Windows\Tasks\VoiceControlEngine.job =>")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, r"c:\windows\tasks\voicecontrolengine.job")
+        self.assertEqual(entry.filepath, "")
+        self.assertEqual(entry.arguments, "")
+
+    def test_guid_form_with_job_suffix_is_left_to_guid_extractor(self):
+        line = (
+            r"Task: {162CDD36-726C-42E6-B340-A22BE2E35722} - System32\Tasks\Wise Care 365.job => "
+            r"C:\Program Files (x86)\Wise\Wise Care 365\WiseTray.exe [8397208 2024-12-11] "
+            r"(Lespeed Technology Co., Ltd -> WiseCleaner.com)"
+        )
+        self.assertIsNone(extract_frst_scheduled_task_job(line))
+        entry = get_frst_entry(line)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, r"System32\Tasks\Wise Care 365.job")
+
+
+class ScheduledTaskJobRuleMatchingTests(LogAnalyzerApiBaseTestCase):
+    EPSON_TARGET = r"C:\WINDOWS\system32\spool\DRIVERS\x64\3\E_YTSYXE.EXE:/EXE:{X} /F:Update"
+    EPSON_A = (
+        r"Task: C:\WINDOWS\Tasks\EPSON L3210 Series Update {AF6E14DC-0890-4A39-8C42-9CB318E4BA46}.job => "
+        + EPSON_TARGET
+    )
+    EPSON_B = (
+        r"Task: C:\Windows\Tasks\EPSON L3210 Series Update {28F69C72-592D-4803-B8A5-54397702634D}.job => "
+        + EPSON_TARGET
+    )
+
+    def _save_rule(self, line, status=ClassificationRule.STATUS_CLEAN):
+        parsed = parse_rule_line(line, status, "test-suite")
+        self.assertEqual(parsed["match_type"], ClassificationRule.MATCH_PARSED_ENTRY)
+        ClassificationRule.objects.create(owner=self.user, **parsed)
+
+    def test_rule_matches_the_same_task_on_another_machine(self):
+        self._save_rule(self.EPSON_A)
+
+        result = analyze_log_text(self.EPSON_B)["lines"][0]
+
+        self.assertEqual(result["matcher"], "parsed_entry")
+        self.assertEqual(result["dominant_status"], ClassificationRule.STATUS_CLEAN)
+        self.assertEqual(result["css_class"], "status-c")
+        self.assertEqual(result["highlights"], [])
+        self.assertFalse(result["fallback_only"])
+
+    def test_same_task_from_another_pc_only_matches_through_the_path(self):
+        # The trailing data counts, so another PC name in it is another entry.
+        self._save_rule(self.EPSON_A + r"WORKGROUP\DESKTOP-TEST01$")
+
+        result = analyze_log_text(self.EPSON_A + r"WORKGROUP\DESKTOP-TEST02$")["lines"][0]
+
+        self.assertEqual(result["matcher"], "filepath")
+        self.assertTrue(result["fallback_only"])
+
+    def test_other_job_with_same_binary_only_matches_through_the_path(self):
+        self._save_rule(self.EPSON_A)
+
+        other = r"Task: C:\Windows\Tasks\Something Else.job => " + self.EPSON_TARGET
+        result = analyze_log_text(other)["lines"][0]
+
+        self.assertEqual(result["matcher"], "filepath")
+        self.assertTrue(result["fallback_only"])
+
+    def test_copied_job_name_keeps_the_line_spelling_unless_masked(self):
+        plain = r"Task: C:\WINDOWS\Tasks\CreateExplorerShellUnelevatedTask.job => C:\WINDOWS\explorer.exe"
+        result = analyze_log_text(plain)["lines"][0]
+        self.assertEqual(
+            result["components"]["name"], r"C:\WINDOWS\Tasks\CreateExplorerShellUnelevatedTask.job"
+        )
+
+        masked = analyze_log_text(self.EPSON_A)["lines"][0]
+        self.assertNotIn("name", masked["components"])
 
 
 class ScheduledTaskCommandFormTests(TestCase):

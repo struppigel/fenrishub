@@ -225,7 +225,7 @@ class ExtractorRegistryTests(TestCase):
     or wiring up a path-eligible extractor that yields no filepath."""
 
     def test_all_extractors_count(self):
-        self.assertEqual(len(_ALL_EXTRACTORS), 21)
+        self.assertEqual(len(_ALL_EXTRACTORS), 22)
 
     def test_path_extractors_excludes_non_path_yielders(self):
         from ..frst_extractors import extract_frst_scheduled_task_command
@@ -246,3 +246,11 @@ class ExtractorRegistryTests(TestCase):
 
     def test_known_extractor_present(self):
         self.assertIn(extract_frst_service, _ALL_EXTRACTORS)
+
+    def test_analyzer_parser_order_covers_every_extractor(self):
+        # Rules are saved through get_frst_entry (_ALL_EXTRACTORS) but matched
+        # through the analyzer's PARSER_ORDER. An extractor missing from the
+        # latter saves parsed rules that only ever match via the filepath
+        # fallback (as happened to onemonth and .job task lines).
+        from ..analyzer import PARSER_ORDER
+        self.assertEqual(set(PARSER_ORDER), set(_ALL_EXTRACTORS))
