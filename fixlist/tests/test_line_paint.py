@@ -26,6 +26,27 @@ SERVICE_PATH = r"C:\Program Files\Proton\VPN\v4.3.13\ProtoVPNService.exe"
 # matches it only through the path (the filepath fallback).
 PATH_LINE = r"2026-03-18 13:45 - 2026-03-18 13:45 - 000000000 ____D " + SERVICE_PATH
 
+# Real lines from badlog2.txt. A "Query User" firewall rule is named after its
+# program, so the path is in the line twice; the target after (Allow) is the one
+# to colour.
+QUERY_USER_PATH = r"C:\program files\gigabyte\control center\gcc.exe"
+QUERY_USER_LINE = (
+    r"FirewallRules: [TCP Query User{CB374BDA-2B92-42F7-8D0A-728CF9725B43}"
+    + QUERY_USER_PATH + r"] => (Allow) " + QUERY_USER_PATH
+    + r" (GIGA-BYTE TECHNOLOGY CO., LTD. -> )"
+)
+# On drive A:, which normalization turns into C:, so the path is only found
+# through its denormalized pattern.
+JAVAW_PATH = (
+    r"A:\wpsystem\s-1-5-21-57707764-2827926285-876679099-500\appdata\local\packages"
+    r"\microsoft.4297127d64ec6_8wekyb3d8bbwe\localcache\local\runtime\java-runtime-epsilon"
+    r"\windows-x64\java-runtime-epsilon\bin\javaw.exe"
+)
+JAVAW_LINE = (
+    r"FirewallRules: [TCP Query User{7AF66B33-B2FD-41BF-9835-FD75DD0DD957}"
+    + JAVAW_PATH + r"] => (Allow) " + JAVAW_PATH
+)
+
 
 class LinePaintTests(LogAnalyzerApiBaseTestCase):
 
@@ -186,6 +207,29 @@ class LinePaintTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(result["css_class"], "status-unknown")
         self.assertFalse(result["fallback_only"])
         self.assertEqual(self._spans(result), [(PATH_LINE.index("C:\\"), len(PATH_LINE), B, 11)])
+
+    def test_file_path_rule_colours_a_firewall_rules_target_not_its_name(self):
+        self._rule(
+            QUERY_USER_PATH, match_type=ClassificationRule.MATCH_FILEPATH,
+            filepath=QUERY_USER_PATH, normalized_filepath=QUERY_USER_PATH.lower(),
+        )
+
+        result = self._analyze_line(QUERY_USER_LINE)
+
+        target = QUERY_USER_LINE.index("(Allow) ") + len("(Allow) ")
+        self.assertEqual(self._spans(result), [(target, target + len(QUERY_USER_PATH), B, 11)])
+
+    def test_file_path_rule_colours_a_firewall_rules_target_on_another_drive(self):
+        normalized = "c:" + JAVAW_PATH[2:].lower()
+        self._rule(
+            normalized, match_type=ClassificationRule.MATCH_FILEPATH,
+            filepath=normalized, normalized_filepath=normalized,
+        )
+
+        result = self._analyze_line(JAVAW_LINE)
+
+        target = JAVAW_LINE.index("(Allow) ") + len("(Allow) ")
+        self.assertEqual(self._spans(result), [(target, len(JAVAW_LINE), B, 11)])
 
     def test_file_path_rule_with_color_whole_line_colours_the_whole_line(self):
         self._filepath_rule(color_whole_line=True)

@@ -169,8 +169,8 @@ def _denormalize_path_pattern(normalized_path):
     return pattern
 
 
-def find_value_position(value, source, field_name=None):
-    """Locate value inside source. Returns (start, end) or None.
+def find_value_position(value, source, field_name=None, start=0):
+    """Locate value inside source, at or after `start`. Returns (start, end) or None.
 
     Tries a case-insensitive literal find first. For path-bearing fields
     (filepath, filename), falls back to a denormalized regex so values that
@@ -181,7 +181,7 @@ def find_value_position(value, source, field_name=None):
 
     lower_source = source.lower()
     lower_value = value.lower()
-    pos = lower_source.find(lower_value)
+    pos = lower_source.find(lower_value, start)
     if pos != -1:
         return (pos, pos + len(value))
 
@@ -192,7 +192,7 @@ def find_value_position(value, source, field_name=None):
     if not pattern:
         return None
     try:
-        match = re.search(pattern, source, re.IGNORECASE)
+        match = re.compile(pattern, re.IGNORECASE).search(source, start)
     except re.error:
         return None
     if match:
@@ -508,14 +508,42 @@ def extract_package(line):
     return extract_frst_entry(line, regexp, group_map, entry_type="package")
 
 
+# Everything up to the rule's target. Shared with path_search_start so both agree
+# on where the target begins.
+_FIREWALL_RULE_PREFIX = r"FirewallRules: \[([^\]]+)\] => \((Allow|Block)\) "
+_FIREWALL_TARGET_START_RE = re.compile(_FIREWALL_RULE_PREFIX)
+
+
 def extract_firewall_rule(line):
     if not line.startswith("FirewallRules:"):
         return None
     if line.rstrip().endswith("=> No File"):
         return None
-    regexp = r'FirewallRules: \[([^\]]+)\] => \((Allow|Block)\) (.+?)\s*(?:\(([^)]+)\s*->\s*([^)]+)\))?$'
+    # After the target FRST writes `(Signer -> Company)` for a signed file and
+    # `(Company) [File not signed]` for an unsigned one, either name possibly
+    # empty, and may append `<==== ATTENTION`. The parentheses only end the path
+    # when one of those shapes follows, so `Program Files (x86)` stays in it.
+    regexp = (
+        _FIREWALL_RULE_PREFIX
+        + r"(.+?)"
+        + r"(?:\s+\((?:([^()]*?)\s*->\s*|(?=[^()]*\)\s*\[File not signed\]))([^()]*)\)"
+        + r"(?:\s*\[File not signed\])?)?"
+        + r"(?:\s*<====.*)?\s*$"
+    )
     group_map = {"name": 2, "filepath": 3, "company": 5}
     return extract_frst_entry(line, regexp, group_map, entry_type="firewall")
+
+
+def path_search_start(line):
+    r"""Where in `line` its own file path can start.
+
+    A "Query User" firewall rule is named after its program, so the path is in
+    the line twice, `[TCP Query User{GUID}C:\...\app.exe] => (Allow) C:\...\app.exe`,
+    and the one that counts is the rule's target after the action. Every other
+    line is searched from its start.
+    """
+    match = _FIREWALL_TARGET_START_RE.match(line)
+    return match.end() if match else 0
 
 
 # Single source of truth for extractor order (first match wins) and membership.

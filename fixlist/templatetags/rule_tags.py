@@ -54,12 +54,14 @@ def highlight_parsed(rule, max_chars=120):
         return escape(truncated)
 
     candidates = []
+    path_start = ex.path_search_start(source)
 
     for priority, (attr, css_class) in enumerate(_FIELDS):
         value = (getattr(rule, attr, '') or '').strip()
         if not value:
             continue
-        position = ex.find_value_position(value, source, field_name=attr)
+        start = path_start if attr in ('filepath', 'filename') else 0
+        position = ex.find_value_position(value, source, field_name=attr, start=start)
         if position is None:
             continue
         start, end = position

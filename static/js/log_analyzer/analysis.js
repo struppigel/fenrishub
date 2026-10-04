@@ -1630,6 +1630,19 @@ function setupLookupMenu() {
     document.addEventListener('scroll', () => closeLookupMenu(), true);
 }
 
+// The hover text is a native title tooltip, which the browser cuts off once it
+// gets too long. Reasons (each ending in its rule's "(by owner)") go first so a
+// long line can only push itself out of view, and the line is capped because
+// its full text is already on the page.
+const LINE_TOOLTIP_MAX_LINE_CHARS = 300;
+
+function buildLineTooltip(line, reasons) {
+    const shownLine = line.length > LINE_TOOLTIP_MAX_LINE_CHARS
+        ? `${line.slice(0, LINE_TOOLTIP_MAX_LINE_CHARS)}…`
+        : line;
+    return reasons.length > 0 ? `${reasons.join('\n')}\n\n${shownLine}` : shownLine;
+}
+
 function renderLogLines() {
     const container = document.getElementById('logLines');
     const savedScrollTop = container.scrollTop;
@@ -1716,7 +1729,7 @@ function renderLogLines() {
         lineDiv.appendChild(searchBtn);
 
         const reasons = Array.isArray(entry.reasons) ? entry.reasons : [];
-        lineDiv.title = reasons.length > 0 ? `${line}\n\n${reasons.join('\n')}` : line;
+        lineDiv.title = buildLineTooltip(line, reasons);
         lineDiv.addEventListener('click', () => {
             if (questionCursorModeActive) {
                 openLineInspectorForIndex(index, { triggerElement: lineDiv });

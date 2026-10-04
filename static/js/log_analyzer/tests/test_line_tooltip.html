@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<!--
+  Tests for the hover tooltip on analyzed log lines (analysis.js
+  buildLineTooltip, used by renderLogLines).
+
+  The tooltip is a native title attribute, which the browser cuts off once it
+  gets too long. It used to show the line first and the reasons after it, so a
+  very long line pushed the reasons - and the "(by owner)" at the end of each -
+  out of view. Reasons now come first and the line is capped.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>log analyzer line tooltip tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+  #logLines { display: none; }
+</style>
+</head>
+<body>
+<h1>log analyzer &ndash; line tooltip tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<!-- The container renderLogLines() fills -->
+<div id="logLines"></div>
+
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Tiny test harness (same shape as test_legend_filter.html)
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+const longLine = 'HKLM\\...\\Run: [Updater] => C:\\Users\\x\\AppData\\' + 'A'.repeat(2000) + '\\evil.exe';
+const reasons = ['B: known miner (by alice)', 'P: bundled adware (by bob)'];
+
+analyzedLines = [
+    { line: longLine, dominant_status: 'B', css_class: 'status-b', reasons },
+    { line: 'short line', dominant_status: 'B', css_class: 'status-b', reasons },
+    { line: 'no reasons line', dominant_status: '?', css_class: 'status-unknown' },
+];
+renderLogLines();
+
+const titles = [...document.querySelectorAll('#logLines .log-line')].map((el) => el.title);
+
+// ---------------------------------------------------------------------------
+// Reasons, including the owner, lead the tooltip
+// ---------------------------------------------------------------------------
+(function testReasonsComeFirst() {
+    assert(
+        'a long line\'s tooltip starts with the reasons and their owners',
+        titles[0].startsWith('B: known miner (by alice)\nP: bundled adware (by bob)\n\n'),
+        JSON.stringify(titles[0].slice(0, 80))
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// A long line is capped, a short one is not
+// ---------------------------------------------------------------------------
+(function testLongLineCapped() {
+    const shownLine = titles[0].split('\n\n')[1];
+    assert(
+        'a long line is cut to the cap and marked with an ellipsis',
+        shownLine === longLine.slice(0, LINE_TOOLTIP_MAX_LINE_CHARS) + '…',
+        'shown length ' + shownLine.length
+    );
+    assert(
+        'a short line is shown in full after the reasons',
+        titles[1] === reasons.join('\n') + '\n\nshort line',
+        JSON.stringify(titles[1])
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Without reasons the tooltip is just the line
+// ---------------------------------------------------------------------------
+(function testNoReasons() {
+    assert(
+        'a line without reasons has just the line as its tooltip',
+        titles[2] === 'no reasons line',
+        JSON.stringify(titles[2])
+    );
+})();
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+const summary = document.getElementById('summary');
+summary.textContent = passed + ' passed, ' + failed + ' failed';
+summary.style.color = failed === 0 ? '#6f9' : '#f66';
+</script>
+</body>
+</html>

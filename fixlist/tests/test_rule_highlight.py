@@ -10,6 +10,7 @@ path with the parsed-filepath span.
 from django.contrib.auth.models import User
 from django.test import TestCase
 
+from ..analyzer import parse_rule_line
 from ..models import ClassificationRule
 from ..templatetags.rule_tags import highlight_parsed
 
@@ -118,3 +119,17 @@ class HighlightParsedTests(TestCase):
         rendered_b = str(highlight_parsed(rule_b))
         self.assertIn('class="parsed-filepath"', rendered_a)
         self.assertIn('class="parsed-filepath"', rendered_b)
+
+    def test_firewall_query_user_rule_highlights_its_target_not_its_name(self):
+        # Real line from badlog2.txt: the rule's name repeats the program path.
+        path = r"C:\program files\gigabyte\control center\gcc.exe"
+        source = (
+            r"FirewallRules: [TCP Query User{CB374BDA-2B92-42F7-8D0A-728CF9725B43}"
+            + path + r"] => (Allow) " + path + r" (GIGA-BYTE TECHNOLOGY CO., LTD. -> )"
+        )
+        rule = self._rule(**parse_rule_line(source, ClassificationRule.STATUS_UNKNOWN))
+
+        rendered = str(highlight_parsed(rule, max_chars=len(source)))
+
+        self.assertIn("{CB374BDA-2B92-42F7-8D0A-728CF9725B43}" + path + "]", rendered)
+        self.assertIn(f'<span class="parsed-filepath">{path}</span> (GIGA-BYTE', rendered)

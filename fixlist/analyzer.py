@@ -1224,11 +1224,12 @@ def _build_line_result(
             value = getattr(parsed_entry, key, "") or ""
             if value:
                 components[key] = value
+        path_start = ex.path_search_start(line)
         for key in ("filepath", "filename"):
             normalized = getattr(parsed_entry, key, "") or ""
             if not normalized:
                 continue
-            pos = ex.find_value_position(normalized, line, key)
+            pos = ex.find_value_position(normalized, line, key, start=path_start)
             if pos:
                 components[key] = line[pos[0]:pos[1]]
     return {
@@ -1315,7 +1316,7 @@ def _locate_line_path(line: str):
     path = ex.extract_any_frst_path(line)
     if not path:
         return None
-    return ex.find_value_position(path, line, "filepath")
+    return ex.find_value_position(path, line, "filepath", start=ex.path_search_start(line))
 
 
 def _uncovered_parts(covered: list, start: int, end: int) -> list:

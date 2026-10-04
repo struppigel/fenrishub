@@ -1,9 +1,34 @@
 from django.test import TestCase
 
 from ..analyzer import inspect_line_matches, invalidate_rule_buckets_cache
-from ..frst_extractors import extract_firewall_rule, get_frst_entry, normalize_path
+from ..frst_extractors import extract_firewall_rule, get_frst_entry, normalize_path, path_search_start
 from ..models import ClassificationRule
 from .factories import make_rule
+
+# Real lines from badlog2.txt. FRST ends a firewall rule's target with
+# `(Signer -> Company)` when the file is signed and `(Company) [File not signed]`
+# when it isn't; either name can be empty.
+SIGNED_LINE = (
+    r"FirewallRules: [{EEE78C2B-BF0C-42A2-A005-83DDAB47249E}] => (Allow) "
+    r"C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe (Valve Corp. -> Valve Corporation)"
+)
+SIGNED_NO_COMPANY_LINE = (
+    r"FirewallRules: [{8E48BC75-A166-42A4-B40D-85F29F2F4A50}] => (Allow) "
+    r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-svc.exe (Cloudflare, Inc. -> )"
+)
+UNSIGNED_LINE = (
+    r"FirewallRules: [{C4252B8B-11D7-42A9-A9EA-3663F73FDE47}] => (Allow) "
+    r"F:\SteamLibrary\steamapps\common\Dead as Disco\Pagoda.exe (Epic Games, Inc.) [File not signed]"
+)
+UNSIGNED_NO_COMPANY_LINE = (
+    r"FirewallRules: [{CEB7DAAC-72E9-499E-97B3-C0198FE0C7FD}] => (Allow) "
+    r"A:\SteamLibrary\steamapps\common\Library Of Ruina\LibraryOfRuina.exe () [File not signed]"
+)
+QUERY_USER_LINE = (
+    r"FirewallRules: [TCP Query User{CB374BDA-2B92-42F7-8D0A-728CF9725B43}"
+    r"C:\program files\gigabyte\control center\gcc.exe] => (Allow) "
+    r"C:\program files\gigabyte\control center\gcc.exe (GIGA-BYTE TECHNOLOGY CO., LTD. -> )"
+)
 
 
 class ExtractFirewallRuleTests(TestCase):
@@ -231,6 +256,67 @@ class ExtractFirewallRuleTests(TestCase):
         self.assertEqual(legacy_rule_entry, freshly_parsed)
 
 
+class FirewallTargetSuffixTests(TestCase):
+    """What follows the target ends the path and fills the company -- it must
+    never be left in the path or the arguments."""
+
+    def test_signed_target(self):
+        entry = extract_firewall_rule(SIGNED_LINE)
+        self.assertEqual(entry.filepath, r"C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe")
+        self.assertEqual(entry.company, "Valve Corporation")
+        self.assertEqual(entry.arguments, "")
+        self.assertFalse(entry.file_not_signed)
+
+    def test_signed_target_without_company(self):
+        entry = extract_firewall_rule(SIGNED_NO_COMPANY_LINE)
+        self.assertEqual(entry.filepath, r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-svc.exe")
+        self.assertEqual(entry.company, "")
+        self.assertEqual(entry.arguments, "")
+
+    def test_unsigned_target_keeps_its_company(self):
+        entry = extract_firewall_rule(UNSIGNED_LINE)
+        self.assertEqual(entry.filepath, r"C:\SteamLibrary\steamapps\common\Dead as Disco\Pagoda.exe")
+        self.assertEqual(entry.company, "Epic Games, Inc.")
+        self.assertEqual(entry.arguments, "")
+        self.assertTrue(entry.file_not_signed)
+
+    def test_unsigned_target_without_company(self):
+        entry = extract_firewall_rule(UNSIGNED_NO_COMPANY_LINE)
+        self.assertEqual(entry.filepath, r"C:\SteamLibrary\steamapps\common\Library Of Ruina\LibraryOfRuina.exe")
+        self.assertEqual(entry.company, "")
+        self.assertEqual(entry.arguments, "")
+        self.assertTrue(entry.file_not_signed)
+
+    def test_unsigned_target_that_is_not_a_program(self):
+        # Without a program extension to split at, only the suffix ends the path.
+        entry = extract_firewall_rule(UNSIGNED_LINE.replace("Pagoda.exe", "Pagoda.pak"))
+        self.assertEqual(entry.filepath, r"C:\SteamLibrary\steamapps\common\Dead as Disco\Pagoda.pak")
+        self.assertEqual(entry.company, "Epic Games, Inc.")
+
+    def test_attention_marker_after_the_suffix(self):
+        entry = extract_firewall_rule(SIGNED_NO_COMPANY_LINE + " <==== ATTENTION")
+        self.assertEqual(entry.filepath, r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-svc.exe")
+        self.assertEqual(entry.company, "")
+        self.assertEqual(entry.arguments, "")
+
+    def test_query_user_target(self):
+        entry = extract_firewall_rule(QUERY_USER_LINE)
+        self.assertEqual(entry.filepath, r"C:\program files\gigabyte\control center\gcc.exe")
+        self.assertEqual(entry.company, "")
+        self.assertEqual(entry.arguments, "")
+
+
+class PathSearchStartTests(TestCase):
+
+    def test_query_user_rule_is_searched_from_its_target(self):
+        # The rule's name repeats the path; only the copy after the action counts.
+        target = QUERY_USER_LINE.index("(Allow) ") + len("(Allow) ")
+        self.assertEqual(path_search_start(QUERY_USER_LINE), target)
+
+    def test_other_lines_are_searched_from_the_start(self):
+        self.assertEqual(path_search_start(r"HKLM\...\Run: [TestApp] => C:\test.exe"), 0)
+
+
 class FirewallFilepathMatchingTests(TestCase):
     """A filepath rule should match firewall entries, including paths that
     contain parentheses (which previously failed to parse entirely)."""
@@ -265,6 +351,30 @@ class FirewallFilepathMatchingTests(TestCase):
             + self.PATH
             + r" (Acme Inc -> Acme Signer)"
         )
+        self.assertEqual(
+            inspect_line_matches(line)["dominant_status"],
+            ClassificationRule.STATUS_MALWARE,
+        )
+
+
+class FirewallUnsignedFilepathMatchingTests(TestCase):
+    """The `(Company) [File not signed]` suffix used to stay in the path when
+    the target has no program extension, so no filepath rule could match it."""
+
+    PATH = r"C:\SteamLibrary\steamapps\common\Dead as Disco\Pagoda.pak"
+
+    def setUp(self):
+        invalidate_rule_buckets_cache()
+        make_rule(
+            self.PATH,
+            status=ClassificationRule.STATUS_MALWARE,
+            match_type=ClassificationRule.MATCH_FILEPATH,
+            normalized_filepath=self.PATH.lower(),
+        )
+        invalidate_rule_buckets_cache()
+
+    def test_filepath_rule_matches_unsigned_target(self):
+        line = UNSIGNED_LINE.replace("Pagoda.exe", "Pagoda.pak")
         self.assertEqual(
             inspect_line_matches(line)["dominant_status"],
             ClassificationRule.STATUS_MALWARE,
