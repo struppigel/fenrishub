@@ -211,7 +211,7 @@ The Railway config:
 
 - runs `collectstatic` at build time
 - runs tests, migrations, and `ensure_superuser` before deploy
-- starts `gunicorn fenrishub.wsgi:application`
+- starts `gunicorn fenrishub.wsgi:application` with `--timeout 280`: the analyzer analyzes inside the request (~1.75 ms per line, so a 10 MB log takes minutes), and 280 s stays just under Railway's 5-minute cutoff for responses that send no data
 
 When `DEBUG` is false, WhiteNoise is enabled for static file serving and secure cookie settings are applied.
 
