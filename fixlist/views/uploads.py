@@ -404,6 +404,10 @@ def view_uploaded_log(request, upload_id):
             messages.success(request, f'{upload_id} was unassigned')
             return redirect('view_uploaded_log', upload_id=upload_id)
 
+    # Detection rules are editable, so a stored type can be stale; refresh it on view.
+    if uploaded_log.recalculate_log_type():
+        schedule_analysis_stats_recalc(uploaded_log)
+
     # Empty unless the log type has a converter and it found something to report.
     converted_response = convert_log_to_response(uploaded_log.log_type, uploaded_log.content)
 

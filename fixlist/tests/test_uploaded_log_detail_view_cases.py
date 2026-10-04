@@ -1,7 +1,7 @@
 from django.test import TestCase
 from django.urls import reverse
 
-from ..models import UploadedLog
+from ..models import UploadedLog, UploadedLogAnalysis
 from .uploaded_log_shared_setup import UploadedLogSharedSetupMixin
 
 
@@ -63,6 +63,42 @@ class UploadedLogDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, '>encoding<')
+
+    def test_detail_view_redetects_stale_log_type_and_rescans_stats(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='stale-type',
+            forum_username='forum_user',
+            original_filename='FRST.txt',
+            content='Scan result of Farbar Recovery Scan Tool (FRST) (x64)\nline\n',
+            log_type='Unknown',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'log-type-frst')
+        uploaded.refresh_from_db()
+        self.assertEqual(uploaded.log_type, 'FRST')
+        self.assertTrue(UploadedLogAnalysis.objects.filter(upload=uploaded).exists())
+
+    def test_detail_view_does_not_save_when_log_type_is_current(self):
+        uploaded = UploadedLog.objects.create(
+            upload_id='current-type',
+            forum_username='forum_user',
+            original_filename='x.txt',
+            content='payload',
+            log_type='Unknown',
+        )
+        updated_at = uploaded.updated_at
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('view_uploaded_log', args=[uploaded.upload_id]))
+
+        self.assertEqual(response.status_code, 200)
+        uploaded.refresh_from_db()
+        self.assertEqual(uploaded.log_type, 'Unknown')
+        self.assertEqual(uploaded.updated_at, updated_at)
 
     def test_authenticated_user_can_delete_upload(self):
         uploaded = UploadedLog.objects.create(

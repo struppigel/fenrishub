@@ -2,7 +2,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from ..log_converters import convert_log_to_response, parse_securitycheck
-from ..models import UploadedLog
+from ..models import LogTypeDetectionRule, UploadedLog
 from .uploaded_log_shared_setup import UploadedLogSharedSetupMixin
 
 
@@ -158,6 +158,16 @@ class ConvertLogToResponseTests(TestCase):
 
 class CopyResponseButtonTests(UploadedLogSharedSetupMixin, TestCase):
 
+    def setUp(self):
+        super().setUp()
+        # The detail view re-detects log_type, and no SecurityCheck rule is seeded.
+        LogTypeDetectionRule.objects.create(
+            name='SecurityCheck',
+            log_type='SecurityCheck',
+            pattern=r'^SecurityCheck by',
+            scope=LogTypeDetectionRule.SCOPE_START,
+        )
+
     def _create_log(self, upload_id, log_type, content):
         return UploadedLog.objects.create(
             upload_id=upload_id,
@@ -178,7 +188,9 @@ class CopyResponseButtonTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.context['converted_response'], EXPECTED_REDDIT)
 
     def test_button_hidden_for_other_log_types(self):
-        log = self._create_log('frst-river', 'FRST', SECURITYCHECK_LOG)
+        log = self._create_log(
+            'frst-river', 'FRST', 'Scan result of Farbar Recovery Scan Tool (FRST)\n' + SECURITYCHECK_LOG,
+        )
         self.client.login(username='alice', password='password123')
 
         response = self.client.get(reverse('view_uploaded_log', args=[log.upload_id]))

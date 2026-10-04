@@ -818,9 +818,14 @@ class UploadedLog(models.Model):
         self.fixlog_not_found = not_found
         self.fixlog_error = error
 
-    def recalculate_log_type(self):
-        self.log_type = detect_log_type(self.content or '')
+    def recalculate_log_type(self) -> bool:
+        """Re-run detection; saves and returns True only when the type changed."""
+        new_type = detect_log_type(self.content or '')
+        if new_type == self.log_type:
+            return False
+        self.log_type = new_type
         self.save(update_fields=['log_type', 'updated_at'])
+        return True
 
     def recalculate_scan_date(self):
         self.scan_date = extract_scan_date(self.content or '')
