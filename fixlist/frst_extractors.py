@@ -2,6 +2,8 @@ import ntpath
 import re
 from dataclasses import dataclass, replace
 
+from . import frst_tags
+
 DESCRIPTION_SEP = "|||Description:"
 FIREFOX_PROFILE_RE = re.compile(r"(?i)(\\mozilla\\firefox\\profiles\\)[^\\]+")
 # Chromium-family browsers (Chrome, Edge, Brave, Vivaldi, Opera, ...) all keep
@@ -273,18 +275,19 @@ def _strip_frst_filepath_markers(value: str) -> str:
     return value
 
 
-# FRST writes the not-signed tag in the language of the scanned system.
-# `[File not signed?]` is left out: what FRST means by it is unclear.
-_FILE_NOT_SIGNED_TAGS = (
-    "[File not signed]",
-    "[Archivo no firmado]",
-    "[Arquivo não assinado]",
-    "[Fichier non signé]",
-    "[Datei ist nicht signiert]",
-    "[Brak podpisu cyfrowego]",
-    "[Файл не подписан]",
-    "[文件未签名]",
+# FRST's bracket tags after a file's company (`[File not signed]`, `[File is in
+# use]`, `[symlink -> ...]`), in every language listed in frst_tags.py -- add
+# translations there, not here.
+_FILE_NOT_SIGNED_TAGS = tuple(f"[{text}]" for text in frst_tags.NOT_SIGNED)
+_FILE_TAG = (
+    r"\[(?:"
+    + "|".join(re.escape(text) for text in sorted(frst_tags.ALL_FIXED, key=len, reverse=True))
+    + "|"
+    + "|".join(re.escape(prefix) + r"[^\]]*" for prefix in frst_tags.PREFIXED)
+    + r")\]"
 )
+# Any number of tags, each with optional leading whitespace.
+_FILE_TAGS = r"(?:\s*" + _FILE_TAG + r")*"
 
 
 def extract_frst_entry(line, regexp, group_map, entry_type=""):
@@ -341,7 +344,7 @@ def extract_frst_entry(line, regexp, group_map, entry_type=""):
 # requiring the closing `)` to be followed by valid trailing content — never
 # just any `)`. The `\(` alternative covers concatenated entries where another
 # `(...)` group follows the company (e.g. process-style continuations).
-_COMPANY_GROUP = r"(.*?)\)(?=\s*(?:<====|\(No File\)|\[File not signed\]|\(|$))"
+_COMPANY_GROUP = r"(.*?)\)(?=\s*(?:<====|\(No File\)|" + _FILE_TAG + r"|\(|$))"
 
 
 def extract_frst_service(line):
@@ -412,12 +415,13 @@ def extract_frst_scheduled_task(line):
     #   - `[<size date>] (<company>)`     (canonical FRST output)
     #   - `-> <args>`                     (e.g. Opera/iTop autoupdate tasks, vbs droppers)
     #   - `<==== ATTENTION`               (FRST malware marker)
-    #   - `[File not signed]` / end-of-line
+    #   - tags such as `[File not signed]` (any language in frst_tags) / end-of-line
     # The filepath ends at the first ` [`, ` ->`, ` <====`, or end-of-line — `(x86)`
     # in `C:\Program Files (x86)\...` and an empty `()` company both parse correctly.
     # The task path (group 2) goes into `name`, and any trailing `-> args` goes into
     # `arguments`. Both are needed in __eq__ so two tasks at different paths or with
-    # different vbs/exe arguments do not collapse into a single FrstEntry.
+    # different vbs/exe arguments do not collapse into a single FrstEntry. Tags may
+    # sit before the `->` (`() [File not signed] -> args`) or after it.
     regexp = (
         r"Task:\s*?\{(.*?)\}\s*(?:-\s*)?(.+?)\s*=>"
         r"(?!\s*(?:\{|Command\(\d+\):))"   # exclude `=> {GUID}` and `=> Command(N):` forms
@@ -426,10 +430,12 @@ def extract_frst_scheduled_task(line):
         # Optional `[date] (company)` block. Company may contain nested parens
         # (e.g. `Intel(R) Client Connectivity Division SW -> Intel Corporation`) —
         # the closing `)` must be followed by valid trailing content, not just any `)`.
-        r"(?:\s+\[(.*?)\]\s*\((.*?)\)(?=\s*(?:->|<====|\(No File\)|\[File not signed\]|\(|$)))?"
+        r"(?:\s+\[(.*?)\]\s*\((.*?)\)(?=\s*(?:->|<====|\(No File\)|" + _FILE_TAG + r"|\(|$)))?"
+        + _FILE_TAGS
         # Optional `-> args` tail (e.g. `wscript.exe ... -> "%LOCALAPPDATA%\foo.vbs"`).
-        r"(?:\s*->\s*(.+?))?"
-        r"\s*(?:\[File not signed\])?\s*(?:<====.*)?\s*$"
+        + r"(?:\s*->\s*(.+?))?"
+        + _FILE_TAGS
+        + r"\s*(?:<====.*)?\s*$"
     )
     group_map = {"clsid": 1, "name": 2, "filepath": 3, "date": 4, "company": 5, "arguments": 6}
     return extract_frst_entry(line, regexp, group_map, entry_type="scheduled_task")
@@ -465,16 +471,19 @@ def extract_frst_scheduled_task_job(line):
 
 
 def extract_frst_startup(line):
-    # Trailing tokens FRST may append after the date bracket: `[File not signed]`,
-    # `<==== ATTENTION`, and the `(No File)` status marker. Anchoring all of them
-    # prevents `(.+?)` from swallowing them into the filepath.
+    # `Startup: <path> [<size date>] (<company>) [tags]`, every part after the path
+    # optional. FRST may also append the `(No File)` status marker and
+    # `<==== ATTENTION`. Anchoring all of them prevents `(.+?)` from swallowing
+    # them into the filepath. A tag (frst_tags, any language) is never the date,
+    # and `(No File)` is never the company.
     regexp = (
-        r"Startup: (.+?)(?: \[([^\]]*)\])?"
-        r"\s*(?:\[File not signed\])?"
-        r"\s*(?:\(No File\))?"
+        r"Startup: (.+?)(?: (?!" + _FILE_TAG + r")\[([^\]]*)\])?"
+        r"(?:\s+\((?!No File\))(.*?)\))?"
+        + _FILE_TAGS
+        + r"\s*(?:\(No File\))?"
         r"\s*(?:<====.*)?$"
     )
-    group_map = {"filepath": 1, "date": 2}
+    group_map = {"filepath": 1, "date": 2, "company": 3}
     return extract_frst_entry(line, regexp, group_map, entry_type="startup")
 
 
@@ -509,7 +518,7 @@ def extract_onemonth(line):
     regexp = (
         r"(?:Found path already in\s+)?"
         + r"(" + _ONEMONTH_TS + r") - " + _ONEMONTH_TS +
-        r" - \d+ (.{5}) (\((.*)\) )?(\w:\\.*)"
+        r" - \d+ (.{5}) (\((.*)\) )?(?:" + _FILE_TAG + r"\s+)*(\w:\\.*)"
     )
     group_map = {"date": 1, "attributes": 2, "company": 4, "filepath": 5}
     return extract_frst_entry(line, regexp, group_map, entry_type="onemonth")
@@ -517,10 +526,10 @@ def extract_onemonth(line):
 
 def extract_process(line):
     # `(<parent> ->) (<company>) [tags] <path>`. FRST puts tags such as
-    # `[File not signed]` (in the system's language) or `[File is in use]`
+    # `[File not signed]` or `[File is in use]` (any language in frst_tags)
     # between the company and the path. The parent goes into `name`, normalized
     # like a path so the same process tree matches across users and casings.
-    regexp = r"(\((.* )->\) )?\((.*)\)(?:\s+\[[^\]]*\])*\s+(\w:\\[^\<]*?)( \<\d+\>)?$"
+    regexp = r"(\((.* )->\) )?\((.*)\)(?:\s+" + _FILE_TAG + r")*\s+(\w:\\[^\<]*?)( \<\d+\>)?$"
     group_map = {"name": 2, "company": 3, "filepath": 4}
     entry = extract_frst_entry(line, regexp, group_map, entry_type="process")
     if entry is None or not entry.name:
@@ -588,13 +597,14 @@ def extract_firewall_rule(line):
         return None
     # After the target FRST writes `(Signer -> Company)` for a signed file and
     # `(Company) [File not signed]` for an unsigned one, either name possibly
-    # empty, and may append `<==== ATTENTION`. The parentheses only end the path
-    # when one of those shapes follows, so `Program Files (x86)` stays in it.
+    # empty, and may append more tags (`[File is in use]`, `[symlink -> ...]`;
+    # any language in frst_tags) and `<==== ATTENTION`. The parentheses only end
+    # the path when one of those shapes follows, so `Program Files (x86)` stays in it.
     regexp = (
         _FIREWALL_RULE_PREFIX
         + r"(.+?)"
-        + r"(?:\s+\((?:([^()]*?)\s*->\s*|(?=[^()]*\)\s*\[File not signed\]))([^()]*)\)"
-        + r"(?:\s*\[File not signed\])?)?"
+        + r"(?:\s+\((?:([^()]*?)\s*->\s*|(?=[^()]*\)(?:\s*" + _FILE_TAG + r")+))([^()]*)\)"
+        + _FILE_TAGS + r")?"
         + r"(?:\s*<====.*)?\s*$"
     )
     group_map = {"name": 2, "filepath": 3, "company": 5}
