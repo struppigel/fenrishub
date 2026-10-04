@@ -488,6 +488,137 @@ function statusOf(index) {
 })();
 
 // ---------------------------------------------------------------------------
+// Status picker on partially coloured lines (saveStatusSelection)
+//
+// saveStatusSelection is async but never awaits, so its state changes are done
+// by the time the call returns.
+// ---------------------------------------------------------------------------
+
+// A line whose verdict comes from a substring rule that colours only its match.
+function partialLine(text, token, status) {
+    const start = text.indexOf(token);
+    return {
+        ...line(text, status, 'substring'),
+        css_class: 'status-unknown',
+        paint_base: null,
+        highlights: [{ start, end: start + token.length, status, priority: 7 }],
+    };
+}
+
+function pendingShape() {
+    return [...pendingStatusChanges.values()]
+        .map((change) => `${change.original_status}->${change.new_status}`)
+        .join(' ');
+}
+
+(function testSameStatusQueuesFullRuleOnPartialLine() {
+    reset();
+    const text = 'R1 evil; C:\\bad\\evil.sys [X]';
+    loadLines([partialLine(text, 'evil.sys', 'B')]);
+
+    saveStatusSelection(0, 'B');
+
+    assert('picking the verdict queues a same-status override', pendingShape() === 'B->B', 'got ' + pendingShape());
+    assert(
+        'the queued full rule colours the whole line',
+        analyzedLines[0].css_class === STATUS_CLASS_MAP.B && highlightShape(0) === '',
+        'got ' + analyzedLines[0].css_class + ' / ' + highlightShape(0)
+    );
+
+    saveStatusSelection(0, 'B');
+
+    assert('picking it again removes the override', pendingStatusChanges.size === 0, 'got ' + pendingShape());
+    assert(
+        'the partial colouring comes back',
+        analyzedLines[0].css_class === 'status-unknown' && highlightShape(0) === tokenSpan(text, 'evil.sys', 'B', 7),
+        'got ' + analyzedLines[0].css_class + ' / ' + highlightShape(0)
+    );
+    reset();
+})();
+
+(function testOtherStatusTogglesOnPartialLine() {
+    reset();
+    loadLines([partialLine('R1 evil; C:\\bad\\evil.sys [X]', 'evil.sys', 'B')]);
+
+    saveStatusSelection(0, 'P');
+    assert('picking another status queues it', pendingShape() === 'B->P', 'got ' + pendingShape());
+
+    saveStatusSelection(0, 'B');
+    assert('picking the verdict then switches to a same-status override', pendingShape() === 'B->B', 'got ' + pendingShape());
+
+    saveStatusSelection(0, 'P');
+    saveStatusSelection(0, 'P');
+    assert('picking the active status again removes it', pendingStatusChanges.size === 0, 'got ' + pendingShape());
+    assert('the verdict is back to the analyzed one', statusOf(0) === 'B', 'got ' + statusOf(0));
+    reset();
+})();
+
+(function testWholeLineVerdictKeepsNoOp() {
+    reset();
+    loadLines([line('R1 evil; C:\\bad\\evil.sys [X]', 'B', 'exact')]);
+
+    saveStatusSelection(0, 'B');
+    assert('a fully coloured line gets no same-status override', pendingStatusChanges.size === 0, 'got ' + pendingShape());
+    reset();
+})();
+
+(function testNormalLineRevertsByPickingBaseStatus() {
+    reset();
+    loadLines([line('R1 evil; C:\\bad\\evil.sys [X]', 'C', 'exact')]);
+
+    saveStatusSelection(0, 'B');
+    assert('an override is queued', pendingShape() === 'C->B', 'got ' + pendingShape());
+
+    saveStatusSelection(0, 'C');
+    assert('picking the analyzed status removes it', pendingStatusChanges.size === 0, 'got ' + pendingShape());
+    reset();
+})();
+
+(function testFallbackOnlyLineStillQueues() {
+    reset();
+    const text = 'R2 evil; C:\\bad\\evil.sys [X]';
+    const pathStart = text.indexOf('C:');
+    loadLines([{
+        ...line(text, 'C', 1),
+        matcher: 'filepath',
+        css_class: 'status-unknown',
+        paint_base: null,
+        highlights: [{ start: pathStart, end: pathStart + 'C:\\bad\\evil.sys'.length, status: 'C', priority: 1 }],
+        fallback_only: true,
+    }]);
+
+    saveStatusSelection(0, 'C');
+    assert('a fallback-only line queues a same-status override', pendingShape() === 'C->C', 'got ' + pendingShape());
+    reset();
+})();
+
+(function testDifferentBaseColourCountsAsPartial() {
+    reset();
+    // A substring B and a whole-line regex C share a tier: B wins the verdict,
+    // but the line text is C with only the substring in B.
+    const text = 'R1 evil; C:\\bad\\evil.sys [X]';
+    const start = text.indexOf('evil.sys');
+    loadLines([{
+        ...line(text, 'B', 7),
+        css_class: STATUS_CLASS_MAP.C,
+        paint_base: { status: 'C', priority: 7 },
+        highlights: [{ start, end: start + 'evil.sys'.length, status: 'B', priority: 7 }],
+    }]);
+
+    assert('the line counts as partially coloured', verdictIsPartiallyColored(analyzedLines[0]) === true);
+    saveStatusSelection(0, 'B');
+    assert('picking the verdict queues a same-status override', pendingShape() === 'B->B', 'got ' + pendingShape());
+    reset();
+})();
+
+(function testUnknownLineIsNotPartial() {
+    reset();
+    loadLines([line('R1 something; C:\\x.sys [X]')]);
+    assert('an unknown line is not partially coloured', verdictIsPartiallyColored(analyzedLines[0]) === false);
+    reset();
+})();
+
+// ---------------------------------------------------------------------------
 // The menu itself
 // ---------------------------------------------------------------------------
 (function testItemOfferedForEveryKind() {

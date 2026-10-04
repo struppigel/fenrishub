@@ -717,6 +717,22 @@ function attachLineKeys(lines) {
     });
 }
 
+// True when the line's verdict is not shown as a whole-line colour: the deciding
+// rules colour only a substring or the file path (or nothing, for a filepath
+// fallback). No full-line rule for that verdict exists yet, so picking the same
+// status still has something to save.
+function verdictIsPartiallyColored(entry) {
+    const status = (entry && entry._baseDominantStatus) || '?';
+    if (status === '?') {
+        return false;
+    }
+    if (entry._baseFallbackOnly) {
+        return true;
+    }
+    const base = entry._basePaintBase;
+    return !base || base.status !== status;
+}
+
 function pendingOverrideKeyForEntry(entry, fallbackIndex = 0) {
     if (entry && typeof entry._lineTextKey === 'string') {
         return entry._lineTextKey;

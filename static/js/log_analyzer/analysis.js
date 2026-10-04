@@ -739,13 +739,14 @@ async function saveStatusSelection(index, newStatus) {
     }
     const currentStatus = entry.dominant_status || '?';
     const baseStatus = entry._baseDominantStatus || currentStatus;
-    // Lines whose verdict rests only on filepath fallbacks show the rule's verdict
-    // on the badge but no full match exists yet. Clicking even the same status
-    // must register an override so the workflow can persist a full parsed_entry
-    // rule for this line.
-    const hasFilepathFallback = Boolean(entry._baseFallbackOnly);
+    // On a partially coloured line (substring, file path or filepath fallback
+    // decides the verdict) the badge shows the verdict but no full-line rule for
+    // it exists yet. Clicking even the same status must register an override so
+    // the workflow can persist a full exact/parsed rule for this line; clicking
+    // the override's status again takes it back.
+    const partiallyColored = verdictIsPartiallyColored(entry);
 
-    if (currentStatus === newStatus && !hasFilepathFallback) {
+    if (currentStatus === newStatus && !partiallyColored) {
         closeStatusPicker();
         return;
     }
@@ -762,7 +763,11 @@ async function saveStatusSelection(index, newStatus) {
         const lineKey = pendingOverrideKeyForEntry(entry, index);
         const existing = pendingStatusChanges.get(lineKey);
 
-        if (newStatus === baseStatus && !hasFilepathFallback) {
+        const removeOverride = partiallyColored
+            ? Boolean(existing) && existing.new_status === newStatus
+            : newStatus === baseStatus;
+
+        if (removeOverride) {
             pendingStatusChanges.delete(lineKey);
         } else {
             let id = existing ? existing.id : null;
