@@ -509,6 +509,34 @@ def extract_installed_software(line):
     return extract_frst_entry(line, regexp, group_map, entry_type="installed_software")
 
 
+# FRST shortens an Installed Programs uninstall key to `HIVE\...\KEY`. The part
+# it leaves out depends only on the hive, so the full key can be rebuilt. The key
+# runs up to `) (Version:` because key names may hold parens of their own
+# (`Mozilla Firefox 128.0 (x64 en-US)`). The SID is kept strict so a hive form we
+# don't know yields nothing rather than a wrong path.
+_INSTALLED_SOFTWARE_KEY_RE = re.compile(
+    r"\((HKLM(?:-x32)?|HKU\\S-1-[\d-]+)\\\.\.\.\\(.+?)\) \(Version:"
+)
+_UNINSTALL_SUBKEY = r"Microsoft\Windows\CurrentVersion\Uninstall"
+
+
+def installed_software_uninstall_key(line):
+    r"""The uninstall key of an Installed Programs line as (key name, full key),
+    e.g. ("{GUID}", r"HKLM\SOFTWARE\WOW6432Node\...\Uninstall\{GUID}") for an
+    `HKLM-x32\...\{GUID}` line, or None when the line carries no such key."""
+    match = _INSTALLED_SOFTWARE_KEY_RE.search(strip_description(line))
+    if not match:
+        return None
+    hive, key = match.groups()
+    if hive == "HKLM":
+        path = rf"HKLM\SOFTWARE\{_UNINSTALL_SUBKEY}\{key}"
+    elif hive == "HKLM-x32":
+        path = rf"HKLM\SOFTWARE\WOW6432Node\{_UNINSTALL_SUBKEY}\{key}"
+    else:
+        path = rf"{hive}\Software\{_UNINSTALL_SUBKEY}\{key}"
+    return key, path
+
+
 _ONEMONTH_TS = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?"
 
 

@@ -1,6 +1,10 @@
 from django.test import TestCase
 
-from ..frst_extractors import extract_frst_service, extract_installed_software
+from ..frst_extractors import (
+    extract_frst_service,
+    extract_installed_software,
+    installed_software_uninstall_key,
+)
 
 
 GUID_LINE = (
@@ -69,3 +73,74 @@ class ExtractInstalledSoftwareTests(TestCase):
         )
         entry = extract_installed_software(not_hidden)
         self.assertFalse(entry.is_hidden)
+
+
+class InstalledSoftwareUninstallKeyTests(TestCase):
+    r"""FRST shortens the uninstall key to `HIVE\...\KEY`; the copy menu offers
+    the key name and the full key rebuilt from the hive."""
+
+    UNINSTALL = r"Microsoft\Windows\CurrentVersion\Uninstall"
+
+    def test_hklm_x32_expands_to_wow6432node(self):
+        line = (
+            r"Wireless Utility (HKLM-x32\...\{81FBE49E-CFE9-44C3-BD74-9EAF39953649}) "
+            r"(Version: 6.5 - Broadcom Inc.)"
+        )
+        self.assertEqual(
+            installed_software_uninstall_key(line),
+            (
+                "{81FBE49E-CFE9-44C3-BD74-9EAF39953649}",
+                rf"HKLM\SOFTWARE\WOW6432Node\{self.UNINSTALL}\{{81FBE49E-CFE9-44C3-BD74-9EAF39953649}}",
+            ),
+        )
+
+    def test_hklm_expands_to_software(self):
+        line = (
+            r"Windows PC Health Check (HKLM\...\{6798C408-2636-448C-8AC6-F4E341102D27}) "
+            r"(Version: 3.6.2204.08001 - Microsoft Corporation)"
+        )
+        self.assertEqual(
+            installed_software_uninstall_key(line),
+            (
+                "{6798C408-2636-448C-8AC6-F4E341102D27}",
+                rf"HKLM\SOFTWARE\{self.UNINSTALL}\{{6798C408-2636-448C-8AC6-F4E341102D27}}",
+            ),
+        )
+
+    def test_hidden_suffix_does_not_end_up_in_key(self):
+        line = (
+            r"UsbRepairTool (HKLM-x32\...\{F8762A81-32B5-4144-9F3C-9274F515A651}) "
+            r"(Version: 1.4.0.0 - Brother Industries, Ltd.) Hidden"
+        )
+        key, path = installed_software_uninstall_key(line)
+        self.assertEqual(key, "{F8762A81-32B5-4144-9F3C-9274F515A651}")
+        self.assertTrue(path.endswith(r"\Uninstall\{F8762A81-32B5-4144-9F3C-9274F515A651}"))
+
+    def test_hku_keeps_sid_and_named_key(self):
+        sid = "S-1-5-21-2331057209-136270744-4161921719-1001"
+        line = (
+            rf"Zoom Workplace (HKU\{sid}\...\ZoomUMX) "
+            r"(Version: 7.1.9 (48550) - Zoom Communications, Inc.)"
+        )
+        self.assertEqual(
+            installed_software_uninstall_key(line),
+            ("ZoomUMX", rf"HKU\{sid}\Software\{self.UNINSTALL}\ZoomUMX"),
+        )
+
+    def test_key_with_parens_is_kept_whole(self):
+        line = (
+            r"Mozilla Firefox (x64 en-US) (HKLM\...\Mozilla Firefox 128.0 (x64 en-US)) "
+            r"(Version: 128.0 - Mozilla)"
+        )
+        key, path = installed_software_uninstall_key(line)
+        self.assertEqual(key, "Mozilla Firefox 128.0 (x64 en-US)")
+        self.assertEqual(path, rf"HKLM\SOFTWARE\{self.UNINSTALL}\Mozilla Firefox 128.0 (x64 en-US)")
+
+    def test_description_suffix_is_ignored(self):
+        line = NAMED_LINE + "|||Description: (Version: 1 - Foo)"
+        self.assertEqual(installed_software_uninstall_key(line)[0], "Adobe AIR")
+
+    def test_line_without_uninstall_key_returns_none(self):
+        self.assertIsNone(installed_software_uninstall_key(
+            r"R2 FakeSvc; C:\Windows\foo.exe [1234 2024-01-01] (Acme)"
+        ))

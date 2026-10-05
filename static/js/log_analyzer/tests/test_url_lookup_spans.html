@@ -8,6 +8,10 @@
   separating semicolon and the VirusTotal/urlscan lookup searched for
   "...example%3B". Trailing punctuation must be trimmed off the span.
 
+  Also covers the copy items: the IP/URL/domain lookup menus offer a copy
+  (URLs copied refanged), and the ⎘ menu (buildLineLookupItems) lists IPs and
+  the Installed Programs uninstall key.
+
   Open this file directly in a browser (no build step needed).
   Pass = green row, Fail = red row with an error message.
 -->
@@ -147,6 +151,85 @@ function vtUrlFor(value) {
         bad.length === 0,
         bad.map((s) => JSON.stringify(s)).join(' ')
     );
+})();
+
+// ---------------------------------------------------------------------------
+// Copy items: clicking an IP/URL/domain offers a copy, and the ⎘ menu lists IPs
+// ---------------------------------------------------------------------------
+(function testLookupKindsOfferCopy() {
+    for (const kind of ['ipv4', 'ipv6', 'url', 'domain']) {
+        assert(
+            'lookup menu offers a copy item for kind: ' + kind,
+            LOOKUP_KINDS[kind].items.some((i) => i.copy),
+            LOOKUP_KINDS[kind].items.map((i) => i.label).join(' | ')
+        );
+    }
+})();
+
+// copyToClipboard is called synchronously from the click handler, so a stub
+// records the value before the handler's first await.
+function copiedFromLookupMenu(value, kind, label) {
+    const realCopy = copyToClipboard;
+    let copied = null;
+    copyToClipboard = async (text) => { copied = text; return true; };
+    try {
+        const trigger = document.createElement('button');
+        document.body.appendChild(trigger);
+        openLookupMenu(trigger, value, kind);
+        const item = Array.from(document.querySelectorAll('.lookup-menu .lookup-menu-item'))
+            .find((el) => el.textContent === label);
+        if (item) item.click();
+        closeLookupMenu();
+        trigger.remove();
+    } finally {
+        copyToClipboard = realCopy;
+    }
+    return copied;
+}
+
+(function testCopyItemsCopyTheToken() {
+    let got = copiedFromLookupMenu('hxxps://evil.example/a', 'url', 'copy url instead');
+    assert('copied URL is refanged', got === 'https://evil.example/a', 'got ' + got);
+    got = copiedFromLookupMenu('https://good.example/a', 'url', 'copy url instead');
+    assert('copied https URL is unchanged', got === 'https://good.example/a', 'got ' + got);
+    got = copiedFromLookupMenu('1.2.3.4', 'ipv4', 'copy ip instead');
+    assert('copied IPv4 is the address', got === '1.2.3.4', 'got ' + got);
+    got = copiedFromLookupMenu('evil.example', 'domain', 'copy domain instead');
+    assert('copied domain is the domain', got === 'evil.example', 'got ' + got);
+})();
+
+function lookupItemsFor(entry) {
+    return buildLineLookupItems(entry).map((i) => i.key + '=' + i.value);
+}
+
+(function testCopyMenuListsIps() {
+    const items = lookupItemsFor({ line: 'Hosts: 1.2.3.4 evil.example' });
+    assert('⎘ menu lists the IP', items.includes('ip=1.2.3.4'), items.join(' | '));
+    assert('⎘ menu still lists the domain', items.includes('domain=evil.example'), items.join(' | '));
+
+    const versionLine = 'Foo (HKLM\\...\\Foo) (Version: 1.2.3.4 - Acme)';
+    const versionItems = lookupItemsFor({ line: versionLine });
+    assert(
+        '⎘ menu does not list an Installed Programs version as an IP',
+        !versionItems.some((i) => i.startsWith('ip=')),
+        versionItems.join(' | ')
+    );
+})();
+
+(function testCopyMenuListsUninstallKey() {
+    const items = lookupItemsFor({
+        line: 'Zoom Workplace (HKU\\S-1-5-21-1-2-3-1001\\...\\ZoomUMX) (Version: 7.1.9 (48550) - Zoom)',
+        components: {
+            uninstall_key: 'ZoomUMX',
+            uninstall_key_path: 'HKU\\S-1-5-21-1-2-3-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZoomUMX',
+        },
+    });
+    assert(
+        '⎘ menu lists the full uninstall registry key',
+        items.includes('registry key=HKU\\S-1-5-21-1-2-3-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZoomUMX'),
+        items.join(' | ')
+    );
+    assert('⎘ menu lists the key name', items.includes('key name=ZoomUMX'), items.join(' | '));
 })();
 
 // ---------------------------------------------------------------------------

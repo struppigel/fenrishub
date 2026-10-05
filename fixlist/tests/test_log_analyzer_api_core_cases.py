@@ -122,6 +122,38 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(components.get("name"), "SomeValue")
         self.assertEqual(components.get("company"), "Acme")
 
+    def test_analyze_api_components_include_installed_software_uninstall_key(self):
+        """Installed Programs lines carry the uninstall key name and the full key
+        FRST elides as `\\...\\`, for the line copy menu. Other entry types don't."""
+        self.client.login(username="analyzer", password="password123")
+        sid = "S-1-5-21-2331057209-136270744-4161921719-1001"
+        installed_line = (
+            rf"Zoom Workplace (HKU\{sid}\...\ZoomUMX) "
+            r"(Version: 7.1.9 (48550) - Zoom Communications, Inc.)"
+        )
+        runkey_line = (
+            r"HKU\S-1-5-21-111-222-333-1001\...\Run: [SomeValue] => C:\Users\Alice\Some.exe "
+            r"[2024-01-01] (Acme)"
+        )
+
+        response = self.client.post(
+            reverse("analyze_log_api"),
+            data=json.dumps({"log": f"{installed_line}\n{runkey_line}"}),
+            content_type="application/json",
+        )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        installed = payload["lines"][0].get("components") or {}
+        self.assertEqual(installed.get("uninstall_key"), "ZoomUMX")
+        self.assertEqual(
+            installed.get("uninstall_key_path"),
+            rf"HKU\{sid}\Software\Microsoft\Windows\CurrentVersion\Uninstall\ZoomUMX",
+        )
+        runkey = payload["lines"][1].get("components") or {}
+        self.assertNotIn("uninstall_key", runkey)
+        self.assertNotIn("uninstall_key_path", runkey)
+
     def test_analyze_api_components_omit_path_keys_for_unparsed_lines(self):
         """When no FRST extractor matches a line, no parsed_entry exists and the
         components dict contains no filepath/filename keys (so the copy menu hides

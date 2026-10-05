@@ -809,6 +809,8 @@ const LINE_COPY_COMPONENT_LABELS = [
     ['clsid', 'clsid'],
     ['name', 'name'],
     ['company', 'company'],
+    ['uninstall_key_path', 'registry key'],
+    ['uninstall_key', 'key name'],
 ];
 
 let lineCopyMenuEl = null;
@@ -817,7 +819,7 @@ let lineSearchMenuEl = null;
 let lineSearchMenuTrigger = null;
 
 // Shared by the copy and search menus so both offer the exact same item set:
-// the whole line, parsed components, and any detected URLs/domains.
+// the whole line, parsed components, and any detected URLs/domains/IPs.
 function buildLineLookupItems(entry) {
     const items = [{ key: 'whole line', value: entry.line || '' }];
     const components = (entry && typeof entry.components === 'object') ? entry.components : {};
@@ -828,15 +830,17 @@ function buildLineLookupItems(entry) {
         }
     });
 
-    // Refanged URLs and bare domains detected in the line, so the user can act on
-    // the resolvable form directly without retyping (defanged "hxxp://..." → "http://...").
+    // Refanged URLs, bare domains and IPs detected in the line, so the user can act
+    // on the resolvable form directly without retyping (defanged "hxxp://..." → "http://...").
+    const lookupKeys = { url: 'url', domain: 'domain', ipv4: 'ip', ipv6: 'ip' };
     const seenLookups = new Set();
     for (const span of findHighlightSpans(entry.line || '')) {
-        if (span.type !== 'url' && span.type !== 'domain') continue;
+        const key = lookupKeys[span.type];
+        if (!key) continue;
         const value = span.type === 'url' ? refangUrl(span.text) : span.text;
         if (seenLookups.has(value)) continue;
         seenLookups.add(value);
-        items.push({ key: span.type, value });
+        items.push({ key, value });
     }
     return items;
 }
@@ -1121,6 +1125,7 @@ const IP_LOOKUP_ITEMS = [
     { label: 'who.is', url: (v) => `https://who.is/whois-ip/ip-address/${encodeURIComponent(v)}` },
     { label: 'abuseipdb', url: (v) => `https://www.abuseipdb.com/check/${encodeURIComponent(v)}` },
     { label: 'urlscan.io', url: (v) => `https://urlscan.io/ip/${encodeURIComponent(v)}` },
+    { label: 'copy ip instead', copy: true },
 ];
 
 const LOOKUP_KINDS = {
@@ -1171,6 +1176,7 @@ const LOOKUP_KINDS = {
                 return `https://who.is/whois/${encodeURIComponent(host)}`;
             } },
             { label: 'urlscan.io', url: (v) => `https://urlscan.io/search/#${encodeURIComponent(refangUrl(v))}` },
+            { label: 'copy url instead', copy: refangUrl },
         ],
     },
     'domain': {
@@ -1180,6 +1186,7 @@ const LOOKUP_KINDS = {
             { label: 'virustotal', url: (v) => `https://www.virustotal.com/gui/domain/${encodeURIComponent(v)}` },
             { label: 'who.is', url: (v) => `https://who.is/whois/${encodeURIComponent(v)}` },
             { label: 'urlscan.io', url: (v) => `https://urlscan.io/domain/${encodeURIComponent(v)}` },
+            { label: 'copy domain instead', copy: true },
         ],
     },
 };
@@ -1565,17 +1572,20 @@ function renderLookupItemsMenu(menu, trigger, value, kind) {
     appendLookupMenuHeader(menu, config.menuHeader);
 
     config.items.forEach((item) => {
+        // `copy` is either `true` (copy the token as shown) or a function that
+        // maps it first, e.g. refangUrl so a copied URL is the resolvable form.
         if (item.copy) {
             const btn = createLookupMenuButton(item.label);
-            btn.addEventListener('click', (event) => {
+            btn.addEventListener('click', async (event) => {
                 event.preventDefault();
-                navigator.clipboard.writeText(value).then(() => {
+                const text = typeof item.copy === 'function' ? item.copy(value) : value;
+                if (await copyToClipboard(text)) {
                     btn.textContent = 'copied';
                     setTimeout(() => closeLookupMenu(), 600);
-                }, () => {
+                } else {
                     btn.textContent = 'copy failed';
                     setTimeout(() => closeLookupMenu(), 800);
-                });
+                }
             });
             menu.appendChild(btn);
             return;

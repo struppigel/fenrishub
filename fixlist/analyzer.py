@@ -1302,6 +1302,10 @@ def _build_line_result(
             pos = ex.find_value_position(normalized, line, key, start=path_start)
             if pos:
                 components[key] = line[pos[0]:pos[1]]
+        if parsed_entry.entry_type == "installed_software":
+            uninstall_key = ex.installed_software_uninstall_key(line)
+            if uninstall_key:
+                components["uninstall_key"], components["uninstall_key_path"] = uninstall_key
     return {
         "line": line,
         "status_codes": status_codes,
