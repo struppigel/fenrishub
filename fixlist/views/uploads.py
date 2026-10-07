@@ -315,6 +315,7 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
             Q(upload_id__icontains=search_query)
             | Q(forum_username__icontains=search_query)
             | Q(recipient_user__username__icontains=search_query)
+            | Q(original_filename__icontains=search_query)
         )
     if deleted:
         uploads = uploads.order_by('-deleted_at')

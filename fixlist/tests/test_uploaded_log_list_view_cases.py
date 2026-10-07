@@ -858,6 +858,22 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'azure-bear')
         self.assertNotContains(response, 'amber-wolf')
 
+    def test_search_filters_by_filename(self):
+        UploadedLog.objects.create(
+            upload_id='amber-wolf', forum_username='user1',
+            original_filename='FRST.txt', content='aaa', recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='azure-bear', forum_username='user2',
+            original_filename='Fixlog.txt', content='bbb', recipient_user=self.user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'q': 'fixlog'})
+
+        self.assertContains(response, 'azure-bear')
+        self.assertNotContains(response, 'amber-wolf')
+
     def _create_typed_logs(self):
         UploadedLog.objects.create(
             upload_id='frst-wolf', forum_username='user1', original_filename='a.txt',

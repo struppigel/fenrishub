@@ -145,7 +145,7 @@
 {% endif %}
 
 <form method="get" action="{% url submit_url_name %}" class="search-filter-form">
-    {% include "partials/search_filter_inputs.html" with search_placeholder="search by user, upload id, assignee" all_users_label="all users" select_id="uploaderSelect" %}
+    {% include "partials/search_filter_inputs.html" with search_placeholder="search by user, upload id, assignee, filename" all_users_label="all users" select_id="uploaderSelect" %}
     <select name="channel" onchange="this.form.submit()" class="search-filter-select" title="filter by channel">
         <option value="mine" {% if channel == 'mine' %}selected{% endif %}>my channel</option>
         <option value="all" {% if channel == 'all' %}selected{% endif %}>all channels</option>
