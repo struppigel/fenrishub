@@ -70,6 +70,11 @@
 
     .upload-stats .rule-set-tag { color: var(--la-text-muted); }
 
+    /* Three filter selects share the row here, so keep them narrower than the global default. */
+    .search-filter-form select.search-filter-select {
+        width: 130px;
+    }
+
     .uploads-count {
         font-size: 11px;
         color: var(--la-text-muted);
@@ -127,6 +132,7 @@
     {% csrf_token %}
     {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
     {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+    {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
     {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
     {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
 </form>
@@ -145,10 +151,16 @@
         <option value="all" {% if channel == 'all' %}selected{% endif %}>all channels</option>
         <option value="unassigned" {% if channel == 'unassigned' %}selected{% endif %}>unassigned</option>
         {% for u in channel_users %}
-        <option value="{{ u }}" {% if u == channel %}selected{% endif %}>{{ u }}'s channel</option>
+        <option value="{{ u }}" {% if u == channel %}selected{% endif %}>{{ u }}</option>
         {% endfor %}
     </select>
-    {% if search_query or username_filter or channel != 'mine' %}
+    <select name="type" onchange="this.form.submit()" class="search-filter-select" title="filter by log type">
+        <option value="">all log types</option>
+        {% for type_name in all_log_types %}
+        <option value="{{ type_name }}" {% if type_name == log_type_filter %}selected{% endif %}>{{ type_name }}</option>
+        {% endfor %}
+    </select>
+    {% if search_query or username_filter or log_type_filter or channel != 'mine' %}
     <a href="{% url submit_url_name %}" class="search-filter-clear">clear</a>
     {% endif %}
     {% if not is_trash %}
@@ -255,6 +267,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn" title="restore this upload from trash">restore</button>
@@ -266,6 +279,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Permanently delete this upload?');" title="permanently delete this upload">delete</button>
@@ -280,6 +294,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn" title="assign this upload to you (take over)">assign</button>
@@ -291,6 +306,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn" title="release this upload back to the general channel">unassign</button>
@@ -302,6 +318,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn" title="copy this upload into your channel (original stays with the other helper)">copy</button>
@@ -318,6 +335,7 @@
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
                 {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this upload to trash?');" title="move this upload to trash">delete</button>

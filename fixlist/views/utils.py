@@ -146,12 +146,12 @@ def get_updatable_uploads(user):
 def redirect_preserving_filters(request, target_url_name):
     """Redirect to a listing view, preserving search/filter query params from POST or GET.
 
-    Preserves `q`, `u`, and `page` as-is. Carries the uploads `channel` filter when it is
-    non-default (anything other than `mine`); fixlist forms never submit it, so it's harmless
-    there.
+    Preserves `q`, `u`, `type`, and `page` as-is. Carries the uploads `channel` filter when it
+    is non-default (anything other than `mine`); fixlist forms never submit `channel` or
+    `type`, so they're harmless there.
     """
     params = {}
-    for key in ('q', 'u'):
+    for key in ('q', 'u', 'type'):
         value = (request.POST.get(key) or request.GET.get(key) or '').strip()
         if value:
             params[key] = value

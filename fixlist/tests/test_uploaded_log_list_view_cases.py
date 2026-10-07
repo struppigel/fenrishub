@@ -858,3 +858,92 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'azure-bear')
         self.assertNotContains(response, 'amber-wolf')
 
+    def _create_typed_logs(self):
+        UploadedLog.objects.create(
+            upload_id='frst-wolf', forum_username='user1', original_filename='a.txt',
+            content='aaa', log_type='FRST', recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='fixlog-bear', forum_username='user1', original_filename='b.txt',
+            content='bbb', log_type='Fixlog', recipient_user=self.user,
+        )
+        UploadedLog.objects.create(
+            upload_id='unknown-fox', forum_username='user1', original_filename='c.txt',
+            content='ccc', log_type='Unknown', recipient_user=self.user,
+        )
+
+    def test_log_type_filter_defaults_to_all_log_types(self):
+        self._create_typed_logs()
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'))
+
+        self.assertEqual(response.context['log_type_filter'], '')
+        self.assertContains(response, '<option value="">all log types</option>', html=True)
+        self.assertContains(response, 'frst-wolf')
+        self.assertContains(response, 'fixlog-bear')
+        self.assertContains(response, 'unknown-fox')
+
+    def test_log_type_filter_shows_only_matching_type(self):
+        self._create_typed_logs()
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'type': 'Fixlog'})
+
+        self.assertEqual(response.context['log_type_filter'], 'Fixlog')
+        self.assertContains(response, 'fixlog-bear')
+        self.assertNotContains(response, 'frst-wolf')
+        self.assertNotContains(response, 'unknown-fox')
+
+    def test_log_type_filter_unknown_shows_only_unknown_logs(self):
+        self._create_typed_logs()
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'type': 'Unknown'})
+
+        self.assertContains(response, 'unknown-fox')
+        self.assertNotContains(response, 'frst-wolf')
+        self.assertNotContains(response, 'fixlog-bear')
+
+    def test_log_type_options_always_include_unknown_last(self):
+        UploadedLog.objects.create(
+            upload_id='only-frst', forum_username='user1', original_filename='a.txt',
+            content='aaa', log_type='FRST', recipient_user=self.user,
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'))
+
+        self.assertEqual(response.context['all_log_types'], ['FRST', 'Unknown'])
+
+    def test_log_type_filter_ignores_unavailable_type(self):
+        self._create_typed_logs()
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'type': 'NoSuchType'})
+
+        self.assertEqual(response.context['log_type_filter'], '')
+        self.assertContains(response, 'frst-wolf')
+        self.assertContains(response, 'fixlog-bear')
+
+    def test_log_type_filter_is_preserved_in_pagination_and_actions(self):
+        for index in range(9):
+            UploadedLog.objects.create(
+                upload_id=f'fixlog-page-{index}', forum_username='user1', original_filename='x.txt',
+                content='payload', log_type='Fixlog', recipient_user=self.user,
+            )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_logs'), {'type': 'Fixlog'})
+
+        self.assertEqual(response.context['pagination_query'], 'type=Fixlog')
+        self.assertContains(response, '<input type="hidden" name="type" value="Fixlog">', html=True)
+
+        action_response = self.client.post(
+            reverse('uploaded_logs'),
+            {'action': 'unassign_to_general', 'upload_id': 'fixlog-page-0', 'type': 'Fixlog'},
+        )
+
+        self.assertEqual(action_response.status_code, 302)
+        self.assertEqual(action_response.url, f"{reverse('uploaded_logs')}?type=Fixlog")
+

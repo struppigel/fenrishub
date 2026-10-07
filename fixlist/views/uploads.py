@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 
 from ..forms import UploadedLogForm
 from ..log_converters import convert_log_to_response
-from ..models import UploadedLog
+from ..models import LOG_TYPE_UNKNOWN, UploadedLog
 from ..permissions import user_can_delete_uploaded_log
 from ..upload_utils import (
     soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
@@ -246,13 +246,15 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     """Build shared listing context (filters/search/pagination) for uploads pages.
 
     Used by both the live uploads view and the trash view. Reads `q`, `u`,
-    `channel`, and `page` from request.GET; flips between active and trashed
-    records via the `deleted` keyword. The returned dict is suitable for direct
-    splatting into a render() context.
+    `type`, `channel`, and `page` from request.GET; flips between active and
+    trashed records via the `deleted` keyword. The returned dict is suitable for
+    direct splatting into a render() context.
 
     The `channel` filter selects which assignment scope is shown:
     `mine` (default, own channel), `all`, `unassigned` (general channel), or a
     specific helper username. Reserved values win over a same-named helper.
+
+    The `type` filter narrows to one log type; empty (the default) means all.
     """
     from django.db.models import Q
 
@@ -260,6 +262,21 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     search_query = request.GET.get('q', '').strip()
 
     deleted_filter = {'deleted_at__isnull': not deleted}
+
+    # Types present anywhere in the current (active/trash) scope, not just the
+    # selected channel, so switching channels keeps the chosen type available.
+    # Unknown is always offered, even when no such log exists yet.
+    present_log_types = set(
+        UploadedLog.objects.filter(**deleted_filter)
+        .values_list('log_type', flat=True)
+        .distinct()
+    )
+    present_log_types.add(LOG_TYPE_UNKNOWN)
+    all_log_types = sorted(present_log_types, key=lambda name: (name == LOG_TYPE_UNKNOWN, name.lower()))
+
+    log_type_filter = request.GET.get('type', '').strip()
+    if log_type_filter not in present_log_types:
+        log_type_filter = ''
 
     # Helpers with at least one log in the current (active/trash) scope, excluding
     # the current user since `mine` already covers them. Drives the dropdown options.
@@ -291,6 +308,8 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     )
     if username_filter:
         uploads = uploads.filter(forum_username=username_filter)
+    if log_type_filter:
+        uploads = uploads.filter(log_type=log_type_filter)
     if search_query:
         uploads = uploads.filter(
             Q(upload_id__icontains=search_query)
@@ -307,6 +326,8 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         pagination_params['u'] = username_filter
     if channel != 'mine':
         pagination_params['channel'] = channel
+    if log_type_filter:
+        pagination_params['type'] = log_type_filter
     if search_query:
         pagination_params['q'] = search_query
 
@@ -324,6 +345,8 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         'all_usernames': all_usernames,
         'channel': channel,
         'channel_users': channel_users,
+        'log_type_filter': log_type_filter,
+        'all_log_types': all_log_types,
         'search_query': search_query,
         'pagination_query': urlencode(pagination_params),
     }
