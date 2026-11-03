@@ -40,6 +40,8 @@ from .analyzer import (
 )
 
 from .snippets import (
+    add_snippet_view,
+    edit_snippet_view,
     snippets_view,
     snippets_api,
 )
@@ -102,6 +104,8 @@ __all__ = [
     'preview_pending_rule_changes_api',
     'persist_pending_rule_changes_api',
     'update_analyzed_line_status_api',
+    'add_snippet_view',
+    'edit_snippet_view',
     'snippets_view',
     'snippets_api',
     'speeches_view',

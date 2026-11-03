@@ -1,7 +1,7 @@
 """
 Fixlist snippet management views.
 
-Handles: creating, editing, deleting, and listing code snippets for reuse in fixlists.
+Handles: creating, editing (full-page editor), deleting, and listing code snippets for reuse in fixlists.
 """
 
 from urllib.parse import urlencode
@@ -13,60 +13,129 @@ from django.core.paginator import Paginator
 from django.views.decorators.http import require_http_methods
 from django.http import JsonResponse
 from django.db.models import Q
+from django.urls import reverse
 
 from django.contrib.auth.models import User
 
 from ..models import FixlistSnippet
+from .rules import _sanitize_return_q
+
+
+def _snippets_redirect(return_q):
+    """Back to the snippets list, keeping the filter/search the user came from."""
+    safe_query = _sanitize_return_q(return_q)
+    if safe_query:
+        return redirect(f"{reverse('snippets')}?{safe_query}")
+    return redirect('snippets')
+
+
+def _snippet_form_from_post(request) -> dict:
+    return {
+        'name': request.POST.get('name', '').strip(),
+        'content': request.POST.get('content', '').strip(),
+        'category': request.POST.get('category', '').strip() or FixlistSnippet.DEFAULT_CATEGORY,
+        'is_shared': request.POST.get('is_shared') == 'on',
+    }
+
+
+def _validate_snippet_form(user, form: dict, exclude_pk=None):
+    """Return an error message for the submitted snippet form, or None if valid."""
+    if not form['name']:
+        return 'Snippet name is required.'
+    if not form['content']:
+        return 'Snippet content is required.'
+    duplicates = FixlistSnippet.objects.filter(owner=user, name=form['name'])
+    if exclude_pk is not None:
+        duplicates = duplicates.exclude(pk=exclude_pk)
+    if duplicates.exists():
+        return f'A snippet named "{form["name"]}" already exists.'
+    return None
+
+
+def _snippet_form_context(user, form: dict, *, editing: bool, return_q: str = '', snippet=None) -> dict:
+    """Context for snippet_editor.html, which serves both the add page and the editor."""
+    cancel_url = reverse('snippets')
+    if return_q:
+        cancel_url = f"{cancel_url}?{return_q}"
+
+    categories = sorted(set(
+        FixlistSnippet.objects.filter(owner=user).values_list('category', flat=True)
+    ))
+
+    return {
+        'editing': editing,
+        'snippet': snippet,
+        'form': form,
+        'categories': categories,
+        'return_q': return_q,
+        'cancel_url': cancel_url,
+    }
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def add_snippet_view(request):
+    """Full-page editor for creating a snippet."""
+    if request.method == 'POST':
+        return_q = request.POST.get('return_q', '')
+        form = _snippet_form_from_post(request)
+        error = _validate_snippet_form(request.user, form)
+        if error:
+            # Re-render instead of redirecting so long snippet content is not lost.
+            messages.error(request, error)
+        else:
+            snippet = FixlistSnippet.objects.create(owner=request.user, **form)
+            snippet.analyzer_users.add(request.user)
+            messages.success(request, f'Snippet "{form["name"]}" created.')
+            return _snippets_redirect(return_q)
+    else:
+        return_q = request.GET.get('return_q', '')
+        form = {
+            'name': '', 'content': '',
+            'category': FixlistSnippet.DEFAULT_CATEGORY, 'is_shared': True,
+        }
+
+    return render(request, 'snippet_editor.html', _snippet_form_context(
+        request.user, form, editing=False, return_q=_sanitize_return_q(return_q),
+    ))
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def edit_snippet_view(request, pk: int):
+    """Full-page editor for one of the user's own snippets."""
+    snippet = get_object_or_404(FixlistSnippet, pk=pk, owner=request.user)
+
+    if request.method == 'POST':
+        return_q = request.POST.get('return_q', '')
+        form = _snippet_form_from_post(request)
+        error = _validate_snippet_form(request.user, form, exclude_pk=snippet.pk)
+        if error:
+            messages.error(request, error)
+        else:
+            for field, value in form.items():
+                setattr(snippet, field, value)
+            snippet.save(update_fields=['name', 'content', 'is_shared', 'category', 'updated_at'])
+            messages.success(request, f'Snippet "{form["name"]}" updated.')
+            return _snippets_redirect(return_q)
+    else:
+        return_q = request.GET.get('return_q', '')
+        form = {
+            'name': snippet.name, 'content': snippet.content,
+            'category': snippet.category, 'is_shared': snippet.is_shared,
+        }
+
+    return render(request, 'snippet_editor.html', _snippet_form_context(
+        request.user, form, editing=True, return_q=_sanitize_return_q(return_q), snippet=snippet,
+    ))
 
 
 @login_required
 @require_http_methods(["GET", "POST"])
 def snippets_view(request):
-    """Manage fixlist snippets: create, edit, delete."""
+    """List fixlist snippets; handles deletion. Adding/editing live on their own pages."""
     if request.method == 'POST':
         action = request.POST.get('action', '')
-
-        if action == 'create':
-            name = request.POST.get('name', '').strip()
-            content = request.POST.get('content', '').strip()
-            if not name:
-                messages.error(request, 'Snippet name is required.')
-            elif not content:
-                messages.error(request, 'Snippet content is required.')
-            elif FixlistSnippet.objects.filter(owner=request.user, name=name).exists():
-                messages.error(request, f'A snippet named "{name}" already exists.')
-            else:
-                is_shared = request.POST.get('is_shared') == 'on'
-                category = request.POST.get('category', '').strip() or FixlistSnippet.DEFAULT_CATEGORY
-                snippet = FixlistSnippet.objects.create(
-                    owner=request.user, name=name, content=content,
-                    is_shared=is_shared, category=category,
-                )
-                snippet.analyzer_users.add(request.user)
-                messages.success(request, f'Snippet "{name}" created.')
-            return redirect('snippets')
-
-        if action == 'edit':
-            pk = request.POST.get('pk', '').strip()
-            snippet = get_object_or_404(FixlistSnippet, pk=pk, owner=request.user)
-            name = request.POST.get('name', '').strip()
-            content = request.POST.get('content', '').strip()
-            if not name:
-                messages.error(request, 'Snippet name is required.')
-            elif not content:
-                messages.error(request, 'Snippet content is required.')
-            else:
-                duplicate = FixlistSnippet.objects.filter(owner=request.user, name=name).exclude(pk=snippet.pk).exists()
-                if duplicate:
-                    messages.error(request, f'A snippet named "{name}" already exists.')
-                else:
-                    snippet.name = name
-                    snippet.content = content
-                    snippet.is_shared = request.POST.get('is_shared') == 'on'
-                    snippet.category = request.POST.get('category', '').strip() or FixlistSnippet.DEFAULT_CATEGORY
-                    snippet.save(update_fields=['name', 'content', 'is_shared', 'category', 'updated_at'])
-                    messages.success(request, f'Snippet "{name}" updated.')
-            return redirect('snippets')
 
         if action == 'delete':
             pk = request.POST.get('pk', '').strip()
@@ -74,7 +143,9 @@ def snippets_view(request):
             name = snippet.name
             snippet.delete()
             messages.success(request, f'Snippet "{name}" deleted.')
-            return redirect('snippets')
+            return _snippets_redirect(request.POST.get('return_q', ''))
+
+        return redirect('snippets')
 
 
     shared_by = request.GET.get('shared_by', '').strip()
@@ -135,6 +206,7 @@ def snippets_view(request):
         'category_filter': category_filter,
         'categories': categories,
         'pagination_query': urlencode(pagination_params),
+        'current_query_string': request.GET.urlencode(),
         'analyzer_snippet_ids': analyzer_snippet_ids,
     })
 

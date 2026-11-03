@@ -1,0 +1,107 @@
+{% extends 'base.html' %}
+
+{% block title %}{% if editing %}Edit{% else %}Add{% endif %} Snippet - Fenris{% endblock %}
+
+{% block page_context_label %}snippets / {% if editing %}edit{% else %}add{% endif %}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .snippet-meta-row {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: end;
+    }
+
+    @media (max-width: 700px) {
+        .snippet-meta-row {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .snippet-meta-row .form-group {
+        min-width: 0;
+    }
+
+    .checkbox-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--la-text-neutral);
+        cursor: pointer;
+        padding-bottom: 8px;
+    }
+
+    #snippetContent {
+        height: calc(100vh - 300px);
+        min-height: 400px;
+        tab-size: 4;
+    }
+
+    .editor-hint {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        margin-top: 4px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h2>{% if editing %}edit{% else %}add{% endif %} snippet</h2>
+<form method="post" id="snippetForm">
+    {% csrf_token %}
+    <input type="hidden" name="return_q" value="{{ return_q }}">
+    <div class="snippet-meta-row">
+        <div class="form-group">
+            <label for="snippetName">name</label>
+            <input type="text" id="snippetName" name="name" value="{{ form.name }}" placeholder="Snippet name..." required>
+        </div>
+        <div class="form-group">
+            <label for="snippetCategory">category</label>
+            <input type="text" id="snippetCategory" name="category" value="{{ form.category }}" list="categoryList" placeholder="Category...">
+            <datalist id="categoryList">
+                {% for cat in categories %}
+                <option value="{{ cat }}">
+                {% endfor %}
+            </datalist>
+        </div>
+        <div class="form-group">
+            <label class="checkbox-label"><input type="checkbox" name="is_shared" id="snippetIsShared" {% if form.is_shared %}checked{% endif %}> shared with all users</label>
+        </div>
+    </div>
+    <div class="form-group">
+        <label for="snippetContent">content</label>
+        <textarea id="snippetContent" name="content" placeholder="Snippet content to paste into fixlist..." spellcheck="false" required>{{ form.content }}</textarea>
+        <div class="editor-hint">ctrl+s saves</div>
+    </div>
+    <div class="button-group">
+        <button type="submit">{% if editing %}save{% else %}create{% endif %}</button>
+        <a href="{{ cancel_url }}"><button type="button">cancel</button></a>
+    </div>
+</form>
+
+<script>
+(function () {
+    const form = document.getElementById('snippetForm');
+
+    document.addEventListener('keydown', function (event) {
+        if ((event.ctrlKey || event.metaKey) && (event.key === 's' || event.key === 'S')) {
+            event.preventDefault();
+            /* requestSubmit runs the required-field checks; submit() would skip them. */
+            if (form.requestSubmit) {
+                form.requestSubmit();
+            } else {
+                form.submit();
+            }
+        }
+    });
+
+    {% if editing %}
+    document.getElementById('snippetContent').focus();
+    {% else %}
+    document.getElementById('snippetName').focus();
+    {% endif %}
+})();
+</script>
+{% endblock %}

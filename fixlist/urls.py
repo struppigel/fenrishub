@@ -53,7 +53,9 @@ from .views.log_type_rules import (
     toggle_log_type_rule_view,
 )
 from .views.rules import add_rule_view, edit_rule_view, rules_view, test_rule_api
-from .views.snippets import snippets_api, snippets_toggle_analyzer_api, snippets_view
+from .views.snippets import (
+    add_snippet_view, edit_snippet_view, snippets_api, snippets_toggle_analyzer_api, snippets_view,
+)
 from .views.speeches import (
     speech_create_api,
     speeches_api,
@@ -113,6 +115,8 @@ urlpatterns = [
     path('api/fixlist/rules-preview/', preview_pending_rule_changes_api, name='preview_pending_rule_changes_api'),
     path('api/fixlist/rules-persist/', persist_pending_rule_changes_api, name='persist_pending_rule_changes_api'),
     path('fixes/snippets/', snippets_view, name='snippets'),
+    path('fixes/snippets/add/', add_snippet_view, name='add_snippet'),
+    path('fixes/snippets/<int:pk>/edit/', edit_snippet_view, name='edit_snippet'),
     path('speeches/', speeches_view, name='speeches'),
     path('rules/', rules_view, name='rules'),
     path('rules/add/', add_rule_view, name='add_rule'),

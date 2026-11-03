@@ -121,27 +121,32 @@ class SnippetViewTests(TestCase):
         self.assertIn(snippet.pk, response.context['analyzer_snippet_ids'])
 
     def test_create_snippet_with_category(self):
-        self.client.post(reverse('snippets'), {
-            'action': 'create', 'name': 'cat snippet',
-            'content': 'c', 'category': 'Cleanup',
+        self.client.post(reverse('add_snippet'), {
+            'name': 'cat snippet', 'content': 'c', 'category': 'Cleanup',
         })
         snippet = FixlistSnippet.objects.get(name='cat snippet')
         self.assertEqual(snippet.category, 'Cleanup')
 
     def test_create_snippet_defaults_to_generic_category(self):
-        self.client.post(reverse('snippets'), {
-            'action': 'create', 'name': 'default cat',
-            'content': 'c',
+        self.client.post(reverse('add_snippet'), {
+            'name': 'default cat', 'content': 'c',
         })
         snippet = FixlistSnippet.objects.get(name='default cat')
         self.assertEqual(snippet.category, 'generic')
+
+    def test_create_snippet_selects_it_for_analyzer(self):
+        self.client.post(reverse('add_snippet'), {
+            'name': 'new', 'content': 'c', 'is_shared': 'on',
+        })
+        snippet = FixlistSnippet.objects.get(name='new')
+        self.assertTrue(snippet.is_shared)
+        self.assertTrue(snippet.analyzer_users.filter(pk=self.user.pk).exists())
 
     def test_edit_snippet_changes_category(self):
         snippet = FixlistSnippet.objects.create(
             owner=self.user, name='s', content='c', category='generic',
         )
-        self.client.post(reverse('snippets'), {
-            'action': 'edit', 'pk': snippet.pk,
+        self.client.post(reverse('edit_snippet', args=[snippet.pk]), {
             'name': 's', 'content': 'c', 'category': 'Registry',
         })
         snippet.refresh_from_db()
@@ -151,12 +156,117 @@ class SnippetViewTests(TestCase):
         snippet = FixlistSnippet.objects.create(
             owner=self.user, name='s', content='c', category='Old',
         )
-        self.client.post(reverse('snippets'), {
-            'action': 'edit', 'pk': snippet.pk,
+        self.client.post(reverse('edit_snippet', args=[snippet.pk]), {
             'name': 's', 'content': 'c', 'category': '',
         })
         snippet.refresh_from_db()
         self.assertEqual(snippet.category, 'generic')
+
+    def test_add_page_renders_editor(self):
+        response = self.client.get(reverse('add_snippet'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'snippet_editor.html')
+        self.assertFalse(response.context['editing'])
+
+    def test_edit_page_prefills_snippet(self):
+        snippet = FixlistSnippet.objects.create(
+            owner=self.user, name='prefilled', content='CloseProcesses:', category='Cleanup',
+        )
+
+        response = self.client.get(reverse('edit_snippet', args=[snippet.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['editing'])
+        self.assertContains(response, 'value="prefilled"')
+        self.assertContains(response, 'CloseProcesses:</textarea>')
+
+    def test_edit_other_users_snippet_returns_404(self):
+        snippet = FixlistSnippet.objects.create(
+            owner=self.other_user, name='bob shared', content='c', is_shared=True,
+        )
+
+        get_response = self.client.get(reverse('edit_snippet', args=[snippet.pk]))
+        post_response = self.client.post(reverse('edit_snippet', args=[snippet.pk]), {
+            'name': 'hijacked', 'content': 'x',
+        })
+
+        self.assertEqual(get_response.status_code, 404)
+        self.assertEqual(post_response.status_code, 404)
+        snippet.refresh_from_db()
+        self.assertEqual(snippet.name, 'bob shared')
+
+    def test_create_missing_content_rerenders_with_input(self):
+        response = self.client.post(reverse('add_snippet'), {
+            'name': 'keep my name', 'content': '', 'category': 'Registry',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Snippet content is required.')
+        self.assertContains(response, 'value="keep my name"')
+        self.assertFalse(FixlistSnippet.objects.filter(name='keep my name').exists())
+
+    def test_create_duplicate_name_keeps_submitted_content(self):
+        FixlistSnippet.objects.create(owner=self.user, name='dup', content='old')
+
+        response = self.client.post(reverse('add_snippet'), {
+            'name': 'dup', 'content': 'long content worth keeping',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'A snippet named &quot;dup&quot; already exists.')
+        self.assertContains(response, 'long content worth keeping</textarea>')
+        self.assertEqual(FixlistSnippet.objects.filter(name='dup').count(), 1)
+
+    def test_edit_duplicate_name_is_rejected(self):
+        FixlistSnippet.objects.create(owner=self.user, name='taken', content='c')
+        snippet = FixlistSnippet.objects.create(owner=self.user, name='mine', content='c')
+
+        response = self.client.post(reverse('edit_snippet', args=[snippet.pk]), {
+            'name': 'taken', 'content': 'edited content',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'edited content</textarea>')
+        snippet.refresh_from_db()
+        self.assertEqual(snippet.name, 'mine')
+
+    def test_save_redirects_to_list_with_return_q(self):
+        snippet = FixlistSnippet.objects.create(owner=self.user, name='s', content='c')
+
+        response = self.client.post(reverse('edit_snippet', args=[snippet.pk]), {
+            'name': 's', 'content': 'c2', 'return_q': 'category=Registry&q=hklm',
+        })
+
+        self.assertRedirects(
+            response, reverse('snippets') + '?category=Registry&q=hklm',
+            fetch_redirect_response=False,
+        )
+
+    def test_hostile_return_q_falls_back_to_list(self):
+        response = self.client.post(reverse('add_snippet'), {
+            'name': 'n', 'content': 'c', 'return_q': '//evil.com',
+        })
+
+        self.assertRedirects(response, reverse('snippets'), fetch_redirect_response=False)
+
+    def test_list_links_to_editor_pages(self):
+        snippet = FixlistSnippet.objects.create(owner=self.user, name='s', content='c')
+
+        response = self.client.get(reverse('snippets'), {'q': 's'})
+
+        self.assertContains(response, reverse('add_snippet') + '?return_q=q%3Ds')
+        self.assertContains(response, reverse('edit_snippet', args=[snippet.pk]) + '?return_q=q%3Ds')
+
+    def test_delete_keeps_list_filters(self):
+        snippet = FixlistSnippet.objects.create(owner=self.user, name='s', content='c')
+
+        response = self.client.post(reverse('snippets'), {
+            'action': 'delete', 'pk': snippet.pk, 'return_q': 'q=x',
+        })
+
+        self.assertRedirects(response, reverse('snippets') + '?q=x', fetch_redirect_response=False)
+        self.assertFalse(FixlistSnippet.objects.filter(pk=snippet.pk).exists())
 
     def test_filter_by_category(self):
         FixlistSnippet.objects.create(owner=self.user, name='reg snippet', content='c', category='Registry')
