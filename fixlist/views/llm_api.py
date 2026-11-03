@@ -3,8 +3,8 @@ Read-only token API (/api/v1/) for LLM clients.
 
 Serves what a logged-in helper can already read in the browser: every
 non-trashed upload, its verdicts under the caller's own rule set, content
-search, infection cases by id, and the fixlist snippets the caller owns or that
-are shared. Listing cases is limited to the caller's own,
+search, infection cases by id, the fixlist snippets and speeches the caller
+owns or that are shared, and the caller's fixlist starter template. Listing cases is limited to the caller's own,
 as on the cases page. Authentication, limits and logging live in api_auth.
 
 Fields holding text that came from the infected machine or its user (log lines,
@@ -17,12 +17,14 @@ import re
 
 from django.db.models import Q
 from django.http import JsonResponse
+from django.urls import reverse
 
-from ..models import FixlistSnippet, InfectionCase, InfectionCaseLog, UploadedLog
+from ..models import FixlistSnippet, InfectionCase, InfectionCaseLog, Speech, UploadedLog
 from ..rule_sets import SHARED_RULE_SET_KEY, resolve_user_rule_set_key
 from ..status_types import STATUS_LABELS, VALID_STATUSES
 from ..upload_utils import get_fresh_cached_analysis, get_or_compute_upload_analysis
 from .api_auth import api_token_required, charge_api_units, rate_limited_response
+from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE, effective_analyzer_fixlist_template
 from .infection_cases import _build_case_timeline
 from .log_search import _first_hit, _logs_in_id_order, search_matching_log_ids
 from .uploads import filter_uploads_by_text
@@ -35,8 +37,8 @@ QUERY_MAX_CHARS = 500
 LIST_DEFAULT_LIMIT = 20
 LIST_MAX_LIMIT = 50
 LIST_MAX_OFFSET = 10000
-SNIPPETS_DEFAULT_LIMIT = 50
-SNIPPETS_MAX_LIMIT = 100
+LIBRARY_DEFAULT_LIMIT = 50
+LIBRARY_MAX_LIMIT = 100
 LINES_DEFAULT_LIMIT = 500
 LINES_MAX_LIMIT = 2000
 LINES_MAX_OFFSET = 200000
@@ -296,70 +298,136 @@ def _case_summary(infection_case, user):
     }
 
 
-def _visible_snippets(user):
-    """Snippets the caller can use in the browser: their own plus every shared one."""
+def _visible_library_items(model, user):
+    """Snippets or speeches the caller can use in the browser: their own plus every shared one."""
     return (
-        FixlistSnippet.objects.filter(Q(owner=user) | Q(is_shared=True))
+        model.objects.filter(Q(owner=user) | Q(is_shared=True))
         .select_related('owner')
         .order_by('category', 'name', 'pk')
     )
 
 
-def _snippet_payload(snippet, user):
+def _library_item_payload(item, user, id_key):
     return {
-        'snippet_id': snippet.pk,
-        'name': snippet.name,
-        'category': snippet.category,
-        'owner': snippet.owner.username,
-        'is_own': snippet.owner_id == user.id,
-        'is_shared': snippet.is_shared,
-        'updated_at': _iso(snippet.updated_at),
-        'content': snippet.content,
+        id_key: item.pk,
+        'name': item.name,
+        'category': item.category,
+        'owner': item.owner.username,
+        'is_own': item.owner_id == user.id,
+        'is_shared': item.is_shared,
+        'updated_at': _iso(item.updated_at),
+        'content': item.content,
     }
 
 
-@api_token_required('api_v1_snippets')
-def api_snippets(request):
-    """Fixlist snippets: own and shared. q matches name, content or owner; category filters exactly.
-
-    Alert rules in an analysis often name the snippet a helper should use.
-    """
-    limit = _int_param(request, 'limit', SNIPPETS_DEFAULT_LIMIT, 1, SNIPPETS_MAX_LIMIT)
+def _library_list_response(request, model, id_key, list_key, extra=None):
+    """Paged list of own and shared items. q matches name, content or owner; category filters exactly."""
+    limit = _int_param(request, 'limit', LIBRARY_DEFAULT_LIMIT, 1, LIBRARY_MAX_LIMIT)
     offset = _int_param(request, 'offset', 0, 0, LIST_MAX_OFFSET)
     if limit is None or offset is None:
         return _error('limit and offset must be integers.')
 
-    snippets = _visible_snippets(request.user)
+    items = _visible_library_items(model, request.user)
     search_query = (request.GET.get('q') or '').strip()[:QUERY_MAX_CHARS]
     if search_query:
-        snippets = snippets.filter(
+        items = items.filter(
             Q(name__icontains=search_query)
             | Q(content__icontains=search_query)
             | Q(owner__username__icontains=search_query)
         )
     category = (request.GET.get('category') or '').strip()
     if category:
-        snippets = snippets.filter(category=category)
+        items = items.filter(category=category)
 
-    total = snippets.count()
-    return JsonResponse({
-        'total': total,
+    payload = {
+        'total': items.count(),
         'offset': offset,
         'limit': limit,
-        'categories': sorted(set(_visible_snippets(request.user).values_list('category', flat=True))),
-        'snippets': [
-            _snippet_payload(snippet, request.user) for snippet in snippets[offset:offset + limit]
+        'categories': sorted(set(
+            _visible_library_items(model, request.user).values_list('category', flat=True)
+        )),
+        **(extra or {}),
+        list_key: [
+            _library_item_payload(item, request.user, id_key) for item in items[offset:offset + limit]
         ],
-    })
+    }
+    return JsonResponse(payload)
+
+
+def _library_item_response(request, model, item_id, id_key, extra=None):
+    item = _visible_library_items(model, request.user).filter(pk=item_id).first()
+    if item is None:
+        return _not_found()
+    return JsonResponse({**_library_item_payload(item, request.user, id_key), **(extra or {})})
+
+
+@api_token_required('api_v1_snippets')
+def api_snippets(request):
+    """Fixlist snippets, own and shared. Alert rules in an analysis often name the one to use."""
+    return _library_list_response(request, FixlistSnippet, 'snippet_id', 'snippets')
 
 
 @api_token_required('api_v1_snippet')
 def api_snippet(request, snippet_id):
     """One fixlist snippet by id, if it is the caller's own or shared."""
-    snippet = _visible_snippets(request.user).filter(pk=snippet_id).first()
-    if snippet is None:
-        return _not_found()
-    return JsonResponse(_snippet_payload(snippet, request.user))
+    return _library_item_response(request, FixlistSnippet, snippet_id, 'snippet_id')
+
+
+def _speech_placeholders(request):
+    """Values for the speech placeholders the server can resolve.
+
+    {USERNAME}, the *_PREFILLED links and {COUNTER} depend on the reply being
+    written (forum user, step numbering), so the client resolves those itself,
+    as the log analyzer does in applySpeechPlaceholders().
+    """
+    return {
+        '{HELPERNAME}': request.user.username,
+        '{UPLOADLINK_HELPER}': request.build_absolute_uri(
+            reverse('upload_log_for_helper', args=[request.user.username])
+        ),
+        '{UPLOADLINK_GENERAL}': request.build_absolute_uri(reverse('upload_log')),
+    }
+
+
+@api_token_required('api_v1_speeches')
+def api_speeches(request):
+    """Speeches (canned reply paragraphs), own and shared, with the resolvable placeholder values."""
+    return _library_list_response(
+        request, Speech, 'speech_id', 'speeches',
+        extra={'placeholders': _speech_placeholders(request)},
+    )
+
+
+@api_token_required('api_v1_speech')
+def api_speech(request, speech_id):
+    """One speech by id, if it is the caller's own or shared."""
+    return _library_item_response(
+        request, Speech, speech_id, 'speech_id',
+        extra={'placeholders': _speech_placeholders(request)},
+    )
+
+
+@api_token_required('api_v1_fixlist_template')
+def api_fixlist_template(request):
+    """The caller's log analyzer fixlist starter (profile setting, else the default).
+
+    `insert_entries_at_line` is where the analyzer user would put the lines to
+    fix: the template's first empty line, else the line holding End::.
+    """
+    # Saved from a textarea, so it may carry Windows line endings.
+    template = effective_analyzer_fixlist_template(request.user).replace('\r\n', '\n')
+    lines = template.split('\n')
+    insert_at = next((index for index, line in enumerate(lines) if not line.strip()), None)
+    if insert_at is None:
+        insert_at = next(
+            (index for index, line in enumerate(lines) if line.strip().lower() == 'end::'),
+            len(lines),
+        )
+    return JsonResponse({
+        'template': template,
+        'is_default': template == DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
+        'insert_entries_at_line': insert_at + 1,
+    })
 
 
 @api_token_required('api_v1_user')

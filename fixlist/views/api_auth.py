@@ -31,7 +31,7 @@ from django.utils import timezone
 
 from ..models import ApiRequestLog, ApiToken, SiteConfig
 from ..validators import PayloadValidator
-from .utils import get_trusted_client_ip
+from .utils import get_valid_client_ip
 
 logger = logging.getLogger('fixlist.api')
 
@@ -152,7 +152,7 @@ def _day_limit_violation(user, upload_id, limits):
 
 
 def _target_for(request, kwargs) -> str:
-    for key in ('upload_id', 'case_id', 'forum_username', 'snippet_id'):
+    for key in ('upload_id', 'case_id', 'forum_username', 'snippet_id', 'speech_id'):
         if kwargs.get(key):
             return str(kwargs[key])[:TARGET_MAX_CHARS]
     for key in ('q', 'username'):
@@ -184,7 +184,7 @@ def api_token_required(endpoint, *, cost=1):
                 return _error('Send the token in the Authorization header, never in the URL.', 400)
 
             limits = api_limits()
-            ip = get_trusted_client_ip(request)
+            ip = get_valid_client_ip(request)
             user_agent = (request.META.get('HTTP_USER_AGENT') or '')[:USER_AGENT_MAX_CHARS]
 
             if _auth_failures_this_minute(ip) >= limits['auth_fail_per_minute']:

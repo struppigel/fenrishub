@@ -32,9 +32,12 @@ from .views.infection_cases import (
 )
 from .views.llm_api import (
     api_case,
+    api_fixlist_template,
     api_search,
     api_snippet,
     api_snippets,
+    api_speech,
+    api_speeches,
     api_upload,
     api_upload_analysis,
     api_uploads,
@@ -139,6 +142,9 @@ urlpatterns = [
     path('api/v1/cases/<str:case_id>/', api_case, name='api_v1_case'),
     path('api/v1/snippets/', api_snippets, name='api_v1_snippets'),
     path('api/v1/snippets/<int:snippet_id>/', api_snippet, name='api_v1_snippet'),
+    path('api/v1/speeches/', api_speeches, name='api_v1_speeches'),
+    path('api/v1/speeches/<int:speech_id>/', api_speech, name='api_v1_speech'),
+    path('api/v1/fixlist-template/', api_fixlist_template, name='api_v1_fixlist_template'),
     path('stats/', statistics_view, name='statistics'),
     path('logout/', logout_view, name='logout'),
 ]

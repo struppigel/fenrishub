@@ -230,27 +230,18 @@ def get_client_ip(request):
     return ip
 
 
-def get_trusted_client_ip(request):
-    """Client IP as seen by the outermost trusted proxy, or None if unparseable.
+def get_valid_client_ip(request):
+    """get_client_ip, normalized, or None when it is not a valid IP address.
 
-    Unlike get_client_ip, this never trusts the leftmost X-Forwarded-For entry,
-    which the client can set to anything. Each of the TRUSTED_PROXY_COUNT proxies
-    in front of the app appends the address it received the request from, so the
-    entry that many positions from the right is the first one a client cannot
-    forge. With TRUSTED_PROXY_COUNT = 0 the header is ignored entirely.
+    The leftmost X-Forwarded-For entry is whatever the client sent, so it can be
+    junk; storing junk in a GenericIPAddressField fails on PostgreSQL.
+
+    The rightmost entries are not used on purpose: behind Cloudflare and
+    Railway's edge they hold infrastructure addresses shared by many visitors,
+    which would make every visitor share one rate limit.
     """
-    proxy_count = max(0, int(getattr(settings, 'TRUSTED_PROXY_COUNT', 1)))
-    candidate = request.META.get('REMOTE_ADDR', '')
-    if proxy_count:
-        entries = [
-            entry.strip()
-            for entry in (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')
-            if entry.strip()
-        ]
-        if entries:
-            candidate = entries[-min(proxy_count, len(entries))]
     try:
-        return str(ipaddress.ip_address(candidate))
+        return str(ipaddress.ip_address((get_client_ip(request) or '').strip()))
     except ValueError:
         return None
 

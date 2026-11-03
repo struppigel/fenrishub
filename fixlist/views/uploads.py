@@ -35,7 +35,7 @@ from .upload_actions import (
 )
 from .utils import (
     _anonymous_upload_limit, _consume_anonymous_upload_slot, _resolve_upload_recipient_username,
-    get_action_scoped_uploads, get_updatable_uploads, get_client_ip, get_trusted_client_ip, _purge_old_trash,
+    get_action_scoped_uploads, get_updatable_uploads, get_client_ip, _purge_old_trash,
     redirect_preserving_filters,
 )
 
@@ -55,9 +55,7 @@ def upload_log_view(request, helper_username=None):
         form = UploadedLogForm(request.POST, request.FILES)
         try:
             if not request.user.is_authenticated:
-                # Never the leftmost X-Forwarded-For entry: a client could put a
-                # fresh fake address there on every upload to dodge the limit.
-                client_ip = get_trusted_client_ip(request)
+                client_ip = get_client_ip(request)
                 if not _consume_anonymous_upload_slot(client_ip):
                     minutes = max(1, (upload_window_seconds + 59) // 60)
                     form.add_error(

@@ -348,12 +348,11 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(second, 'Anonymous upload rate limit reached')
         self.assertEqual(UploadedLog.objects.count(), 1)
 
-    @override_settings(
-        ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600, TRUSTED_PROXY_COUNT=1,
-    )
-    def test_anonymous_upload_rate_limit_ignores_spoofed_forwarded_for(self):
-        # The proxy appends the real client address; the leftmost entries are
-        # whatever the client sent and change on every attempt.
+    @override_settings(ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600)
+    def test_anonymous_upload_rate_limit_is_per_visitor_behind_shared_proxies(self):
+        # Behind Cloudflare and Railway's edge the rightmost X-Forwarded-For
+        # entries are infrastructure shared by many visitors; keying the limit
+        # on them would make all visitors share one budget.
         responses = [
             self.client.post(
                 reverse('upload_log'),
@@ -361,14 +360,13 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
                     'forum_username': 'forum_user',
                     'log_file': SimpleUploadedFile(f'{index}.txt', b'line', content_type='text/plain'),
                 },
-                HTTP_X_FORWARDED_FOR=f'198.51.100.{index}, 203.0.113.10',
+                HTTP_X_FORWARDED_FOR=f'198.51.100.{index}, 79.127.178.82',
             )
             for index in range(2)
         ]
 
-        self.assertEqual(responses[0].status_code, 302)
-        self.assertContains(responses[1], 'Anonymous upload rate limit reached')
-        self.assertEqual(UploadedLog.objects.count(), 1)
+        self.assertEqual([response.status_code for response in responses], [302, 302])
+        self.assertEqual(UploadedLog.objects.count(), 2)
 
     @override_settings(ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600)
 

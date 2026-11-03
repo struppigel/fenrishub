@@ -36,7 +36,7 @@ from ..rule_utils import (
     _normalize_pending_changes, _build_pending_rule_preview,
     _persist_selected_pending_rules,
 )
-from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE
+from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE, effective_analyzer_fixlist_template
 from .guest import deny_guests, guest_or_login_required, is_guest_request
 from .utils import get_action_scoped_uploads, get_updatable_uploads
 
@@ -99,11 +99,7 @@ def log_analyzer_view(request):
         reverse('upload_log_for_helper', args=[request.user.username])
     )
     upload_link_general = request.build_absolute_uri(reverse('upload_log'))
-    profile = getattr(request.user, 'fenris_profile', None)
-    fixlist_template = (
-        (profile.analyzer_fixlist_template if profile else '').strip()
-        or DEFAULT_ANALYZER_FIXLIST_TEMPLATE
-    )
+    fixlist_template = effective_analyzer_fixlist_template(request.user)
 
     # Editing an existing fixlist from the analyzer: preload its content into the fixlist
     # panel and its response into the response panel and, absent an explicit upload_id,

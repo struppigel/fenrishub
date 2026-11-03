@@ -24,10 +24,6 @@ DEBUG = _env_bool('DEBUG', True)
 TESTING = 'test' in sys.argv
 
 ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', ['localhost', '127.0.0.1'])
-# Number of reverse proxies in front of the app that append to X-Forwarded-For
-# (Railway's edge = 1). Client IPs for rate limits are read that many entries
-# from the right; 0 ignores the header and uses REMOTE_ADDR.
-TRUSTED_PROXY_COUNT = int(os.getenv('TRUSTED_PROXY_COUNT', '1'))
 CSRF_TRUSTED_ORIGINS = _env_list('CSRF_TRUSTED_ORIGINS', [])
 
 INSTALLED_APPS = [

@@ -86,7 +86,28 @@
         word-break: break-all;
         border: 1px solid var(--la-border-muted);
         padding: 8px;
+        margin: 6px 0;
         color: var(--la-text-neutral);
+    }
+    .api-connect {
+        border: 1px solid var(--la-border);
+        padding: 8px 10px;
+        margin-bottom: 14px;
+        font-size: 13px;
+    }
+    .api-connect summary {
+        cursor: pointer;
+        font-weight: bold;
+        color: var(--la-text-primary);
+    }
+    .api-connect ol {
+        padding-left: 20px;
+    }
+    .api-connect li {
+        margin-bottom: 10px;
+    }
+    .api-connect ul li {
+        margin-bottom: 2px;
     }
 </style>
 {% endblock %}
@@ -95,9 +116,8 @@
 <div class="api-page">
     <h2>api tokens</h2>
     <div class="api-help">
-        Personal tokens let an LLM client (Claude Code or Claude Desktop, through the FenrisHub MCP server in
-        <code>tools/fenrishub_mcp/</code>) read uploads, verdicts, content search results, infection cases and
-        fixlist snippets on your behalf. A token is read-only and sees exactly what you see when logged in.
+        Personal tokens let an LLM client (Claude Desktop or Claude Code, through the FenrisHub MCP server) read
+        uploads, verdicts, content search results, infection cases and fixlist snippets on your behalf. A token is read-only and sees exactly what you see when logged in.
     </div>
 
     <div class="api-notice">
@@ -118,10 +138,70 @@
             <strong>new token "{{ new_token.name }}"</strong> - copy it now, it will not be shown again:
             <code id="newApiToken">{{ new_token_raw }}</code>
             <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('newApiToken').textContent)">copy token</button>
-            <div class="api-help" style="margin-top: 8px;">Register the MCP server with Claude Code:</div>
-            <div class="api-setup">claude mcp add fenrishub -e FENRISHUB_URL={{ api_base_url }} -e FENRISHUB_TOKEN={{ new_token_raw }} -- python tools/fenrishub_mcp/server.py</div>
+            <div class="api-help" style="margin-top: 8px;">The setup instructions below already contain this token.</div>
         </div>
     {% endif %}
+
+    <details class="api-connect" {% if new_token_raw %}open{% endif %}>
+        <summary>connect claude desktop or claude code</summary>
+        <ol>
+            <li>
+                Get the FenrisHub MCP server folder (<code>server.py</code> and <code>requirements.txt</code>) from the
+                FenrisHub maintainer and put it somewhere permanent, for example <code>C:\Users\YOUR_NAME\fenrishub_mcp\</code>.
+            </li>
+            <li>
+                Install Python 3.10 or newer, then create a separate environment for the server (PowerShell):
+                <div class="api-setup">python -m venv $HOME\.venvs\fenrishub-mcp
+&amp; "$HOME\.venvs\fenrishub-mcp\Scripts\python.exe" -m pip install -r C:\Users\YOUR_NAME\fenrishub_mcp\requirements.txt</div>
+            </li>
+            <li>
+                Quit Claude Desktop completely: right-click its icon in the system tray and choose Quit. Closing the
+                window is not enough, and Claude Desktop rewrites its config file while it runs.
+            </li>
+            <li>
+                Open <code>claude_desktop_config.json</code> in a text editor:
+                <ul>
+                    <li>Claude Desktop - Settings - Developer - Edit Config, if your version has that menu;</li>
+                    <li>otherwise <code>%APPDATA%\Claude\claude_desktop_config.json</code>;</li>
+                    <li>Microsoft Store version: a folder under <code>%LOCALAPPDATA%\Claude-Data\</code>.</li>
+                </ul>
+            </li>
+            <li>
+                Paste this block on the line right after the opening <code>{</code> of the file, then replace
+                <code>YOUR_NAME</code> and the paths with yours (keep the doubled backslashes):
+                <div class="api-setup" id="desktopConfig">  "mcpServers": {
+    "fenrishub": {
+      "command": "C:\\Users\\YOUR_NAME\\.venvs\\fenrishub-mcp\\Scripts\\python.exe",
+      "args": ["C:\\Users\\YOUR_NAME\\fenrishub_mcp\\server.py"],
+      "env": {
+        "FENRISHUB_URL": "{{ api_base_url }}",
+        "FENRISHUB_TOKEN": "{% if new_token_raw %}{{ new_token_raw }}{% else %}fh_YOUR_TOKEN{% endif %}"
+      }
+    }
+  },</div>
+                <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('desktopConfig').textContent)">copy config block</button>
+                <div class="api-help" style="margin-top: 6px;">
+                    If the file already has an <code>"mcpServers"</code> section, add only the <code>"fenrishub"</code>
+                    entry inside it, with a comma between entries. If the file was empty, it should read
+                    <code>{</code>, this block without its last comma, <code>}</code>.
+                </div>
+            </li>
+            <li>
+                Start Claude Desktop again. In a new chat, <code>fenrishub</code> appears in the tools menu. When it asks
+                to use a tool, allow it for the chat rather than "always allow".
+            </li>
+        </ol>
+        <div class="api-help">
+            <strong>Claude Code instead:</strong> after steps 1 and 2, one command registers the server:
+        </div>
+        <div class="api-setup">claude mcp add fenrishub -e FENRISHUB_URL={{ api_base_url }} -e FENRISHUB_TOKEN={% if new_token_raw %}{{ new_token_raw }}{% else %}fh_YOUR_TOKEN{% endif %} -- "$HOME\.venvs\fenrishub-mcp\Scripts\python.exe" C:\Users\YOUR_NAME\fenrishub_mcp\server.py</div>
+        <div class="api-help" style="margin-top: 8px;">
+            <strong>If it does not show up:</strong> Claude Desktop writes <code>mcp-server-fenrishub.log</code> in a
+            <code>logs</code> folder next to its config file. "No module named mcp" means <code>command</code> does not
+            point to the environment's <code>python.exe</code>; "rejected the token" means the token is wrong, expired
+            or revoked; "Could not reach FenrisHub" means the URL is wrong or the site is down.
+        </div>
+    </details>
 
     <h3>create a token</h3>
     <form method="post" class="api-create">

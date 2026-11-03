@@ -1,5 +1,8 @@
 """Tests for the read-only token API (/api/v1/) used by LLM clients."""
 
+import html
+import json
+import re
 from datetime import timedelta
 from unittest import mock
 
@@ -20,10 +23,12 @@ from ..models import (
     InfectionCaseLog,
     InfectionCaseNote,
     SiteConfig,
+    Speech,
     UploadedLog,
     UploadedLogAnalysis,
     UserProfile,
 )
+from ..views.auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE
 from .factories import make_uploaded_log, make_user
 
 
@@ -192,11 +197,15 @@ class ApiRequestLoggingTests(ApiTestBase):
         self.assertEqual(ApiRequestLog.objects.get().target, 'needle')
 
 
-@override_settings(TRUSTED_PROXY_COUNT=1)
 class ApiClientIpTests(ApiTestBase):
-    def test_spoofed_leftmost_forwarded_for_is_ignored(self):
-        self.api_get('api_v1_uploads', HTTP_X_FORWARDED_FOR='6.6.6.6, 203.0.113.7')
+    def test_visitor_address_is_recorded_not_the_proxy_hop(self):
+        self.api_get('api_v1_uploads', HTTP_X_FORWARDED_FOR='203.0.113.7, 79.127.178.82')
         self.assertEqual(ApiRequestLog.objects.get().ip_address, '203.0.113.7')
+
+    def test_junk_forwarded_for_is_stored_as_unknown(self):
+        response = self.api_get('api_v1_uploads', HTTP_X_FORWARDED_FOR='not-an-ip, 79.127.178.82')
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(ApiRequestLog.objects.get().ip_address)
 
 
 @mock.patch('fixlist.views.api_auth._minute_bucket', return_value=1)
@@ -435,6 +444,72 @@ class ApiSnippetEndpointTests(ApiTestBase):
         self.assertEqual(ApiRequestLog.objects.get().target, str(self.own.pk))
 
 
+class ApiSpeechEndpointTests(ApiTestBase):
+    def setUp(self):
+        super().setUp()
+        self.other = make_user('bob')
+        self.own = Speech.objects.create(
+            owner=self.user, name='run frst', content='{COUNTER}. Hi {USERNAME}, run FRST.', category='scans',
+        )
+        self.shared = Speech.objects.create(
+            owner=self.other, name='apply fix', content='Upload the Fixlog: {UPLOADLINK_HELPER_PREFILLED}',
+            is_shared=True,
+        )
+        self.private = Speech.objects.create(owner=self.other, name='bob private', content='secret speech')
+
+    def test_lists_own_and_shared_only_with_placeholders(self):
+        body = self.api_get('api_v1_speeches').json()
+        self.assertEqual({s['speech_id'] for s in body['speeches']}, {self.own.pk, self.shared.pk})
+        self.assertNotIn('secret speech', str(body))
+        self.assertEqual(body['placeholders']['{HELPERNAME}'], 'alice')
+        self.assertEqual(body['placeholders']['{UPLOADLINK_HELPER}'], 'https://testserver/upload/alice/')
+        self.assertEqual(body['placeholders']['{UPLOADLINK_GENERAL}'], 'https://testserver/upload/')
+
+    def test_search_and_category(self):
+        body = self.api_get('api_v1_speeches', data={'q': 'fixlog'}).json()
+        self.assertEqual([s['speech_id'] for s in body['speeches']], [self.shared.pk])
+        body = self.api_get('api_v1_speeches', data={'category': 'scans'}).json()
+        self.assertEqual([s['speech_id'] for s in body['speeches']], [self.own.pk])
+        self.assertIn('{USERNAME}', body['speeches'][0]['content'])
+
+    def test_detail_respects_visibility(self):
+        body = self.api_get('api_v1_speech', self.shared.pk).json()
+        self.assertEqual(body['name'], 'apply fix')
+        self.assertIn('placeholders', body)
+        self.assertEqual(self.api_get('api_v1_speech', self.private.pk).status_code, 404)
+
+    def test_speech_request_logged_with_target(self):
+        self.api_get('api_v1_speech', self.own.pk)
+        self.assertEqual(ApiRequestLog.objects.get().target, str(self.own.pk))
+
+
+class ApiFixlistTemplateTests(ApiTestBase):
+    def test_default_template_without_profile_setting(self):
+        body = self.api_get('api_v1_fixlist_template').json()
+        self.assertTrue(body['is_default'])
+        self.assertEqual(body['template'], DEFAULT_ANALYZER_FIXLIST_TEMPLATE)
+        # The default's empty line sits after CloseProcesses:, line 4.
+        self.assertEqual(body['insert_entries_at_line'], 4)
+
+    def test_own_template_with_windows_line_endings(self):
+        UserProfile.objects.create(
+            user=self.user,
+            analyzer_fixlist_template='Start::\r\nCloseProcesses:\r\n\r\nReboot:\r\nEnd::',
+        )
+        body = self.api_get('api_v1_fixlist_template').json()
+        self.assertFalse(body['is_default'])
+        self.assertEqual(body['template'], 'Start::\nCloseProcesses:\n\nReboot:\nEnd::')
+        self.assertEqual(body['insert_entries_at_line'], 3)
+
+    def test_template_without_empty_line_inserts_before_end(self):
+        UserProfile.objects.create(user=self.user, analyzer_fixlist_template='Start::\nCloseProcesses:\nEnd::')
+        self.assertEqual(self.api_get('api_v1_fixlist_template').json()['insert_entries_at_line'], 3)
+
+    def test_other_users_template_is_not_served(self):
+        UserProfile.objects.create(user=make_user('bob'), analyzer_fixlist_template='Start::\nBOB-ONLY\nEnd::')
+        self.assertNotIn('BOB-ONLY', self.api_get('api_v1_fixlist_template').json()['template'])
+
+
 class ApiTokensPageTests(TestCase):
     def setUp(self):
         self.user = make_user('alice')
@@ -452,6 +527,24 @@ class ApiTokensPageTests(TestCase):
         self.assertNotContains(self.client.get(reverse('api_tokens')), raw)
         token = ApiToken.objects.get(user=self.user)
         self.assertEqual(token.token_hash, ApiToken.hash_raw(raw))
+
+    def test_desktop_config_block_is_prefilled_valid_json(self):
+        response = self.client.post(
+            reverse('api_tokens'), {'action': 'create', 'name': 'desktop', 'expiry_days': '90'}, secure=True,
+        )
+        raw = response.context['new_token_raw']
+        block = re.search(r'id="desktopConfig">(.*?)</div>', response.content.decode(), re.S).group(1)
+        config = json.loads('{' + html.unescape(block).strip().rstrip(',') + '}')
+        server = config['mcpServers']['fenrishub']
+        self.assertEqual(server['env']['FENRISHUB_TOKEN'], raw)
+        self.assertEqual(server['env']['FENRISHUB_URL'], 'https://testserver/api/v1/')
+        self.assertTrue(server['command'].endswith('python.exe'))
+
+    def test_instructions_use_placeholder_without_fresh_token(self):
+        ApiToken.issue(self.user, 'older')
+        response = self.client.get(reverse('api_tokens'))
+        self.assertContains(response, 'fh_YOUR_TOKEN')
+        self.assertNotContains(response, '<details class="api-connect" open')
 
     def test_cannot_revoke_another_users_token(self):
         other_token, _ = ApiToken.issue(make_user('bob'), 'theirs')

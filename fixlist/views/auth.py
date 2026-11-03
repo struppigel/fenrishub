@@ -36,6 +36,15 @@ EmptyTemp:
 End::"""
 
 
+def effective_analyzer_fixlist_template(user):
+    """The user's log analyzer fixlist starter, or the default when they have none."""
+    profile = getattr(user, 'fenris_profile', None)
+    return (
+        (profile.analyzer_fixlist_template if profile else '').strip()
+        or DEFAULT_ANALYZER_FIXLIST_TEMPLATE
+    )
+
+
 @require_http_methods(["GET", "POST"])
 def login_view(request):
     """User login view."""
