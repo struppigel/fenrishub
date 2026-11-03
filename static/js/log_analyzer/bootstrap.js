@@ -744,6 +744,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (typeof initFixlistPanelState === 'function') {
         initFixlistPanelState();
     }
+    if (typeof initPanelSplitter === 'function') {
+        initPanelSplitter();
+    }
     if (typeof initRightPanelState === 'function') {
         initRightPanelState();
     }

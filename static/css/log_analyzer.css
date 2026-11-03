@@ -264,8 +264,10 @@ body.clean-cursor-mode .line-text {
 
 .textareas-box {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    /* The middle column is the drag splitter; it doubles as the gap. */
+    grid-template-columns: minmax(0, var(--log-panel-fr, 1fr)) 10px minmax(0, var(--fix-panel-fr, 1fr));
     gap: 10px;
+    column-gap: 0;
     width: 100%;
     height: calc(100vh - 290px);
     min-height: 0;
@@ -278,8 +280,39 @@ body.clean-cursor-mode .line-text {
     grid-template-columns: minmax(0, 1fr);
 }
 
-.textareas-box.fixlist-hidden .right-panel {
+.textareas-box.fixlist-hidden .right-panel,
+.textareas-box.fixlist-hidden .panel-splitter {
     display: none;
+}
+
+.panel-splitter {
+    position: relative;
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.panel-splitter::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    background-color: var(--la-border-muted);
+}
+
+.panel-splitter:focus {
+    outline: none;
+}
+
+.panel-splitter:focus-visible {
+    outline: 1px solid var(--la-focus);
+}
+
+body.panel-resizing,
+body.panel-resizing * {
+    user-select: none;
+    cursor: col-resize !important;
 }
 
 .left-panel,
@@ -1204,6 +1237,10 @@ button.lookup-menu-item {
     .textareas-box {
         grid-template-columns: 1fr;
         height: auto;
+    }
+
+    .panel-splitter {
+        display: none;
     }
 
     .conflict-wizard-grid {

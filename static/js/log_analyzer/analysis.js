@@ -119,6 +119,100 @@ function setFixlistPanelHidden(hidden) {
     applyFixlistPanelState();
 }
 
+// Share of the row the log takes; the rest goes to the right column. Dragged
+// via the splitter between the panels, double-click resets to an even split.
+const LOG_PANEL_RATIO_KEY = 'fenrishub_log_panel_ratio';
+const LOG_PANEL_RATIO_MIN = 0.15;
+const LOG_PANEL_RATIO_MAX = 0.85;
+const LOG_PANEL_RATIO_DEFAULT = 0.5;
+const LOG_PANEL_RATIO_KEY_STEP = 0.02;
+let logPanelRatio = LOG_PANEL_RATIO_DEFAULT;
+
+function clampLogPanelRatio(ratio) {
+    if (!Number.isFinite(ratio)) return LOG_PANEL_RATIO_DEFAULT;
+    return Math.min(LOG_PANEL_RATIO_MAX, Math.max(LOG_PANEL_RATIO_MIN, ratio));
+}
+
+function applyLogPanelRatio(ratio) {
+    logPanelRatio = clampLogPanelRatio(ratio);
+    const box = document.querySelector('.textareas-box');
+    if (box) {
+        box.style.setProperty('--log-panel-fr', `${logPanelRatio}fr`);
+        box.style.setProperty('--fix-panel-fr', `${1 - logPanelRatio}fr`);
+    }
+    const splitter = document.getElementById('panelSplitter');
+    if (splitter) {
+        splitter.setAttribute('aria-valuenow', String(Math.round(logPanelRatio * 100)));
+    }
+}
+
+function saveLogPanelRatio() {
+    try {
+        localStorage.setItem(LOG_PANEL_RATIO_KEY, String(logPanelRatio));
+    } catch (e) {}
+}
+
+function initPanelSplitter() {
+    let stored = null;
+    try {
+        stored = localStorage.getItem(LOG_PANEL_RATIO_KEY);
+    } catch (e) {}
+    applyLogPanelRatio(stored === null ? LOG_PANEL_RATIO_DEFAULT : parseFloat(stored));
+
+    const splitter = document.getElementById('panelSplitter');
+    const box = document.querySelector('.textareas-box');
+    if (!splitter || !box) return;
+
+    let dragging = false;
+
+    function ratioFromPointer(clientX) {
+        const rect = box.getBoundingClientRect();
+        const style = getComputedStyle(box);
+        const contentLeft = rect.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth);
+        const contentWidth = box.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        const panelsWidth = contentWidth - splitter.offsetWidth;
+        if (panelsWidth <= 0) return logPanelRatio;
+        return (clientX - contentLeft - splitter.offsetWidth / 2) / panelsWidth;
+    }
+
+    function endDrag(event) {
+        if (!dragging) return;
+        dragging = false;
+        document.body.classList.remove('panel-resizing');
+        if (splitter.hasPointerCapture(event.pointerId)) {
+            splitter.releasePointerCapture(event.pointerId);
+        }
+        saveLogPanelRatio();
+    }
+
+    splitter.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        dragging = true;
+        splitter.setPointerCapture(event.pointerId);
+        document.body.classList.add('panel-resizing');
+    });
+    splitter.addEventListener('pointermove', (event) => {
+        if (!dragging) return;
+        applyLogPanelRatio(ratioFromPointer(event.clientX));
+    });
+    splitter.addEventListener('pointerup', endDrag);
+    splitter.addEventListener('pointercancel', endDrag);
+    splitter.addEventListener('dblclick', () => {
+        applyLogPanelRatio(LOG_PANEL_RATIO_DEFAULT);
+        saveLogPanelRatio();
+    });
+    splitter.addEventListener('keydown', (event) => {
+        let delta = 0;
+        if (event.key === 'ArrowLeft') delta = -LOG_PANEL_RATIO_KEY_STEP;
+        else if (event.key === 'ArrowRight') delta = LOG_PANEL_RATIO_KEY_STEP;
+        else return;
+        event.preventDefault();
+        applyLogPanelRatio(logPanelRatio + delta);
+        saveLogPanelRatio();
+    });
+}
+
 function applyRightPanelState() {
     const fixlist = document.getElementById('selectedLines');
     const response = document.getElementById('responseText');
