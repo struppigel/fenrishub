@@ -5,6 +5,8 @@ from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.dispatch import receiver
+from datetime import timedelta
+import hashlib
 import logging
 import secrets
 import string
@@ -173,6 +175,10 @@ class SiteConfig(models.Model):
         default='',
         help_text='Shared secret for guest access to the log analyzer and help page. Leave blank to disable guest access entirely.',
     )
+    api_enabled = models.BooleanField(
+        default=False,
+        help_text='Kill switch for the read-only token API (/api/v1/) used by LLM clients. Off: every API request gets 503.',
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -203,6 +209,136 @@ class SiteConfig(models.Model):
     def generate_guest_token():
         alphabet = string.ascii_letters + string.digits
         return ''.join(secrets.choice(alphabet) for _ in range(32))
+
+    @classmethod
+    def api_is_enabled(cls):
+        return bool(cls.get_solo().api_enabled)
+
+
+class ApiToken(models.Model):
+    """Personal bearer token for the read-only /api/v1/ endpoints.
+
+    Only the sha256 of the raw token is stored; the raw value is shown to its
+    owner once, at creation. A token acts as its user: it sees what that user
+    sees in the browser and nothing more.
+    """
+
+    RAW_PREFIX = 'fh_'
+    MAX_ACTIVE_PER_USER = 5
+    EXPIRY_DAY_CHOICES = (30, 90, 180, 365)
+    DEFAULT_EXPIRY_DAYS = 90
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='api_tokens')
+    name = models.CharField(max_length=64)
+    prefix = models.CharField(max_length=16)
+    token_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    last_used_at = models.DateTimeField(null=True, blank=True, default=None)
+    revoked_at = models.DateTimeField(null=True, blank=True, default=None)
+    revoked_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='revoked_api_tokens',
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.prefix}… ({self.user.username}: {self.name})'
+
+    @staticmethod
+    def hash_raw(raw: str) -> str:
+        return hashlib.sha256((raw or '').encode('utf-8')).hexdigest()
+
+    @property
+    def is_active(self):
+        return self.revoked_at is None and self.expires_at > timezone.now()
+
+    @classmethod
+    def active_for(cls, user):
+        return cls.objects.filter(user=user, revoked_at__isnull=True, expires_at__gt=timezone.now())
+
+    @classmethod
+    def issue(cls, user, name, expiry_days=DEFAULT_EXPIRY_DAYS):
+        """Create a token for `user` and return ``(token, raw)``.
+
+        Raises ValidationError when the user already holds the maximum number of
+        active tokens or the expiry is not one of EXPIRY_DAY_CHOICES.
+        """
+        if expiry_days not in cls.EXPIRY_DAY_CHOICES:
+            raise ValidationError('Unsupported token expiry.')
+        if cls.active_for(user).count() >= cls.MAX_ACTIVE_PER_USER:
+            raise ValidationError(
+                f'You already have {cls.MAX_ACTIVE_PER_USER} active tokens. Revoke one first.'
+            )
+        name = (name or '').strip()[:64] or 'token'
+        raw = cls.RAW_PREFIX + secrets.token_urlsafe(30)
+        token = cls.objects.create(
+            user=user,
+            name=name,
+            prefix=raw[:8],
+            token_hash=cls.hash_raw(raw),
+            expires_at=timezone.now() + timedelta(days=expiry_days),
+        )
+        return token, raw
+
+    @classmethod
+    def authenticate(cls, raw):
+        """Return the active token for `raw` whose user is active, else None."""
+        if not raw or not raw.startswith(cls.RAW_PREFIX):
+            return None
+        token = (
+            cls.objects.select_related('user', 'user__fenris_profile')
+            .filter(token_hash=cls.hash_raw(raw))
+            .first()
+        )
+        if token is None or not token.is_active or not token.user.is_active:
+            return None
+        return token
+
+    def revoke(self, by=None):
+        """Revoke this token. Idempotent: a revoked token keeps its first revocation."""
+        if self.revoked_at is not None:
+            return False
+        self.revoked_at = timezone.now()
+        self.revoked_by = by
+        self.save(update_fields=['revoked_at', 'revoked_by'])
+        return True
+
+
+class ApiRequestLog(models.Model):
+    """One row per /api/v1/ request, the source of truth for usage stats and caps.
+
+    Failed authentication is aggregated: one row per client IP per minute with
+    `count` holding the number of attempts, so unauthenticated traffic cannot
+    grow the table one row per request.
+    """
+
+    token = models.ForeignKey(ApiToken, null=True, blank=True, on_delete=models.SET_NULL, related_name='requests')
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='api_requests')
+    endpoint = models.CharField(max_length=64)
+    target = models.CharField(max_length=200, blank=True, default='')
+    status_code = models.PositiveSmallIntegerField()
+    response_bytes = models.PositiveIntegerField(default=0)
+    duration_ms = models.PositiveIntegerField(default=0)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=200, blank=True, default='')
+    count = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'created_at']),
+            models.Index(fields=['token', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.endpoint} {self.status_code} at {self.created_at}'
 
 
 MEMORABLE_ID_ADJECTIVES = [

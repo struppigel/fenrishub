@@ -6,9 +6,59 @@ from django.conf import settings
 from django.db import IntegrityError, connections, transaction
 from django.utils import timezone
 
-from .models import UploadedLog
+from .analyzer import ANALYSIS_PAYLOAD_FORMAT, analyze_log_text
+from .models import UploadedLog, UploadedLogAnalysis
 
 logger = logging.getLogger(__name__)
+
+
+def get_fresh_cached_analysis(uploaded_log: UploadedLog, rule_set_key: str):
+    """Return the cached analyzer payload for (upload, rule set), or None if unusable.
+
+    A cache row is unusable when the upload's content changed since it was
+    written, or when an older analyzer wrote it in a shape no longer produced.
+    """
+    cached = UploadedLogAnalysis.objects.filter(
+        upload=uploaded_log, rule_set_key=rule_set_key,
+    ).first()
+    if (
+        cached is None
+        or cached.source_content_hash != uploaded_log.content_hash
+        or not isinstance(cached.payload, dict)
+        or cached.payload.get('format') != ANALYSIS_PAYLOAD_FORMAT
+    ):
+        return None
+    return cached.payload
+
+
+def store_cached_analysis(uploaded_log: UploadedLog, rule_set_key: str, analysis: dict) -> None:
+    """Write `analysis` as the cached payload for (upload, rule set)."""
+    UploadedLogAnalysis.objects.update_or_create(
+        upload=uploaded_log,
+        rule_set_key=rule_set_key,
+        defaults={
+            'payload': analysis,
+            'source_content_hash': uploaded_log.content_hash,
+        },
+    )
+
+
+def get_or_compute_upload_analysis(uploaded_log: UploadedLog, rule_set_key: str):
+    """Return ``(payload, computed)`` for (upload, rule set).
+
+    Serves the cached payload when it is fresh; otherwise runs the analyzer and
+    caches the result. Never touches the count_* stats on the upload, which
+    reflect the assigned recipient's view only.
+    """
+    payload = get_fresh_cached_analysis(uploaded_log, rule_set_key)
+    if payload is not None:
+        return payload, False
+    payload = analyze_log_text(uploaded_log.content, rule_set_key)
+    try:
+        store_cached_analysis(uploaded_log, rule_set_key, payload)
+    except Exception:
+        logger.exception('Failed to cache analysis for upload_id=%s', uploaded_log.upload_id)
+    return payload, True
 
 
 def _recalculate_analysis_stats_in_thread(upload_pk: int) -> None:

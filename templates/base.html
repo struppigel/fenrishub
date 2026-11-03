@@ -733,8 +733,10 @@
                                 <a href="{% url 'change_password' %}">change password</a>
                                 <a href="{% url 'statistics' %}">stats</a>
                                 <a href="{% url 'log_search' %}">search logs</a>
+                                <a href="{% url 'api_tokens' %}">api tokens</a>
                                 <a href="{% url 'help' %}">help</a>
                                 {% if is_moderator %}<a href="{% url 'log_type_rules' %}">log type rules</a>{% endif %}
+                                {% if is_moderator %}<a href="{% url 'api_usage' %}">api usage</a>{% endif %}
                                 <form method="post" action="{% url 'logout' %}">
                                     {% csrf_token %}
                                     <button type="submit">logout</button>

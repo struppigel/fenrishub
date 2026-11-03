@@ -6,6 +6,7 @@ used across multiple view domains.
 """
 
 import io
+import ipaddress
 import re
 import zipfile
 
@@ -20,7 +21,7 @@ from urllib.parse import urlencode
 from datetime import timedelta
 from django.utils import timezone
 
-from ..models import InfectionCase, UploadedLog, Fixlist
+from ..models import ApiRequestLog, InfectionCase, UploadedLog, Fixlist
 
 
 def _purge_old_trash():
@@ -35,6 +36,14 @@ def _purge_old_trash():
     Fixlist.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff, is_protected=False).delete()
     UploadedLog.objects.filter(created_at__lt=hard_cutoff, is_protected=False).delete()
     Fixlist.objects.filter(created_at__lt=hard_cutoff, is_protected=False).delete()
+    _purge_old_api_request_logs()
+
+
+def _purge_old_api_request_logs():
+    """Delete API request log rows older than API_LOG_RETENTION_DAYS (default 90)."""
+    retention_days = max(1, int(getattr(settings, 'API_LOG_RETENTION_DAYS', 90)))
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    ApiRequestLog.objects.filter(created_at__lt=cutoff).delete()
 
 
 def _autoclose_stale_cases():
@@ -219,6 +228,31 @@ def get_client_ip(request):
     else:
         ip = request.META.get('REMOTE_ADDR')
     return ip
+
+
+def get_trusted_client_ip(request):
+    """Client IP as seen by the outermost trusted proxy, or None if unparseable.
+
+    Unlike get_client_ip, this never trusts the leftmost X-Forwarded-For entry,
+    which the client can set to anything. Each of the TRUSTED_PROXY_COUNT proxies
+    in front of the app appends the address it received the request from, so the
+    entry that many positions from the right is the first one a client cannot
+    forge. With TRUSTED_PROXY_COUNT = 0 the header is ignored entirely.
+    """
+    proxy_count = max(0, int(getattr(settings, 'TRUSTED_PROXY_COUNT', 1)))
+    candidate = request.META.get('REMOTE_ADDR', '')
+    if proxy_count:
+        entries = [
+            entry.strip()
+            for entry in (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')
+            if entry.strip()
+        ]
+        if entries:
+            candidate = entries[-min(proxy_count, len(entries))]
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return None
 
 
 def custom_404_view(request, exception):

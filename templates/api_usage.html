@@ -1,0 +1,105 @@
+{% extends 'base.html' %}
+
+{% block title %}API Usage - FenrisHub{% endblock %}
+
+{% block page_context_label %}api usage{% endblock %}
+
+{% block extra_css %}
+<style>
+    .api-help {
+        color: var(--la-text-muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+    }
+    .api-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin-bottom: 16px;
+    }
+    .api-table th,
+    .api-table td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--la-border-muted);
+        vertical-align: top;
+    }
+    .api-table th {
+        color: var(--la-text-muted);
+        font-weight: 600;
+    }
+    .api-table td.num,
+    .api-table th.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+    .api-flag {
+        color: var(--la-status-b);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h2>api usage</h2>
+<div class="api-help">
+    {% if api_enabled %}The API is enabled.{% else %}The API is switched off (site configuration in the admin).{% endif %}
+    Limits per user: {{ limits.per_minute }} units/minute, {{ limits.per_day }} requests, {{ limits.uploads_per_day }} distinct uploads
+    and {{ limits.bytes_per_day|filesizeformat }} per 24 hours. Rows are sorted by requests in the last 24 hours.
+</div>
+
+<table class="api-table">
+    <thead>
+        <tr>
+            <th>user</th>
+            <th class="num">1h</th>
+            <th class="num">24h</th>
+            <th class="num">7d</th>
+            <th class="num">30d</th>
+            <th class="num">uploads 24h</th>
+            <th class="num">served 24h</th>
+            <th class="num">429s 24h</th>
+            <th class="num">active tokens</th>
+            <th>last request</th>
+            <th>attention</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+            <tr>
+                <td><a href="{% url 'api_usage_user' row.user_id %}">{{ row.username }}</a></td>
+                <td class="num">{{ row.requests_1h }}</td>
+                <td class="num">{{ row.requests_24h }}</td>
+                <td class="num">{{ row.requests_7d }}</td>
+                <td class="num">{{ row.requests_30d }}</td>
+                <td class="num">{{ row.uploads_24h }}</td>
+                <td class="num">{{ row.bytes_24h|filesizeformat }}</td>
+                <td class="num">{{ row.limited_24h }}</td>
+                <td class="num">{{ row.active_tokens }}</td>
+                <td>{{ row.last_request|date:"Y-m-d H:i"|default:"-" }}</td>
+                <td>{% if row.flags %}<span class="api-flag">high usage: {{ row.flags|join:", " }}</span>{% endif %}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="11">No API activity in the last 30 days and no active tokens.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<h3>failed authentication, last 24 hours</h3>
+<div class="api-help">Requests with a missing, invalid, expired or revoked token, by client IP.</div>
+<table class="api-table">
+    <thead>
+        <tr><th>ip</th><th class="num">attempts</th><th>last attempt</th></tr>
+    </thead>
+    <tbody>
+        {% for row in failed_auth %}
+            <tr>
+                <td>{{ row.ip_address|default:"unknown" }}</td>
+                <td class="num">{{ row.attempts }}</td>
+                <td>{{ row.last_attempt|date:"Y-m-d H:i" }}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="3">None.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

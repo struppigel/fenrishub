@@ -14,7 +14,7 @@ from django.views.decorators.http import require_http_methods
 from django.core.paginator import Paginator
 from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
-from django.db.models import Count
+from django.db.models import Count, Q
 from urllib.parse import urlencode
 
 from ..forms import UploadedLogForm
@@ -35,7 +35,7 @@ from .upload_actions import (
 )
 from .utils import (
     _anonymous_upload_limit, _consume_anonymous_upload_slot, _resolve_upload_recipient_username,
-    get_action_scoped_uploads, get_updatable_uploads, get_client_ip, _purge_old_trash,
+    get_action_scoped_uploads, get_updatable_uploads, get_client_ip, get_trusted_client_ip, _purge_old_trash,
     redirect_preserving_filters,
 )
 
@@ -55,7 +55,9 @@ def upload_log_view(request, helper_username=None):
         form = UploadedLogForm(request.POST, request.FILES)
         try:
             if not request.user.is_authenticated:
-                client_ip = get_client_ip(request)
+                # Never the leftmost X-Forwarded-For entry: a client could put a
+                # fresh fake address there on every upload to dodge the limit.
+                client_ip = get_trusted_client_ip(request)
                 if not _consume_anonymous_upload_slot(client_ip):
                     minutes = max(1, (upload_window_seconds + 59) // 60)
                     form.add_error(
@@ -242,6 +244,16 @@ def uploaded_logs_view(request):
     })
 
 
+def filter_uploads_by_text(uploads, search_query):
+    """Narrow `uploads` to rows whose id, poster, helper or filename contains the query."""
+    return uploads.filter(
+        Q(upload_id__icontains=search_query)
+        | Q(forum_username__icontains=search_query)
+        | Q(recipient_user__username__icontains=search_query)
+        | Q(original_filename__icontains=search_query)
+    )
+
+
 def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     """Build shared listing context (filters/search/pagination) for uploads pages.
 
@@ -256,8 +268,6 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
 
     The `type` filter narrows to one log type; empty (the default) means all.
     """
-    from django.db.models import Q
-
     username_filter = request.GET.get('u', '').strip()
     search_query = request.GET.get('q', '').strip()
 
@@ -311,12 +321,7 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     if log_type_filter:
         uploads = uploads.filter(log_type=log_type_filter)
     if search_query:
-        uploads = uploads.filter(
-            Q(upload_id__icontains=search_query)
-            | Q(forum_username__icontains=search_query)
-            | Q(recipient_user__username__icontains=search_query)
-            | Q(original_filename__icontains=search_query)
-        )
+        uploads = filter_uploads_by_text(uploads, search_query)
     if deleted:
         uploads = uploads.order_by('-deleted_at')
 

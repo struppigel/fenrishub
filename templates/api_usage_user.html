@@ -1,0 +1,137 @@
+{% extends 'base.html' %}
+
+{% block title %}API Usage of {{ subject.username }} - FenrisHub{% endblock %}
+
+{% block page_context_label %}api usage{% endblock %}
+
+{% block extra_css %}
+<style>
+    .api-help {
+        color: var(--la-text-muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+    }
+    .api-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin-bottom: 16px;
+    }
+    .api-table th,
+    .api-table td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--la-border-muted);
+        vertical-align: top;
+    }
+    .api-table th {
+        color: var(--la-text-muted);
+        font-weight: 600;
+    }
+    .api-table td.num,
+    .api-table th.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+    .api-table td.target {
+        word-break: break-all;
+        max-width: 320px;
+    }
+    .api-table form {
+        margin: 0;
+    }
+    .api-table button {
+        padding: 3px 7px;
+        font-size: 11px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h2>api usage of {{ subject.username }}</h2>
+<div class="api-help"><a href="{% url 'api_usage' %}">back to all users</a></div>
+
+<h3>tokens</h3>
+<table class="api-table">
+    <thead>
+        <tr><th>name</th><th>token</th><th>created</th><th>expires</th><th>last used</th><th>state</th><th></th></tr>
+    </thead>
+    <tbody>
+        {% for token in tokens %}
+            <tr>
+                <td>{{ token.name }}</td>
+                <td><code>{{ token.prefix }}…</code></td>
+                <td>{{ token.created_at|date:"Y-m-d H:i" }}</td>
+                <td>{{ token.expires_at|date:"Y-m-d" }}</td>
+                <td>{{ token.last_used_at|date:"Y-m-d H:i"|default:"never" }}</td>
+                <td>
+                    {% if token.revoked_at %}revoked {{ token.revoked_at|date:"Y-m-d H:i" }}{% if token.revoked_by %} by {{ token.revoked_by.username }}{% endif %}
+                    {% elif not token.is_active %}expired
+                    {% else %}active{% endif %}
+                </td>
+                <td>
+                    {% if token.is_active %}
+                        <form method="post" onsubmit="return confirm('Revoke this token of {{ subject.username|escapejs }}?');">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="revoke">
+                            <input type="hidden" name="token_id" value="{{ token.pk }}">
+                            <button type="submit">revoke</button>
+                        </form>
+                    {% endif %}
+                </td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="7">No tokens.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+<form method="post" onsubmit="return confirm('Revoke all API tokens of {{ subject.username|escapejs }}?');">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="revoke_all">
+    <button type="submit">revoke all tokens</button>
+</form>
+
+<h3>per day, last 30 days</h3>
+<table class="api-table">
+    <thead>
+        <tr><th>day</th><th class="num">requests</th><th class="num">distinct uploads</th><th class="num">served</th><th class="num">429s</th></tr>
+    </thead>
+    <tbody>
+        {% for row in daily %}
+            <tr>
+                <td>{{ row.day|date:"Y-m-d" }}</td>
+                <td class="num">{{ row.requests }}</td>
+                <td class="num">{{ row.uploads }}</td>
+                <td class="num">{{ row.bytes|filesizeformat }}</td>
+                <td class="num">{{ row.limited }}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="5">No requests.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<h3>last {{ recent_limit }} requests</h3>
+<table class="api-table">
+    <thead>
+        <tr><th>time</th><th>endpoint</th><th>target</th><th class="num">status</th><th class="num">bytes</th><th class="num">ms</th><th>token</th><th>ip</th><th>user agent</th></tr>
+    </thead>
+    <tbody>
+        {% for entry in recent %}
+            <tr>
+                <td>{{ entry.created_at|date:"Y-m-d H:i:s" }}</td>
+                <td>{{ entry.endpoint }}</td>
+                <td class="target">{{ entry.target }}</td>
+                <td class="num">{{ entry.status_code }}</td>
+                <td class="num">{{ entry.response_bytes }}</td>
+                <td class="num">{{ entry.duration_ms }}</td>
+                <td>{% if entry.token %}<code>{{ entry.token.prefix }}…</code>{% else %}-{% endif %}</td>
+                <td>{{ entry.ip_address|default:"-" }}</td>
+                <td class="target">{{ entry.user_agent }}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="9">No requests.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

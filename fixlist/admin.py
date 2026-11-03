@@ -26,6 +26,8 @@ def _invalidate_for_owner_ids(owner_ids):
         invalidate_for_rule_owner(owner)
 from .models import (
     AccessLog,
+    ApiRequestLog,
+    ApiToken,
     ClassificationRule,
     Fixlist,
     FixlistSnippet,
@@ -142,6 +144,46 @@ class AccessLogAdmin(admin.ModelAdmin):
     list_display = ('fixlist', 'accessed_at', 'ip_address')
     list_filter = ('accessed_at',)
     readonly_fields = ('accessed_at', 'ip_address')
+
+
+@admin.register(ApiToken)
+class ApiTokenAdmin(admin.ModelAdmin):
+    """Read-only: tokens are issued on the api tokens page, where the raw value is shown once."""
+
+    list_display = ('prefix', 'user', 'name', 'created_at', 'expires_at', 'last_used_at', 'revoked_at', 'revoked_by')
+    list_filter = ('revoked_at', 'expires_at')
+    search_fields = ('user__username', 'name', 'prefix')
+    readonly_fields = list_display
+    fields = list_display
+    actions = ['revoke_tokens']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    @admin.action(description='Revoke selected tokens')
+    def revoke_tokens(self, request, queryset):
+        revoked = sum(int(token.revoke(by=request.user)) for token in queryset)
+        self.message_user(request, f'Revoked {revoked} token(s).', messages.SUCCESS)
+
+
+@admin.register(ApiRequestLog)
+class ApiRequestLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'user', 'endpoint', 'target', 'status_code', 'count', 'response_bytes', 'duration_ms', 'ip_address')
+    list_filter = ('endpoint', 'status_code', 'created_at')
+    search_fields = ('user__username', 'target', 'ip_address')
+    readonly_fields = (
+        'created_at', 'token', 'user', 'endpoint', 'target', 'status_code', 'count',
+        'response_bytes', 'duration_ms', 'ip_address', 'user_agent',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ClassificationRule)
@@ -934,9 +976,9 @@ class ParsedFilepathExclusionAdmin(admin.ModelAdmin):
 
 @admin.register(SiteConfig)
 class SiteConfigAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'guest_token_preview', 'updated_at')
+    list_display = ('__str__', 'guest_token_preview', 'api_enabled', 'updated_at')
     readonly_fields = ('updated_at',)
-    fields = ('guest_token', 'updated_at')
+    fields = ('guest_token', 'api_enabled', 'updated_at')
     change_list_template = 'admin/fixlist/siteconfig/change_list.html'
 
     def guest_token_preview(self, obj):

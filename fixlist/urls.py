@@ -9,6 +9,8 @@ from .views.analyzer import (
     update_analyzed_line_status_api,
     uploaded_log_cached_analysis_api,
 )
+from .views.api_tokens import api_tokens_view
+from .views.api_usage import api_usage_user_view, api_usage_view
 from .views.auth import change_password_view, frst_download_view, help_view, login_view, logout_view, profile_view
 from .views.fixlists import (
     copy_to_clipboard_api,
@@ -27,6 +29,16 @@ from .views.infection_cases import (
     infection_case_download_logs_view,
     infection_cases_view,
     view_infection_case,
+)
+from .views.llm_api import (
+    api_case,
+    api_search,
+    api_snippet,
+    api_snippets,
+    api_upload,
+    api_upload_analysis,
+    api_uploads,
+    api_user,
 )
 from .views.log_search import log_search_download_view, log_search_view
 from .views.log_type_rules import (
@@ -65,6 +77,9 @@ urlpatterns = [
     path('upload/', upload_log_view, name='upload_log'),
     path('account/password/', change_password_view, name='change_password'),
     path('account/profile/', profile_view, name='profile'),
+    path('account/api-tokens/', api_tokens_view, name='api_tokens'),
+    path('api-usage/', api_usage_view, name='api_usage'),
+    path('api-usage/<int:user_id>/', api_usage_user_view, name='api_usage_user'),
     path('help/', help_view, name='help'),
     path('frst-download/', frst_download_view, name='frst_download'),
     path('fixes/', dashboard_view, name='dashboard'),
@@ -115,6 +130,15 @@ urlpatterns = [
     path('share/<str:token>/', shared_fixlist_view, name='shared_fixlist'),
     path('download/<str:token>/', download_fixlist, name='download_fixlist'),
     path('api/copy/<str:token>/', copy_to_clipboard_api, name='copy_api'),
+    # Read-only token API for LLM clients (see views/llm_api.py, views/api_auth.py).
+    path('api/v1/uploads/', api_uploads, name='api_v1_uploads'),
+    path('api/v1/uploads/<str:upload_id>/', api_upload, name='api_v1_upload'),
+    path('api/v1/uploads/<str:upload_id>/analysis/', api_upload_analysis, name='api_v1_upload_analysis'),
+    path('api/v1/search/', api_search, name='api_v1_search'),
+    path('api/v1/users/<str:forum_username>/', api_user, name='api_v1_user'),
+    path('api/v1/cases/<str:case_id>/', api_case, name='api_v1_case'),
+    path('api/v1/snippets/', api_snippets, name='api_v1_snippets'),
+    path('api/v1/snippets/<int:snippet_id>/', api_snippet, name='api_v1_snippet'),
     path('stats/', statistics_view, name='statistics'),
     path('logout/', logout_view, name='logout'),
 ]

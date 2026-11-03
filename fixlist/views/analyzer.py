@@ -22,14 +22,15 @@ from django.utils.safestring import mark_safe
 
 from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
-    ANALYSIS_PAYLOAD_FORMAT, VALID_STATUSES,
+    VALID_STATUSES,
 )
-from ..models import ClassificationRule, Fixlist, FixlistSnippet, Speech, UploadedLog, UploadedLogAnalysis
+from ..models import ClassificationRule, Fixlist, FixlistSnippet, Speech, UploadedLog
 from ..rule_sets import (
     SHARED_RULE_SET_KEY,
     resolve_effective_rule_set_key,
     resolve_user_rule_set_key,
 )
+from ..upload_utils import get_fresh_cached_analysis, store_cached_analysis
 from ..validators import PayloadValidator, BadJsonError, PayloadTooLargeError
 from ..rule_utils import (
     _normalize_pending_changes, _build_pending_rule_preview,
@@ -186,14 +187,7 @@ def analyze_log_api(request):
         ).first()
         if uploaded_log:
             try:
-                UploadedLogAnalysis.objects.update_or_create(
-                    upload=uploaded_log,
-                    rule_set_key=viewer_key,
-                    defaults={
-                        'payload': analysis,
-                        'source_content_hash': uploaded_log.content_hash,
-                    },
-                )
+                store_cached_analysis(uploaded_log, viewer_key, analysis)
                 # count_* on the upload reflects the assigned recipient's view.
                 # Only update it when this viewer's ruleset matches the
                 # upload's effective ruleset AND the viewer is the recipient
@@ -226,22 +220,15 @@ def uploaded_log_cached_analysis_api(request, upload_id):
         deleted_at__isnull=True,
     )
     viewer_key = resolve_user_rule_set_key(request.user)
-    cached = UploadedLogAnalysis.objects.filter(
-        upload=uploaded_log, rule_set_key=viewer_key,
-    ).first()
     # A payload written by an older analyzer has a shape the page no longer reads;
     # the page re-analyses anyway, and that run replaces the cache.
-    if (
-        cached is None
-        or cached.source_content_hash != uploaded_log.content_hash
-        or not isinstance(cached.payload, dict)
-        or cached.payload.get('format') != ANALYSIS_PAYLOAD_FORMAT
-    ):
+    payload = get_fresh_cached_analysis(uploaded_log, viewer_key)
+    if payload is None:
         return JsonResponse({'has_cache': False, 'payload': None, 'source_content_hash': None})
     return JsonResponse({
         'has_cache': True,
-        'payload': cached.payload,
-        'source_content_hash': cached.source_content_hash,
+        'payload': payload,
+        'source_content_hash': uploaded_log.content_hash,
     })
 
 

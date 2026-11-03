@@ -348,6 +348,28 @@ class UploadedLogUploadsViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(second, 'Anonymous upload rate limit reached')
         self.assertEqual(UploadedLog.objects.count(), 1)
 
+    @override_settings(
+        ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600, TRUSTED_PROXY_COUNT=1,
+    )
+    def test_anonymous_upload_rate_limit_ignores_spoofed_forwarded_for(self):
+        # The proxy appends the real client address; the leftmost entries are
+        # whatever the client sent and change on every attempt.
+        responses = [
+            self.client.post(
+                reverse('upload_log'),
+                {
+                    'forum_username': 'forum_user',
+                    'log_file': SimpleUploadedFile(f'{index}.txt', b'line', content_type='text/plain'),
+                },
+                HTTP_X_FORWARDED_FOR=f'198.51.100.{index}, 203.0.113.10',
+            )
+            for index in range(2)
+        ]
+
+        self.assertEqual(responses[0].status_code, 302)
+        self.assertContains(responses[1], 'Anonymous upload rate limit reached')
+        self.assertEqual(UploadedLog.objects.count(), 1)
+
     @override_settings(ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600)
 
     @override_settings(ANON_UPLOAD_RATE_LIMIT_COUNT=1, ANON_UPLOAD_RATE_LIMIT_WINDOW_SECONDS=3600)

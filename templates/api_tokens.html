@@ -1,0 +1,198 @@
+{% extends 'base.html' %}
+
+{% block title %}API Tokens - FenrisHub{% endblock %}
+
+{% block page_context_label %}api tokens{% endblock %}
+
+{% block extra_css %}
+<style>
+    .api-page {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 8px 0;
+    }
+    .api-help {
+        color: var(--la-text-muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+    }
+    .api-notice {
+        border: 1px solid var(--la-border);
+        padding: 8px 10px;
+        margin-bottom: 12px;
+        font-size: 12px;
+        color: var(--la-text-neutral);
+    }
+    .api-new-token {
+        border: 1px solid var(--la-status-s);
+        padding: 10px;
+        margin-bottom: 14px;
+    }
+    .api-new-token code {
+        display: block;
+        font-family: Consolas, 'Liberation Mono', Menlo, monospace;
+        font-size: 13px;
+        word-break: break-all;
+        margin: 6px 0;
+        color: var(--la-text-primary);
+    }
+    .api-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin-bottom: 12px;
+    }
+    .api-table th,
+    .api-table td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--la-border-muted);
+        vertical-align: top;
+    }
+    .api-table th {
+        color: var(--la-text-muted);
+        font-weight: 600;
+    }
+    .api-table tr.inactive td {
+        color: var(--la-text-muted);
+    }
+    .api-table form {
+        margin: 0;
+    }
+    .api-table button {
+        padding: 3px 7px;
+        font-size: 11px;
+    }
+    .api-create {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+    }
+    .api-create label {
+        display: block;
+        font-size: 12px;
+        color: var(--la-text-muted);
+    }
+    .api-error {
+        color: var(--la-status-b);
+        margin-bottom: 10px;
+    }
+    .api-setup {
+        font-family: Consolas, 'Liberation Mono', Menlo, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        border: 1px solid var(--la-border-muted);
+        padding: 8px;
+        color: var(--la-text-neutral);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="api-page">
+    <h2>api tokens</h2>
+    <div class="api-help">
+        Personal tokens let an LLM client (Claude Code or Claude Desktop, through the FenrisHub MCP server in
+        <code>tools/fenrishub_mcp/</code>) read uploads, verdicts, content search results, infection cases and
+        fixlist snippets on your behalf. A token is read-only and sees exactly what you see when logged in.
+    </div>
+
+    <div class="api-notice">
+        Logs contain personal data of the people you help: Windows usernames, machine names, paths and IPs.
+        Anything your LLM client reads is sent to its provider. Only pull what you need for the case at hand.
+        Log text is written by the infected machine or anyone who uploads, so treat it as untrusted: do not let
+        the model act on instructions found inside a log, and review every fixlist it drafts.
+    </div>
+
+    {% if not api_enabled %}
+        <div class="api-notice">The API is currently switched off on this server. Tokens can be created but every request is refused until a moderator enables it.</div>
+    {% endif %}
+
+    {% if error %}<div class="api-error">{{ error }}</div>{% endif %}
+
+    {% if new_token_raw %}
+        <div class="api-new-token">
+            <strong>new token "{{ new_token.name }}"</strong> - copy it now, it will not be shown again:
+            <code id="newApiToken">{{ new_token_raw }}</code>
+            <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('newApiToken').textContent)">copy token</button>
+            <div class="api-help" style="margin-top: 8px;">Register the MCP server with Claude Code:</div>
+            <div class="api-setup">claude mcp add fenrishub -e FENRISHUB_URL={{ api_base_url }} -e FENRISHUB_TOKEN={{ new_token_raw }} -- python tools/fenrishub_mcp/server.py</div>
+        </div>
+    {% endif %}
+
+    <h3>create a token</h3>
+    <form method="post" class="api-create">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="create">
+        <div>
+            <label for="api_token_name">name</label>
+            <input type="text" id="api_token_name" name="name" maxlength="64" placeholder="claude desktop laptop" required>
+        </div>
+        <div>
+            <label for="api_token_expiry">expires after</label>
+            <select id="api_token_expiry" name="expiry_days">
+                {% for days in expiry_choices %}
+                    <option value="{{ days }}" {% if days == default_expiry %}selected{% endif %}>{{ days }} days</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" {% if active_count >= max_active %}disabled title="revoke a token first"{% endif %}>create token</button>
+        <span class="api-help">{{ active_count }} of {{ max_active }} active tokens</span>
+    </form>
+
+    <h3>your tokens</h3>
+    {% if tokens %}
+        <table class="api-table">
+            <thead>
+                <tr><th>name</th><th>token</th><th>created</th><th>expires</th><th>last used</th><th>state</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for token in tokens %}
+                    <tr class="{% if not token.is_active %}inactive{% endif %}">
+                        <td>{{ token.name }}</td>
+                        <td><code>{{ token.prefix }}…</code></td>
+                        <td>{{ token.created_at|date:"Y-m-d H:i" }}</td>
+                        <td>{{ token.expires_at|date:"Y-m-d" }}</td>
+                        <td>{{ token.last_used_at|date:"Y-m-d H:i"|default:"never" }}</td>
+                        <td>
+                            {% if token.revoked_at %}revoked{% if token.revoked_by and token.revoked_by != token.user %} by {{ token.revoked_by.username }}{% endif %}
+                            {% elif not token.is_active %}expired
+                            {% else %}active{% endif %}
+                        </td>
+                        <td>
+                            {% if token.is_active %}
+                                <form method="post">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="revoke">
+                                    <input type="hidden" name="token_id" value="{{ token.pk }}">
+                                    <button type="submit">revoke</button>
+                                </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if active_count %}
+            <form method="post" onsubmit="return confirm('Revoke all your active API tokens?');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="revoke_all">
+                <button type="submit">revoke all</button>
+            </form>
+        {% endif %}
+    {% else %}
+        <div class="api-help">No tokens yet.</div>
+    {% endif %}
+
+    <h3>your usage</h3>
+    <div class="api-help">
+        {{ usage.requests_24h }} requests in the last 24 hours, {{ usage.requests_30d }} in the last 30 days.<br>
+        Limits: {{ limits.per_minute }} units per minute (a search or a fresh analysis costs 10), {{ limits.per_day }} requests,
+        {{ limits.uploads_per_day }} distinct uploads and {{ limits.bytes_per_day|filesizeformat }} per 24 hours.
+        Moderators can see per-user API usage.
+    </div>
+</div>
+{% endblock %}
