@@ -34,9 +34,43 @@
         text-decoration: underline;
     }
 
-    .tab-active {
-        border-color: var(--la-focus);
-        color: var(--la-focus);
+    /* Fixlist / response tabs sit on top of the editor they switch. The
+       active tab shares the editor's border and background and covers the
+       editor's top border beneath it, so the two read as one piece. */
+    .panel-tabs {
+        display: flex;
+        gap: 2px;
+    }
+
+    .panel-tabs .panel-tab {
+        position: relative;
+        padding: 4px 14px;
+        margin-bottom: -1px;
+        background-color: transparent;
+        color: var(--la-text-muted);
+        border: 1px solid var(--la-border-muted);
+        border-bottom-color: transparent;
+    }
+
+    .panel-tabs .panel-tab.tab-active {
+        z-index: 1;
+        background-color: var(--la-bg-1);
+        color: var(--la-text-primary);
+        border-color: var(--la-border);
+        border-bottom-color: var(--la-bg-1);
+        cursor: default;
+    }
+
+    .panel-tabs .panel-tab.tab-active:hover {
+        text-decoration: none;
+    }
+
+    .panel-tab-body {
+        margin-bottom: 12px;
+    }
+
+    .panel-tab-body textarea {
+        display: block;
     }
 
     /* Double the base textarea height: this page is now the main editor for both. */
@@ -75,11 +109,6 @@
         <a href="{{ guest_preview_url }}" target="_blank" rel="noopener" class="inline-action-link" style="margin-left: 8px;">preview guest view</a>
     </div>
 
-    <div class="button-group" style="margin-bottom: 12px;">
-        <button type="button" id="tabContent" onclick="switchTab('content')" class="{% if active_tab != 'response' %}tab-active{% endif %}">fixlist</button>
-        <button type="button" id="tabResponse" onclick="switchTab('response')" class="{% if active_tab == 'response' %}tab-active{% endif %}">response</button>
-    </div>
-
     <form method="post">
         {% csrf_token %}
         <input type="hidden" name="action" value="update">
@@ -94,14 +123,17 @@
         Neither textarea may be `required`: a hidden required control silently
         blocks submission. Emptiness is tolerated server-side instead.
         {% endcomment %}
-        <div class="form-group" id="contentPanel"{% if active_tab == 'response' %} style="display: none;"{% endif %}>
-            <label for="content">fixlist</label>
-            <textarea id="content" name="content">{{ fixlist.content }}</textarea>
+        <div class="panel-tabs" role="tablist" aria-label="fixlist or response">
+            <button type="button" id="tabContent" class="panel-tab{% if active_tab != 'response' %} tab-active{% endif %}" onclick="switchTab('content')" role="tab" aria-selected="{% if active_tab != 'response' %}true{% else %}false{% endif %}" aria-controls="contentPanel">fixlist</button>
+            <button type="button" id="tabResponse" class="panel-tab{% if active_tab == 'response' %} tab-active{% endif %}" onclick="switchTab('response')" role="tab" aria-selected="{% if active_tab == 'response' %}true{% else %}false{% endif %}" aria-controls="responsePanel">response</button>
         </div>
 
-        <div class="form-group" id="responsePanel"{% if active_tab != 'response' %} style="display: none;"{% endif %}>
-            <label for="response">response</label>
-            <textarea id="response" name="response" placeholder="Write the response for the user here...">{{ fixlist.response }}</textarea>
+        <div class="panel-tab-body" id="contentPanel" role="tabpanel" aria-labelledby="tabContent"{% if active_tab == 'response' %} style="display: none;"{% endif %}>
+            <textarea id="content" name="content" aria-labelledby="tabContent">{{ fixlist.content }}</textarea>
+        </div>
+
+        <div class="panel-tab-body" id="responsePanel" role="tabpanel" aria-labelledby="tabResponse"{% if active_tab != 'response' %} style="display: none;"{% endif %}>
+            <textarea id="response" name="response" aria-labelledby="tabResponse" placeholder="Write the response for the user here...">{{ fixlist.response }}</textarea>
         </div>
 
         {% comment %}
@@ -135,8 +167,12 @@ function switchTab(tab) {
     const isResponse = tab === 'response';
     document.getElementById('contentPanel').style.display = isResponse ? 'none' : '';
     document.getElementById('responsePanel').style.display = isResponse ? '' : 'none';
-    document.getElementById('tabContent').classList.toggle('tab-active', !isResponse);
-    document.getElementById('tabResponse').classList.toggle('tab-active', isResponse);
+    const tabContent = document.getElementById('tabContent');
+    const tabResponse = document.getElementById('tabResponse');
+    tabContent.classList.toggle('tab-active', !isResponse);
+    tabResponse.classList.toggle('tab-active', isResponse);
+    tabContent.setAttribute('aria-selected', isResponse ? 'false' : 'true');
+    tabResponse.setAttribute('aria-selected', isResponse ? 'true' : 'false');
     document.getElementById('activeTabInput').value = isResponse ? 'response' : 'content';
     // Each copy button belongs to the tab it copies from.
     document.getElementById('copyFixMessageButton').style.display = isResponse ? 'none' : '';
