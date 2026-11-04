@@ -238,6 +238,8 @@ def api_token_required(endpoint, *, cost=1, write=False):
             )
             return response
 
+        # Read by the tests that check every /api/v1/ view is either GET-only or write-gated.
+        _wrapped.api_write = write
         return csrf_exempt(_wrapped) if write else _wrapped
 
     return decorator

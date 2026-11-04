@@ -13,7 +13,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from ..analyzer import invalidate_rule_buckets_cache
-from ..models import ApiToken, ClassificationRule, RuleTag, Speech
+from ..models import ApiToken, ClassificationRule, FixlistSnippet, RuleTag, Speech
 from .factories import make_rule, make_uploaded_log, make_user
 from .test_llm_api import enable_api
 
@@ -73,6 +73,43 @@ class WriteAuthTests(ApiWriteBase):
         response = self.get('api_v1_tag_create', raw=self.write_raw)
         self.assertEqual(response.status_code, 405)
 
+    def _api_v1_patterns(self):
+        from ..urls import urlpatterns
+        return [pattern for pattern in urlpatterns if (pattern.name or '').startswith('api_v1_')]
+
+    def test_every_changing_endpoint_needs_a_write_token(self):
+        write_names = {pattern.name for pattern in self._api_v1_patterns() if getattr(pattern.callback, 'api_write', None)}
+        self.assertEqual(write_names, {
+            'api_v1_tag_create', 'api_v1_tag_update', 'api_v1_tag_apply',
+            'api_v1_speech_create', 'api_v1_speech_update',
+        })
+        tag = RuleTag.objects.create(name='renloader')
+        speech = Speech.objects.create(owner=self.admin, name='mine', content='x')
+        snippet = FixlistSnippet.objects.create(owner=self.admin, name='fix', content='x')
+        args = {'api_v1_tag_update': [tag.pk], 'api_v1_tag_apply': [tag.pk], 'api_v1_speech_update': [speech.pk]}
+        body = {'name': 'changed', 'content': 'changed', 'mode': 'add_rules', 'rule_ids': [], 'confirm': True,
+                'snippet_ids': [snippet.pk], 'speech_ids': [speech.pk]}
+
+        for name in sorted(write_names):
+            for raw in (self.helper_raw, self.admin_read_raw):
+                response = self.post(name, *args.get(name, []), body=body, raw=raw)
+                self.assertEqual(response.status_code, 403, name)
+
+        tag.refresh_from_db()
+        speech.refresh_from_db()
+        self.assertEqual((tag.name, speech.content), ('renloader', 'x'))
+        self.assertFalse(tag.snippets.exists() or tag.speeches.exists())
+        self.assertFalse(RuleTag.objects.filter(name='changed').exists())
+        self.assertFalse(Speech.objects.filter(name='changed').exists())
+
+    def test_every_other_endpoint_is_get_only(self):
+        for pattern in self._api_v1_patterns():
+            self.assertIsNotNone(getattr(pattern.callback, 'api_write', None), f'{pattern.name} is not token-gated')
+            if not pattern.callback.api_write:
+                args = [1] * len(pattern.pattern.converters)
+                response = self.post(pattern.name, *args, raw=self.write_raw)
+                self.assertEqual(response.status_code, 405, pattern.name)
+
     def test_kill_switch_blocks_writes(self):
         enable_api(False)
         response = self.post('api_v1_tag_create', body={'name': 'x', 'match_statuses': ['P']})
@@ -124,6 +161,40 @@ class TagWriteTests(ApiWriteBase):
         self.assertEqual(list(rule.tags.all()), [tag])
         self.post('api_v1_tag_apply', tag.pk, body={'mode': 'remove_rules', 'rule_ids': [rule.pk], 'confirm': True})
         self.assertFalse(rule.tags.exists())
+
+    def test_snippet_ids_link_and_unlink_snippets(self):
+        tag = RuleTag.objects.create(name='renloader')
+        own = FixlistSnippet.objects.create(owner=self.admin, name='renloader fix', content='Folder: C:\\x')
+        # Another helper's snippet the caller never selected cannot be linked.
+        foreign = FixlistSnippet.objects.create(owner=self.helper, name='not mine', content='x', is_shared=True)
+
+        response = self.post('api_v1_tag_update', tag.pk, body={'snippet_ids': [own.pk, foreign.pk]})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['snippet_count'], 1)
+        self.assertEqual(list(tag.snippets.all()), [own])
+        self.assertEqual(
+            [s['snippet_id'] for s in self.get('api_v1_tag', tag.pk, raw=self.admin_read_raw).json()['snippets']],
+            [own.pk],
+        )
+
+        # Leaving the field out keeps the links; [] removes them.
+        self.post('api_v1_tag_update', tag.pk, body={'description': 'loader'})
+        self.assertEqual(list(tag.snippets.all()), [own])
+        self.post('api_v1_tag_update', tag.pk, body={'snippet_ids': []})
+        self.assertFalse(tag.snippets.exists())
+
+    def test_create_tag_with_snippets(self):
+        own = FixlistSnippet.objects.create(owner=self.admin, name='renloader fix', content='x')
+
+        response = self.post('api_v1_tag_create', body={'name': 'renloader', 'snippet_ids': [own.pk]})
+
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(list(RuleTag.objects.get(name='renloader').snippets.all()), [own])
+
+    def test_snippet_ids_must_be_integers(self):
+        tag = RuleTag.objects.create(name='renloader')
+        response = self.post('api_v1_tag_update', tag.pk, body={'snippet_ids': ['1']})
+        self.assertEqual(response.status_code, 400)
 
 
 class SpeechWriteTests(ApiWriteBase):
