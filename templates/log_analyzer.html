@@ -5,6 +5,7 @@
 
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/log_analyzer.css' %}">
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
     .upload-source-row {
         display: flex;
@@ -132,6 +133,20 @@
         display: block;
     }
 
+    /* "suggested" label above the speeches matching the loaded log: a
+       label, not a menu entry, so it does not react to the pointer. */
+    .snippet-menu-item.snippet-menu-heading,
+    .snippet-menu-item.snippet-menu-heading:hover {
+        cursor: default;
+        font-size: 11px;
+        background: none;
+        color: var(--la-text-disabled);
+    }
+
+    .snippet-menu-item.snippet-menu-suggested {
+        color: var(--la-info);
+    }
+
     /* Right-panel picker — the snippet menu's dropdown, sized for its three
        items and marking the current selection. */
     .panel-menu > .snippet-menu-dropdown {
@@ -243,6 +258,7 @@
         <span class="legend-item" data-status-class="status-unknown" style="color: var(--la-status-unknown);"><strong>?</strong> unknown <span class="legend-count">(0)</span></span>
         <span style="color: var(--la-text-muted);">|</span> <button type="button" id="legendToggleAllButton" class="legend-toggle-all">all</button>
     </div>
+    <div id="ruleTagsLine" class="rule-tags-line" aria-live="polite" hidden></div>
 </div>
 
 <div id="statusPicker" class="status-picker" role="radiogroup" aria-label="Select line status" hidden></div>
@@ -298,6 +314,11 @@
         <div class="review-section">
             <h4>source line</h4>
             <div id="lineInspectorSource" class="line-inspector-source"></div>
+        </div>
+
+        <div class="review-section" id="lineInspectorTagsSection" hidden>
+            <h4>tags</h4>
+            <ul id="lineInspectorTags" class="review-list"></ul>
         </div>
 
         <div class="review-section">
@@ -398,19 +419,29 @@ window.logAnalyzerConfig = {
     speechesApiUrl: "{% url 'speeches_api' %}",
     speechCreateUrl: "{% url 'speech_create_api' %}",
     speeches: {{ speeches_json }},
+    // Other helpers' shared speeches with tags, for tags none of `speeches` covers.
+    sharedTagSpeeches: {{ shared_tag_speeches_json }},
     uploadLinkHelperBase: "{{ upload_link_helper_base|default:''|escapejs }}",
     uploadLinkGeneral: "{{ upload_link_general|default:''|escapejs }}",
+    fixlistShareUrl: "{{ fixlist_share_url|default:''|escapejs }}",
+    // Absent for guests, who cannot tag rules; the review then shows no picker.
+    ruleTagUrls: {% if user.is_authenticated %}{
+        list: "{% url 'rule_tags_api' %}",
+        suggest: "{% url 'rule_tag_suggest_api' %}",
+    }{% else %}null{% endif %},
     isSuperuser: {{ is_superuser|yesno:"true,false" }},
     currentUsername: "{{ request.user.username|escapejs }}",
     guestToken: "{{ guest_token|default:''|escapejs }}",
 };
 </script>
+<script defer src="{% static 'js/rule_tag_picker.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/shared.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/analysis.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/conflict_wizard.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/rule_preview.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/draft_autosave.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/speech_capture.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/speech_suggestions.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/bootstrap.js' %}"></script>
 <script>
 (function() {
@@ -451,7 +482,11 @@ window.logAnalyzerConfig = {
         });
 
         function insertItem(itemId) {
-            var entry = items.find(function(s) { return s.id === itemId; });
+            // Extra items (other helpers' shared speeches) can be inserted
+            // too, though they are not listed in the categories.
+            var extra = options.extraKey ? ((window.logAnalyzerConfig || {})[options.extraKey] || []) : [];
+            var entry = items.find(function(s) { return s.id === itemId; })
+                || extra.find(function(s) { return s.id === itemId; });
             var target = lastCursorTarget || options.resolveTarget();
             if (!entry || !target) return;
 
@@ -479,8 +514,48 @@ window.logAnalyzerConfig = {
         }
 
         function load() {
-            items = (window.logAnalyzerConfig || {})[options.configKey] || [];
+            var config = window.logAnalyzerConfig || {};
+            items = config[options.configKey] || [];
             dropdown.innerHTML = '';
+            // Suggested items come first, one click away instead of inside
+            // their category, and stay in their category as well.
+            var suggestedIds = options.suggestedKey ? (config[options.suggestedKey] || []) : [];
+            var suggested = items.filter(function(s) { return suggestedIds.indexOf(s.id) !== -1; });
+            if (suggested.length) {
+                var header = document.createElement('div');
+                header.className = 'snippet-menu-item snippet-menu-heading';
+                header.textContent = 'suggested';
+                dropdown.appendChild(header);
+                suggested.forEach(function(s) {
+                    var item = document.createElement('div');
+                    item.className = 'snippet-menu-item snippet-menu-suggested';
+                    item.textContent = s.name;
+                    item.addEventListener('click', function() { insertItem(s.id); });
+                    dropdown.appendChild(item);
+                });
+            }
+            // Other helpers' shared speeches, for tags no own speech covers.
+            var extraItems = options.extraKey ? (config[options.extraKey] || []) : [];
+            var extraIds = options.extraSuggestedKey ? (config[options.extraSuggestedKey] || []) : [];
+            var extraSuggested = extraItems.filter(function(s) { return extraIds.indexOf(s.id) !== -1; });
+            if (extraSuggested.length) {
+                var extraHeader = document.createElement('div');
+                extraHeader.className = 'snippet-menu-item snippet-menu-heading';
+                extraHeader.textContent = 'from other helpers';
+                dropdown.appendChild(extraHeader);
+                extraSuggested.forEach(function(s) {
+                    var item = document.createElement('div');
+                    item.className = 'snippet-menu-item snippet-menu-suggested';
+                    item.textContent = s.name;
+                    item.addEventListener('click', function() { insertItem(s.id); });
+                    dropdown.appendChild(item);
+                });
+            }
+            if (options.triggerLabel) {
+                var suggestedCount = suggested.length + extraSuggested.length;
+                trigger.textContent = options.triggerLabel
+                    + (suggestedCount ? ' (' + suggestedCount + ' suggested)' : '') + ' ▾';
+            }
             // Group by category
             var categories = {};
             items.forEach(function(s) {
@@ -513,10 +588,22 @@ window.logAnalyzerConfig = {
             }
         }
 
+        // Insert without the menu, e.g. from a warning box's suggestions: at
+        // the caret if the analyst has been in the target, else at the end.
+        function insertById(itemId) {
+            var target = options.resolveTarget();
+            if (!target) return;
+            lastCursorTarget = target;
+            lastCursorPos = target.dataset.caretTouched === '1'
+                ? target.selectionStart
+                : target.value.length;
+            insertItem(itemId);
+        }
+
         load();
         // reload() rebuilds from window.logAnalyzerConfig, so a speech captured
         // from the response panel shows up without a page reload.
-        return { close: closeMenu, reload: load };
+        return { close: closeMenu, reload: load, insertById: insertById };
     }
 
     var snippetMenu = null;
@@ -543,6 +630,10 @@ window.logAnalyzerConfig = {
         triggerId: 'speechMenuTrigger',
         dropdownId: 'speechMenuDropdown',
         configKey: 'speeches',
+        suggestedKey: 'suggestedSpeechIds',
+        extraKey: 'sharedTagSpeeches',
+        extraSuggestedKey: 'suggestedSharedSpeechIds',
+        triggerLabel: 'speeches',
         emptyLabel: 'no speeches selected',
         resolveTarget: function() { return document.getElementById('responseText'); },
         // {HELPERNAME} / {USERNAME} / {UPLOADLINK_*} / {COUNTER} are resolved on
@@ -556,10 +647,25 @@ window.logAnalyzerConfig = {
         closeSiblings: function() { if (snippetMenu) snippetMenu.close(); },
     });
 
-    // speech_capture.js calls this after saving a newly captured speech.
+    // speech_capture.js calls this after saving a newly captured speech, and
+    // speech_suggestions.js after every analysis.
     window.reloadSpeechMenu = function() {
         if (speechMenu) speechMenu.reload();
+        if (typeof refreshWarningSpeechRows === 'function') refreshWarningSpeechRows();
     };
+
+    window.insertSpeechById = function(id) {
+        if (speechMenu) speechMenu.insertById(id);
+    };
+
+    // Remembers whether the response has had a caret yet, so an insert from
+    // outside the menu goes to the caret or, if none, to the end.
+    var responseTextarea = document.getElementById('responseText');
+    if (responseTextarea) {
+        responseTextarea.addEventListener('focus', function() {
+            responseTextarea.dataset.caretTouched = '1';
+        });
+    }
 })();
 </script>
 {% endblock %}

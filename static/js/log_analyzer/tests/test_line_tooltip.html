@@ -109,6 +109,22 @@ const titles = [...document.querySelectorAll('#logLines .log-line')].map((el) =>
 })();
 
 // ---------------------------------------------------------------------------
+// A line's rule tags head the tooltip; without tags nothing changes
+// ---------------------------------------------------------------------------
+(function testTagsRow() {
+    const tags = [{ name: 'renloader', description: 'RenPy loader family' }, { name: 'adware', description: '' }];
+    assert(
+        'tags come first, one row each with its description, before the reasons',
+        buildLineTooltip('line', ['B: x'], tags) === 'tag: renloader - RenPy loader family\ntag: adware\n\nB: x\n\nline',
+        JSON.stringify(buildLineTooltip('line', ['B: x'], tags))
+    );
+    assert(
+        'an empty tag list leaves the tooltip as it was',
+        buildLineTooltip('line', ['B: x'], []) === buildLineTooltip('line', ['B: x'])
+    );
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 const summary = document.getElementById('summary');

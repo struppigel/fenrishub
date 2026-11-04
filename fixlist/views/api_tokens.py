@@ -69,7 +69,11 @@ def api_tokens_view(request):
         except ValueError:
             expiry_days = 0
         try:
-            token, raw = ApiToken.issue(request.user, request.POST.get('name', ''), expiry_days)
+            # Write tokens are for superusers only; anyone else's checkbox is ignored.
+            can_write = request.user.is_superuser and request.POST.get('can_write') == 'on'
+            token, raw = ApiToken.issue(
+                request.user, request.POST.get('name', ''), expiry_days, can_write=can_write,
+            )
         except ValidationError as exc:
             return _render_tokens_page(request, error=' '.join(exc.messages))
         return _render_tokens_page(request, new_token_raw=raw, new_token=token)

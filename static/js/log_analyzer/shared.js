@@ -62,6 +62,7 @@ const EDIT_FIXLIST_ID = analyzerConfig.initialFixlistId || '';
 const CURRENT_USERNAME = analyzerConfig.currentUsername || '';
 const UPLOAD_LINK_HELPER_BASE = analyzerConfig.uploadLinkHelperBase || '';
 const UPLOAD_LINK_GENERAL = analyzerConfig.uploadLinkGeneral || '';
+const FIXLIST_SHARE_URL = analyzerConfig.fixlistShareUrl || '';
 
 // The forum username of the upload currently loaded in the analyzer. Set from
 // the upload content payload; cleared when the selection is cleared, so one
@@ -101,6 +102,10 @@ function setSpeechCounter(value) {
 // A token with no value is deliberately left in the text. A visible {USERNAME}
 // is a prompt to fill it in; a silent "Hi ," or a link missing its ?u= is a
 // message you send without noticing.
+//
+// {FIXLISTLINK} and {FRSTPATH} are never filled here, even when editing an
+// existing fixlist: they are left for the server, which fills them when the
+// fixlist is saved (_resolve_save_time_placeholders in views/fixlists.py).
 function applySpeechPlaceholders(text) {
     // ?u= prefills the forum-username field on the upload form. It works on both
     // the per-helper and the general route (see upload_log_view).
@@ -165,6 +170,11 @@ function reverseSpeechPlaceholders(text) {
     // An array, not an object: insertion order is the replacement order and
     // that ordering is the whole point here.
     const replacements = [];
+    // First, like every whole URL: nothing shorter may be swapped out of it
+    // before the link itself is.
+    if (FIXLIST_SHARE_URL) {
+        replacements.push([FIXLIST_SHARE_URL, '{FIXLISTLINK}']);
+    }
     if (UPLOAD_LINK_HELPER_BASE) {
         if (currentForumUsername) {
             replacements.push([prefilled(UPLOAD_LINK_HELPER_BASE), '{UPLOADLINK_HELPER_PREFILLED}']);
@@ -208,6 +218,9 @@ let pendingStatusChanges = new Map();
 let pendingTokenRules = new Map();
 let pendingChangeSequence = 0;
 let ruleDescriptionOverrides = new Map();
+// Change id -> [{id, name, description}] picked in the rule review. Not part of
+// the analyzer draft: a restored draft comes back without its review tags.
+let ruleTagOverrides = new Map();
 let removedRuleCandidateIds = new Set();
 let expandedRuleCandidateId = null;
 let ruleSubmitTarget = RULE_SUBMIT_TARGET_CREATE_FIXLIST;
@@ -819,6 +832,9 @@ function getPendingStatusChangesPayload() {
             if (ruleDescriptionOverrides.has(changeId)) {
                 payload.description = ruleDescriptionOverrides.get(changeId);
             }
+            if (ruleTagOverrides.has(changeId)) {
+                payload.tag_ids = ruleTagOverrides.get(changeId).map((tag) => tag.id);
+            }
 
             return payload;
         });
@@ -837,6 +853,7 @@ function applyAnalysisPayload(payload, options = {}) {
             pendingTokenRules.clear();
             pendingChangeSequence = 0;
             ruleDescriptionOverrides.clear();
+            ruleTagOverrides.clear();
             removedRuleCandidateIds.clear();
             expandedRuleCandidateId = null;
         }
@@ -847,6 +864,7 @@ function applyAnalysisPayload(payload, options = {}) {
             pendingTokenRules.clear();
             pendingChangeSequence = 0;
             ruleDescriptionOverrides.clear();
+            ruleTagOverrides.clear();
             removedRuleCandidateIds.clear();
             expandedRuleCandidateId = null;
         }
@@ -862,6 +880,9 @@ function applyAnalysisPayload(payload, options = {}) {
     }
     applyPendingOverrides();
     renderWarnings(payload.warnings || []);
+    if (typeof updateSpeechSuggestionsFromAnalysis === 'function') {
+        updateSpeechSuggestionsFromAnalysis(payload);
+    }
     updateSummary(summarizeEffectiveStatuses(analyzedLines), analyzedLines.length);
     closeStatusPicker();
     renderLogLines();
@@ -880,6 +901,7 @@ function clearPendingAnalyzerChanges() {
     pendingTokenRules.clear();
     pendingChangeSequence = 0;
     ruleDescriptionOverrides.clear();
+    ruleTagOverrides.clear();
     removedRuleCandidateIds.clear();
     expandedRuleCandidateId = null;
     updateSaveChangesButtonState();

@@ -38,7 +38,7 @@
 
         <div class="form-group">
             <label for="frst_fix_message">frst fix message</label>
-            <div class="field-help">Template posted as a reply when sharing a fixlist. Placeholders: <code>{USERNAME}</code>, <code>{HELPERNAME}</code>, <code>{FIXLISTLINK}</code>, <code>{FRSTPATH}</code>.</div>
+            <div class="field-help">Template posted as a reply when sharing a fixlist. Placeholders: <code>{USERNAME}</code>, <code>{HELPERNAME}</code>, <code>{FIXLISTLINK}</code>, <code>{FRSTPATH}</code>. Also listed as the <strong>FRST fix</strong> speech on the <a href="{% url 'speeches' %}">speeches page</a>, so you can insert it into a response in the analyzer.</div>
             <textarea id="frst_fix_message" name="frst_fix_message" rows="14" style="color: var(--la-text-neutral);">{{ frst_fix_message }}</textarea>
         </div>
 

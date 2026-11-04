@@ -112,13 +112,13 @@ class TrashViewTests(TestCase):
 
         self.assertEqual(first_page.status_code, 200)
         self.assertEqual(first_page.context['page_obj'].paginator.num_pages, 2)
-        self.assertEqual(len(first_page.context['page_obj'].object_list), 8)
+        self.assertEqual(len(first_page.context['page_obj'].object_list), 6)
         self.assertContains(first_page, 'page 1 of 2')
         self.assertContains(first_page, '?page=2')
 
         self.assertEqual(second_page.status_code, 200)
         self.assertEqual(second_page.context['page_obj'].number, 2)
-        self.assertEqual(len(second_page.context['page_obj'].object_list), 1)
+        self.assertEqual(len(second_page.context['page_obj'].object_list), 3)
 
     def test_uploads_list_shows_trash_count(self):
         from django.utils import timezone as tz

@@ -1,10 +1,12 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block title %}{% if editing %}Edit{% else %}Add{% endif %} Rule - Fenris{% endblock %}
 
 {% block page_context_label %}rules / {% if editing %}edit{% else %}add{% endif %}{% endblock %}
 
 {% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
     .add-rule-top {
         display: grid;
@@ -40,6 +42,12 @@
 
     .rule-form-panel textarea {
         min-height: 120px;
+    }
+
+    /* Room for a few lines of notes and links, without the source box's height. */
+    #ruleDescription {
+        min-height: 60px;
+        resize: vertical;
     }
 
     #rulePriority {
@@ -246,6 +254,25 @@
         border: 1px solid var(--la-border);
         flex-shrink: 0;
     }
+
+    .log-matches-panel {
+        margin-top: 18px;
+    }
+
+    .log-matches-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        margin-bottom: 8px;
+    }
+
+    .log-refs {
+        font-size: 11px;
+        padding: 1px 6px 3px;
+        color: var(--la-text-muted);
+        word-break: break-all;
+    }
 </style>
 {% endblock %}
 
@@ -296,10 +323,9 @@
                     <option value="{{ value }}" {% if form_priority == value %}selected{% endif %}>{{ label }}</option>
                     {% endfor %}
                 </select>
-                <div style="font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">only change this if there is a problem</div>
             </div>
             <div class="form-group">
-                <label for="ruleSourceText" id="ruleSourceTextLabel">match line or pattern{% if not editing %} (one per line &mdash; each line creates a separate rule){% endif %}</label>
+                <label for="ruleSourceText" id="ruleSourceTextLabel">match line or pattern</label>
                 <textarea id="ruleSourceText" name="source_text" placeholder="{% if editing %}The line or pattern this rule matches.{% else %}One pattern per line. All lines share the status, match type, priority, and description above.{% endif %}" required>{{ form_source_text }}</textarea>
                 {% if editing %}<div id="ruleMultilineWarning" class="regex-warning" style="display: none; margin-top: 6px; margin-bottom: 0;"></div>{% endif %}
                 <div id="ruleScriptHelp" style="display: none; font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">
@@ -308,7 +334,11 @@
             </div>
             <div class="form-group">
                 <label for="ruleDescription">description (optional)</label>
-                <input type="text" id="ruleDescription" name="description" value="{{ form_description }}" placeholder="What this rule matches...">
+                <textarea id="ruleDescription" name="description" rows="3" placeholder="What this rule matches...">{{ form_description }}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="ruleTagPicker">tags (optional)</label>
+                <div id="ruleTagPicker"></div>
             </div>
             {% if editing %}
             {% comment %}
@@ -352,9 +382,21 @@
     <div class="preview-output" id="previewOutput"></div>
 </div>
 
+<div class="log-matches-panel">
+    <h2>matches in current logs</h2>
+    <label class="log-matches-toggle">
+        <input type="checkbox" id="logMatchesToggle">
+        preview against the {{ log_preview_max_logs }} newest uploaded logs
+    </label>
+    <div class="match-count" id="logMatchCount"></div>
+    <div class="preview-output" id="logMatchOutput"></div>
+</div>
+
 <script>
 (function () {
     const TEST_RULE_URL = "{% url 'test_rule_api' %}";
+    const TEST_RULE_LOGS_URL = "{% url 'test_rule_logs_api' %}";
+    const ANALYZER_URL = "{% url 'log_analyzer' %}";
     const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
     const EDITING = {% if editing %}true{% else %}false{% endif %};
     /* Editing: hide the saved copy of this rule from the preview's existing-match
@@ -365,6 +407,12 @@
     let debounceTimer = null;
     let fetchController = null;
     const DEBOUNCE_MS = 300;
+    /* The stored-log scan reads dozens of whole logs, so it waits for a longer
+     * pause in typing than the pasted-lines preview. */
+    let logMatchesTimer = null;
+    let logMatchesController = null;
+    const LOG_MATCHES_DEBOUNCE_MS = 800;
+    const LOG_MATCHES_STORAGE_KEY = 'fenris.ruleEditor.logMatches';
 
     const STATUS_CSS = {
         'B': 'status-b', 'P': 'status-p', 'C': 'status-c', '!': 'status-w',
@@ -592,6 +640,63 @@
         });
     }
 
+    /* One tested line: its text, parsed breakdown, verdict and the rules involved.
+     * Shared by the pasted-lines preview and the stored-logs preview. */
+    function buildResultBlock(result, matchType, statusLabels) {
+        const wrapper = document.createElement('div');
+
+        /* ── line text with highlights ── */
+        const lineDiv = document.createElement('div');
+        lineDiv.className = 'preview-line';
+        if (result.matched) lineDiv.classList.add('matched');
+
+        if (result.parsed && matchType === 'parsed') {
+            appendHighlightedRuleLine(lineDiv, result.line, result.parsed);
+        } else if (result.match_ranges && result.match_ranges.length) {
+            renderHighlightSpans(lineDiv, result.line, result.match_ranges, 'match-highlight');
+        } else {
+            lineDiv.textContent = result.line;
+        }
+        wrapper.appendChild(lineDiv);
+
+        /* ── parsed details grid ── */
+        if (result.parsed && matchType === 'parsed') {
+            const grid = buildParsedDetailsGrid(result.parsed);
+            if (grid) wrapper.appendChild(grid);
+        }
+
+        /* ── status row (show when line has any matches) ── */
+        const hasExisting = (result.existing_matches && result.existing_matches.length) ||
+                            (result.existing_shadowed && result.existing_shadowed.length);
+        if (result.matched || hasExisting) {
+            wrapper.appendChild(buildStatusRow(result, statusLabels));
+        }
+
+        /* ── new rule shadowed / outranked notices ── */
+        if (result.new_rule_shadowed) {
+            const notice = document.createElement('div');
+            notice.className = 'new-rule-notice';
+            notice.textContent = RULE_NOUN + ' (priority ' + result.new_rule_priority +
+                ') matched but is shadowed by an existing higher-priority rule (' +
+                result.new_rule_shadowed_by + ') — it will have no effect on this line';
+            wrapper.appendChild(notice);
+        } else if (result.new_rule_outranked) {
+            const notice = document.createElement('div');
+            notice.className = 'new-rule-notice';
+            notice.textContent = RULE_NOUN + ' matched but its status is outranked by ' +
+                result.new_rule_outranked_by + ' at the same priority — ' +
+                result.combined_status_label + ' (' + result.combined_status +
+                ') takes precedence over this rule’s status';
+            wrapper.appendChild(notice);
+        }
+
+        /* ── existing rule matches ── */
+        const existingBlock = buildExistingMatchesBlock(result);
+        if (existingBlock) wrapper.appendChild(existingBlock);
+
+        return wrapper;
+    }
+
     /* ── server-side preview (all match types) ── */
 
     async function renderPreview(lines, sourceText, matchType, status, priority) {
@@ -627,62 +732,8 @@
             document.getElementById('colorLegend').style.display = showLegend ? 'flex' : 'none';
 
             (data.results || []).forEach(function (result) {
-                const wrapper = document.createElement('div');
-
-                /* ── line text with highlights ── */
-                const lineDiv = document.createElement('div');
-                lineDiv.className = 'preview-line';
-
-                if (result.matched) {
-                    lineDiv.classList.add('matched');
-                    matchCount++;
-                }
-
-                if (result.parsed && matchType === 'parsed') {
-                    appendHighlightedRuleLine(lineDiv, result.line, result.parsed);
-                } else if (result.match_ranges && result.match_ranges.length) {
-                    renderHighlightSpans(lineDiv, result.line, result.match_ranges, 'match-highlight');
-                } else {
-                    lineDiv.textContent = result.line;
-                }
-                wrapper.appendChild(lineDiv);
-
-                /* ── parsed details grid ── */
-                if (result.parsed && matchType === 'parsed') {
-                    const grid = buildParsedDetailsGrid(result.parsed);
-                    if (grid) wrapper.appendChild(grid);
-                }
-
-                /* ── status row (show when line has any matches) ── */
-                const hasExisting = (result.existing_matches && result.existing_matches.length) ||
-                                    (result.existing_shadowed && result.existing_shadowed.length);
-                if (result.matched || hasExisting) {
-                    wrapper.appendChild(buildStatusRow(result, statusLabels));
-                }
-
-                /* ── new rule shadowed / outranked notices ── */
-                if (result.new_rule_shadowed) {
-                    const notice = document.createElement('div');
-                    notice.className = 'new-rule-notice';
-                    notice.textContent = RULE_NOUN + ' (priority ' + result.new_rule_priority +
-                        ') matched but is shadowed by an existing higher-priority rule (' +
-                        result.new_rule_shadowed_by + ') \u2014 it will have no effect on this line';
-                    wrapper.appendChild(notice);
-                } else if (result.new_rule_outranked) {
-                    const notice = document.createElement('div');
-                    notice.className = 'new-rule-notice';
-                    notice.textContent = RULE_NOUN + ' matched but its status is outranked by ' +
-                        result.new_rule_outranked_by + ' at the same priority \u2014 ' +
-                        result.combined_status_label + ' (' + result.combined_status +
-                        ') takes precedence over this rule\u2019s status';
-                    wrapper.appendChild(notice);
-                }
-
-                /* ── existing rule matches ── */
-                const existingBlock = buildExistingMatchesBlock(result);
-                if (existingBlock) wrapper.appendChild(existingBlock);
-
-                container.appendChild(wrapper);
+                if (result.matched) matchCount++;
+                container.appendChild(buildResultBlock(result, matchType, statusLabels));
             });
 
             setMatchCount(matchCount, lines.length);
@@ -772,6 +823,137 @@
         }
     }
 
+    /* ── stored-logs preview (opt-in) ── */
+
+    function buildLogLink(uploadId, lineNumber) {
+        const link = document.createElement('a');
+        link.href = ANALYZER_URL + '?upload_id=' + encodeURIComponent(uploadId);
+        link.target = '_blank';
+        link.textContent = lineNumber ? uploadId + ' line ' + lineNumber : uploadId;
+        return link;
+    }
+
+    function buildLogRefs(result) {
+        const row = document.createElement('div');
+        row.className = 'log-refs';
+        row.appendChild(document.createTextNode(
+            'in ' + result.log_count + ' log' + (result.log_count === 1 ? '' : 's') + ': '));
+        result.logs.forEach(function (ref, i) {
+            if (i) row.appendChild(document.createTextNode(', '));
+            row.appendChild(buildLogLink(ref.upload_id, ref.line_number));
+        });
+        const more = result.log_count - result.logs.length;
+        if (more > 0) row.appendChild(document.createTextNode(' and ' + more + ' more'));
+        return row;
+    }
+
+    function describeLogScan(data, summary) {
+        const parts = [summary];
+        if (data.truncated) parts.push('showing the first ' + data.max_lines + ' distinct lines');
+        if (data.timed_out) parts.push('stopped early because the scan took too long');
+        return parts.join('; ');
+    }
+
+    function showLogMatchesError(message) {
+        const output = document.getElementById('logMatchOutput');
+        output.innerHTML = '';
+        const err = document.createElement('div');
+        err.className = 'preview-error';
+        err.textContent = message;
+        output.appendChild(err);
+        document.getElementById('logMatchCount').textContent = '';
+    }
+
+    function clearLogMatches() {
+        clearTimeout(logMatchesTimer);
+        if (logMatchesController) logMatchesController.abort();
+        document.getElementById('logMatchOutput').innerHTML = '';
+        document.getElementById('logMatchCount').textContent = '';
+    }
+
+    async function renderLogMatches(sourceText) {
+        if (logMatchesController) logMatchesController.abort();
+        logMatchesController = new AbortController();
+
+        const output = document.getElementById('logMatchOutput');
+        const countLine = document.getElementById('logMatchCount');
+        const matchType = document.getElementById('ruleMatchType').value;
+        countLine.textContent = 'scanning logs…';
+
+        try {
+            const resp = await fetch(TEST_RULE_LOGS_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                body: JSON.stringify({
+                    source_text: sourceText,
+                    status: document.getElementById('ruleStatus').value,
+                    match_type: matchType,
+                    priority: currentPriority(),
+                    whole_log: isWholeLogActive(),
+                    exclude_rule_id: EXCLUDE_RULE_ID,
+                }),
+                signal: logMatchesController.signal,
+            });
+            const data = await resp.json();
+            if (data.error) { showLogMatchesError(data.error); return; }
+
+            output.innerHTML = '';
+            const scanned = data.logs_scanned + ' log' + (data.logs_scanned === 1 ? '' : 's');
+
+            if (data.whole_log) {
+                data.logs.forEach(function (log) {
+                    const row = document.createElement('div');
+                    row.className = 'line-status-row';
+                    row.appendChild(makeStatusBadge('A'));
+                    row.appendChild(buildLogLink(log.upload_id));
+                    if (log.match_count) {
+                        row.appendChild(document.createTextNode(
+                            log.match_count + ' match' + (log.match_count === 1 ? '' : 'es')));
+                    }
+                    output.appendChild(row);
+                });
+                if (data.script_error) {
+                    const err = document.createElement('div');
+                    err.className = 'preview-error';
+                    err.textContent = 'Script error: ' + data.script_error;
+                    output.appendChild(err);
+                }
+                countLine.textContent = describeLogScan(data,
+                    'alert would fire on ' + data.logs_matched + ' of ' + scanned);
+                return;
+            }
+
+            const statusLabels = data.status_labels || {};
+            data.results.forEach(function (result) {
+                const block = buildResultBlock(result, matchType, statusLabels);
+                /* Right under the line text, ahead of its verdict rows. */
+                block.insertBefore(buildLogRefs(result), block.firstChild.nextSibling);
+                output.appendChild(block);
+            });
+            const distinct = data.results.length;
+            countLine.textContent = describeLogScan(data,
+                distinct + ' distinct line' + (distinct === 1 ? '' : 's') + ' in ' +
+                data.logs_matched + ' of ' + scanned + ' matched by ' + RULE_NOUN);
+        } catch (e) {
+            if (e.name === 'AbortError') return;
+            showLogMatchesError('Request failed: ' + e.message);
+        }
+    }
+
+    function updateLogMatches() {
+        const sourceText = document.getElementById('ruleSourceText').value.trim();
+        if (!document.getElementById('logMatchesToggle').checked || !sourceText) {
+            clearLogMatches();
+            return;
+        }
+        renderLogMatches(sourceText);
+    }
+
+    function scheduleLogMatchesUpdate() {
+        clearTimeout(logMatchesTimer);
+        logMatchesTimer = setTimeout(updateLogMatches, LOG_MATCHES_DEBOUNCE_MS);
+    }
+
     /* ── main update ── */
 
     function currentPriority() {
@@ -809,7 +991,7 @@
             textarea.style.minHeight = '';
             help.style.display = 'none';
         } else {
-            label.innerHTML = 'match line or pattern (one per line &mdash; each line creates a separate rule)';
+            label.innerHTML = 'match line or pattern';
             textarea.placeholder = 'One pattern per line. All lines share the status, match type, priority, and description above.';
             textarea.style.fontFamily = '';
             textarea.style.minHeight = '';
@@ -916,12 +1098,19 @@
         debounceTimer = setTimeout(updatePreview, DEBOUNCE_MS);
     }
 
+    /* A change to the rule itself refreshes both previews; pasted lines only
+     * affect their own. */
+    function scheduleRuleUpdate() {
+        schedulePreviewUpdate();
+        scheduleLogMatchesUpdate();
+    }
+
     /* ── event listeners ── */
 
     document.getElementById('ruleSourceText').addEventListener('input', function () {
         /* Ahead of the debounce so the notice tracks the keystroke, not the preview. */
         syncMultilineWarning();
-        schedulePreviewUpdate();
+        scheduleRuleUpdate();
     });
     document.getElementById('ruleMatchType').addEventListener('change', function () {
         syncPriorityPlaceholder();
@@ -929,21 +1118,25 @@
         syncWholeLogMode();
         syncColorWholeLineMode();
         syncMultilineWarning();
-        schedulePreviewUpdate();
+        scheduleRuleUpdate();
     });
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
     document.getElementById('ruleStatus').addEventListener('change', function () {
         syncWholeLogMode();
-        schedulePreviewUpdate();
+        scheduleRuleUpdate();
     });
     document.getElementById('ruleWholeLog').addEventListener('change', function () {
         syncSourceTextMode();
         syncWholeLogMode();
-        schedulePreviewUpdate();
+        scheduleRuleUpdate();
     });
     document.getElementById('rulePriority').addEventListener('change', function () {
         this.dataset.userTouched = 'true';
-        schedulePreviewUpdate();
+        scheduleRuleUpdate();
+    });
+    document.getElementById('logMatchesToggle').addEventListener('change', function () {
+        try { localStorage.setItem(LOG_MATCHES_STORAGE_KEY, this.checked ? '1' : '0'); } catch (e) { /* storage blocked */ }
+        updateLogMatches();
     });
 
     /* If the user already submitted a value (form_priority), mark as touched. */
@@ -955,6 +1148,39 @@
     syncWholeLogMode();
     syncColorWholeLineMode();
     syncMultilineWarning();
+
+    /* Remembered per browser, so a user who wants it on does not tick it on every
+     * rule. The editor opens with its rule filled in, so the scan runs at once. */
+    try {
+        document.getElementById('logMatchesToggle').checked =
+            localStorage.getItem(LOG_MATCHES_STORAGE_KEY) === '1';
+    } catch (e) { /* storage blocked: stays off */ }
+    updateLogMatches();
 })();
+</script>
+{{ form_tags_json|json_script:"ruleTagsData" }}
+<script src="{% static 'js/rule_tag_picker.js' %}"></script>
+<script>
+createRuleTagPicker({
+    root: document.getElementById('ruleTagPicker'),
+    inputName: 'tag_ids',
+    initialTags: JSON.parse(document.getElementById('ruleTagsData').textContent || '[]'),
+    descriptionInput: document.getElementById('ruleDescription'),
+    // Tag conditions also look at the source line, status and entry type.
+    contextProvider: function() {
+        return {
+            source_text: document.getElementById('ruleSourceText').value,
+            status: document.getElementById('ruleStatus').value,
+            match_type: document.getElementById('ruleMatchType').value,
+        };
+    },
+    contextInputs: ['ruleSourceText', 'ruleStatus', 'ruleMatchType'].map(function(id) {
+        return document.getElementById(id);
+    }),
+    urls: {
+        list: "{% url 'rule_tags_api' %}",
+        suggest: "{% url 'rule_tag_suggest_api' %}",
+    },
+});
 </script>
 {% endblock %}

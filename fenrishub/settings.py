@@ -67,6 +67,7 @@ TEMPLATES = [
                 'fixlist.context_processors.online_users',
                 'fixlist.context_processors.moderator_status',
                 'fixlist.context_processors.log_type_badges',
+                'fixlist.context_processors.tag_category_colors',
             ],
         },
     },

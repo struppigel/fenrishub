@@ -16,6 +16,7 @@ from .analyzer import (
     reparse_rules,
 )
 from .rule_sets import invalidate_for_rule_owner
+from .tagging import auto_tag_rules
 
 
 def _invalidate_for_owner_ids(owner_ids):
@@ -805,7 +806,9 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                 )
 
                 if to_create:
-                    ClassificationRule.objects.bulk_create(to_create, batch_size=1000)
+                    created = ClassificationRule.objects.bulk_create(to_create, batch_size=1000)
+                    # bulk_create sends no signals, so auto-apply tags are added here.
+                    auto_tag_rules(created)
                     invalidate_for_rule_owner(request.user)
 
                 self.message_user(

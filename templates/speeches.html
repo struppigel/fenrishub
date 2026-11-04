@@ -1,11 +1,53 @@
 {% extends 'base.html' %}
+{% load static rule_tags %}
 
 {% block title %}Speeches - Fenris{% endblock %}
 
 {% block page_context_label %}speeches{% endblock %}
 
 {% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
+    .speech-triggers {
+        border: 1px solid var(--la-border);
+        padding: 8px 10px;
+        margin: 0 0 12px;
+    }
+
+    .speech-triggers legend {
+        font-size: 12px;
+        color: var(--la-text-primary);
+        padding: 0 4px;
+    }
+
+    .speech-trigger-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        align-items: center;
+        margin-top: 8px;
+    }
+
+    .speech-trigger-group > .speech-trigger-label {
+        flex-basis: 100%;
+        font-size: 11px;
+        color: var(--la-text-muted);
+    }
+
+    .speech-trigger-group > div {
+        flex-basis: 100%;
+    }
+
+    .speech-trigger-summary {
+        margin-top: 4px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        align-items: center;
+        font-size: 11px;
+        color: var(--la-text-muted);
+    }
+
     .speech-item {
         padding: 10px;
         margin-bottom: 8px;
@@ -215,8 +257,9 @@
             </div>
             <div class="form-group">
                 <label for="createContent">content</label>
-                <textarea id="createContent" name="content" required placeholder="Write the text you want to paste into the response here.&#10;&#10;Placeholders, filled in when you insert the speech in the analyzer:&#10;&#10;{HELPERNAME} - your own username&#10;{USERNAME} - the forum user of the log loaded in the analyzer&#10;{UPLOADLINK_HELPER} - upload link to your own channel&#10;{UPLOADLINK_HELPER_PREFILLED} - the same link, with the forum user filled in&#10;{UPLOADLINK_GENERAL} - upload link to the general channel&#10;{UPLOADLINK_GENERAL_PREFILLED} - the same link, with the forum user filled in&#10;{COUNTER} - the next step number, counting on across the whole response&#10;&#10;{USERNAME} and the two prefilled links need a loaded log. Without one they are left as they are."></textarea>
+                <textarea id="createContent" name="content" required placeholder="Write the text you want to paste into the response here.&#10;&#10;Placeholders, filled in when you insert the speech in the analyzer:&#10;&#10;{HELPERNAME} - your own username&#10;{USERNAME} - the forum user of the log loaded in the analyzer&#10;{UPLOADLINK_HELPER} - upload link to your own channel&#10;{UPLOADLINK_HELPER_PREFILLED} - the same link, with the forum user filled in&#10;{UPLOADLINK_GENERAL} - upload link to the general channel&#10;{UPLOADLINK_GENERAL_PREFILLED} - the same link, with the forum user filled in&#10;{COUNTER} - the next step number, counting on across the whole response&#10;&#10;{USERNAME} and the two prefilled links need a loaded log. Without one they are left as they are.&#10;&#10;Filled when the fixlist is saved:&#10;&#10;{FIXLISTLINK} - the share link of the fixlist&#10;{FRSTPATH} - the folder FRST was run from, read from the source log"></textarea>
             </div>
+            {% include 'partials/speech_triggers.html' with prefix='create' %}
             <div class="form-group">
                 <label class="checkbox-label"><input type="checkbox" name="is_shared" checked> shared with all users</label>
             </div>
@@ -242,8 +285,9 @@
             </div>
             <div class="form-group">
                 <label for="editContent">content</label>
-                <textarea id="editContent" name="content" required placeholder="Write the text you want to paste into the response here.&#10;&#10;Placeholders, filled in when you insert the speech in the analyzer:&#10;&#10;{HELPERNAME} - your own username&#10;{USERNAME} - the forum user of the log loaded in the analyzer&#10;{UPLOADLINK_HELPER} - upload link to your own channel&#10;{UPLOADLINK_HELPER_PREFILLED} - the same link, with the forum user filled in&#10;{UPLOADLINK_GENERAL} - upload link to the general channel&#10;{UPLOADLINK_GENERAL_PREFILLED} - the same link, with the forum user filled in&#10;{COUNTER} - the next step number, counting on across the whole response&#10;&#10;{USERNAME} and the two prefilled links need a loaded log. Without one they are left as they are."></textarea>
+                <textarea id="editContent" name="content" required placeholder="Write the text you want to paste into the response here.&#10;&#10;Placeholders, filled in when you insert the speech in the analyzer:&#10;&#10;{HELPERNAME} - your own username&#10;{USERNAME} - the forum user of the log loaded in the analyzer&#10;{UPLOADLINK_HELPER} - upload link to your own channel&#10;{UPLOADLINK_HELPER_PREFILLED} - the same link, with the forum user filled in&#10;{UPLOADLINK_GENERAL} - upload link to the general channel&#10;{UPLOADLINK_GENERAL_PREFILLED} - the same link, with the forum user filled in&#10;{COUNTER} - the next step number, counting on across the whole response&#10;&#10;{USERNAME} and the two prefilled links need a loaded log. Without one they are left as they are.&#10;&#10;Filled when the fixlist is saved:&#10;&#10;{FIXLISTLINK} - the share link of the fixlist&#10;{FRSTPATH} - the folder FRST was run from, read from the source log"></textarea>
             </div>
+            {% include 'partials/speech_triggers.html' with prefix='edit' %}
             <div class="form-group">
                 <label class="checkbox-label"><input type="checkbox" name="is_shared" id="editIsShared"> shared with all users</label>
             </div>
@@ -290,12 +334,13 @@
         {% for speech in speeches %}
         <div class="speech-item">
             <div class="speech-header">
-                <span class="speech-name">{{ speech.name }} <span class="category-badge">[{{ speech.category }}]</span>{% if speech.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if shared_by %} <span class="speech-owner">by {{ speech.owner.username }}</span>{% endif %}</span>
+                <span class="speech-name">{{ speech.name }} <span class="category-badge">[{{ speech.category }}]</span>{% if speech.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% if speech.is_fix_message %} <span class="shared-badge" title="your FRST fix message: the same text as in your profile settings and behind &quot;copy fix message&quot; on a fixlist">FRST fix message - also in your profile</span>{% endif %}{% if shared_by %} <span class="speech-owner">by {{ speech.owner.username }}</span>{% endif %}</span>
                 <div class="speech-actions">
                     <button type="button" class="action-btn analyzer-btn{% if speech.pk in analyzer_speech_ids %} active{% endif %}" data-toggle-pk="{{ speech.pk }}" title="{% if speech.pk in analyzer_speech_ids %}deselect speech from log analyzer{% else %}select speech to be available in log analyzer{% endif %}">{% if speech.pk in analyzer_speech_ids %}selected{% else %}select{% endif %}</button>
                     <button type="button" class="action-btn view-btn" data-name="{{ speech.name|escapejs }}" data-content-id="speech-content-{{ speech.pk }}">view</button>
                     {% if speech.owner_id == request.user.id %}
                     <button type="button" class="action-btn edit-btn" data-pk="{{ speech.pk }}" data-name="{{ speech.name|escapejs }}" data-category="{{ speech.category|escapejs }}" data-content-id="speech-content-{{ speech.pk }}" data-is-shared="{% if speech.is_shared %}1{% else %}0{% endif %}">edit</button>
+                    {% if not speech.is_fix_message %}
                     <form method="post" style="display: inline;">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="delete">
@@ -303,8 +348,14 @@
                         <button type="submit" class="action-btn delete-btn" onclick="return confirm('Delete speech &quot;{{ speech.name|escapejs }}&quot;?');">delete</button>
                     </form>
                     {% endif %}
+                    {% endif %}
                 </div>
             </div>
+            {% if speech.trigger_tags.all %}
+            <div class="speech-trigger-summary">suggested for:
+                {% for tag in speech.trigger_tags.all %}<span class="tag-chip{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% endfor %}
+            </div>
+            {% endif %}
             <div class="speech-content-preview">{{ speech.content }}</div>
             <pre id="speech-content-{{ speech.pk }}" style="display:none;">{{ speech.content }}</pre>
         </div>
@@ -340,8 +391,33 @@
     </div>
 </div>
 
+{{ speech_triggers_json|json_script:"speechTriggersData" }}
+<script src="{% static 'js/rule_tag_picker.js' %}"></script>
 <script>
+const SPEECH_TRIGGERS = JSON.parse(document.getElementById('speechTriggersData').textContent || '{}');
+// Existing tags only; new tags are made in the tag editor.
+const TAG_URLS = {
+    list: "{% url 'rule_tags_api' %}",
+};
+const triggerPickers = {
+    create: createRuleTagPicker({
+        root: document.getElementById('createTagPicker'),
+        inputName: 'trigger_tag_ids',
+        urls: TAG_URLS,
+    }),
+    edit: createRuleTagPicker({
+        root: document.getElementById('editTagPicker'),
+        inputName: 'trigger_tag_ids',
+        urls: TAG_URLS,
+    }),
+};
+
+function setTriggerFields(prefix, triggers) {
+    triggerPickers[prefix].setTags((triggers || {}).tags || []);
+}
+
 function startEdit(pk, name, category, content, isShared) {
+    setTriggerFields('edit', SPEECH_TRIGGERS[String(pk)]);
     document.getElementById('editPk').value = pk;
     document.getElementById('editName').value = name;
     document.getElementById('editCategory').value = category;
@@ -358,6 +434,7 @@ function startEditById(pk, name, category, contentElementId, isShared) {
 }
 
 function showCreate() {
+    setTriggerFields('create', null);
     document.getElementById('editSection').style.display = 'none';
     document.getElementById('createSection').style.display = 'block';
     document.getElementById('createName').focus();

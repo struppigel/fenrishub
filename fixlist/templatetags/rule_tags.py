@@ -15,6 +15,17 @@ def log_type_css_slug(name):
     return _log_type_css_slug(name or '')
 
 
+@register.filter(name='tag_category_class')
+def tag_category_class(tag):
+    """' tag-cat-<id>' for a tag badge whose tag has a category, else ''.
+
+    Takes a RuleTag or a tag dict with `category_id`; the colour itself comes
+    from the tag_category_colors rules in base.html.
+    """
+    category_id = tag.get('category_id') if isinstance(tag, dict) else getattr(tag, 'category_id', None)
+    return f' tag-cat-{int(category_id)}' if category_id else ''
+
+
 @register.filter(name='chunk_log')
 def chunk_log(content, lines_per_chunk=100):
     """Split log content into chunks of N lines for the uploaded-log viewer.

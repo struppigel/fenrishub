@@ -11,21 +11,16 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
 from django.views.decorators.http import require_http_methods
 
+# The fix message lives in the user's flagged FRST fix speech; the default is
+# defined in fix_message.py and re-exported here for existing importers.
+from ..fix_message import (
+    DEFAULT_FRST_FIX_MESSAGE_TEMPLATE,
+    effective_fix_message,
+    ensure_fix_message_speech,
+)
 from ..models import UserProfile
 from ..rule_sets import on_user_rule_set_mode_changed
 from .guest import guest_or_login_required
-
-
-DEFAULT_FRST_FIX_MESSAGE_TEMPLATE = """**FRST Fix**
-
-* Open the following link and press on the **Copy contents** button to copy the entire text: [fixlist for {USERNAME}]({FIXLISTLINK})
-* Run **FRST64.exe** and click on **Fix**. Note: FRST reads the fixlist directly from your clipboard, so you don't need to paste or save it anywhere.
-* A log (Fixlog.txt) will open on your desktop.
-* Copy & paste the contents of the Fixlog.txt to [https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}](https://malwareanalysis.cc/upload/{HELPERNAME}/?u={USERNAME}) and press **\"save log\"**. Reply back with the keyword
-
-I have included the EmptyTemp: command. Note: This will remove cookies and may result in some websites (like banking) indicating they do not recognize your computer. It may be necessary to receive and apply a verification code.
-
-It is normal for your system to reboot as a result of the fix."""
 
 
 DEFAULT_ANALYZER_FIXLIST_TEMPLATE = """Start::
@@ -89,7 +84,9 @@ def profile_view(request):
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
 
     if request.method == 'POST':
-        profile.frst_fix_message = request.POST.get('frst_fix_message', '')
+        # The profile edits the flagged FRST fix speech, the same entry the
+        # speeches page lists. Empty means the default, as it always did.
+        ensure_fix_message_speech(request.user, request.POST.get('frst_fix_message', ''))
         profile.word_wrap = 'word_wrap' in request.POST
         profile.analyzer_fixlist_template = request.POST.get('analyzer_fixlist_template', '')
         old_rule_set_mode = profile.rule_set_mode
@@ -98,14 +95,14 @@ def profile_view(request):
             new_rule_set_mode = UserProfile.RULE_SET_MODE_SHARED
         profile.rule_set_mode = new_rule_set_mode
         profile.save(update_fields=[
-            'frst_fix_message', 'word_wrap', 'analyzer_fixlist_template', 'rule_set_mode',
+            'word_wrap', 'analyzer_fixlist_template', 'rule_set_mode',
         ])
         if old_rule_set_mode != new_rule_set_mode:
             on_user_rule_set_mode_changed(request.user, old_rule_set_mode, new_rule_set_mode)
         messages.success(request, 'Profile settings updated successfully.')
         return redirect('profile')
 
-    effective_frst_fix_message = (profile.frst_fix_message or '').strip() or DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
+    effective_frst_fix_message = effective_fix_message(request.user)
     effective_analyzer_fixlist_template = (profile.analyzer_fixlist_template or '').strip() or DEFAULT_ANALYZER_FIXLIST_TEMPLATE
 
     return render(

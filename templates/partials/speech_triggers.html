@@ -1,0 +1,13 @@
+{% comment %}
+"suggest this speech when" field of the speech forms. `prefix` keeps the ids
+of the create and the edit form apart; the field names are the same.
+{% endcomment %}
+<fieldset class="speech-triggers" id="{{ prefix }}Triggers">
+    <legend>suggest in the analyzer when</legend>
+    <div class="speech-triggers-help small-note">The speech is listed under <strong>suggested</strong> when one of these tags is found in the analysed log. Built-in tags stand for the analyzer's log warnings; alert rules count through their own tags.</div>
+
+    <div class="speech-trigger-group">
+        <span class="speech-trigger-label">rule tags found in the log</span>
+        <div id="{{ prefix }}TagPicker"></div>
+    </div>
+</fieldset>

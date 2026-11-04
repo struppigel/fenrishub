@@ -219,6 +219,13 @@
                 {% endfor %}
             </select>
         </div>
+        {% if request.user.is_superuser %}
+        <div>
+            <label title="lets the MCP server create and change rule tags and speeches; keep a separate token for everyday reading">
+                <input type="checkbox" name="can_write"> allow writing tags and speeches
+            </label>
+        </div>
+        {% endif %}
         <button type="submit" {% if active_count >= max_active %}disabled title="revoke a token first"{% endif %}>create token</button>
         <span class="api-help">{{ active_count }} of {{ max_active }} active tokens</span>
     </form>
@@ -232,7 +239,7 @@
             <tbody>
                 {% for token in tokens %}
                     <tr class="{% if not token.is_active %}inactive{% endif %}">
-                        <td>{{ token.name }}</td>
+                        <td>{{ token.name }}{% if token.can_write %} <strong title="can create and change rule tags and speeches">(write)</strong>{% endif %}</td>
                         <td><code>{{ token.prefix }}…</code></td>
                         <td>{{ token.created_at|date:"Y-m-d H:i" }}</td>
                         <td>{{ token.expires_at|date:"Y-m-d" }}</td>

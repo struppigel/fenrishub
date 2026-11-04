@@ -5,6 +5,7 @@ Handles: creating, editing, deleting, testing, and viewing classification rules.
 """
 
 import json
+import time
 from urllib.parse import parse_qsl, urlencode
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
@@ -26,10 +27,18 @@ from ..models import (
     PRIORITY_DEFAULT_LABELS,
     PRIORITY_MAX,
     PRIORITY_MIN,
+    RuleTag,
 )
 from ..rule_sets import invalidate_for_rule_owner
-from ..rule_test_service import build_rule_test_results, build_wholelog_rule_test_result
-from .guest import is_moderator
+from ..tagging import auto_tag_rules, parse_tag_ids, serialize_tag
+from ..rule_test_service import (
+    build_rule_test_results,
+    build_wholelog_rule_test_result,
+    scan_logs_for_rule_matches,
+    scan_logs_for_wholelog_matches,
+)
+from .guest import deny_guests, is_moderator
+from .utils import get_action_scoped_uploads
 
 
 def _priority_choices():
@@ -155,9 +164,35 @@ def _rules_redirect(return_q):
     return redirect('rules')
 
 
+def _tag_ids_from_post(request):
+    """The tag ids the form posted, or None when it had no tag picker.
+
+    The picker always posts `tags_present`, so a form without one - the quick-edit
+    panel on the rules list - leaves a rule's tags alone instead of clearing them.
+    """
+    if not request.POST.get('tags_present'):
+        return None
+    return parse_tag_ids(request.POST.getlist('tag_ids'))
+
+
+def _set_rule_tags(rules, tag_ids) -> None:
+    """Link every rule in `rules` to exactly the tags in `tag_ids`."""
+    through = ClassificationRule.tags.through
+    rule_ids = [rule.pk for rule in rules if rule.pk]
+    through.objects.filter(classificationrule_id__in=rule_ids).exclude(
+        ruletag_id__in=tag_ids,
+    ).delete()
+    through.objects.bulk_create(
+        [through(classificationrule_id=rule_id, ruletag_id=tag_id)
+         for rule_id in rule_ids for tag_id in tag_ids],
+        ignore_conflicts=True,
+    )
+
+
 def _rule_form_from_post(request) -> dict:
     """Read the shared rule-form fields out of a POST."""
     return {
+        'tag_ids': _tag_ids_from_post(request),
         'status': request.POST.get('status', '').strip(),
         'match_type': request.POST.get('match_type', '').strip(),
         'source_text': request.POST.get('source_text', '').strip(),
@@ -176,6 +211,7 @@ def _rule_form_from_post(request) -> dict:
 def _rule_form_from_rule(rule) -> dict:
     """Form state for an existing rule. See _rule_form_from_post on the priority str."""
     return {
+        'tag_ids': list(rule.tags.values_list('pk', flat=True)),
         'status': rule.status,
         'match_type': rule.match_type,
         'source_text': rule.source_text,
@@ -287,6 +323,10 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
         'status', 'match_type', 'source_text', 'description',
         'is_enabled', 'priority', 'whole_log', 'color_whole_line', *REPARSE_FIELDS, 'updated_at',
     ])
+    # Tags are looked up when an analysis is served, not baked into the cached
+    # result, so changing them needs no invalidation of their own.
+    if form.get('tag_ids') is not None:
+        _set_rule_tags([rule], form['tag_ids'])
     invalidate_for_rule_owner(user)
     return None
 
@@ -297,7 +337,13 @@ def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', r
     if return_q:
         cancel_url = f"{cancel_url}?{return_q}"
 
+    tag_ids = form.get('tag_ids')
+    if tag_ids is None:
+        tag_ids = list(rule.tags.values_list('pk', flat=True)) if rule else []
+    tags_by_id = {tag.pk: tag for tag in RuleTag.objects.filter(pk__in=tag_ids).select_related('category')}
+
     return {
+        'form_tags_json': [serialize_tag(tags_by_id[pk]) for pk in tag_ids if pk in tags_by_id],
         'editing': editing,
         'rule': rule,
         'return_q': return_q,
@@ -319,6 +365,7 @@ def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', r
         'priority_min': PRIORITY_MIN,
         'priority_max': PRIORITY_MAX,
         'priority_choices': _priority_choices(),
+        'log_preview_max_logs': LOG_PREVIEW_MAX_LOGS,
     }
 
 
@@ -404,7 +451,8 @@ def rules_view(request):
                 ]
                 skipped = [pattern for pattern in patterns if pattern in existing]
                 if to_create:
-                    ClassificationRule.objects.bulk_create(to_create)
+                    # bulk_create sends no signals, so auto tags are added here.
+                    auto_tag_rules(ClassificationRule.objects.bulk_create(to_create))
                     invalidate_for_rule_owner(request.user)
                     n = len(to_create)
                     messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
@@ -472,6 +520,14 @@ def rules_view(request):
         filter_mode = 'own'
         rules = ClassificationRule.objects.filter(owner=request.user)
 
+    filter_tag = None
+    raw_tag = request.GET.get('tag', '').strip()
+    if raw_tag.isdigit():
+        filter_tag = RuleTag.objects.filter(pk=int(raw_tag)).first()
+    if filter_tag is not None:
+        rules = rules.filter(tags=filter_tag)
+    rules = rules.prefetch_related('tags')
+
     if filter_status and filter_status in dict(ClassificationRule.STATUS_CHOICES):
         rules = rules.filter(status=filter_status)
     if filter_match and filter_match in dict(ClassificationRule.MATCH_TYPE_CHOICES):
@@ -507,6 +563,7 @@ def rules_view(request):
         'filter_mode': filter_mode,
         'filter_status': filter_status,
         'filter_match': filter_match,
+        'filter_tag': filter_tag,
         'search_q': search_q,
         'search_mode': search_mode,
         'sort': sort,
@@ -537,6 +594,8 @@ def add_rule_view(request):
     form_priority = ''
     form_whole_log = request.GET.get('whole_log') == '1'
     form_color_whole_line = request.GET.get('color_whole_line') == '1'
+    # None: the post had no tag picker, so auto-apply alone decides the tags.
+    form_tag_ids = None
 
     if form_status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
         form_status = ClassificationRule.STATUS_MALWARE
@@ -560,6 +619,7 @@ def add_rule_view(request):
         form_priority = raw_priority
         form_whole_log = whole_log
         form_color_whole_line = color_whole_line
+        form_tag_ids = _tag_ids_from_post(request)
         patterns = _patterns_for(match_type, source_text)
         script_error = _script_rule_error(match_type, source_text, request.user, whole_log)
         whole_log_error = _whole_log_error(whole_log, status, match_type)
@@ -616,7 +676,13 @@ def add_rule_view(request):
                 to_create.append(ClassificationRule(**create_kwargs))
 
             if to_create:
-                ClassificationRule.objects.bulk_create(to_create)
+                created = ClassificationRule.objects.bulk_create(to_create)
+                # bulk_create sends no signals, so auto tags are added here.
+                auto_tag_rules(created)
+                # The picker already shows the auto tags filled in, so with a
+                # picker its tags are the rules' tags - a removed auto tag stays off.
+                if form_tag_ids is not None:
+                    _set_rule_tags(created, form_tag_ids)
                 invalidate_for_rule_owner(request.user)
                 n = len(to_create)
                 messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
@@ -652,6 +718,7 @@ def add_rule_view(request):
         'color_whole_line': form_color_whole_line,
         # New rules are always created enabled; the add form has no such field.
         'is_enabled': True,
+        'tag_ids': form_tag_ids or [],
     }
     return render(
         request, 'add_rule.html', _rule_form_context(request.user, form, editing=False)
@@ -694,38 +761,36 @@ def edit_rule_view(request, pk: int):
     ))
 
 
-@login_required
-@require_http_methods(["POST"])
-def test_rule_api(request):
-    """Test a rule definition against a list of log lines and return per-line match results."""
+def _read_rule_test_payload(request):
+    """Parse and validate the rule definition the two rule preview APIs share.
+
+    Returns ``(payload, rule, error_response)``: the raw JSON payload, the cleaned
+    rule fields with the source split into ``patterns``, and an error response
+    that is set (and the other two None) when the request must be refused.
+    """
     try:
         payload = json.loads(request.body.decode('utf-8') or '{}')
     except json.JSONDecodeError:
-        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+        return None, None, JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
 
     source_text = (payload.get('source_text') or '').strip()
     status = (payload.get('status') or '?').strip()
     match_type = (payload.get('match_type') or '').strip()
-    lines = payload.get('lines', [])
     raw_priority = payload.get('priority')
     whole_log = bool(payload.get('whole_log'))
-    # The rule editor passes the rule it is editing so the preview reports the lines
-    # as they would look without it -- otherwise the saved copy shows up as an
-    # existing match and can appear to shadow the user's own pending edit. Honoured
-    # only for a rule the caller owns.
-    exclude_rule_id = _owned_rule_id(payload.get('exclude_rule_id'), request.user)
 
-    if not isinstance(lines, list) or len(lines) > 500:
-        return JsonResponse({'error': 'Field "lines" must be a list with at most 500 entries.'}, status=400)
+    def refuse(message, status_code=400):
+        return None, None, JsonResponse({'error': message}, status=status_code)
+
     if not source_text:
-        return JsonResponse({'error': 'Field "source_text" is required.'}, status=400)
+        return refuse('Field "source_text" is required.')
     if status not in VALID_STATUSES:
         status = '?'
 
     # Previewing a script rule executes the submitted snippet, so it is gated to
     # moderators exactly like authoring one.
     if match_type == ClassificationRule.MATCH_SCRIPT and not is_moderator(request.user):
-        return JsonResponse({'error': 'Script rules can only be tested by moderators.'}, status=403)
+        return refuse('Script rules can only be tested by moderators.', 403)
 
     if raw_priority is None or raw_priority == '':
         priority = None
@@ -737,18 +802,45 @@ def test_rule_api(request):
 
     patterns = _patterns_for(match_type, source_text)
     if not patterns:
-        return JsonResponse({'error': 'Field "source_text" is required.'}, status=400)
+        return refuse('Field "source_text" is required.')
     if len(patterns) > 100:
-        return JsonResponse({'error': 'At most 100 patterns are allowed.'}, status=400)
+        return refuse('At most 100 patterns are allowed.')
+    if whole_log and match_type not in (ClassificationRule.MATCH_REGEX, ClassificationRule.MATCH_SCRIPT):
+        return refuse('Whole-log rules support only regex and script match types.')
+
+    return payload, {
+        'patterns': patterns,
+        'status': status,
+        'match_type': match_type,
+        'priority': priority,
+        'whole_log': whole_log,
+        # The rule editor passes the rule it is editing so the preview reports the
+        # lines as they would look without it -- otherwise the saved copy shows up
+        # as an existing match and can appear to shadow the user's own pending
+        # edit. Honoured only for a rule the caller owns.
+        'exclude_rule_id': _owned_rule_id(payload.get('exclude_rule_id'), request.user),
+    }, None
+
+
+@login_required
+@require_http_methods(["POST"])
+def test_rule_api(request):
+    """Test a rule definition against a list of log lines and return per-line match results."""
+    payload, rule, error_response = _read_rule_test_payload(request)
+    if error_response:
+        return error_response
+
+    lines = payload.get('lines', [])
+    if not isinstance(lines, list) or len(lines) > 500:
+        return JsonResponse({'error': 'Field "lines" must be a list with at most 500 entries.'}, status=400)
+
+    patterns = rule['patterns']
+    status = rule['status']
+    match_type = rule['match_type']
 
     # Whole-log rules run once against the entire log (regex / script only), so the
     # preview reconstructs the pasted text and returns a single log-level verdict.
-    if whole_log:
-        if match_type not in (ClassificationRule.MATCH_REGEX, ClassificationRule.MATCH_SCRIPT):
-            return JsonResponse(
-                {'error': 'Whole-log rules support only regex and script match types.'},
-                status=400,
-            )
+    if rule['whole_log']:
         log_text = '\n'.join(str(line) for line in lines)
         try:
             result_payload = build_wholelog_rule_test_result(patterns, match_type, log_text)
@@ -782,8 +874,8 @@ def test_rule_api(request):
             status=status,
             match_type=match_type,
             lines=lines,
-            priority=priority,
-            exclude_rule_id=exclude_rule_id,
+            priority=rule['priority'],
+            exclude_rule_id=rule['exclude_rule_id'],
         )
     except ValueError as exc:
         return JsonResponse({'error': str(exc)}, status=400)
@@ -813,4 +905,81 @@ def test_rule_api(request):
         if regex_warnings:
             response_payload['regex_warnings'] = regex_warnings
 
+    return JsonResponse(response_payload)
+
+
+# The stored-log preview reruns on every edit in the rule editor, so each request
+# is bounded three ways: how many logs it reads, how many distinct matched lines
+# it returns, and wall-clock time.
+LOG_PREVIEW_MAX_LOGS = 50
+LOG_PREVIEW_MAX_LINES = 200
+LOG_PREVIEW_TIME_BUDGET_S = 3.0
+
+
+@deny_guests
+@login_required
+@require_http_methods(["POST"])
+def test_rule_logs_api(request):
+    """Test a rule definition against the newest stored logs.
+
+    Scans the logs the user can open in the analyzer (own and general channel,
+    not trashed) and returns the distinct lines the rule matches, each with the
+    same per-line verdict `test_rule_api` gives plus the logs it occurs in. A
+    whole-log alert rule instead returns the logs it would fire on.
+    """
+    _payload, rule, error_response = _read_rule_test_payload(request)
+    if error_response:
+        return error_response
+
+    patterns = rule['patterns']
+    match_type = rule['match_type']
+
+    if match_type == ClassificationRule.MATCH_REGEX:
+        # The paste preview only warns about slow patterns; run over dozens of
+        # whole logs one could stall the worker, so it is refused here.
+        for pattern in patterns:
+            evaluation = evaluate_regex_pattern(pattern)
+            if evaluation['stdlib_ok'] and evaluation['is_slow']:
+                return JsonResponse({
+                    'error': 'This regex is too slow to run against stored logs '
+                             f"({evaluation['worst_ms']:.0f} ms on a {evaluation['worst_input']} input).",
+                }, status=400)
+
+    logs = (
+        get_action_scoped_uploads(request.user)
+        .filter(deleted_at__isnull=True)
+        .order_by('-created_at')
+        .values_list('upload_id', 'content')[:LOG_PREVIEW_MAX_LOGS]
+        .iterator(chunk_size=10)
+    )
+    deadline = time.monotonic() + LOG_PREVIEW_TIME_BUDGET_S
+
+    try:
+        if rule['whole_log']:
+            response_payload = scan_logs_for_wholelog_matches(
+                patterns, match_type, logs, deadline=deadline,
+            )
+        else:
+            scan = scan_logs_for_rule_matches(
+                patterns, rule['status'], match_type, logs,
+                max_lines=LOG_PREVIEW_MAX_LINES, deadline=deadline,
+            )
+            matches = scan.pop('matches')
+            response_payload = build_rule_test_results(
+                patterns=patterns,
+                status=rule['status'],
+                match_type=match_type,
+                lines=[entry['line'] for entry in matches],
+                priority=rule['priority'],
+                exclude_rule_id=rule['exclude_rule_id'],
+            )
+            for result, entry in zip(response_payload['results'], matches):
+                result['logs'] = entry['logs']
+                result['log_count'] = entry['log_count']
+            response_payload.update(scan)
+    except ValueError as exc:
+        return JsonResponse({'error': str(exc)}, status=400)
+
+    response_payload['max_logs'] = LOG_PREVIEW_MAX_LOGS
+    response_payload['max_lines'] = LOG_PREVIEW_MAX_LINES
     return JsonResponse(response_payload)

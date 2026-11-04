@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+{% load static rule_tags %}
+
+{% block title %}Rule Tags - Fenris{% endblock %}
+
+{% block page_context_label %}rule tags{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
+<style>
+    .tags-toolbar {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+        align-items: center;
+    }
+
+    .tags-toolbar input[type="text"] {
+        width: 240px;
+        padding: 4px 8px;
+    }
+
+    .tag-row {
+        padding: 8px 10px;
+        margin-bottom: 6px;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border);
+    }
+
+    .tag-row-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .tag-row-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--la-info);
+    }
+
+    .tag-row-meta {
+        font-size: 11px;
+        color: var(--la-text-muted);
+    }
+
+    .tag-row-meta code {
+        color: var(--la-text-neutral);
+    }
+
+    .tag-row-description {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--la-text-neutral);
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    .tag-row-actions {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+
+    .tag-row-actions button {
+        padding: 2px 10px;
+        font-size: 12px;
+    }
+
+    .tag-pending {
+        color: var(--la-caution);
+    }
+
+    @media (max-width: 640px) {
+        .tags-toolbar {
+            flex-wrap: wrap;
+        }
+
+        .tags-toolbar input[type="text"] {
+            width: 100%;
+        }
+
+        .tag-row-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div>
+    <div class="tags-toolbar">
+        <input type="text" id="tagFilter" placeholder="filter tags" aria-label="filter tags">
+        <span style="flex: 1;"></span>
+        <a href="{% url 'tag_categories' %}"><button type="button" title="name categories and give their tags a color">categories</button></a>
+        <a href="{% url 'rule_tag_add' %}"><button type="button">new tag</button></a>
+    </div>
+
+    {% if tags %}
+        {% for tag in tags %}
+        <div class="tag-row" data-tag-search="{{ tag.name|lower }} {{ tag.description|lower }}">
+            <div class="tag-row-header">
+                <span>
+                    <span class="tag-chip tag-row-name{{ tag|tag_category_class }}">{{ tag.name }}</span>
+                    <span class="tag-row-meta">
+                        {% if tag.builtin_code %}- <span title="also found in a log when the analyzer raises this warning">built-in: <code>{{ tag.builtin_code }}</code></span>{% endif %}
+                        - <a href="{% url 'rules' %}?filter=all&amp;tag={{ tag.pk }}">{{ tag.rule_count }} rule{{ tag.rule_count|pluralize }}</a>,
+                        {{ tag.speech_count }} speech{{ tag.speech_count|pluralize:"es" }}
+                        {% if tag.pending_count %}, <a href="{% url 'rule_tag_edit' tag.pk %}" class="tag-pending" title="rules that meet the conditions but do not carry the tag yet">{{ tag.pending_count }} pending</a>{% endif %}
+                        {% if tag.unmatched_count %}, <a href="{% url 'rule_tag_edit' tag.pk %}" class="tag-pending" title="tagged rules that no longer meet the conditions">{{ tag.unmatched_count }} no longer matching</a>{% endif %}
+                        {% if tag.auto_apply %}, applied automatically{% endif %}
+                        {% if tag.updated_by %}, edited by {{ tag.updated_by.username }}{% endif %}
+                    </span>
+                </span>
+                <div class="tag-row-actions">
+                    <a href="{% url 'rule_tag_edit' tag.pk %}"><button type="button">edit</button></a>
+                    {% if not tag.builtin_code %}
+                    <form method="post" style="display: inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="pk" value="{{ tag.pk }}">
+                        <button type="submit" style="background-color: var(--la-error-bg); color: var(--la-error-text); border-color: var(--la-error-border);" onclick="return confirm('Delete tag &quot;{{ tag.name|escapejs }}&quot;? It is removed from {{ tag.rule_count }} rule(s) and {{ tag.speech_count }} speech(es).');">delete</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+            {% if tag.description %}<div class="tag-row-description">{{ tag.description }}</div>{% endif %}
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="info-box">
+            no tags yet. A tag groups related rules - a malware family, a source such as chrome-mal-ids, a vendor - e.g. every RenPyLoader rule, so speeches can be suggested for the group instead of rule by rule.
+        </div>
+    {% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('tagFilter').addEventListener('input', function(event) {
+    const query = event.target.value.trim().toLowerCase();
+    document.querySelectorAll('[data-tag-search]').forEach(function(row) {
+        row.hidden = Boolean(query) && !row.dataset.tagSearch.includes(query);
+    });
+});
+</script>
+{% endblock %}

@@ -448,6 +448,9 @@ class ApiSpeechEndpointTests(ApiTestBase):
     def setUp(self):
         super().setUp()
         self.other = make_user('bob')
+        # Every new account starts with its FRST fix speech; these tests were
+        # written for users without speeches, so they start from that state.
+        Speech.objects.filter(is_fix_message=True).delete()
         self.own = Speech.objects.create(
             owner=self.user, name='run frst', content='{COUNTER}. Hi {USERNAME}, run FRST.', category='scans',
         )

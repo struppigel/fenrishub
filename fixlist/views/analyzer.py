@@ -24,12 +24,13 @@ from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
     VALID_STATUSES,
 )
-from ..models import ClassificationRule, Fixlist, FixlistSnippet, Speech, UploadedLog
+from ..models import ClassificationRule, Fixlist, FixlistSnippet, UploadedLog
 from ..rule_sets import (
     SHARED_RULE_SET_KEY,
     resolve_effective_rule_set_key,
     resolve_user_rule_set_key,
 )
+from ..tagging import attach_rule_tags, attach_tags_to_matches
 from ..upload_utils import get_fresh_cached_analysis, store_cached_analysis
 from ..validators import PayloadValidator, BadJsonError, PayloadTooLargeError
 from ..rule_utils import (
@@ -38,6 +39,7 @@ from ..rule_utils import (
 )
 from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE, effective_analyzer_fixlist_template
 from .guest import deny_guests, guest_or_login_required, is_guest_request
+from .speeches import analyzer_speeches_for, shared_tag_speeches_for
 from .utils import get_action_scoped_uploads, get_updatable_uploads
 
 
@@ -58,6 +60,7 @@ def log_analyzer_view(request):
                 'is_superuser': False,
                 'snippets_json': mark_safe('[]'),
                 'speeches_json': mark_safe('[]'),
+                'shared_tag_speeches_json': mark_safe('[]'),
                 # A guest has no username, so there is no per-helper upload link
                 # and the {UPLOADLINK_HELPER*} placeholders stay literal for them.
                 'upload_link_helper_base': '',
@@ -81,18 +84,8 @@ def log_analyzer_view(request):
         }
         for s in snippets_qs
     ]))
-    speeches_qs = Speech.objects.filter(
-        analyzer_users=request.user,
-    ).select_related('owner').order_by('category', 'name')
-    speeches_json = mark_safe(json.dumps([
-        {
-            'id': s.id,
-            'name': s.name if s.owner_id == request.user.id else f"{s.name} ({s.owner.username})",
-            'category': s.category,
-            'content': s.content,
-        }
-        for s in speeches_qs
-    ]))
+    speeches_json = mark_safe(json.dumps(analyzer_speeches_for(request.user)))
+    shared_tag_speeches_json = mark_safe(json.dumps(shared_tag_speeches_for(request.user)))
     # Bases for the {UPLOADLINK_*} speech placeholders. The per-user link needs a
     # forum username that only the browser knows, so the client appends ?u=.
     upload_link_helper_base = request.build_absolute_uri(
@@ -110,6 +103,9 @@ def log_analyzer_view(request):
     # The fixlist panel falls back to the user's template; the response has no
     # template and simply starts empty.
     initial_response_text = ''
+    # Lets the analyzer turn the concrete share link in a reloaded response back
+    # into {FIXLISTLINK} when part of it is captured as a speech.
+    fixlist_share_url = ''
     requested_fixlist_id = (request.GET.get('fixlist_id') or '').strip()
     if requested_fixlist_id.isdigit():
         editing_fixlist = Fixlist.objects.filter(
@@ -121,6 +117,7 @@ def log_analyzer_view(request):
             initial_fixlist_id = str(editing_fixlist.pk)
             initial_selected_lines = editing_fixlist.content
             initial_response_text = editing_fixlist.response
+            fixlist_share_url = request.build_absolute_uri(f'/share/{editing_fixlist.share_token}/')
             if not initial_upload_id and editing_fixlist.source_uploaded_log:
                 initial_upload_id = editing_fixlist.source_uploaded_log.upload_id
 
@@ -133,9 +130,11 @@ def log_analyzer_view(request):
             'initial_fixlist_id': initial_fixlist_id,
             'initial_selected_lines': initial_selected_lines,
             'initial_response_text': initial_response_text,
+            'fixlist_share_url': fixlist_share_url,
             'is_superuser': request.user.is_superuser,
             'snippets_json': snippets_json,
             'speeches_json': speeches_json,
+            'shared_tag_speeches_json': shared_tag_speeches_json,
             'upload_link_helper_base': upload_link_helper_base,
             'upload_link_general': upload_link_general,
             'fixlist_template': fixlist_template,
@@ -197,7 +196,8 @@ def analyze_log_api(request):
                     uploaded_log.save(update_fields=UploadedLog.analysis_stat_update_fields())
             except Exception:
                 logger.exception('Failed to refresh cached analysis for upload_id=%s', upload_id)
-    return JsonResponse(analysis)
+    # After the cache write: tags are looked up per request, never cached.
+    return JsonResponse(attach_rule_tags(analysis))
 
 
 @deny_guests
@@ -223,7 +223,7 @@ def uploaded_log_cached_analysis_api(request, upload_id):
         return JsonResponse({'has_cache': False, 'payload': None, 'source_content_hash': None})
     return JsonResponse({
         'has_cache': True,
-        'payload': payload,
+        'payload': attach_rule_tags(payload),
         'source_content_hash': uploaded_log.content_hash,
     })
 
@@ -262,6 +262,7 @@ def analyze_line_details_api(request):
         source_name=f'analyzer-inspect:{actor_label}',
     )
     inspection = inspect_line_matches(line)
+    attach_tags_to_matches(inspection.get('matches'), inspection.get('shadowed_matches'))
 
     return JsonResponse(
         {

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<!--
+  Tests for speech_suggestions.js: which speeches are suggested for the rule
+  tags found in a log (dropdown and warning boxes), the tag names behind a
+  line's tooltip, and the one-tag line filter.
+
+  A speech is suggested when any of its trigger tags is among the tags found.
+  A speech without trigger tags is never suggested.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>speech suggestion tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>speech_suggestions.js – suggestion tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<script>
+window.logAnalyzerConfig = { speeches: [] };
+</script>
+<script src="../../rule_tag_picker.js"></script>
+<script src="../speech_suggestions.js"></script>
+
+<script>
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    li.className = condition ? 'pass' : 'fail';
+    li.textContent = (condition ? '✓ ' : '✗ ') + description + (!condition && detail ? ' — ' + detail : '');
+    if (condition) passed++; else failed++;
+    list.appendChild(li);
+}
+
+function assertIds(description, actual, expected) {
+    const a = JSON.stringify([...actual].sort());
+    const e = JSON.stringify([...expected].sort());
+    assert(description, a === e, 'got ' + a);
+}
+
+const speeches = [
+    { id: 1, name: 'renloader cleanup', trigger_tag_ids: [7] },
+    { id: 2, name: 'two AVs', trigger_tag_ids: [90] },
+    { id: 3, name: 'either', trigger_tag_ids: [7, 90] },
+    { id: 4, name: 'no triggers', trigger_tag_ids: [] },
+];
+
+(function testSuggestionsByTag() {
+    assertIds('a found tag suggests its speeches',
+        computeSuggestedSpeechIds(speeches, [7]), [1, 3]);
+    assertIds('a built-in warning tag works like any other tag',
+        computeSuggestedSpeechIds(speeches, [90]), [2, 3]);
+    assertIds('no tags found, no suggestions',
+        computeSuggestedSpeechIds(speeches, []), []);
+    assertIds('a speech without trigger tags is never suggested',
+        computeSuggestedSpeechIds([speeches[3]], [7, 90]), []);
+})();
+
+(function testWarningBoxMatching() {
+    // A warning box carries the built-in tag of its code or its alert rules' tags.
+    const forWarning = speechesForTags([90], speeches).map((speech) => speech.name);
+    assert('a warning box lists the speeches for its own tags',
+        JSON.stringify(forWarning) === JSON.stringify(['either', 'two AVs']),
+        'got ' + JSON.stringify(forWarning));
+    assert('a warning without tags lists none', speechesForTags([], speeches).length === 0);
+})();
+
+(function testTagNamesAndFilter() {
+    updateSpeechSuggestionsFromAnalysis({
+        rule_tags: [
+            { id: 7, name: 'renloader', description: 'RenPy loader family', line_count: 2 },
+            { id: 8, name: 'adware', line_count: 1 },
+        ],
+    });
+    assert('tags for a line come in its tag order, with descriptions',
+        JSON.stringify(ruleTagsFor([8, 7]).map((tag) => [tag.name, tag.description]))
+            === JSON.stringify([['adware', ''], ['renloader', 'RenPy loader family']]));
+    assert('unknown tag ids are skipped', ruleTagsFor([99]).length === 0);
+
+    const chips = buildLineTagChips([7]);
+    assert('one chip per line tag', chips.length === 1 && chips[0].textContent === 'renloader');
+    assert('a chip carries the tag description as its title',
+        chips[0].title === 'renloader: RenPy loader family', chips[0].title);
+
+    assert('no filter: no line counts as a filter match', !lineMatchesTagFilter({ tag_ids: [7] }));
+    setTagFilter(7);
+    assert('with a filter, a line carrying the tag matches', lineMatchesTagFilter({ tag_ids: [7, 8] }));
+    assert('with a filter, a line without the tag does not', !lineMatchesTagFilter({ tag_ids: [8] }));
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [] });
+    assert('a new analysis clears the filter', !lineMatchesTagFilter({ tag_ids: [7] }));
+})();
+
+(function testAlreadyInTheResponse() {
+    const greeting = { id: 20, content: 'Hi {USERNAME},\nplease run FRST and post both logs here.', trigger_tag_ids: [7] };
+    const short = { id: 21, content: '{COUNTER}. ok', trigger_tag_ids: [7] };
+
+    assert('the fingerprint skips placeholders and takes the longest passage',
+        speechFingerprint(greeting.content) === 'please run frst and post both logs here',
+        speechFingerprint(greeting.content));
+    assert('a speech with only short text has no fingerprint', speechFingerprint(short.content) === '');
+
+    const filled = 'Hi bob,\n\nplease   run FRST and post both logs   here.\nThanks';
+    assert('a speech inserted with filled placeholders counts as used',
+        withoutUsedSpeeches([greeting], filled).length === 0);
+    assert('it is suggested again once its text is gone',
+        withoutUsedSpeeches([greeting], 'Hi bob, thanks').length === 1);
+    assert('a speech without fingerprint is never taken for used',
+        withoutUsedSpeeches([short], '1. ok').length === 1);
+    assert('used speeches drop out of the dropdown suggestions',
+        computeSuggestedSpeechIds([greeting], [7], filled).length === 0);
+})();
+
+(function testLineClick() {
+    const one = { id: 30, content: 'Uninstall the toolbar from the control panel, then reboot.', trigger_tag_ids: [7] };
+    const two = { id: 31, content: 'Reset your browser settings to their defaults afterwards.', trigger_tag_ids: [7, 8] };
+    const ids = (list) => JSON.stringify(list.map((speech) => speech.id));
+
+    assert('one fitting speech', ids(speechesForLineClick({ tag_ids: [8] }, [one, two], '')) === '[31]');
+    assert('several fitting speeches', ids(speechesForLineClick({ tag_ids: [7] }, [one, two], '')) === '[30,31]');
+    assert('a speech already in the response is left out',
+        ids(speechesForLineClick({ tag_ids: [7] }, [one, two], one.content)) === '[31]');
+    assert('a line without tags fits nothing', speechesForLineClick({ tag_ids: [] }, [one, two], '').length === 0);
+})();
+
+(function testFallbackToOtherHelpers() {
+    const mine = { id: 40, content: 'My own text about the renloader family here.', trigger_tag_ids: [7] };
+    const theirsSame = { id: 41, content: 'Their text about the renloader family here.', trigger_tag_ids: [7] };
+    const theirsOther = { id: 42, content: 'Their text about adware cleanup in browsers.', trigger_tag_ids: [8] };
+    const ids = (list) => JSON.stringify(list.map((speech) => speech.id));
+
+    assert('only tags no own speech covers fall back',
+        ids(fallbackSpeechesForTags([7, 8], [mine], [theirsSame, theirsOther])) === '[42]');
+    assert('a covered tag gets no fallback even if its own speech is already used',
+        ids(fallbackSpeechesForTags([7], [mine], [theirsSame], mine.content)) === '[]');
+    assert('fallback speeches already in the response are left out',
+        ids(fallbackSpeechesForTags([8], [mine], [theirsOther], theirsOther.content)) === '[]');
+    assert('a line click falls back when no own speech fits',
+        ids(speechesForLineClick({ tag_ids: [8] }, [mine], '', [theirsOther])) === '[42]');
+    assert('own speeches win over fallback on a line click',
+        ids(speechesForLineClick({ tag_ids: [7] }, [mine], '', [theirsSame])) === '[40]');
+})();
+
+(function testManyTags() {
+    updateSpeechSuggestionsFromAnalysis({
+        rule_tags: ['echo', 'alpha', 'delta', 'Charlie', 'bravo'].map((name, index) => ({ id: 100 + index, name })),
+    });
+    const chips = buildLineTagChips([100, 101, 102, 103, 104]);
+    const labels = chips.map((chip) => chip.textContent);
+    assert('three name chips in alphabetical order, then +N',
+        JSON.stringify(labels) === JSON.stringify(['alpha', 'bravo', 'Charlie', '+2']), JSON.stringify(labels));
+    assert('the +N chip names the rest', chips[3].title === 'delta, echo', chips[3].title);
+    assert('a line with few tags gets no +N chip', buildLineTagChips([100, 101]).length === 2);
+
+    const speeches = [
+        { id: 1, name: 'zulu speech', content: 'A long enough passage for zulu here.', trigger_tag_ids: [100] },
+        { id: 2, name: 'Alpha speech', content: 'A long enough passage for alpha here.', trigger_tag_ids: [101] },
+    ];
+    const order = speechesForLineClick({ tag_ids: [100, 101] }, speeches, '').map((speech) => speech.name);
+    assert('fitting speeches come alphabetically',
+        JSON.stringify(order) === JSON.stringify(['Alpha speech', 'zulu speech']), JSON.stringify(order));
+    assert('insert all follows the same order',
+        JSON.stringify(speechesToInsertAll(speeches).map((speech) => speech.id)) === '[2,1]');
+})();
+
+(function testMenuOpeningClickDoesNotCloseIt() {
+    window.logAnalyzerConfig.speeches = [
+        { id: 1, name: 'one', content: 'A long enough passage number one here.', trigger_tag_ids: [100] },
+        { id: 2, name: 'two', content: 'A long enough passage number two here.', trigger_tag_ids: [101] },
+    ];
+    let stopped = false;
+    const fakeEvent = { stopPropagation() { stopped = true; } };
+    const anchor = { getBoundingClientRect: () => ({ left: 0, bottom: 0 }) };
+    handleResponseLineClick({ tag_ids: [100, 101] }, anchor, fakeEvent);
+    assert('the line click stops at the line, so the document does not close the menu', stopped);
+    assert('the pick menu is opened',
+        [...document.body.children].some((element) => element.id === 'lineSpeechMenu'));
+    closeLineSpeechMenu();
+    window.logAnalyzerConfig.speeches = [];
+})();
+
+(function testMenuOpensWhereClicked() {
+    const anchor = { getBoundingClientRect: () => ({ left: 10, top: 40, bottom: 60 }) };
+    const atPoint = document.createElement('div');
+    placeNear(atPoint, anchor, { x: 300, y: 200 });
+    assert('a menu opens at the clicked point',
+        atPoint.style.left === `${302 + window.scrollX}px` && atPoint.style.top === `${202 + window.scrollY}px`,
+        `${atPoint.style.left} ${atPoint.style.top}`);
+    const withoutPoint = document.createElement('div');
+    placeNear(withoutPoint, anchor, clickPoint({ clientX: 0, clientY: 0 }));
+    assert('a keyboard click (no pointer) falls back to below the line',
+        withoutPoint.style.top === `${62 + window.scrollY}px`, withoutPoint.style.top);
+})();
+
+(function testLineInspectorTagRows() {
+    updateSpeechSuggestionsFromAnalysis({
+        rule_tags: [
+            { id: 201, name: 'zeta', description: 'last one' },
+            { id: 202, name: 'Alpha' },
+        ],
+    });
+    const rows = lineInspectorTagRows([201, 202]);
+    assert('inspector rows are alphabetical with descriptions, empty when none',
+        JSON.stringify(rows) === JSON.stringify([
+            { name: 'Alpha', description: '', category_id: null },
+            { name: 'zeta', description: 'last one', category_id: null },
+        ]), JSON.stringify(rows));
+    assert('a line without tags has no rows', lineInspectorTagRows([]).length === 0);
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [] });
+})();
+
+(function testTagCategoryColours() {
+    updateSpeechSuggestionsFromAnalysis({
+        rule_tags: [
+            { id: 301, name: 'coloured', category_id: 4, line_count: 1 },
+            { id: 302, name: 'plain', line_count: 1 },
+        ],
+    });
+    assert('a tag keeps its category through ruleTagsFor',
+        ruleTagsFor([301])[0].category_id === 4);
+    assert('the inspector rows keep the category',
+        lineInspectorTagRows([301])[0].category_id === 4);
+    const [coloured, plain] = [buildLineTagChips([301])[0], buildLineTagChips([302])[0]];
+    assert('a line chip of a categorised tag gets its colour class',
+        coloured.className === 'line-tag-chip tag-cat-4', coloured.className);
+    assert('a line chip without a category keeps the default look',
+        plain.className === 'line-tag-chip', plain.className);
+    assert('tagCategoryClass is empty without a category',
+        tagCategoryClass({ category_id: null }) === '' && tagCategoryClass({ category_id: 9 }) === ' tag-cat-9');
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [] });
+})();
+
+document.getElementById('summary').textContent =
+    failed === 0 ? `ALL PASS (${passed})` : `${failed} FAILED, ${passed} passed`;
+document.getElementById('summary').className = failed === 0 ? 'pass' : 'fail';
+</script>
+</body>
+</html>

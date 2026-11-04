@@ -22,6 +22,11 @@ from urllib.parse import urlencode
 
 from ..analyzer import _re2, evaluate_regex_pattern
 from ..models import UploadedLog
+from ..rule_sets import SHARED_RULE_SET_KEY, resolve_user_rule_set_key
+from ..tagging import (
+    first_tagged_line, found_tags_by_upload, logs_with_tags, parse_tag_ids, selected_tags_for_picker,
+)
+from ..upload_utils import get_fresh_cached_analysis
 from .guest import deny_guests
 from .utils import build_uploaded_logs_zip
 
@@ -133,44 +138,60 @@ def _base_queryset():
     return UploadedLog.objects.filter(deleted_at__isnull=True)
 
 
-def _search_cache_key(query, use_regex, case_sensitive, log_type, limit):
+def _search_cache_key(query, use_regex, case_sensitive, log_type, limit, tag_ids=(), rule_set_key=''):
     """Cache key for one search. Hashed because queries are arbitrary user text."""
+    tags = ','.join(str(tag_id) for tag_id in sorted(tag_ids))
     digest = hashlib.md5(
-        f'{int(use_regex)}|{int(case_sensitive)}|{limit}|{log_type}|{query}'.encode('utf-8')
+        f'{int(use_regex)}|{int(case_sensitive)}|{limit}|{log_type}|{tags}|{rule_set_key}|{query}'.encode('utf-8')
     ).hexdigest()
     return f'log-search-ids:{digest}'
 
 
-def search_matching_log_ids(query, use_regex, limit, case_sensitive=False, log_type=''):
-    """Find logs whose content matches `query`.
+def search_matching_log_ids(
+    query, use_regex, limit, case_sensitive=False, log_type='',
+    tag_ids=(), rule_set_key=SHARED_RULE_SET_KEY,
+):
+    """Find logs whose content matches `query` and that contain every tag in `tag_ids`.
 
-    Returns ``(log_ids, truncated, error, matcher)``. `log_ids` preserves the
-    model's newest-first ordering and holds at most `limit` entries; `truncated`
-    is True when more logs matched than the limit allows. The compiled `matcher`
-    is handed back so callers can build previews without re-validating the
-    pattern (regex validation benchmarks the pattern and is not free).
+    Returns ``(log_ids, truncated, error, matcher, tag_unanalyzed_count)``.
+    `log_ids` preserves the model's newest-first ordering and holds at most
+    `limit` entries; `truncated` is True when more logs matched than the limit
+    allows. The compiled `matcher` is handed back so callers can build previews
+    without re-validating the pattern (regex validation benchmarks the pattern
+    and is not free); it is None for a tags-only search.
 
     An optional `log_type` narrows the search to one kind of log, which also
-    shrinks the regex scan.
+    shrinks the regex scan. Tags are looked up in the cached analyses under
+    `rule_set_key` (see tagging.logs_with_tags) before any content is scanned,
+    and `tag_unanalyzed_count` says how many logs had no analysis to look in.
     """
-    if not query:
-        return [], False, None, None
+    if not query and not tag_ids:
+        return [], False, None, None, 0
 
-    matcher, error = _build_matcher(query, use_regex, case_sensitive)
-    if error:
-        return [], False, error, None
+    matcher = None
+    if query:
+        matcher, error = _build_matcher(query, use_regex, case_sensitive)
+        if error:
+            return [], False, error, None, 0
 
-    cache_key = _search_cache_key(query, use_regex, case_sensitive, log_type, limit)
+    cache_key = _search_cache_key(query, use_regex, case_sensitive, log_type, limit, tag_ids, rule_set_key)
     cached = cache.get(cache_key)
     if cached is not None:
-        cached_ids, cached_truncated = cached
-        return cached_ids, cached_truncated, None, matcher
+        cached_ids, cached_truncated, cached_unanalyzed = cached
+        return cached_ids, cached_truncated, None, matcher, cached_unanalyzed
 
     scoped = _base_queryset()
     if log_type:
         scoped = scoped.filter(log_type=log_type)
 
-    if not use_regex and not case_sensitive:
+    tag_unanalyzed_count = 0
+    if tag_ids:
+        tagged_ids, tag_unanalyzed_count = logs_with_tags(tag_ids, rule_set_key, scoped)
+        scoped = scoped.filter(pk__in=tagged_ids)
+
+    if not query:
+        log_ids = tagged_ids[: limit + 1]
+    elif not use_regex and not case_sensitive:
         # Case-insensitive substring matching pushes down to the database; fetch
         # one extra id so a truncated result set is distinguishable from an
         # exactly-full one.
@@ -199,8 +220,8 @@ def search_matching_log_ids(query, use_regex, limit, case_sensitive=False, log_t
 
     truncated = len(log_ids) > limit
     log_ids = log_ids[:limit]
-    cache.set(cache_key, (log_ids, truncated), SEARCH_CACHE_TIMEOUT)
-    return log_ids, truncated, None, matcher
+    cache.set(cache_key, (log_ids, truncated, tag_unanalyzed_count), SEARCH_CACHE_TIMEOUT)
+    return log_ids, truncated, None, matcher, tag_unanalyzed_count
 
 
 def _logs_in_id_order(log_ids, *, with_content=False):
@@ -221,7 +242,7 @@ def _logs_in_id_order(log_ids, *, with_content=False):
 
 
 def _read_search_params(request):
-    """Read the search term, its mode toggles, and the log type filter."""
+    """Read the search term, its mode toggles, the log type filter and the tag filter."""
     log_type = request.GET.get('type', '').strip()
     if log_type not in available_log_types():
         log_type = ''
@@ -230,10 +251,11 @@ def _read_search_params(request):
         request.GET.get('regex') == '1',
         request.GET.get('case') == '1',
         log_type,
+        parse_tag_ids(request.GET.getlist('tags')),
     )
 
 
-def _search_query_params(query, use_regex, case_sensitive, log_type):
+def _search_query_params(query, use_regex, case_sensitive, log_type, tag_ids=()):
     """Build the query-string params that carry a search across links."""
     params = {'q': query}
     if use_regex:
@@ -242,7 +264,35 @@ def _search_query_params(query, use_regex, case_sensitive, log_type):
         params['case'] = '1'
     if log_type:
         params['type'] = log_type
+    if tag_ids:
+        params['tags'] = list(tag_ids)
     return params
+
+
+def _searched_analysis(uploaded_log, rule_set_key):
+    """The cached analysis a tag search reads for a log: the viewer's, else the shared one."""
+    payload = get_fresh_cached_analysis(uploaded_log, rule_set_key)
+    if payload is None and rule_set_key != SHARED_RULE_SET_KEY:
+        payload = get_fresh_cached_analysis(uploaded_log, SHARED_RULE_SET_KEY)
+    return payload
+
+
+def _first_tagged_hit(uploaded_log, tag_ids, rule_set_key):
+    """Preview of the first line carrying one of `tag_ids`, shaped like _first_hit.
+
+    The line comes from the log's cached analysis, the same one the search
+    read; its number is found in the content, since the analysis skips blank
+    lines. None when only a whole-log rule or a warning carries the tag.
+    """
+    payload = _searched_analysis(uploaded_log, rule_set_key)
+    tagged_line = first_tagged_line(payload, tag_ids) if payload else None
+    if tagged_line is None:
+        return None
+    for line_number, raw_line in enumerate(uploaded_log.content.splitlines(), start=1):
+        if raw_line.strip() == tagged_line:
+            before, hit, after = _clip_preview(raw_line.rstrip('\r'), 0, 0)
+            return line_number, before, hit, after
+    return None
 
 
 def available_log_types():
@@ -260,27 +310,34 @@ def available_log_types():
 @require_http_methods(["GET"])
 def log_search_view(request):
     """Search the contents of every uploaded log and preview the first hit."""
-    query, use_regex, case_sensitive, log_type = _read_search_params(request)
+    query, use_regex, case_sensitive, log_type, tag_ids = _read_search_params(request)
+    rule_set_key = resolve_user_rule_set_key(request.user)
 
-    log_ids, truncated, error, matcher = search_matching_log_ids(
-        query, use_regex, SEARCH_MATCH_LIMIT, case_sensitive, log_type
+    log_ids, truncated, error, matcher, tag_unanalyzed_count = search_matching_log_ids(
+        query, use_regex, SEARCH_MATCH_LIMIT, case_sensitive, log_type, tag_ids, rule_set_key,
     )
 
     page_obj = Paginator(log_ids, RESULTS_PER_PAGE).get_page(request.GET.get('page'))
     results = []
-    if page_obj.object_list and matcher:
+    if page_obj.object_list:
         page_logs = _logs_in_id_order(list(page_obj.object_list), with_content=True)
+        tags_by_upload = found_tags_by_upload([log.pk for log in page_logs], rule_set_key)
         for uploaded_log in page_logs:
-            hit = _first_hit(uploaded_log.content, matcher)
+            if matcher:
+                hit = _first_hit(uploaded_log.content, matcher)
+            else:
+                hit = _first_tagged_hit(uploaded_log, tag_ids, rule_set_key)
             results.append({
                 'log': uploaded_log,
+                # Every tag found in the log, by name; none without a cached analysis.
+                'tags': tags_by_upload.get(uploaded_log.pk, []),
                 'line_number': hit[0] if hit else None,
                 'before': hit[1] if hit else '',
                 'hit': hit[2] if hit else '',
                 'after': hit[3] if hit else '',
             })
 
-    query_params = _search_query_params(query, use_regex, case_sensitive, log_type)
+    query_params = _search_query_params(query, use_regex, case_sensitive, log_type, tag_ids)
 
     return render(request, 'log_search.html', {
         'search_query': query,
@@ -288,6 +345,8 @@ def log_search_view(request):
         'case_sensitive': case_sensitive,
         'log_type_filter': log_type,
         'log_types': available_log_types(),
+        'selected_tags': selected_tags_for_picker(tag_ids),
+        'tag_unanalyzed_count': tag_unanalyzed_count,
         'search_error': error,
         'results': results,
         'match_count': len(log_ids),
@@ -296,8 +355,8 @@ def log_search_view(request):
         'zip_limit': ZIP_MATCH_LIMIT,
         'search_limit': SEARCH_MATCH_LIMIT,
         'page_obj': page_obj,
-        'pagination_query': urlencode(query_params),
-        'download_query': urlencode(query_params),
+        'pagination_query': urlencode(query_params, doseq=True),
+        'download_query': urlencode(query_params, doseq=True),
     })
 
 
@@ -311,7 +370,7 @@ def log_search_download_view(request):
     `selected_upload_ids` it bundles exactly those logs, so the user can cherry-pick
     across result pages.
     """
-    query, use_regex, case_sensitive, log_type = _read_search_params(request)
+    query, use_regex, case_sensitive, log_type, tag_ids = _read_search_params(request)
     selected_upload_ids = [
         value.strip() for value in request.GET.getlist('selected_upload_ids') if value.strip()
     ]
@@ -324,8 +383,9 @@ def log_search_download_view(request):
             .order_by('-created_at')
         )
     else:
-        log_ids, _, error, _matcher = search_matching_log_ids(
-            query, use_regex, ZIP_MATCH_LIMIT, case_sensitive, log_type
+        log_ids, _, error, _matcher, _unanalyzed = search_matching_log_ids(
+            query, use_regex, ZIP_MATCH_LIMIT, case_sensitive, log_type,
+            tag_ids, resolve_user_rule_set_key(request.user),
         )
         logs = _logs_in_id_order(log_ids, with_content=True) if log_ids else []
 
@@ -337,8 +397,8 @@ def log_search_download_view(request):
         else:
             fallback_message = 'No logs matched this search.'
         messages.error(request, fallback_message)
-        params = _search_query_params(query, use_regex, case_sensitive, log_type)
-        return redirect(f"{reverse('log_search')}?{urlencode(params)}")
+        params = _search_query_params(query, use_regex, case_sensitive, log_type, tag_ids)
+        return redirect(f"{reverse('log_search')}?{urlencode(params, doseq=True)}")
 
     response = HttpResponse(build_uploaded_logs_zip(logs), content_type='application/zip')
     response['Content-Disposition'] = 'attachment; filename="fenris_search_logs.zip"'

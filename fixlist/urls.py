@@ -10,6 +10,16 @@ from .views.analyzer import (
     uploaded_log_cached_analysis_api,
 )
 from .views.api_tokens import api_tokens_view
+from .views.tags import (
+    rule_tag_add_view,
+    rule_tag_edit_view,
+    rule_tag_preview_api,
+    rule_tag_save_api,
+    rule_tag_suggest_api,
+    rule_tags_api,
+    rule_tags_view,
+    tag_categories_view,
+)
 from .views.api_usage import api_usage_user_view, api_usage_view
 from .views.auth import (
     about_view,
@@ -46,9 +56,17 @@ from .views.llm_api import (
     api_snippet,
     api_snippets,
     api_speech,
+    api_speech_create,
+    api_speech_update,
     api_speeches,
+    api_tag,
+    api_tag_apply,
+    api_tag_create,
+    api_tag_update,
+    api_tags,
     api_upload,
     api_upload_analysis,
+    api_upload_speeches,
     api_uploads,
     api_user,
 )
@@ -61,7 +79,7 @@ from .views.log_type_rules import (
     test_log_type_api,
     toggle_log_type_rule_view,
 )
-from .views.rules import add_rule_view, edit_rule_view, rules_view, test_rule_api
+from .views.rules import add_rule_view, edit_rule_view, rules_view, test_rule_api, test_rule_logs_api
 from .views.snippets import (
     add_snippet_view, edit_snippet_view, snippets_api, snippets_toggle_analyzer_api, snippets_view,
 )
@@ -132,7 +150,16 @@ urlpatterns = [
     path('rules/', rules_view, name='rules'),
     path('rules/add/', add_rule_view, name='add_rule'),
     path('rules/<int:pk>/edit/', edit_rule_view, name='edit_rule'),
+    path('tags/', rule_tags_view, name='rule_tags'),
+    path('tags/add/', rule_tag_add_view, name='rule_tag_add'),
+    path('tags/categories/', tag_categories_view, name='tag_categories'),
+    path('tags/<int:pk>/edit/', rule_tag_edit_view, name='rule_tag_edit'),
+    path('api/tags/', rule_tags_api, name='rule_tags_api'),
+    path('api/tags/save/', rule_tag_save_api, name='rule_tag_save_api'),
+    path('api/tags/preview/', rule_tag_preview_api, name='rule_tag_preview_api'),
+    path('api/tags/suggest/', rule_tag_suggest_api, name='rule_tag_suggest_api'),
     path('api/rules/test/', test_rule_api, name='test_rule_api'),
+    path('api/rules/test-logs/', test_rule_logs_api, name='test_rule_logs_api'),
     path('log-types/', log_type_rules_view, name='log_type_rules'),
     path('log-types/add/', add_log_type_rule_view, name='add_log_type_rule'),
     path('log-types/<int:pk>/edit/', edit_log_type_rule_view, name='edit_log_type_rule'),
@@ -152,6 +179,7 @@ urlpatterns = [
     path('api/v1/uploads/', api_uploads, name='api_v1_uploads'),
     path('api/v1/uploads/<str:upload_id>/', api_upload, name='api_v1_upload'),
     path('api/v1/uploads/<str:upload_id>/analysis/', api_upload_analysis, name='api_v1_upload_analysis'),
+    path('api/v1/uploads/<str:upload_id>/speeches/', api_upload_speeches, name='api_v1_upload_speeches'),
     path('api/v1/search/', api_search, name='api_v1_search'),
     path('api/v1/users/<str:forum_username>/', api_user, name='api_v1_user'),
     path('api/v1/cases/<str:case_id>/', api_case, name='api_v1_case'),
@@ -160,6 +188,13 @@ urlpatterns = [
     path('api/v1/speeches/', api_speeches, name='api_v1_speeches'),
     path('api/v1/speeches/<int:speech_id>/', api_speech, name='api_v1_speech'),
     path('api/v1/fixlist-template/', api_fixlist_template, name='api_v1_fixlist_template'),
+    path('api/v1/tags/', api_tags, name='api_v1_tags'),
+    path('api/v1/tags/create/', api_tag_create, name='api_v1_tag_create'),
+    path('api/v1/tags/<int:tag_id>/', api_tag, name='api_v1_tag'),
+    path('api/v1/tags/<int:tag_id>/update/', api_tag_update, name='api_v1_tag_update'),
+    path('api/v1/tags/<int:tag_id>/apply/', api_tag_apply, name='api_v1_tag_apply'),
+    path('api/v1/speeches/create/', api_speech_create, name='api_v1_speech_create'),
+    path('api/v1/speeches/<int:speech_id>/update/', api_speech_update, name='api_v1_speech_update'),
     path('stats/', statistics_view, name='statistics'),
     path('logout/', logout_view, name='logout'),
 ]

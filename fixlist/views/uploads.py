@@ -19,8 +19,10 @@ from urllib.parse import urlencode
 
 from ..forms import UploadedLogForm
 from ..log_converters import convert_log_to_response
-from ..models import LOG_TYPE_UNKNOWN, UploadedLog
+from ..models import LOG_TYPE_UNKNOWN, RuleTag, UploadedLog
 from ..permissions import user_can_delete_uploaded_log
+from ..rule_sets import resolve_user_rule_set_key
+from ..tagging import found_tags_by_upload, logs_with_tags
 from ..upload_utils import (
     soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
     schedule_analysis_stats_recalc,
@@ -265,6 +267,10 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     specific helper username. Reserved values win over a same-named helper.
 
     The `type` filter narrows to one log type; empty (the default) means all.
+
+    The search text `q` also names a rule tag: when it equals a tag's name
+    (ignoring case), logs whose cached analysis under the viewer's rule set
+    contains that tag match too; see tagging.logs_with_tags.
     """
     username_filter = request.GET.get('u', '').strip()
     search_query = request.GET.get('q', '').strip()
@@ -318,12 +324,24 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         uploads = uploads.filter(forum_username=username_filter)
     if log_type_filter:
         uploads = uploads.filter(log_type=log_type_filter)
+    rule_set_key = resolve_user_rule_set_key(request.user)
+    tag_unanalyzed_count = 0
     if search_query:
-        uploads = filter_uploads_by_text(uploads, search_query)
+        text_matches = filter_uploads_by_text(uploads, search_query)
+        tag = RuleTag.objects.filter(name__iexact=search_query).first()
+        if tag is None:
+            uploads = text_matches
+        else:
+            tagged_pks, tag_unanalyzed_count = logs_with_tags([tag.pk], rule_set_key, uploads)
+            uploads = uploads.filter(Q(pk__in=text_matches.values('pk')) | Q(pk__in=tagged_pks))
     if deleted:
         uploads = uploads.order_by('-deleted_at')
 
-    page_obj = Paginator(uploads, 8).get_page(request.GET.get('page'))
+    page_obj = Paginator(uploads, 6).get_page(request.GET.get('page'))
+    # The tags found in each listed log, under the viewer's rule set like the tag search.
+    tags_by_upload = found_tags_by_upload([log.pk for log in page_obj.object_list], rule_set_key)
+    for uploaded_log in page_obj.object_list:
+        uploaded_log.rule_tags = tags_by_upload.get(uploaded_log.pk, [])
 
     pagination_params = {}
     if username_filter:
@@ -352,6 +370,7 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         'log_type_filter': log_type_filter,
         'all_log_types': all_log_types,
         'search_query': search_query,
+        'tag_unanalyzed_count': tag_unanalyzed_count,
         'pagination_query': urlencode(pagination_params),
     }
 

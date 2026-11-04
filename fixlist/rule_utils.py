@@ -7,6 +7,7 @@ from django.db import transaction
 
 from .analyzer import parse_rule_line, inspect_line_matches, VALID_STATUSES, _load_rule_buckets
 from .models import ClassificationRule
+from .tagging import parse_tag_ids
 
 
 # Conflict resolution action constants
@@ -78,6 +79,8 @@ def _normalize_pending_changes(raw_changes) -> tuple[list[dict], list[dict]]:
         new_status = raw.get('new_status', '')
         original_status = raw.get('original_status', '')
         description = raw.get('description', None)
+        # None: the review's picker never touched this change.
+        tag_ids = raw.get('tag_ids')
 
         if not isinstance(line, str):
             invalid.append({'index': index, 'error': 'Field "line" must be a string.'})
@@ -90,6 +93,11 @@ def _normalize_pending_changes(raw_changes) -> tuple[list[dict], list[dict]]:
             continue
         if description is not None and not isinstance(description, str):
             invalid.append({'index': index, 'error': 'Field "description" must be a string when provided.'})
+            continue
+        if tag_ids is not None and (not isinstance(tag_ids, list) or any(
+            isinstance(value, bool) or not isinstance(value, int) for value in tag_ids
+        )):
+            invalid.append({'index': index, 'error': 'Field "tag_ids" must be a list of integers when provided.'})
             continue
 
         line = line.strip()
@@ -115,6 +123,7 @@ def _normalize_pending_changes(raw_changes) -> tuple[list[dict], list[dict]]:
                 'new_status': new_status,
                 'order': int(raw.get('order', index)) if isinstance(raw.get('order', index), int) else index,
                 'description': description,
+                'tag_ids': tag_ids,
             }
         )
 
@@ -450,7 +459,16 @@ def _persist_selected_pending_rules(
             if change.get('description') is not None:
                 parsed['description'] = change['description']
 
-            _, is_created = _upsert_classification_rule(parsed, owner=owner)
+            rule, is_created = _upsert_classification_rule(parsed, owner=owner)
+            # The review's picker shows auto tags filled in, so a new rule gets
+            # exactly its tags (a removed auto tag stays off). An existing rule
+            # only gains them and keeps the tags it already had.
+            if change.get('tag_ids') is not None:
+                tag_ids = parse_tag_ids(change['tag_ids'])
+                if is_created:
+                    rule.tags.set(tag_ids)
+                elif tag_ids:
+                    rule.tags.add(*tag_ids)
             if is_created:
                 created_rules += 1
             else:

@@ -1,0 +1,6 @@
+{% comment %}
+Says how many logs a tag filter could not look in. Context: tag_unanalyzed_count.
+{% endcomment %}
+{% if tag_unanalyzed_count %}
+<div class="tag-filter-note">{{ tag_unanalyzed_count }} log{{ tag_unanalyzed_count|pluralize }} without a cached analysis {{ tag_unanalyzed_count|pluralize:"was,were" }} not searched for tags - open {{ tag_unanalyzed_count|pluralize:"it,them" }} in the analyzer or rescan to include {{ tag_unanalyzed_count|pluralize:"it,them" }}.</div>
+{% endif %}

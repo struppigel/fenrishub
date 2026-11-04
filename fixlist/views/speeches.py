@@ -18,12 +18,98 @@ from django.db.models import Q
 from django.contrib.auth.models import User
 
 from ..models import Speech
+from ..tagging import parse_tag_ids, serialize_tag
 from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
 
 # Matches the model's CharField(max_length=255) on name and category. The forms
 # on the speeches page are bounded by the widget, but a JSON client is not, and
 # an over-long value would surface as a database error instead of a 400.
 SPEECH_FIELD_MAX_LENGTH = 255
+
+
+def _trigger_tag_ids_from_post(request):
+    """The tag ids picked in the speech form, built-in tags included."""
+    return parse_tag_ids(request.POST.getlist('trigger_tag_ids'))
+
+
+def serialize_speech_for_analyzer(speech, user):
+    """The shape the analyzer's speeches picker reads.
+
+    One place for it, because the analyzer page, the speeches API and the
+    capture API all hand speeches to the same picker. Expects `trigger_tags`
+    prefetched when serializing many speeches.
+    """
+    return {
+        'id': speech.id,
+        'name': speech.name if speech.owner_id == user.id else f"{speech.name} ({speech.owner.username})",
+        'category': speech.category,
+        'content': speech.content,
+        'trigger_tag_ids': [tag.pk for tag in speech.trigger_tags.all()],
+    }
+
+
+def analyzer_speeches_for(user):
+    """Serialized speeches the user selected for the analyzer, in picker order."""
+    qs = Speech.objects.filter(
+        analyzer_users=user,
+    ).select_related('owner').prefetch_related('trigger_tags').order_by('category', 'name')
+    return [serialize_speech_for_analyzer(speech, user) for speech in qs]
+
+
+def shared_tag_speeches_for(user):
+    """Other helpers' shared speeches that suggest at least one tag and that the
+    user has not selected - the analyzer's fallback when a tag found in a log
+    has no speech of the user's own."""
+    qs = (
+        Speech.objects.filter(is_shared=True, trigger_tags__isnull=False)
+        .exclude(owner=user)
+        .exclude(analyzer_users=user)
+        .distinct()
+        .select_related('owner')
+        .prefetch_related('trigger_tags')
+        .order_by('category', 'name')
+    )
+    return [serialize_speech_for_analyzer(speech, user) for speech in qs]
+
+
+def speeches_for_tags(user, tag_ids):
+    """``(suggested, shared_fallback)`` speeches for the rule tags in `tag_ids`.
+
+    The analyzer's choice (speech_suggestions.js): `suggested` are the user's
+    selected speeches naming any of the tags; `shared_fallback` are other
+    helpers' shared speeches for the tags none of the user's selected speeches
+    names. Both lists of Speech objects with `trigger_tags` prefetched, by name.
+    """
+    found = set(tag_ids)
+    if not found:
+        return [], []
+
+    def by_name(speeches):
+        return sorted(speeches, key=lambda speech: (speech.name.casefold(), speech.pk))
+
+    def names_any(speech, ids):
+        return any(tag.pk in ids for tag in speech.trigger_tags.all())
+
+    selected = list(
+        Speech.objects.filter(analyzer_users=user)
+        .select_related('owner').prefetch_related('trigger_tags')
+    )
+    covered = {tag.pk for speech in selected for tag in speech.trigger_tags.all()}
+    suggested = [speech for speech in selected if names_any(speech, found)]
+
+    uncovered = found - covered
+    shared_fallback = []
+    if uncovered:
+        shared = (
+            Speech.objects.filter(is_shared=True, trigger_tags__in=uncovered)
+            .exclude(owner=user)
+            .exclude(analyzer_users=user)
+            .distinct()
+            .select_related('owner')
+            .prefetch_related('trigger_tags')
+        )
+        shared_fallback = list(shared)
+    return by_name(suggested), by_name(shared_fallback)
 
 
 def _speech_validation_error(owner, name, content, category='', exclude_pk=None):
@@ -69,6 +155,7 @@ def speeches_view(request):
                     owner=request.user, name=name, content=content,
                     is_shared=is_shared, category=category,
                 )
+                speech.trigger_tags.set(_trigger_tag_ids_from_post(request))
                 speech.analyzer_users.add(request.user)
                 messages.success(request, f'Speech "{name}" created.')
             return redirect('speeches')
@@ -90,6 +177,9 @@ def speeches_view(request):
                 speech.is_shared = request.POST.get('is_shared') == 'on'
                 speech.category = category
                 speech.save(update_fields=['name', 'content', 'is_shared', 'category', 'updated_at'])
+                # A form without the tag picker must not clear them.
+                if request.POST.get('tags_present'):
+                    speech.trigger_tags.set(_trigger_tag_ids_from_post(request))
                 messages.success(request, f'Speech "{name}" updated.')
             return redirect('speeches')
 
@@ -97,6 +187,11 @@ def speeches_view(request):
             pk = request.POST.get('pk', '').strip()
             speech = get_object_or_404(Speech, pk=pk, owner=request.user)
             name = speech.name
+            # The FRST fix message is also the profile's fix message and the
+            # fixlist page's "copy fix message"; it is edited, never deleted.
+            if speech.is_fix_message:
+                messages.error(request, f'Speech "{name}" is your FRST fix message and cannot be deleted.')
+                return redirect('speeches')
             speech.delete()
             messages.success(request, f'Speech "{name}" deleted.')
             return redirect('speeches')
@@ -133,7 +228,7 @@ def speeches_view(request):
             | Q(owner__username__icontains=search_query)
         )
 
-    speeches = speeches.order_by('name')
+    speeches = speeches.order_by('name').prefetch_related('trigger_tags__category')
     compact_view = request.COOKIES.get('fenrishub_speeches_compact') == '1'
     per_page = 14 if compact_view else 7
     page_obj = Paginator(speeches, per_page).get_page(request.GET.get('page'))
@@ -160,6 +255,10 @@ def speeches_view(request):
         'categories': categories,
         'pagination_query': urlencode(pagination_params),
         'analyzer_speech_ids': analyzer_speech_ids,
+        'speech_triggers_json': {
+            str(speech.pk): {'tags': [serialize_tag(tag) for tag in speech.trigger_tags.all()]}
+            for speech in page_obj
+        },
     })
 
 
@@ -225,28 +324,14 @@ def speech_create_api(request):
 
     # Same shape speeches_api returns, so the analyzer can drop it straight into
     # its speeches config and rebuild the dropdown without a refetch.
-    return JsonResponse({'speech': {
-        'id': speech.id,
-        'name': speech.name,
-        'category': speech.category,
-        'content': speech.content,
-    }})
+    return JsonResponse({'speech': serialize_speech_for_analyzer(speech, request.user)})
 
 
 @login_required
 @require_http_methods(["GET"])
 def speeches_api(request):
     """Return speeches selected for the log analyzer by the current user."""
-    qs = Speech.objects.filter(
-        analyzer_users=request.user,
-    ).select_related('owner').order_by('category', 'name')
-    speeches = [
-        {
-            'id': s.id,
-            'name': s.name if s.owner_id == request.user.id else f"{s.name} ({s.owner.username})",
-            'category': s.category,
-            'content': s.content,
-        }
-        for s in qs
-    ]
-    return JsonResponse({'speeches': speeches})
+    return JsonResponse({
+        'speeches': analyzer_speeches_for(request.user),
+        'shared_tag_speeches': shared_tag_speeches_for(request.user),
+    })

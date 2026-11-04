@@ -1,6 +1,7 @@
 """Service helpers for rule-testing endpoint logic."""
 
 import re
+import time
 
 from . import frst_extractors as ex
 from . import script_matcher
@@ -315,4 +316,126 @@ def build_rule_test_results(
         'results': results,
         'status_labels': STATUS_LABELS,
         'status_precedence': STATUS_PRECEDENCE,
+    }
+
+
+# A line seen in many logs lists only the first few; `log_count` has the total.
+LOG_REFS_PER_LINE = 5
+
+
+def _may_contain_match(compiled_patterns: list, match_type: str, content: str) -> bool:
+    """Cheap whole-log check that lets the scan skip logs that cannot match.
+
+    Only exact and substring rules have a literal that must appear verbatim in
+    any matching line; every other type has to look at the lines themselves.
+    """
+    if match_type == 'substring':
+        return any(p['source_text'] in content for p in compiled_patterns)
+    if match_type == 'exact':
+        return any(p['source_text'].strip() in content for p in compiled_patterns)
+    return True
+
+
+def scan_logs_for_rule_matches(
+    patterns: list,
+    status: str,
+    match_type: str,
+    logs,
+    *,
+    max_lines: int,
+    deadline: float,
+) -> dict:
+    """Find the distinct lines a rule matches across stored logs.
+
+    ``logs`` yields ``(upload_id, content)`` pairs. Identical lines from different
+    logs collapse into one entry recording the logs it occurs in, so a line common
+    to many machines is reviewed once; entries come back most widespread first.
+    Scanning stops after ``max_lines`` distinct lines (``truncated``) or once
+    ``time.monotonic()`` passes ``deadline`` (``timed_out``).
+    """
+    compiled_patterns = [
+        _compile_pattern(pattern, status, match_type) for pattern in patterns
+    ]
+    strip = match_type in ('exact', 'parsed', 'filepath')
+
+    found = {}
+    logs_scanned = 0
+    logs_matched = 0
+    truncated = False
+    timed_out = False
+
+    for upload_id, content in logs:
+        if time.monotonic() > deadline:
+            timed_out = True
+            break
+        logs_scanned += 1
+        if not _may_contain_match(compiled_patterns, match_type, content):
+            continue
+
+        matched_here = set()
+        for line_number, raw_line in enumerate(content.splitlines(), start=1):
+            if time.monotonic() > deadline:
+                timed_out = True
+                break
+            # Normalised exactly as build_rule_test_results does, so the lines
+            # handed back to it produce the same verdicts the scan found.
+            line = raw_line.strip() if strip else raw_line
+            if not line.strip() or line in matched_here:
+                continue
+            if not any(_match_line(p, match_type, line)['matched'] for p in compiled_patterns):
+                continue
+
+            entry = found.get(line)
+            if entry is None:
+                if len(found) >= max_lines:
+                    truncated = True
+                    break
+                entry = found[line] = {'line': line, 'logs': [], 'log_count': 0}
+            matched_here.add(line)
+            entry['log_count'] += 1
+            if len(entry['logs']) < LOG_REFS_PER_LINE:
+                entry['logs'].append({'upload_id': upload_id, 'line_number': line_number})
+
+        if matched_here:
+            logs_matched += 1
+        if truncated or timed_out:
+            break
+
+    return {
+        'matches': sorted(found.values(), key=lambda entry: -entry['log_count']),
+        'logs_scanned': logs_scanned,
+        'logs_matched': logs_matched,
+        'truncated': truncated,
+        'timed_out': timed_out,
+    }
+
+
+def scan_logs_for_wholelog_matches(patterns: list, match_type: str, logs, *, deadline: float) -> dict:
+    """Run a whole-log alert rule over stored logs and list the ones it fires on."""
+    matched_logs = []
+    logs_scanned = 0
+    timed_out = False
+    script_error = None
+
+    for upload_id, content in logs:
+        if time.monotonic() > deadline:
+            timed_out = True
+            break
+        logs_scanned += 1
+        result = build_wholelog_rule_test_result(patterns, match_type, content)
+        if result.get('script_error') and script_error is None:
+            script_error = result['script_error']
+        if result['matched']:
+            matched_logs.append({
+                'upload_id': upload_id,
+                'match_count': len(result['match_ranges'] or []),
+            })
+
+    return {
+        'whole_log': True,
+        'logs': matched_logs,
+        'logs_scanned': logs_scanned,
+        'logs_matched': len(matched_logs),
+        'timed_out': timed_out,
+        'script_error': script_error,
     }

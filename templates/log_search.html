@@ -1,11 +1,12 @@
 {% extends 'base.html' %}
-{% load rule_tags %}
+{% load static rule_tags %}
 
 {% block title %}Search logs - Fenris{% endblock %}
 
 {% block page_context_label %}search logs{% endblock %}
 
 {% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
     .search-mode-label {
         display: inline-flex;
@@ -54,6 +55,12 @@
         align-items: center;
     }
 
+    /* Picked tags lengthen the row; wrap it rather than squeeze the fields. */
+    .search-filter-form {
+        flex-wrap: wrap;
+    }
+
+
     .search-controls a {
         text-decoration: none;
     }
@@ -101,8 +108,9 @@
         <option value="{{ type_name }}" {% if type_name == log_type_filter %}selected{% endif %}>{{ type_name }}</option>
         {% endfor %}
     </select>
+    {% include "partials/tag_filter_picker.html" %}
     <button type="submit" id="searchSubmitButton">search</button>
-    {% if search_query or log_type_filter %}
+    {% if search_query or log_type_filter or selected_tags %}
     <a href="{% url 'log_search' %}" class="search-filter-clear">clear</a>
     {% endif %}
     <span id="searchStatus" class="search-status" role="status" hidden></span>
@@ -110,17 +118,20 @@
 
 {% if search_error %}
 <div class="error-box">{{ search_error }}</div>
-{% elif not search_query %}
-<div class="info-box">enter a search term to look through the contents of every log. matching ignores upper/lower case unless case sensitive is ticked, and covers all channels, excluding trashed logs.</div>
+{% elif not search_query and not selected_tags %}
+<div class="info-box">enter a search term to look through the contents of every log, pick tags to find logs that contain all of them, or both. matching ignores upper/lower case unless case sensitive is ticked, and covers all channels, excluding trashed logs.</div>
 {% elif not results %}
-<div class="info-box">no {% if log_type_filter %}{{ log_type_filter }} {% endif %}logs contain "{{ search_query }}".</div>
+{% include "partials/tag_unanalyzed_note.html" %}
+<div class="info-box">no {% if log_type_filter %}{{ log_type_filter }} {% endif %}logs {% if search_query %}contain "{{ search_query }}"{% if selected_tags %} and {% endif %}{% endif %}{% if selected_tags %}have the tag{{ selected_tags|length|pluralize }} {% for tag in selected_tags %}{{ tag.name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}.</div>
 {% else %}
+{% include "partials/tag_unanalyzed_note.html" %}
 
 <form id="downloadSelectedForm" method="get" action="{% url 'log_search_download' %}">
     <input type="hidden" name="q" value="{{ search_query }}">
     {% if use_regex %}<input type="hidden" name="regex" value="1">{% endif %}
     {% if case_sensitive %}<input type="hidden" name="case" value="1">{% endif %}
     {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
+    {% for tag in selected_tags %}<input type="hidden" name="tags" value="{{ tag.id }}">{% endfor %}
 </form>
 
 <div class="search-controls button-group">
@@ -160,6 +171,11 @@
         <div class="fixlist-meta">
             {{ result.log.original_filename }} | {{ result.log.forum_username }} | {{ result.log.created_at|date:"Y-m-d H:i" }} | lines {{ result.log.total_line_count }}
         </div>
+        {% if result.tags %}
+        <div class="search-result-tags">
+            {% for tag in result.tags %}<span class="tag-chip{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% endfor %}
+        </div>
+        {% endif %}
         {% if result.line_number %}
         <div class="fixlist-meta search-preview"><span class="search-preview-line-number">{{ result.line_number }}:</span>{{ result.before }}<span class="search-hit">{{ result.hit }}</span>{{ result.after }}</div>
         {% endif %}
@@ -221,7 +237,8 @@ function bindSearchProgress() {
 
     form.addEventListener('submit', function() {
         const query = form.querySelector('input[name="q"]');
-        if (query && !query.value.trim()) return;
+        const tags = form.querySelector('input[name="tags"]');
+        if (query && !query.value.trim() && !tags) return;
         showProgress();
     });
 

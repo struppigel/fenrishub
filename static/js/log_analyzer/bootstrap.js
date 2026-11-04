@@ -755,6 +755,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     bindAnalyzerControls();
     bindAnalyzerModalDismissals();
+    if (typeof setupRuleTagsLine === 'function') {
+        setupRuleTagsLine();
+    }
     if (typeof setupAddSpeechButton === 'function') {
         setupAddSpeechButton();
     }

@@ -1,11 +1,12 @@
 {% extends 'base.html' %}
-{% load rule_tags %}
+{% load static rule_tags %}
 
 {% block title %}{% if is_trash %}Trash{% else %}Uploads{% endif %} - Fenris{% endblock %}
 
 {% block page_context_label %}uploads{% endblock %}
 
 {% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
     .duplicate-hash {
         color: var(--la-warning-text);
@@ -145,7 +146,7 @@
 {% endif %}
 
 <form method="get" action="{% url submit_url_name %}" class="search-filter-form">
-    {% include "partials/search_filter_inputs.html" with search_placeholder="search by user, upload id, assignee, filename" all_users_label="all users" select_id="uploaderSelect" %}
+    {% include "partials/search_filter_inputs.html" with search_placeholder="search by user, upload id, assignee, filename, tag" all_users_label="all users" select_id="uploaderSelect" %}
     <select name="channel" onchange="this.form.submit()" class="search-filter-select" title="filter by channel">
         <option value="mine" {% if channel == 'mine' %}selected{% endif %}>my channel</option>
         <option value="all" {% if channel == 'all' %}selected{% endif %}>all channels</option>
@@ -173,6 +174,7 @@
     </div>
     {% endif %}
 </form>
+{% include "partials/tag_unanalyzed_note.html" %}
 
 <div id="uploadsListContainer">
 <div class="merge-controls button-group">
@@ -254,6 +256,11 @@
                     <span class="stat-b">err {{ uploaded_log.fixlog_error }}</span>
                     {% endif %}
                 </div>
+                {% if uploaded_log.rule_tags %}
+                <div class="search-result-tags">
+                    {% for tag in uploaded_log.rule_tags %}<span class="tag-chip{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% endfor %}
+                </div>
+                {% endif %}
             </div>
         </div>
         <div class="fixlist-actions">

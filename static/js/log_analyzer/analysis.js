@@ -414,6 +414,35 @@ function lineInspectorComponentClassForKey(key) {
     return lookup[key] || '';
 }
 
+// The tags that count for the line - those of the rules deciding its verdict -
+// each with its description.
+function renderLineInspectorTags(entry) {
+    const section = document.getElementById('lineInspectorTagsSection');
+    const list = document.getElementById('lineInspectorTags');
+    if (!section || !list) {
+        return;
+    }
+    const rows = typeof lineInspectorTagRows === 'function' ? lineInspectorTagRows(entry.tag_ids) : [];
+    list.innerHTML = '';
+    section.hidden = rows.length === 0;
+    rows.forEach((row) => {
+        const item = document.createElement('li');
+        const chip = document.createElement('span');
+        chip.className = `tag-chip${typeof tagChipCategoryClass === 'function' ? tagChipCategoryClass(row) : ''}`;
+        chip.textContent = row.name;
+        item.appendChild(chip);
+        if (row.description) {
+            item.appendChild(document.createTextNode(` - ${row.description}`));
+        } else {
+            const none = document.createElement('span');
+            none.className = 'small-note';
+            none.textContent = ' no description yet';
+            item.appendChild(none);
+        }
+        list.appendChild(item);
+    });
+}
+
 function renderLineInspector(detailsPayload, entry) {
     const parsedRule = detailsPayload && typeof detailsPayload.parsed_rule === 'object'
         ? detailsPayload.parsed_rule
@@ -454,6 +483,8 @@ function renderLineInspector(detailsPayload, entry) {
         }
         sourceEl.appendChild(text);
     }
+
+    renderLineInspectorTags(entry);
 
     if (detailsEl) {
         detailsEl.innerHTML = '';
@@ -523,6 +554,16 @@ function renderLineInspector(detailsPayload, entry) {
                     ` (${STATUS_LABEL_MAP[match.status] || 'unknown'}) | ` +
                     `${match.match_type}${priorityText}${matcherText} | ${match.source_text}${reasonText}${ownerText}`,
                 ));
+                // The rule's tags. A shadowed rule's tags do not reach the line.
+                (Array.isArray(match.tags) ? match.tags : []).forEach((tag) => {
+                    item.appendChild(document.createTextNode(' '));
+                    const chip = document.createElement('span');
+                    chip.className = `tag-chip${typeof tagChipCategoryClass === 'function' ? tagChipCategoryClass(tag) : ''}`;
+                    chip.textContent = tag.name;
+                    const known = typeof ruleTagsById !== 'undefined' ? ruleTagsById.get(tag.id) : null;
+                    chip.title = (known && known.description) || tag.name;
+                    item.appendChild(chip);
+                });
                 matchesListEl.appendChild(item);
             });
         }
@@ -603,6 +644,13 @@ function renderWarnings(warnings) {
                 detailsList.appendChild(detailItem);
             });
             warningElement.appendChild(detailsList);
+        }
+
+        // Speeches suggested for this warning: those triggered by the built-in
+        // tag of its code or by its alert rules' tags (speech_suggestions.js).
+        warningElement.dataset.tagIds = JSON.stringify(Array.isArray(warning.tag_ids) ? warning.tag_ids : []);
+        if (typeof renderWarningSpeechRow === 'function') {
+            renderWarningSpeechRow(warningElement);
         }
 
         container.appendChild(warningElement);
@@ -1745,11 +1793,18 @@ function setupLookupMenu() {
 // its full text is already on the page.
 const LINE_TOOLTIP_MAX_LINE_CHARS = 300;
 
-function buildLineTooltip(line, reasons) {
+// The line's rule tags, when it has any, come first of all, one row each with
+// its description: they name what the line belongs to, the reasons say why.
+function buildLineTooltip(line, reasons, tags = []) {
     const shownLine = line.length > LINE_TOOLTIP_MAX_LINE_CHARS
         ? `${line.slice(0, LINE_TOOLTIP_MAX_LINE_CHARS)}…`
         : line;
-    return reasons.length > 0 ? `${reasons.join('\n')}\n\n${shownLine}` : shownLine;
+    const body = reasons.length > 0 ? `${reasons.join('\n')}\n\n${shownLine}` : shownLine;
+    if (!tags.length) {
+        return body;
+    }
+    const tagRows = tags.map((tag) => (tag.description ? `tag: ${tag.name} - ${tag.description}` : `tag: ${tag.name}`));
+    return `${tagRows.join('\n')}\n\n${body}`;
 }
 
 function renderLogLines() {
@@ -1838,14 +1893,31 @@ function renderLogLines() {
         lineDiv.appendChild(searchBtn);
 
         const reasons = Array.isArray(entry.reasons) ? entry.reasons : [];
-        lineDiv.title = buildLineTooltip(line, reasons);
-        lineDiv.addEventListener('click', () => {
+        const lineTags = typeof ruleTagsFor === 'function' ? ruleTagsFor(entry.tag_ids) : [];
+        lineDiv.title = buildLineTooltip(line, reasons, lineTags);
+        // The line's tags as chips, so they show without hovering.
+        if (lineTags.length && typeof buildLineTagChips === 'function') {
+            const chipBox = document.createElement('span');
+            chipBox.className = 'line-tag-chips';
+            buildLineTagChips(entry.tag_ids).forEach((chip) => chipBox.appendChild(chip));
+            lineDiv.insertBefore(chipBox, copyBtn);
+        }
+        // The tag filter (speech_suggestions.js) hides lines without this class.
+        if (typeof lineMatchesTagFilter === 'function' && lineMatchesTagFilter(entry)) {
+            lineDiv.classList.add('tag-filter-match');
+        }
+        lineDiv.addEventListener('click', (event) => {
             if (questionCursorModeActive) {
                 openLineInspectorForIndex(index, { triggerElement: lineDiv });
                 return;
             }
             if (cleanCursorModeActive) {
                 saveStatusSelection(index, 'C');
+                return;
+            }
+            // Writing the response: the line's speech goes in, not the line.
+            if (activeRightPanel === 'response' && typeof handleResponseLineClick === 'function') {
+                handleResponseLineClick(entry, lineDiv, event);
                 return;
             }
             if (copiedLineIndexes.has(index)) {

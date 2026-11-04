@@ -1,11 +1,14 @@
+import logging
 from datetime import timedelta
 
 from django.utils import timezone
 
-from .models import LogTypeBadge, UserProfile, log_type_css_slug
+from .models import TAG_CATEGORY_COLOR_RE, LogTypeBadge, TagCategory, UserProfile, log_type_css_slug
 from .views.guest import is_guest_request, is_moderator
 
 ONLINE_WINDOW_MINUTES = 5
+
+logger = logging.getLogger(__name__)
 
 
 def user_display_prefs(request):
@@ -46,6 +49,25 @@ def log_type_badges(request):
     except Exception:
         return {'log_type_badges': []}
     return {'log_type_badges': [{'slug': s, 'color': c} for s, c in sorted(seen.items())]}
+
+
+def tag_category_colors(request):
+    """Provide each tag category's colour for the `.tag-cat-<id>` badge rules in base.html.
+
+    The colour is written into a <style> block, so a stored value that is not a
+    plain hex colour is left out (the badges keep the default look) and logged,
+    never emitted.
+    """
+    categories = []
+    try:
+        for pk, color in TagCategory.objects.values_list('pk', 'color'):
+            if TAG_CATEGORY_COLOR_RE.match(color or ''):
+                categories.append({'id': pk, 'color': color})
+            else:
+                logger.warning('Tag category %s has an invalid colour %r; using the default look.', pk, color)
+    except Exception:
+        return {'tag_category_colors': []}
+    return {'tag_category_colors': categories}
 
 
 def online_users(request):

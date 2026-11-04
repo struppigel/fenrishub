@@ -1,0 +1,145 @@
+/* Rule tag chips and the tag picker, shared by the tags page, the rule
+   forms, the speeches page and the analyzer. */
+
+.tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--la-info);
+    background-color: var(--la-bg-3);
+    border: 1px solid var(--la-border-strong);
+    white-space: nowrap;
+}
+
+.tag-chip .tag-chip-count {
+    color: var(--la-text-muted);
+}
+
+.tag-chip-remove {
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    color: var(--la-text-muted);
+    font: inherit;
+    cursor: pointer;
+}
+
+.tag-chip-remove:hover,
+.tag-chip-action:hover,
+button.tag-chip:hover {
+    text-decoration: underline;
+}
+
+button.tag-chip {
+    font-family: inherit;
+    cursor: pointer;
+}
+
+/* A suggestion is offered, not applied: dashed until it is clicked. */
+.tag-chip.tag-chip-suggested {
+    border-style: dashed;
+    color: var(--la-text-muted);
+}
+
+.tag-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.tag-picker-chips,
+.tag-picker-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
+
+.tag-picker-suggestions-label {
+    font-size: 11px;
+    color: var(--la-text-muted);
+}
+
+.tag-picker-input-row {
+    position: relative;
+}
+
+.tag-picker-input {
+    width: 100%;
+}
+
+.tag-picker-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    max-height: 220px;
+    overflow-y: auto;
+    background-color: var(--la-bg-2);
+    border: 1px solid var(--la-border-strong);
+}
+
+.tag-picker-option {
+    display: block;
+    width: 100%;
+    padding: 4px 8px;
+    text-align: left;
+    border: none;
+    background: none;
+    color: var(--la-text-main);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.tag-picker-option:hover,
+.tag-picker-option.is-active {
+    text-decoration: underline;
+}
+
+/* Styled on its own, not only inside an option: it also stands alone in the
+   dropdown, e.g. "no tag named ...". */
+.tag-picker-option-note {
+    color: var(--la-text-muted);
+    font-size: 11px;
+}
+
+.tag-picker-dropdown > .tag-picker-option-note {
+    display: block;
+    padding: 4px 8px;
+}
+
+/* The tag filter on the log search page sits in a row of filter controls.
+   Its chips and input stay on one line and never shrink, so a picked tag
+   lengthens the row (which wraps) instead of stacking chips above the input
+   and stretching the row's height. */
+.tag-filter-picker {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 4px;
+}
+
+.tag-filter-picker .tag-picker-chips {
+    flex-wrap: nowrap;
+}
+
+.tag-filter-picker [hidden] {
+    display: none;
+}
+
+.tag-filter-picker .tag-picker-input {
+    width: 140px;
+    padding: 4px 8px;
+    background: var(--la-bg-1);
+    color: var(--la-text-main);
+    border: 1px solid var(--la-border);
+    font-family: inherit;
+    font-size: 12px;
+}

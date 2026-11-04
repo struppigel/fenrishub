@@ -42,6 +42,8 @@ window.logAnalyzerConfig = {
     currentUsername: 'alice',
     uploadLinkHelperBase: 'https://fenris.test/upload/alice/',
     uploadLinkGeneral: 'https://fenris.test/upload/',
+    // Set when the analyzer edits an existing fixlist.
+    fixlistShareUrl: 'https://fenris.test/share/abc123/',
 };
 </script>
 
@@ -382,6 +384,26 @@ function assertEqual(description, actual, expected) {
     setCurrentForumUsername('   ');
     assertEqual('a whitespace-only forum username counts as absent',
         reverseSpeechPlaceholders('Hi bob,'), 'Hi bob,');
+})();
+
+// ---------------------------------------------------------------------------
+// {FIXLISTLINK} and {FRSTPATH} belong to the server: they are filled when the
+// fixlist is saved, so inserting a speech must leave them alone - even while
+// an existing fixlist is being edited and its link is known.
+// ---------------------------------------------------------------------------
+(function testSaveTimeTokens() {
+    setCurrentForumUsername('bob');
+
+    assertEqual('{FIXLISTLINK} is left for the server',
+        applySpeechPlaceholders('[fixlist for {USERNAME}]({FIXLISTLINK})'),
+        '[fixlist for bob]({FIXLISTLINK})');
+
+    assertEqual('{FRSTPATH} is left for the server',
+        applySpeechPlaceholders('cd {FRSTPATH}'), 'cd {FRSTPATH}');
+
+    assertEqual('the share link of the edited fixlist reverses to {FIXLISTLINK}',
+        reverseSpeechPlaceholders('open https://fenris.test/share/abc123/ now'),
+        'open {FIXLISTLINK} now');
 })();
 
 document.getElementById('summary').textContent =

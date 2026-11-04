@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<!--
+  Tests for the auto-tag pre-fill decision of rule_tag_picker.js.
+
+  On a rule form, tags that apply automatically are filled in already, since
+  the rule would get them anyway. One the analyst removed is not filled in
+  again, and nothing is filled in while the rule's fields are still as they
+  were when the page opened (an existing rule never gains tags by itself).
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>tag picker tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>rule_tag_picker.js – auto-tag pre-fill</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<script src="../rule_tag_picker.js"></script>
+<script>
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    li.className = condition ? 'pass' : 'fail';
+    li.textContent = (condition ? '✓ ' : '✗ ') + description + (!condition && detail ? ' — ' + detail : '');
+    if (condition) passed++; else failed++;
+    list.appendChild(li);
+}
+
+const ids = (tags) => JSON.stringify(tags.map((tag) => tag.id));
+const suggestions = [
+    { id: 1, name: 'installed PUP program', auto_apply: true },
+    { id: 2, name: 'renloader', auto_apply: false },
+    { id: 3, name: 'chrome-mal-ids', auto_apply: true },
+];
+
+(function testPrefill() {
+    assert('auto tags are filled in, others only suggested',
+        ids(autoTagsToPrefill(suggestions, [], new Set(), true)) === '[1,3]');
+    assert('an auto tag already selected is not added twice',
+        ids(autoTagsToPrefill(suggestions, [1], new Set(), true)) === '[3]');
+    assert('an auto tag the analyst removed is not filled in again',
+        ids(autoTagsToPrefill(suggestions, [], new Set([3]), true)) === '[1]');
+    assert('nothing is filled in while the rule is unchanged',
+        ids(autoTagsToPrefill(suggestions, [], new Set(), false)) === '[]');
+})();
+
+document.getElementById('summary').textContent =
+    failed === 0 ? `ALL PASS (${passed})` : `${failed} FAILED, ${passed} passed`;
+document.getElementById('summary').className = failed === 0 ? 'pass' : 'fail';
+</script>
+</body>
+</html>

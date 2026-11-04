@@ -28,6 +28,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db.models import F, Sum
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 
 from ..models import ApiRequestLog, ApiToken, SiteConfig
 from ..validators import PayloadValidator
@@ -162,11 +163,17 @@ def _target_for(request, kwargs) -> str:
     return ''
 
 
-def api_token_required(endpoint, *, cost=1):
-    """Decorate a read-only API view: kill switch, HTTPS, token auth, limits, logging.
+def api_token_required(endpoint, *, cost=1, write=False):
+    """Decorate an API view: kill switch, HTTPS, token auth, limits, logging.
 
     `endpoint` names the row in ApiRequestLog; `cost` is how many per-minute
     units one call consumes up front.
+
+    Views are read-only GET endpoints unless `write=True`: those take a POST
+    with a JSON body and need a write token (`ApiToken.can_write`) whose user
+    is a superuser right now. They are CSRF-exempt, which is safe because the
+    API ignores the session entirely - the Authorization header is the only
+    identity, so a page in someone's browser cannot ride on their login.
     """
 
     def decorator(view_func):
@@ -178,7 +185,9 @@ def api_token_required(endpoint, *, cost=1):
                 return _error('The API is disabled on this server.', 503)
             if not settings.DEBUG and not request.is_secure():
                 return _error('HTTPS is required.', 400)
-            if request.method != 'GET':
+            if write and request.method != 'POST':
+                return _error('Only POST is supported.', 405)
+            if not write and request.method != 'GET':
                 return _error('Only GET is supported.', 405)
             if any(param in request.GET for param in TOKEN_QUERY_PARAMS):
                 return _error('Send the token in the Authorization header, never in the URL.', 400)
@@ -199,6 +208,12 @@ def api_token_required(endpoint, *, cost=1):
             # The token is the only identity; whatever the session says is ignored.
             request.user = token.user
             request.api_token = token
+
+            if write and not (token.can_write and token.user.is_superuser):
+                response = _error("Write access needs a superuser's write token.", 403)
+                response['Cache-Control'] = 'no-store'
+                _log_request(request, token, endpoint, kwargs, 403, 0, started, ip, user_agent)
+                return response
 
             upload_id = kwargs.get('upload_id') if endpoint in UPLOAD_READ_ENDPOINTS else None
             response = None
@@ -223,7 +238,7 @@ def api_token_required(endpoint, *, cost=1):
             )
             return response
 
-        return _wrapped
+        return csrf_exempt(_wrapped) if write else _wrapped
 
     return decorator
 

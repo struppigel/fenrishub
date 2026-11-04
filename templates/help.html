@@ -96,6 +96,7 @@
                 <ul>
                     <li><a href="#capture-speech">Turning part of a reply into a speech</a></li>
                     <li><a href="#speech-placeholders">Placeholders in speeches</a></li>
+                    <li><a href="#suggested-speeches">Suggested speeches</a></li>
                 </ul>
             </li>
             <li><a href="#rules">Rules</a>
@@ -105,6 +106,7 @@
                     <li><a href="#rule-priorities">Rule priorities</a></li>
                     <li><a href="#match-types">Match types</a></li>
                     <li><a href="#testing-rules">Testing rules</a></li>
+                    <li><a href="#rule-tags">Rule tags</a></li>
                 </ul>
             </li>
             <li><a href="#cases">Cases</a>
@@ -278,6 +280,8 @@
 
     <p><strong>copy fix message</strong> will put a predefined message into the clipboard that instructs users how to fix. To change this predefined message template, click on your username on the top right, click on profile settings, and adjust the frst fix message. This frst fix message template has placeholders for the username, helpername (you), fixlist link and frst path, which will be automatically filled into the template. Some of these only work if the fixlist has an associated uploaded log, e.g., the FRST path is part of the FRST log and not the Fixlist. So if that is missing, it's probably because your Fixlist was created without a log.</p>
 
+    <p>The same fix message is also listed as the <strong>FRST fix</strong> speech on the speeches page. It is one entry shown in two places: editing it in the profile or on the speeches page changes both, and you can insert it into a response in the analyzer like any other speech. It cannot be deleted. Every new account starts with the default text.</p>
+
     <img src="{% static 'images/help/08-fixlist-view.png' %}" alt="Individual fixlist view" loading="lazy">
 
     <h2 id="snippets">Snippets</h2>
@@ -331,11 +335,25 @@
         <li><code>{UPLOADLINK_GENERAL}</code> - an upload link to the general channel, for when any helper may pick the log up.</li>
         <li><code>{UPLOADLINK_HELPER_PREFILLED}</code> and <code>{UPLOADLINK_GENERAL_PREFILLED}</code> - the same two links with <code>?u=</code> appended, which fills the forum username in on the upload form so the user does not have to type it.</li>
         <li><code>{COUNTER}</code> - the next step number.</li>
+        <li><code>{FIXLISTLINK}</code> - the share link of the fixlist the response belongs to.</li>
+        <li><code>{FRSTPATH}</code> - the folder FRST was run from, read from the fixlist's source log.</li>
     </ul>
+
+    <p><code>{FIXLISTLINK}</code> and <code>{FRSTPATH}</code> have no value while you write, because the fixlist does not exist yet. They stay in the response as they are and are filled in when you save the fixlist. Saving also fills a <code>{USERNAME}</code> or <code>{HELPERNAME}</code> that was left over because no log was loaded when you inserted the speech.</p>
 
     <p>Everything that needs the forum user - <code>{USERNAME}</code> and the two <code>_PREFILLED</code> links - requires a loaded log. Without one, those placeholders are deliberately left in the text rather than filled with nothing, so you can see at a glance that they still need attention.</p>
 
     <p><code>{COUNTER}</code> counts across the whole reply rather than restarting for each speech, so you can build one numbered instruction list out of several speeches. A speech containing three <code>{COUNTER}</code> lines inserted into an empty response gives you 1, 2, 3; insert a second speech after it and its first <code>{COUNTER}</code> is 4. The count starts over at 1 whenever you insert into an empty response, so clearing the response is how you begin a fresh reply.</p>
+
+    <h3 id="suggested-speeches">Suggested speeches</h3>
+
+    <p>A speech can name the <a href="#rule-tags">rule tags</a> it fits, under <strong>suggest in the analyzer when</strong> on the speeches page, or from the other side in the tag editor. After every analysis, the speeches whose tags were found in the log are listed under <strong>suggested</strong> at the top of the <strong>speeches</strong> picker, which then reads for example <strong>speeches (2 suggested)</strong>. The picker is shown while the right panel is on <strong>response</strong>. Only speeches you selected for the analyzer can be suggested, and nothing is inserted on its own - you still pick.</p>
+
+    <p>Log warnings work through tags too. An alert rule is a rule, so tag it and its speeches come up when it fires. The analyzer's built-in warnings (incomplete logs, low memory, multiple enabled AVs, recent system restore, recent Windows install) each have a <strong>built-in tag</strong> that is found when the warning is raised. You can also put a built-in tag on your own rules, for example on extra alert rules for the same problem. A warning box also lists the speeches suggested for it; click one to insert it into the response.</p>
+
+    <p>Tagged log lines show their tags as small chips after the line, alphabetically; a line with more than three tags shows the first three and a <strong>+N</strong> chip for the rest. Hover a line to read all its tags with their descriptions. With the right panel on <strong>response</strong>, clicking a tagged line adds its speech to the response instead of adding the line to the fixlist: directly when one speech fits, from a small menu when several do. The menu names the line's tags each speech fits and offers <strong>insert all</strong> at the top. A line without a fitting speech only shows a short note. A speech that is already in the response is not suggested again; once you delete its text, it comes back.</p>
+
+    <p>When a tag is found but none of your selected speeches is linked to it, the analyzer suggests the speeches other helpers shared for that tag, under <strong>from other helpers</strong>. Inserting one does not select it for you; do that on the speeches page if you want to keep it.</p>
 
     <h2 id="rules">Rules</h2>
 
@@ -401,6 +419,41 @@
     <img src="{% static 'images/help/12-rules-test-result.png' %}" alt="Test rule result with effective rule highlighted" loading="lazy">
 
     <p>Here you can see that the Battle.net line was matched by several rules, your new rule and a file path rule. In this case your new rule decides about the verdict because it has a higher priority (the example is nonsense, it's not really junk). The deciding rule is marked as &quot;effective&quot; and the text also mentions that the log line is marked C without your new rule (&quot;was C clean&quot;). The dataX.pak lines with green highlight are here matched by your rule but not any other rule. The remaining lines are not matched at all and would get the ? - unknown verdict in a log.</p>
+
+    <h3 id="rule-tags">Rule tags</h3>
+
+    <p>A rule tag groups related rules - a malware family such as RenPyLoader, a source such as chrome-mal-ids, a vendor - whatever their status. Tags are shared, and any helper can create and edit them. Their main use is <a href="#suggested-speeches">suggesting speeches</a>: one speech per tag instead of one per rule.</p>
+
+    <p>Tags are managed on the <strong>rule tags</strong> page in the menu under your username. <strong>new tag</strong> and <strong>edit</strong> open the tag editor. It starts simple: a name, a <strong>regex</strong>, a description for analysts and <strong>apply automatically</strong>. The regex is searched ignoring case in the rule's description and its source line, URLs included. A new tag applies itself automatically unless you untick it.</p>
+
+    <p><strong>more options</strong> holds further conditions and <strong>suggest these speeches</strong>; it opens by itself for a tag that uses those conditions, and its button says how many speeches are linked. Every condition you set must hold; leave one empty to ignore it:</p>
+
+    <ul>
+        <li><strong>look in</strong> - where the regex and the exclude regex look: the description, the source line, or anywhere (the default).</li>
+        <li><strong>exclude regex</strong> - rules where this matches, in the same place, are left out. For example "installed software, but not microsoft".</li>
+        <li><strong>rule status</strong> - the rule's own status, any of the ticked ones.</li>
+        <li><strong>parsed entry type</strong> - the rule's parsed entry type, such as installed software or browser extension. Substring rules without a parsed entry, like the malext.io extension IDs, have none.</li>
+    </ul>
+
+    <p>A tag with no regex, status or entry type matches nothing; you add it to rules by hand. For "OR", make two tags and pick both on the speech. Example: an uninstall speech fits a PUP on an installed program, not malware on one. So a tag "installed PUP program" with status P and entry type installed software, no regex, picked on the uninstall speech, brings the speech up only for PUP programs.</p>
+
+    <p>In the tag editor:</p>
+
+    <ul>
+        <li>The preview below the buttons updates as you type the regex or change a condition, like <strong>test log lines</strong> on the rule page. It lists the rules already tagged, the tagged rules that no longer match, and the new matches. Untick false positives, then <strong>save &amp; apply to ticked rules</strong>.</li>
+        <li><strong>remove tag from all</strong>, next to the rules that no longer match, takes the tag off all of them at once. Saving the tag also asks whether to do that whenever there are such rules, for example after you narrowed its conditions.</li>
+        <li><strong>apply automatically to new rules</strong> makes the tag add itself to every new rule that meets the conditions, and to a rule whose description, source line, status or entry type is edited to meet them. When you save the tag with this on, you are asked whether to also tag the existing rules that meet the conditions; with <strong>save &amp; apply to ticked rules</strong> the ticks decide instead. Removing such a tag from a rule by hand sticks as long as those fields stay the same.</li>
+        <li><strong>suggest these speeches</strong> links speeches to the tag - your own and any you selected for the analyzer, shared ones by other helpers included. Find them by name or category. A link belongs to the speech, so linking another helper's shared speech suggests it for this tag for everyone who uses it. For your own speeches, the same link can be set from the speech's form on the speeches page.</li>
+        <li>The tag list shows each tag's conditions, how many rules meet them but lack the tag as <strong>pending</strong>, and how many tagged rules no longer meet them.</li>
+    </ul>
+
+    <p>On the add and edit rule pages and in the analyzer's rule review, the tags field takes existing tags only; new tags are made in the tag editor. Tags whose conditions the rule meets are suggested under the field, and tags that apply automatically are already filled in. What the field holds when you save is what the rule gets, so removing a filled-in tag leaves it off. Regexes must be simple enough for the fast regex engine: no lookarounds or backreferences, and nothing that is slow on long input. A regex that matches empty text is refused, because it would match every rule.</p>
+
+    <p><strong>Categories</strong> give tags a color. Open <strong>categories</strong> on the rule tags page to add one with a name and a color, rename or recolor it, or delete it. Every tag has a category: new tags start in the <strong>default</strong> category, which can be renamed and recolored but not deleted. Pick a tag's category in the tag editor, right under its name. Every badge of the tag then shows its category's color, on the rules list, the uploads list, log search, the speeches page, the tag pickers and in the analyzer. Deleting a category moves its tags to the default category.</p>
+
+    <p>Rules get tags on the add and edit rule pages, in the analyzer's rule review before saving, or in bulk from the tag editor. Click a tag on the rules list to see all its rules. Built-in tags are marked as such in the list. They work like any other tag, except that they are also found when their warning is raised and cannot be deleted.</p>
+
+    <p>In the analyzer, the tags of the analyzed log are shown as badges in a second row of the status legend, with the number of lines they cover. Hover a tag to read its notes; click it to show only its lines, and again to show all. The notes are edited in the tag editor. Hovering a line shows its tags first in the tooltip, and the <strong>?</strong> inspector lists the tags of every matching rule, including shadowed ones. A tag only reaches a line through the rules that decide its verdict: if a B rule and a P rule match the same line and the line ends up B, the P rule's tags do not count for it.</p>
 
     <h2 id="cases">Cases</h2>
 

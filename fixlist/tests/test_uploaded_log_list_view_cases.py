@@ -197,7 +197,7 @@ class UploadedLogListViewTests(UploadedLogSharedSetupMixin, TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context['page_obj'].paginator.num_pages, 2)
-        self.assertEqual(len(response.context['page_obj'].object_list), 8)
+        self.assertEqual(len(response.context['page_obj'].object_list), 6)
         self.assertContains(response, 'page 1 of 2')
         self.assertContains(response, 'page-log-8')
         self.assertNotContains(response, 'page-log-0')

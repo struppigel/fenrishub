@@ -115,7 +115,11 @@
         <div class="warning-modal">
             <div class="alert-strip">Warning</div>
             <div class="warning-modal-body">
+                {% if fixlist.username and fixlist.username != 'Unknown' %}
+                <p class="alert-body">This fixlist was made for <strong>{{ fixlist.username }}</strong>. Executing a Fixlist on the wrong system may permanently damage it. Continue only if you are {{ fixlist.username }}.</p>
+                {% else %}
                 <p class="alert-body">Executing a Fixlist on the wrong system may permanently damage it. Continue only if this link was meant for you. </p>
+                {% endif %}
                 <p class="muted consent-note">To view the content, acknowledge this warning.</p>
                 <div class="button-group">
                     <button type="button" onclick="agreeToWarning()">I understand, show content</button>

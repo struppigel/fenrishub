@@ -14,6 +14,9 @@ class SpeechCreateApiTests(TestCase):
         self.other_user = User.objects.create_user(username='bob', password='password123')
         self.client.login(username='alice', password='password123')
         self.url = reverse('speech_create_api')
+        # Every new account starts with its FRST fix speech; these tests were
+        # written for users without speeches, so they start from that state.
+        Speech.objects.filter(is_fix_message=True).delete()
 
     def _post(self, payload):
         return self.client.post(self.url, json.dumps(payload), content_type='application/json')
@@ -100,6 +103,7 @@ class SpeechCreateApiTests(TestCase):
             'name': 'greeting',
             'category': 'intro',
             'content': 'hello',
+            'trigger_tag_ids': [],
         }})
 
     def test_category_defaults_to_generic(self):
@@ -137,4 +141,5 @@ class SpeechCreateApiTests(TestCase):
             'name': 'greeting',
             'category': 'intro',
             'content': 'hello',
+            'trigger_tag_ids': [],
         }])

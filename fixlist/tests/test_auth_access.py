@@ -5,7 +5,7 @@ from django.http import Http404, HttpResponse
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
-from ..models import Fixlist, UserProfile
+from ..models import Fixlist, Speech, UserProfile
 from ..views import change_password_view, dashboard_view, profile_view, view_fixlist
 from ..views.auth import DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
 
@@ -153,7 +153,9 @@ class AuthenticationAndAccessTests(TestCase):
         profile = UserProfile.objects.get(user=self.user)
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse("profile"))
-        self.assertEqual(profile.frst_fix_message, "custom line with {USERNAME}")
+        # Saved into the flagged FRST fix speech, the one entry behind both places.
+        fix_speech = Speech.objects.get(owner=self.user, is_fix_message=True)
+        self.assertEqual(fix_speech.content, "custom line with {USERNAME}")
 
     def test_profile_default_word_wrap_is_false(self):
         profile = UserProfile.objects.create(user=self.other_user)

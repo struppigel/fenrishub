@@ -1,0 +1,138 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Tag Categories - Fenris{% endblock %}
+
+{% block page_context_label %}tag categories{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
+<style>
+    .category-back {
+        display: inline-block;
+        margin-bottom: 6px;
+        font-size: 12px;
+    }
+
+    .category-intro {
+        font-size: 12px;
+        color: var(--la-text-muted);
+        margin-bottom: 10px;
+    }
+
+    .category-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 10px;
+        margin-bottom: 6px;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border);
+    }
+
+    .category-row input[type="text"] {
+        width: 220px;
+        padding: 4px 8px;
+    }
+
+    .category-row input[type="color"] {
+        width: 40px;
+        height: 28px;
+        padding: 0 2px;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border);
+        cursor: pointer;
+    }
+
+    .category-row button {
+        padding: 4px 10px;
+    }
+
+    .category-row .delete-btn {
+        background-color: var(--la-error-bg);
+        color: var(--la-error-text);
+        border-color: var(--la-error-border);
+    }
+
+    .category-preview {
+        min-width: 90px;
+    }
+
+    .category-meta {
+        font-size: 11px;
+        color: var(--la-text-muted);
+    }
+
+    .category-new {
+        border-style: dashed;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<a href="{% url 'rule_tags' %}" class="category-back">&larr; back to rule tags</a>
+<h3>tag categories</h3>
+<div class="category-intro">
+    a category gives its tags a color: every badge of a tag in the category takes it, everywhere tags are shown.
+    every tag has a category; new tags get the default one, and the tags of a deleted category move to it.
+    pick a tag's category in the tag editor.
+</div>
+
+{% for category in categories %}
+<form method="post" action="{% url 'tag_categories' %}" class="category-row">
+    {% csrf_token %}
+    <input type="hidden" name="pk" value="{{ category.pk }}">
+    <span class="tag-chip tag-cat-{{ category.pk }} category-preview" data-preview>{{ category.name }}</span>
+    <input type="text" name="name" value="{{ category.name }}" maxlength="64" aria-label="category name" required>
+    <input type="color" name="color" value="{{ category.color }}" aria-label="category color">
+    <button type="submit" name="action" value="edit">save</button>
+    {% if not category.is_default %}
+    <button type="submit" name="action" value="delete" class="delete-btn"
+            data-confirm="Delete the category &quot;{{ category.name }}&quot;? Its {{ category.tag_count }} tag{{ category.tag_count|pluralize }} will move to the default category.">delete</button>
+    {% endif %}
+    <span class="category-meta">
+        {% if category.is_default %}default for new tags, cannot be deleted - {% endif %}{{ category.tag_count }} tag{{ category.tag_count|pluralize }}{% if category.updated_by %}, edited by {{ category.updated_by.username }}{% endif %}
+    </span>
+</form>
+{% endfor %}
+
+<form method="post" action="{% url 'tag_categories' %}" class="category-row category-new">
+    {% csrf_token %}
+    <span class="tag-chip category-preview" data-preview>new category</span>
+    <input type="text" name="name" maxlength="64" placeholder="category name, e.g. ransomware" aria-label="new category name" required>
+    <input type="color" name="color" value="{{ default_color }}" aria-label="new category color">
+    <button type="submit" name="action" value="add">add category</button>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// The preview chip follows the name and colour fields before saving. Inline
+// colours, since the saved category's style rule only changes on reload.
+document.querySelectorAll('.category-row').forEach(function (row) {
+    const preview = row.querySelector('[data-preview]');
+    const name = row.querySelector('input[name="name"]');
+    const color = row.querySelector('input[name="color"]');
+    if (!preview || !name || !color) return;
+    const placeholder = preview.textContent;
+    name.addEventListener('input', function () {
+        preview.textContent = name.value.trim() || placeholder;
+    });
+    color.addEventListener('input', function () {
+        preview.style.color = color.value;
+        preview.style.borderColor = color.value;
+    });
+    if (row.classList.contains('category-new')) {
+        preview.style.color = color.value;
+        preview.style.borderColor = color.value;
+    }
+});
+
+document.querySelectorAll('button[data-confirm]').forEach(function (button) {
+    button.addEventListener('click', function (event) {
+        if (!confirm(button.dataset.confirm)) event.preventDefault();
+    });
+});
+</script>
+{% endblock %}

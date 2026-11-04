@@ -483,6 +483,21 @@
         input.search-filter-input { width: 220px; }
         select.search-filter-select { width: 180px; }
 
+        /* Logs a tag search could not look in, under the search form. */
+        .tag-filter-note {
+            font-size: 11px;
+            color: var(--la-text-muted);
+            margin-bottom: 8px;
+        }
+
+        /* The rule tags found in a log, on listing rows. */
+        .search-result-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 4px;
+        }
+
         .search-filter-clear {
             padding: 4px 8px;
             font-size: 12px;
@@ -660,6 +675,15 @@
             font-size: 12px;
         }
 
+        /* Every hint, note or help line under a field or in a dropdown. One
+           shared class, so none of them falls back to the page's default
+           font size because a page forgot to style its own variant. Keeps
+           the surrounding text colour. */
+        .small-note {
+            font-size: 11px;
+            line-height: 1.4;
+        }
+
         @media (max-width: 768px) {
             .fixlist-item {
                 flex-direction: column;
@@ -715,6 +739,10 @@
     .timeline-type-badge.log.log-type-{{ badge.slug }} { color: {{ badge.color }}; border-color: {{ badge.color }}; }
     {% endfor %}
     </style>
+    <style id="tag-category-colors">
+    {% for category in tag_category_colors %}.tag-chip.tag-cat-{{ category.id }}, .line-tag-chip.tag-cat-{{ category.id }} { color: {{ category.color }}; border-color: {{ category.color }}; }
+    {% endfor %}
+    </style>
     {% block extra_head %}{% endblock %}
     {% block extra_css %}{% endblock %}
 </head>
@@ -737,6 +765,7 @@
                                 <a href="{% url 'change_password' %}">change password</a>
                                 <a href="{% url 'statistics' %}">stats</a>
                                 <a href="{% url 'log_search' %}">search logs</a>
+                                <a href="{% url 'rule_tags' %}">rule tags</a>
                                 <a href="{% url 'api_tokens' %}">api tokens</a>
                                 <a href="{% url 'help' %}">help</a>
                                 {% if is_moderator %}<a href="{% url 'log_type_rules' %}">log type rules</a>{% endif %}

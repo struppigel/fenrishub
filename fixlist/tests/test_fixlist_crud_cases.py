@@ -10,7 +10,7 @@ from django.test import RequestFactory, TestCase
 from django.test import override_settings
 from django.urls import reverse
 
-from ..models import AccessLog, ClassificationRule, Fixlist, UploadedLog, UserProfile
+from ..models import AccessLog, ClassificationRule, Fixlist, Speech, UploadedLog, UserProfile
 from ..views.auth import DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
 from ..views import log_analyzer_view, shared_fixlist_view, view_fixlist
 
@@ -406,7 +406,11 @@ class FixlistCrudViewTests(TestCase):
             username="Previewable",
             content="payload",
         )
-        UserProfile.objects.create(user=self.user, frst_fix_message="custom {FIXLISTLINK}")
+        # The fix message lives in the user's flagged FRST fix speech.
+        Speech.objects.update_or_create(
+            owner=self.user, is_fix_message=True,
+            defaults={"name": "FRST fix", "content": "custom {FIXLISTLINK}"},
+        )
         request = RequestFactory().get(reverse("view_fixlist", args=[fixlist.pk]))
         request.user = self.user
 

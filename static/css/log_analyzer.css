@@ -269,7 +269,9 @@ body.clean-cursor-mode .line-text {
     gap: 10px;
     column-gap: 0;
     width: 100%;
-    height: calc(100vh - 290px);
+    /* --legend-extra: the height of the tags row in the status legend, set by
+       speech_suggestions.js, so the legend below still fits in the window. */
+    height: calc(100vh - 290px - var(--legend-extra, 0px));
     min-height: 0;
     background-color: var(--la-bg-4);
     border: 1px solid var(--la-border-muted);
@@ -714,6 +716,19 @@ textarea.speech-capture-field {
 .rule-description-inline-input:focus {
     outline: none;
     border-color: var(--la-focus-alt);
+}
+
+.rule-tags-inline {
+    margin-top: 4px;
+    gap: 4px;
+}
+
+.rule-tags-inline .tag-picker-input {
+    border: 1px solid var(--la-border);
+    background: var(--la-bg-0);
+    color: var(--la-text-primary);
+    font-size: 12px;
+    padding: 3px 6px;
 }
 
 .rule-candidate-text {
@@ -1252,3 +1267,139 @@ button.lookup-menu-item {
     }
 }
 
+
+/* Rule tags found in the analysed log, under the status legend. */
+/* The second row of the status legend: the log's rule tags as badges, sized
+   and spaced like the status entries above them. */
+.rule-tags-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    align-items: center;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--la-text-muted);
+}
+
+.rule-tags-line[hidden] {
+    display: none;
+}
+
+.rule-tags-line .tag-chip {
+    font-size: 12px;
+    padding: 0 6px;
+    gap: 2px;
+}
+
+
+
+
+
+
+
+/* One-tag filter from the tags line: lines without the tag are hidden, on
+   top of whatever the status legend hides. */
+.tag-filter-active .log-line:not(.tag-filter-match) {
+    display: none;
+}
+
+.tag-chip-filter {
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.tag-chip-filter:hover,
+.analysis-warning-speech:hover {
+    text-decoration: underline;
+}
+
+/* The filtering tag: a state, shown by its border, not a hover effect. */
+.tag-chip.tag-chip-active {
+    border-color: var(--la-info);
+}
+
+/* While one tag filters the log, the others look like hidden statuses in the
+   legend above them: struck through and faded. */
+.tag-chip.tag-chip-filtered-out {
+    opacity: 0.35;
+    text-decoration: line-through;
+}
+
+.analysis-warning-speeches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-top: 6px;
+    font-size: 12px;
+}
+
+.analysis-warning-speech {
+    padding: 1px 8px;
+    font-size: 12px;
+}
+
+/* A log line's rule tags, after its text; clicking one filters to the tag. */
+.line-tag-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+.line-tag-chip {
+    padding: 0 4px;
+    margin: 0;
+    font: inherit;
+    font-size: 10px;
+    line-height: 1.4;
+    color: var(--la-info);
+    background: var(--la-bg-3);
+    border: 1px solid var(--la-border-strong);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.line-tag-chip:hover,
+.line-speech-menu-item:hover {
+    text-decoration: underline;
+}
+
+/* Speeches a clicked line can add, when several fit (response panel). */
+.line-speech-menu {
+    position: absolute;
+    z-index: 120;
+    display: flex;
+    flex-direction: column;
+    min-width: 180px;
+    background: var(--la-bg-1);
+    border: 1px solid var(--la-border);
+    box-shadow: var(--la-shadow);
+}
+
+.line-speech-menu-item {
+    padding: 5px 10px;
+    border: none;
+    background: none;
+    color: var(--la-text-primary);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.line-speech-hint {
+    position: absolute;
+    z-index: 120;
+    padding: 3px 8px;
+    font-size: 12px;
+    color: var(--la-warning-text);
+    background: var(--la-warning-bg);
+    border: 1px solid var(--la-warning-border);
+}

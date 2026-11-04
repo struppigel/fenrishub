@@ -1,0 +1,785 @@
+{% extends 'base.html' %}
+{% load static rule_tags %}
+
+{% block title %}{% if tag %}Edit{% else %}New{% endif %} Rule Tag - Fenris{% endblock %}
+
+{% block page_context_label %}rule tags / {% if tag %}edit{% else %}new{% endif %}{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
+<style>
+    .tag-editor {
+        max-width: 1100px;
+    }
+
+    .tag-editor textarea {
+        min-height: 90px;
+        font-family: inherit;
+        font-size: 13px;
+    }
+
+    .tag-editor-error {
+        color: var(--la-error-text);
+        font-size: 12px;
+        margin-bottom: 8px;
+    }
+
+    .tag-editor-note {
+        font-size: 12px;
+        color: var(--la-text-neutral);
+        margin-bottom: 10px;
+    }
+
+    .tag-category-field {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .tag-category-field select {
+        width: auto;
+        min-width: 160px;
+    }
+
+    .tag-category-manage {
+        font-size: 12px;
+    }
+
+    .tag-editor-back {
+        display: inline-block;
+        margin-bottom: 6px;
+        font-size: 12px;
+    }
+
+    .tag-editor .checkbox-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--la-text-neutral);
+    }
+
+    .tag-conditions {
+        border: 1px solid var(--la-border);
+        padding: 8px 10px;
+        margin: 0 0 12px;
+    }
+
+    .tag-conditions legend {
+        font-size: 12px;
+        color: var(--la-text-primary);
+        padding: 0 4px;
+    }
+
+    .tag-condition-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        align-items: center;
+        margin-top: 8px;
+    }
+
+    .tag-condition-group > .tag-condition-label {
+        flex-basis: 100%;
+        font-size: 11px;
+        color: var(--la-text-muted);
+    }
+
+    .tag-advanced-toggle {
+        margin: 0 0 10px;
+    }
+
+    /* The rules the conditions match, set apart from the tag's own settings above. */
+    .tag-matches {
+        margin-top: 24px;
+        padding: 10px 14px 4px;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border);
+    }
+
+    .tag-matches-heading {
+        margin: 0 0 8px;
+        font-size: 13px;
+        color: var(--la-text-neutral);
+    }
+
+    .tag-preview-summary {
+        font-size: 12px;
+        color: var(--la-text-neutral);
+        margin: 4px 0 8px;
+    }
+
+    .tag-preview-group {
+        margin-bottom: 14px;
+    }
+
+    .tag-preview-group-title {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+        color: var(--la-text-primary);
+        margin-bottom: 4px;
+    }
+
+    .tag-preview-group-title button {
+        padding: 1px 8px;
+        font-size: 11px;
+    }
+
+    .tag-preview-row {
+        display: grid;
+        grid-template-columns: auto auto 1fr;
+        gap: 6px 8px;
+        align-items: start;
+        padding: 3px 0;
+        border-bottom: 1px solid var(--la-border-muted);
+        font-size: 12px;
+    }
+
+    .tag-preview-row .tag-preview-status {
+        font-weight: 600;
+    }
+
+    .tag-preview-row .tag-preview-source {
+        color: var(--la-text-neutral);
+        word-break: break-all;
+    }
+
+    .tag-preview-row .tag-preview-description {
+        grid-column: 3;
+        color: var(--la-text-muted);
+        word-break: break-word;
+    }
+
+    .tag-preview-tagged {
+        margin-left: 6px;
+        padding: 0 4px;
+        font-size: 10px;
+        color: var(--la-info);
+        border: 1px solid var(--la-border-strong);
+    }
+
+    .tag-preview-row mark {
+        background-color: var(--la-picker-active-bg);
+        color: var(--la-text-primary);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="tag-editor">
+    <a href="{% url 'rule_tags' %}" class="tag-editor-back">&larr; back to rule tags</a>
+    <h2>{% if tag %}edit tag "{{ tag.name }}"{% else %}new tag{% endif %}</h2>
+    <div id="tagEditorSuccess" class="success-box" role="status" hidden></div>
+    <div id="tagEditorError" class="tag-editor-error" role="alert" hidden></div>
+
+    {% if tag.builtin_code %}
+    <div class="tag-editor-note">Built-in tag: also found in a log when the analyzer raises the <code>{{ tag.builtin_code }}</code> warning. Cannot be deleted.</div>
+    {% endif %}
+
+    <div class="form-group">
+        <label for="tagName">name</label>
+        <input type="text" id="tagName" maxlength="64" placeholder="e.g. renloader" autocomplete="off">
+    </div>
+    <div class="form-group">
+        <label for="tagCategory">category</label>
+        <div class="tag-category-field">
+            <select id="tagCategory">
+                {% for category in categories %}
+                <option value="{{ category.pk }}"{% if tag and tag.category_id == category.pk or not tag and category.is_default %} selected{% endif %}>{{ category.name }}</option>
+                {% endfor %}
+            </select>
+            <span id="tagCategoryPreview" class="tag-chip" title="how the tag's badge looks">{% if tag %}{{ tag.name }}{% else %}new tag{% endif %}</span>
+            <a href="{% url 'tag_categories' %}" class="tag-category-manage">manage categories</a>
+        </div>
+        <div class="tag-editor-note">Sets the color of the tag's badge everywhere.</div>
+    </div>
+    <div class="form-group">
+        <label for="tagPattern">regex</label>
+        <input type="text" id="tagPattern" placeholder="case-insensitive, searched in the rule's description and source line - e.g. ren(py)?\s*loader|renloader" autocomplete="off">
+    </div>
+    <div class="form-group">
+        <label for="tagDescription">description</label>
+        <textarea id="tagDescription" placeholder="notes for analysts: what this is, reference links"></textarea>
+    </div>
+    <div class="form-group">
+        <label class="checkbox-label" for="tagAutoApply">
+            <input type="checkbox" id="tagAutoApply">
+            apply automatically to new rules that match
+        </label>
+        <div class="tag-editor-note">Also when a rule is edited to match. Saving asks whether to also tag the existing rules that match.</div>
+    </div>
+    <button type="button" id="tagAdvancedToggle" class="tag-advanced-toggle" aria-expanded="{% if advanced_open %}true{% else %}false{% endif %}" aria-controls="tagAdvanced">more options</button>
+    <div id="tagAdvanced"{% if not advanced_open %} hidden{% endif %}>
+    <fieldset class="tag-conditions">
+        <legend>more conditions - every one that is set must hold</legend>
+        <div class="tag-editor-note">Leave a condition empty to ignore it. A tag with no regex, status or entry type matches nothing and is only added by hand.</div>
+        <div class="form-group">
+            <label for="tagExcludePattern">exclude regex</label>
+            <input type="text" id="tagExcludePattern" placeholder="rules matching this are left out - e.g. microsoft" autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label for="tagScope">look in</label>
+            <select id="tagScope" style="width: auto;">
+                {% for value, label in scope_choices %}<option value="{{ value }}"{% if value == 'any' %} selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
+            <span class="small-note">where the regex and the exclude regex look</span>
+        </div>
+        <div class="tag-condition-group" id="tagStatuses">
+            <span class="tag-condition-label">rule status (any of)</span>
+            {% for code, label, color in status_choices %}
+            <label class="checkbox-label"><input type="checkbox" value="{{ code }}"> <strong style="color: var(--la-status-{{ color }});">{{ code }}</strong> {{ label|lower }}</label>
+            {% endfor %}
+        </div>
+        <div class="tag-condition-group" id="tagEntryTypes">
+            <span class="tag-condition-label">parsed entry type (any of)</span>
+            {% for value, label in entry_type_choices %}
+            <label class="checkbox-label"><input type="checkbox" value="{{ value }}"> {{ label }}</label>
+            {% endfor %}
+        </div>
+    </fieldset>
+    <fieldset class="tag-conditions">
+        <legend>suggest these speeches when the tag is found</legend>
+        <div class="tag-editor-note">Your own speeches and those you selected for the analyzer. A link belongs to the speech: linking another helper's shared speech suggests it for this tag for everyone using it.</div>
+        <div class="tag-picker">
+            <div class="tag-picker-chips" id="tagSpeechChips"></div>
+            <div class="tag-picker-input-row">
+                <input type="text" id="tagSpeechSearch" class="tag-picker-input" placeholder="find a speech by name or category..." autocomplete="off" aria-label="find a speech to link">
+                <div class="tag-picker-dropdown" id="tagSpeechResults" hidden></div>
+            </div>
+        </div>
+        {% if others_speeches %}
+        <div class="tag-condition-group">
+            <span class="tag-condition-label">also suggested by speeches you have not selected</span>
+            {% for speech in others_speeches %}<span class="tag-chip">{{ speech.name }} ({{ speech.owner.username }})</span>{% endfor %}
+        </div>
+        {% endif %}
+    </fieldset>
+    </div>
+    <div class="button-group">
+        <button type="button" id="tagSaveButton">save tag</button>
+        <button type="button" id="tagApplyButton" hidden>save &amp; apply to ticked rules</button>
+        <a href="{% url 'rule_tags' %}"><button type="button">back to tags</button></a>
+    </div>
+
+    <section class="tag-matches" aria-labelledby="tagMatchesHeading">
+        <h3 id="tagMatchesHeading" class="tag-matches-heading">matching rules</h3>
+        <div id="tagPreviewStatus" class="tag-editor-note" aria-live="polite">enter a regex, or pick a status or entry type under more options, to see which rules match</div>
+        <div id="tagPreview" hidden>
+            <div id="tagPreviewSummary" class="tag-preview-summary"></div>
+            <div id="tagPreviewGroups"></div>
+        </div>
+    </section>
+</div>
+
+{{ tag_json|json_script:"tagData" }}
+{{ linkable_speeches_json|json_script:"ownSpeechesData" }}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    'use strict';
+
+    const URLS = {
+        save: "{% url 'rule_tag_save_api' %}",
+        preview: "{% url 'rule_tag_preview_api' %}",
+        list: "{% url 'rule_tags' %}",
+        editBase: "{% url 'rule_tags' %}",
+    };
+    const STATUS_VAR = { B: 'b', P: 'p', C: 'c', '!': 'w', A: 'a', G: 'g', S: 's', I: 'i', J: 'j' };
+    const PAGE_SIZE = 100;
+    const tag = JSON.parse(document.getElementById('tagData').textContent || 'null');
+
+    const errorBox = document.getElementById('tagEditorError');
+    const nameInput = document.getElementById('tagName');
+    const patternInput = document.getElementById('tagPattern');
+    const excludeInput = document.getElementById('tagExcludePattern');
+    const scopeInput = document.getElementById('tagScope');
+    const statusBoxes = [...document.querySelectorAll('#tagStatuses input[type="checkbox"]')];
+    const entryTypeBoxes = [...document.querySelectorAll('#tagEntryTypes input[type="checkbox"]')];
+    const ownSpeeches = JSON.parse(document.getElementById('ownSpeechesData').textContent || '[]');
+    const linkedSpeechIds = new Set(ownSpeeches.filter((speech) => speech.linked).map((speech) => speech.id));
+    const speechChips = document.getElementById('tagSpeechChips');
+    const speechSearch = document.getElementById('tagSpeechSearch');
+    const speechResults = document.getElementById('tagSpeechResults');
+
+    function renderSpeechChips() {
+        speechChips.innerHTML = '';
+        ownSpeeches.filter((speech) => linkedSpeechIds.has(speech.id)).forEach((speech) => {
+            const chip = document.createElement('span');
+            chip.className = 'tag-chip';
+            chip.title = speech.category;
+            chip.appendChild(document.createTextNode(speech.name));
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'tag-chip-remove';
+            remove.textContent = '\u00d7';
+            remove.setAttribute('aria-label', `unlink ${speech.name}`);
+            remove.addEventListener('click', () => {
+                linkedSpeechIds.delete(speech.id);
+                renderSpeechChips();
+            });
+            chip.appendChild(remove);
+            speechChips.appendChild(chip);
+        });
+        speechChips.hidden = linkedSpeechIds.size === 0;
+    }
+
+    function renderSpeechResults() {
+        const query = speechSearch.value.trim().toLowerCase();
+        speechResults.innerHTML = '';
+        if (!query) {
+            speechResults.hidden = true;
+            return;
+        }
+        const matches = ownSpeeches.filter((speech) => !linkedSpeechIds.has(speech.id) && (
+            speech.name.toLowerCase().includes(query) || speech.category.toLowerCase().includes(query)
+        )).slice(0, 20);
+        matches.forEach((speech) => {
+            const option = document.createElement('button');
+            option.type = 'button';
+            option.className = 'tag-picker-option';
+            option.textContent = `${speech.name}  [${speech.category}]`;
+            option.addEventListener('mousedown', (event) => event.preventDefault());
+            option.addEventListener('click', () => {
+                linkedSpeechIds.add(speech.id);
+                speechSearch.value = '';
+                speechResults.hidden = true;
+                renderSpeechChips();
+            });
+            speechResults.appendChild(option);
+        });
+        if (!matches.length) {
+            const none = document.createElement('div');
+            none.className = 'tag-picker-option-note small-note';
+            none.textContent = ownSpeeches.length ? 'no matching speech' : 'you have no speeches yet';
+            speechResults.appendChild(none);
+        }
+        speechResults.hidden = false;
+    }
+
+    speechSearch.addEventListener('input', renderSpeechResults);
+    speechSearch.addEventListener('blur', () => setTimeout(() => { speechResults.hidden = true; }, 100));
+    speechSearch.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            const first = speechResults.querySelector('.tag-picker-option');
+            if (first) first.click();
+        }
+    });
+    renderSpeechChips();
+    const autoApplyInput = document.getElementById('tagAutoApply');
+    const descriptionInput = document.getElementById('tagDescription');
+    const categoryInput = document.getElementById('tagCategory');
+    const categoryPreview = document.getElementById('tagCategoryPreview');
+
+    // The badge preview next to the category: the tag's name in the picked colour.
+    function syncCategoryPreview() {
+        categoryPreview.className = `tag-chip tag-cat-${Number(categoryInput.value)}`;
+        categoryPreview.textContent = nameInput.value.trim() || (tag ? tag.name : 'new tag');
+    }
+    const applyButton = document.getElementById('tagApplyButton');
+    const preview = document.getElementById('tagPreview');
+    const groupsHost = document.getElementById('tagPreviewGroups');
+
+    // Rule id -> whether it should carry the tag after "apply". Only rows the
+    // preview showed are in here, so unseen rules are never touched.
+    let desired = new Map();
+    let initial = new Map();
+    let previewedPattern = null;
+
+    function csrf() {
+        const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+        return match ? decodeURIComponent(match[1]) : '';
+    }
+
+    function showError(message) {
+        errorBox.textContent = message || '';
+        errorBox.hidden = !message;
+    }
+
+    function postJson(url, body) {
+        return fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
+            body: JSON.stringify(body),
+        }).then((response) => response.json().catch(() => ({})).then((data) => {
+            if (!response.ok) throw new Error(data.error || 'Request failed.');
+            return data;
+        }));
+    }
+
+    function currentPattern() {
+        return patternInput ? patternInput.value.trim() : '';
+    }
+
+    function ticked(boxes) {
+        return boxes.filter((box) => box.checked).map((box) => box.value);
+    }
+
+    function currentConditions() {
+        return {
+            match_pattern: currentPattern(),
+            exclude_pattern: excludeInput.value.trim(),
+            match_scope: scopeInput.value,
+            match_statuses: ticked(statusBoxes),
+            match_entry_types: ticked(entryTypeBoxes),
+        };
+    }
+
+    // An exclude regex alone narrows nothing down, so it does not count.
+    function hasCondition(conditions) {
+        return Boolean(conditions.match_pattern)
+            || conditions.match_statuses.length > 0
+            || conditions.match_entry_types.length > 0;
+    }
+
+    function syncAutoApply() {
+        if (!autoApplyInput) return;
+        const ready = hasCondition(currentConditions());
+        // Disabled, not unticked: a new tag starts ticked and keeps that
+        // choice while its regex is still being typed.
+        autoApplyInput.disabled = !ready;
+        autoApplyInput.parentElement.title = ready ? '' : 'takes effect once there is a regex, a status or an entry type';
+    }
+
+    function highlighted(text, span) {
+        const fragment = document.createDocumentFragment();
+        if (!span) {
+            fragment.appendChild(document.createTextNode(text));
+            return fragment;
+        }
+        fragment.appendChild(document.createTextNode(text.slice(0, span[0])));
+        const mark = document.createElement('mark');
+        mark.textContent = text.slice(span[0], span[1]);
+        fragment.appendChild(mark);
+        fragment.appendChild(document.createTextNode(text.slice(span[1])));
+        return fragment;
+    }
+
+    function renderRow(row) {
+        const line = document.createElement('label');
+        line.className = 'tag-preview-row';
+
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = desired.get(row.id);
+        box.addEventListener('change', () => desired.set(row.id, box.checked));
+        line.appendChild(box);
+
+        const status = document.createElement('span');
+        status.className = 'tag-preview-status';
+        status.textContent = row.status;
+        status.style.color = `var(--la-status-${STATUS_VAR[row.status] || 'unknown'})`;
+        status.title = `${row.match_type} rule by ${row.owner}`;
+        line.appendChild(status);
+
+        const source = document.createElement('span');
+        source.className = 'tag-preview-source';
+        source.appendChild(highlighted(row.source_text, row.span_field === 'source_text' ? row.span : null));
+        // Whether the rule carries this tag now, whatever the box says it will.
+        if (initial.get(row.id)) {
+            const marker = document.createElement('span');
+            marker.className = 'tag-preview-tagged';
+            marker.textContent = 'tagged';
+            marker.title = 'this rule already carries the tag';
+            source.appendChild(marker);
+        }
+        if (row.entry_type) {
+            source.appendChild(document.createTextNode(`  [${row.entry_type.replace(/_/g, ' ')}]`));
+        }
+        line.appendChild(source);
+
+        const description = document.createElement('span');
+        description.className = 'tag-preview-description';
+        description.appendChild(highlighted(
+            row.description || '(no description)',
+            row.span_field === 'description' ? row.span : null,
+        ));
+        line.appendChild(description);
+        return line;
+    }
+
+    function renderGroup(label, rows, total, extraButton) {
+        const group = document.createElement('div');
+        group.className = 'tag-preview-group';
+
+        const heading = document.createElement('div');
+        heading.className = 'tag-preview-group-title';
+        const capped = total > rows.length ? ` - showing the first ${rows.length}, narrow the regex` : '';
+        heading.appendChild(document.createTextNode(`${label} (${total})${capped}`));
+
+        const list = document.createElement('div');
+        ['tick all', 'untick all'].forEach((text, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = text;
+            button.addEventListener('click', () => {
+                rows.forEach((row) => desired.set(row.id, index === 0));
+                list.querySelectorAll('input[type="checkbox"]').forEach((box) => {
+                    box.checked = index === 0;
+                });
+            });
+            heading.appendChild(button);
+        });
+        if (extraButton) heading.appendChild(extraButton);
+        group.appendChild(heading);
+        group.appendChild(list);
+
+        let shown = 0;
+        const more = document.createElement('button');
+        more.type = 'button';
+        function showMore() {
+            rows.slice(shown, shown + PAGE_SIZE).forEach((row) => list.appendChild(renderRow(row)));
+            shown = Math.min(rows.length, shown + PAGE_SIZE);
+            more.hidden = shown >= rows.length;
+            more.textContent = `show ${Math.min(PAGE_SIZE, rows.length - shown)} more`;
+        }
+        more.addEventListener('click', showMore);
+        group.appendChild(more);
+        showMore();
+        return group;
+    }
+
+    function resetPreview() {
+        desired = new Map();
+        initial = new Map();
+        previewedPattern = null;
+        preview.hidden = true;
+        groupsHost.innerHTML = '';
+        applyButton.hidden = true;
+    }
+
+    function fieldsBody() {
+        const body = {
+            name: nameInput.value.trim(),
+            description: descriptionInput.value.trim(),
+            ...currentConditions(),
+            // Without a condition the server would refuse it; it has nothing to match.
+            auto_apply: autoApplyInput.checked && hasCondition(currentConditions()),
+            category_id: Number(categoryInput.value),
+            speech_ids: [...linkedSpeechIds],
+        };
+        if (tag) body.id = tag.id;
+        return body;
+    }
+
+    // Survives the reload below, so the page can say what the save did.
+    const FLASH_KEY = 'fenrishub_tag_editor_flash';
+
+    function saveMessage(data) {
+        const parts = [`Tag "${data.tag.name}" saved.`];
+        if (data.added) parts.push(`Added to ${data.added} rule(s).`);
+        if (data.removed) parts.push(`Removed from ${data.removed} rule(s).`);
+        return parts.join(' ');
+    }
+
+    function afterSave(data) {
+        try {
+            sessionStorage.setItem(FLASH_KEY, saveMessage(data));
+        } catch (e) { /* storage blocked: the save still happened */ }
+        // A new tag continues on its own edit page; an existing one reloads,
+        // so counts and the preview reflect what was just applied.
+        window.location.href = `${URLS.editBase}${data.tag.id}/edit/`;
+    }
+
+    (function showFlash() {
+        let message = null;
+        try {
+            message = sessionStorage.getItem(FLASH_KEY);
+            sessionStorage.removeItem(FLASH_KEY);
+        } catch (e) { /* storage blocked */ }
+        if (message) {
+            const box = document.getElementById('tagEditorSuccess');
+            box.textContent = message;
+            box.hidden = false;
+        }
+    })();
+
+    function removeUnmatchedButton(count) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = `remove tag from all ${count}`;
+        button.title = 'take this tag off every tagged rule that no longer meets the conditions';
+        button.addEventListener('click', () => {
+            if (!confirm(`Remove "${nameInput.value.trim()}" from all ${count} tagged rule(s) that no longer meet the conditions?`)) {
+                return;
+            }
+            postJson(URLS.save, { ...fieldsBody(), remove_unmatched: true })
+                .then(afterSave)
+                .catch((error) => showError(error.message));
+        });
+        return button;
+    }
+
+    // The preview follows the conditions as they are typed, like the live
+    // "test log lines" on the rule page. Only the newest answer is drawn.
+    const previewStatus = document.getElementById('tagPreviewStatus');
+    let previewTimer = null;
+    let previewSequence = 0;
+
+    function setPreviewStatus(message, isError) {
+        previewStatus.textContent = message || '';
+        previewStatus.hidden = !message;
+        previewStatus.classList.toggle('tag-editor-error', Boolean(isError));
+    }
+
+    function schedulePreview() {
+        clearTimeout(previewTimer);
+        previewTimer = setTimeout(runPreview, 400);
+    }
+
+    function runPreview() {
+        clearTimeout(previewTimer);
+        const conditions = currentConditions();
+        const sequence = ++previewSequence;
+        if (!hasCondition(conditions)) {
+            resetPreview();
+            setPreviewStatus('enter a regex, or pick a status or entry type under more options, to see which rules match');
+            return;
+        }
+        setPreviewStatus('matching...');
+        postJson(URLS.preview, { ...conditions, tag_id: tag ? tag.id : null }).then((data) => {
+            if (sequence !== previewSequence) return;
+            setPreviewStatus('');
+            resetPreview();
+            previewedPattern = JSON.stringify(conditions);
+            const groups = data.groups || {};
+            const counts = data.counts || {};
+            // A ticked box means "carries the tag after apply". New matches
+            // start ticked; tagged rules, including ones that stopped matching,
+            // stay tagged unless unticked - nothing is ever removed on its own.
+            (groups.new || []).forEach((row) => { desired.set(row.id, true); initial.set(row.id, false); });
+            (groups.tagged || []).forEach((row) => { desired.set(row.id, true); initial.set(row.id, true); });
+            (groups.stale || []).forEach((row) => { desired.set(row.id, true); initial.set(row.id, true); });
+
+            document.getElementById('tagPreviewSummary').textContent =
+                `${counts.new || 0} new match(es), ${counts.tagged || 0} already tagged, ` +
+                `${counts.stale || 0} tagged but no longer matching. Untick false positives, then save & apply.`;
+
+            // The rules that carry the tag come first: "new matches" can run to
+            // hundreds of rows and would push them out of sight.
+            if (tag) {
+                groupsHost.appendChild(renderGroup('already tagged', groups.tagged || [], counts.tagged || 0));
+            }
+            if ((groups.stale || []).length) {
+                groupsHost.appendChild(renderGroup(
+                    'tagged but no longer meeting the conditions - untick to remove',
+                    groups.stale, counts.stale || 0,
+                    tag ? removeUnmatchedButton(counts.stale) : null,
+                ));
+            }
+            groupsHost.appendChild(renderGroup('new matches', groups.new || [], counts.new || 0));
+            preview.hidden = false;
+            applyButton.hidden = false;
+        }).catch((error) => {
+            if (sequence !== previewSequence) return;
+            // A regex being typed is often invalid for a moment: say so in
+            // place and drop the stale result, no alert.
+            resetPreview();
+            setPreviewStatus(error.message, true);
+        });
+    }
+
+    function save(applyChanges) {
+        const body = fieldsBody();
+        if (applyChanges) {
+            if (previewedPattern !== JSON.stringify(currentConditions())) {
+                showError('The conditions changed since the preview. Preview again before applying.');
+                return;
+            }
+            body.add_rule_ids = [];
+            body.remove_rule_ids = [];
+            desired.forEach((want, id) => {
+                if (want && !initial.get(id)) body.add_rule_ids.push(id);
+                if (!want && initial.get(id)) body.remove_rule_ids.push(id);
+            });
+        }
+        const conditions = currentConditions();
+        // The ticks of "save & apply" already say what to do with existing
+        // rules; a tag without conditions matches nothing, so neither asks.
+        if (applyChanges || !hasCondition(conditions)) {
+            postJson(URLS.save, body).then(afterSave).catch((error) => showError(error.message));
+            return;
+        }
+        // A plain save squares the existing rules with the conditions, after
+        // asking: an auto-apply tag is offered to the rules that meet them but
+        // lack it, and an existing tag is offered to come off the rules that
+        // carry it but no longer meet them.
+        postJson(URLS.preview, { ...conditions, tag_id: tag ? tag.id : null }).then((data) => {
+            const counts = data.counts || {};
+            if (body.auto_apply && counts.new
+                && confirm(`Also tag the ${counts.new} existing rule(s) that meet the conditions?`)) {
+                body.apply_to_existing = true;
+            }
+            if (tag && counts.stale
+                && confirm(`Remove the tag from the ${counts.stale} rule(s) that carry it but no longer meet the conditions?`)) {
+                body.remove_unmatched = true;
+            }
+            return postJson(URLS.save, body);
+        }).then(afterSave).catch((error) => showError(error.message));
+    }
+
+    // A new tag looks anywhere and applies itself by default.
+    if (!tag) {
+        autoApplyInput.checked = true;
+        scopeInput.value = 'any';
+    }
+    if (tag) {
+        nameInput.value = tag.name;
+        descriptionInput.value = tag.description;
+        patternInput.value = tag.match_pattern;
+        excludeInput.value = tag.exclude_pattern;
+        scopeInput.value = tag.match_scope;
+        statusBoxes.forEach((box) => { box.checked = tag.match_statuses.includes(box.value); });
+        entryTypeBoxes.forEach((box) => { box.checked = tag.match_entry_types.includes(box.value); });
+        autoApplyInput.checked = tag.auto_apply;
+    }
+    syncAutoApply();
+    [...statusBoxes, ...entryTypeBoxes].forEach((box) => box.addEventListener('change', syncAutoApply));
+    categoryInput.addEventListener('change', syncCategoryPreview);
+    nameInput.addEventListener('input', syncCategoryPreview);
+    syncCategoryPreview();
+
+    document.getElementById('tagSaveButton').addEventListener('click', () => save(false));
+    applyButton.addEventListener('click', () => save(true));
+    patternInput.addEventListener('input', syncAutoApply);
+    [patternInput, excludeInput].forEach((input) => input.addEventListener('input', schedulePreview));
+    scopeInput.addEventListener('change', schedulePreview);
+    [...statusBoxes, ...entryTypeBoxes].forEach((box) => box.addEventListener('change', schedulePreview));
+
+    const advancedToggle = document.getElementById('tagAdvancedToggle');
+    const advanced = document.getElementById('tagAdvanced');
+    // Says how many speeches are linked, so links behind the closed section
+    // are not out of mind.
+    function syncAdvancedToggle() {
+        const linked = linkedSpeechIds.size;
+        const suffix = linked ? ` (${linked} speech${linked === 1 ? '' : 'es'} linked)` : '';
+        advancedToggle.textContent = (advanced.hidden ? 'more options' : 'fewer options') + suffix;
+        advancedToggle.setAttribute('aria-expanded', advanced.hidden ? 'false' : 'true');
+    }
+    advancedToggle.addEventListener('click', () => {
+        advanced.hidden = !advanced.hidden;
+        syncAdvancedToggle();
+    });
+    [speechChips, speechResults].forEach((element) => element.addEventListener('click', syncAdvancedToggle));
+    syncAdvancedToggle();
+    [patternInput, excludeInput].forEach((input) => {
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                runPreview();
+            }
+        });
+    });
+
+    nameInput.focus();
+    {% if run_preview %}runPreview();{% endif %}
+})();
+</script>
+{% endblock %}

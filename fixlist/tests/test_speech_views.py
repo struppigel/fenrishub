@@ -10,6 +10,9 @@ class SpeechViewTests(TestCase):
         self.user = User.objects.create_user(username='alice', password='password123')
         self.other_user = User.objects.create_user(username='bob', password='password123')
         self.client.login(username='alice', password='password123')
+        # Every new account starts with its FRST fix speech; these tests were
+        # written for users without speeches, so they start from that state.
+        Speech.objects.filter(is_fix_message=True).delete()
 
     def test_own_speeches_shown_by_default(self):
         Speech.objects.create(owner=self.user, name='my speech', content='own content')

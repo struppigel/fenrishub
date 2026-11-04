@@ -18,8 +18,8 @@ from django.db.models import F, Q
 from django.urls import reverse
 from django.utils import timezone
 
+from ..fix_message import effective_fix_message
 from ..models import Fixlist, AccessLog, UploadedLog
-from .auth import DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
 from .guest import deny_guests
 from .utils import _purge_old_trash, get_client_ip, redirect_preserving_filters, check_missing_ids
 
@@ -169,6 +169,43 @@ def _extract_frst_run_path(log_text: str) -> str:
     return raw_path
 
 
+def _share_url(request, fixlist):
+    return request.build_absolute_uri(f'/share/{fixlist.share_token}/')
+
+
+def _resolve_save_time_placeholders(request, fixlist):
+    """Fill the speech placeholders that only have a value once the fixlist exists.
+
+    The analyzer resolves speech placeholders the moment a speech is inserted,
+    but the response is written before the fixlist is saved: there is no share
+    link yet, and the FRST path belongs to the source log. Those tokens are left
+    in the text at insert time and filled here instead. {USERNAME} and
+    {HELPERNAME} are filled too, for a speech inserted with no log loaded - the
+    fixlist knows both by now.
+
+    As in the analyzer, a token with no value stays in the text, so a reply that
+    still needs attention is visibly unfinished.
+    """
+    text = fixlist.response or ''
+    if '{' not in text:
+        return
+
+    replacements = {'{FIXLISTLINK}': _share_url(request, fixlist)}
+    if '{FRSTPATH}' in text and fixlist.source_uploaded_log_id:
+        source = fixlist.source_uploaded_log
+        frst_path = _extract_frst_run_path((source.content if source else '') or '')
+        if frst_path:
+            replacements['{FRSTPATH}'] = frst_path
+    if fixlist.username and fixlist.username != 'Unknown':
+        replacements['{USERNAME}'] = fixlist.username
+    if fixlist.owner_id:
+        replacements['{HELPERNAME}'] = fixlist.owner.username
+
+    for token, value in replacements.items():
+        text = text.replace(token, value)
+    fixlist.response = text
+
+
 def _assert_can_access_shared_fixlist(request, fixlist):
     if fixlist.deleted_at is not None and not _is_fixlist_owner(request.user, fixlist):
         raise Http404
@@ -247,6 +284,7 @@ def create_fixlist_view(request):
                 update_fields = ['content', 'line_count', 'updated_at']
                 if response_text is not None:
                     update_fields.extend(existing.set_response(response_text))
+                    _resolve_save_time_placeholders(request, existing)
                 existing.save(update_fields=update_fields)
                 return redirect('view_fixlist', pk=existing.pk)
 
@@ -269,7 +307,11 @@ def create_fixlist_view(request):
             internal_note=internal_note,
             is_public=True,
         )
+        # Minted up front rather than left to save(), so {FIXLISTLINK} can be
+        # filled before the one and only insert.
+        fixlist.share_token = Fixlist.generate_share_token()
         fixlist.set_response(response_text)
+        _resolve_save_time_placeholders(request, fixlist)
         fixlist.save()
 
         return redirect('view_fixlist', pk=fixlist.pk)
@@ -369,6 +411,7 @@ def view_fixlist(request, pk):
             fixlist.content = request.POST.get('content', fixlist.content)
             fixlist.internal_note = request.POST.get('internal_note', fixlist.internal_note)
             fixlist.set_response(request.POST.get('response', fixlist.response))
+            _resolve_save_time_placeholders(request, fixlist)
             fixlist.save()
             saved_at = timezone.localtime(fixlist.updated_at).strftime('%H:%M:%S')
             messages.success(request, f'fixlist saved at {saved_at}')
@@ -420,12 +463,9 @@ def view_fixlist(request, pk):
                 return redirect('dashboard')
             return redirect('view_fixlist', pk=fixlist.pk)
     
-    share_url = request.build_absolute_uri(f'/share/{fixlist.share_token}/')
-    profile = getattr(request.user, 'fenris_profile', None)
-    frst_fix_message_template = (
-        (profile.frst_fix_message if profile else '').strip()
-        or DEFAULT_FRST_FIX_MESSAGE_TEMPLATE
-    )
+    share_url = _share_url(request, fixlist)
+    # The helper's FRST fix speech, also edited in the profile.
+    frst_fix_message_template = effective_fix_message(request.user)
     frst_run_path = _extract_frst_run_path((fixlist.source_uploaded_log.content if fixlist.source_uploaded_log else '') or '')
 
     context = {

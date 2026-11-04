@@ -1,6 +1,7 @@
 from django.db import IntegrityError, models
 from django.db.models import Q
-from django.db.models.signals import post_save, pre_delete
+from django.db.models.functions import Lower
+from django.db.models.signals import post_save, pre_delete, pre_save
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -243,6 +244,9 @@ class ApiToken(models.Model):
         on_delete=models.SET_NULL,
         related_name='revoked_api_tokens',
     )
+    # Lets the token create and change rule tags and speeches. Only superusers
+    # can issue one, and every write re-checks that the user still is one.
+    can_write = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['-created_at']
@@ -263,14 +267,17 @@ class ApiToken(models.Model):
         return cls.objects.filter(user=user, revoked_at__isnull=True, expires_at__gt=timezone.now())
 
     @classmethod
-    def issue(cls, user, name, expiry_days=DEFAULT_EXPIRY_DAYS):
+    def issue(cls, user, name, expiry_days=DEFAULT_EXPIRY_DAYS, can_write=False):
         """Create a token for `user` and return ``(token, raw)``.
 
         Raises ValidationError when the user already holds the maximum number of
-        active tokens or the expiry is not one of EXPIRY_DAY_CHOICES.
+        active tokens, the expiry is not one of EXPIRY_DAY_CHOICES, or a write
+        token is asked for by someone who is not a superuser.
         """
         if expiry_days not in cls.EXPIRY_DAY_CHOICES:
             raise ValidationError('Unsupported token expiry.')
+        if can_write and not user.is_superuser:
+            raise ValidationError('Only superusers can create write tokens.')
         if cls.active_for(user).count() >= cls.MAX_ACTIVE_PER_USER:
             raise ValidationError(
                 f'You already have {cls.MAX_ACTIVE_PER_USER} active tokens. Revoke one first.'
@@ -283,6 +290,7 @@ class ApiToken(models.Model):
             prefix=raw[:8],
             token_hash=cls.hash_raw(raw),
             expires_at=timezone.now() + timedelta(days=expiry_days),
+            can_write=bool(can_write),
         )
         return token, raw
 
@@ -480,6 +488,7 @@ class ClassificationRule(models.Model):
         default=False,
         help_text='Substring and file path rules only: colour the whole analyzer line instead of just the matched text.',
     )
+    tags = models.ManyToManyField('RuleTag', blank=True, related_name='rules')
 
     # Optional parsed metadata, populated for parsed/filepath rules.
     entry_type = models.CharField(max_length=64, blank=True)
@@ -534,6 +543,140 @@ class ClassificationRule(models.Model):
     def __str__(self):
         owner_name = self.owner.username if self.owner_id else 'unknown'
         return f"{self.status} [{self.match_type}] p{self.priority} {self.source_text[:80]} ({owner_name})"
+
+
+TAG_CATEGORY_COLOR_RE = re.compile(r'^#[0-9A-Fa-f]{6}$')
+DEFAULT_TAG_CATEGORY_COLOR = '#cccccc'
+# The default category starts with the colour tag badges had before
+# categories existed (--la-info).
+DEFAULT_TAG_CATEGORY_NAME = 'default'
+DEFAULT_TAG_CATEGORY_SEED_COLOR = '#8eb6d8'
+
+
+class TagCategory(models.Model):
+    """A group of rule tags sharing a colour: every tag badge of the category
+    takes it (text and border), everywhere tags are shown. Shared, and anyone
+    can edit them, like tags.
+
+    Every tag has a category. Exactly one is the default (`is_default`): new
+    tags get it, the tags of a deleted category move to it, and it cannot be
+    deleted itself.
+    """
+
+    NAME_MAX_LENGTH = 64
+
+    name = models.CharField(max_length=NAME_MAX_LENGTH)
+    color = models.CharField(max_length=7, default=DEFAULT_TAG_CATEGORY_COLOR)
+    is_default = models.BooleanField(default=False)
+    created_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_tag_categories',
+    )
+    updated_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name='updated_tag_categories',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(Lower('name'), name='unique_tag_category_name_ci'),
+            models.UniqueConstraint(
+                fields=['is_default'], condition=Q(is_default=True), name='single_default_tag_category',
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        super().clean()
+        if not TAG_CATEGORY_COLOR_RE.match(self.color or ''):
+            raise ValidationError({'color': 'Color must be a 6-digit hex like #aabbcc.'})
+
+    @classmethod
+    def get_default(cls):
+        """The default category, created if it is missing (it is seeded by migration 0083)."""
+        category = cls.objects.filter(is_default=True).first()
+        if category is None:
+            category, _created = cls.objects.get_or_create(
+                name__iexact=DEFAULT_TAG_CATEGORY_NAME,
+                defaults={'name': DEFAULT_TAG_CATEGORY_NAME, 'color': DEFAULT_TAG_CATEGORY_SEED_COLOR},
+            )
+            category.is_default = True
+            category.save(update_fields=['is_default'])
+        return category
+
+
+def default_tag_category_id():
+    """Field default of RuleTag.category: a new tag starts in the default category."""
+    return TagCategory.get_default().pk
+
+
+class RuleTag(models.Model):
+    """A shared label attached to rules: a malware family, a source, a vendor -
+    any group of rules, whatever their status.
+
+    Dozens of rules usually cover one family, and their descriptions name it
+    in as many spellings, so speeches are suggested per tag rather than per
+    rule. `match_pattern` is a regex (called "regex" in the UI) run
+    case-insensitively against a rule's whole description: it drives the bulk
+    apply preview on the tags page and the suggestions on the rule forms. Only
+    with `auto_apply` does it tag new rules by itself - see tagging.auto_tag_rules.
+    Tags are shared and anyone can edit them; `description` is for analysts.
+
+    A built-in tag (`builtin_code` set) stands for one of the analyzer's
+    hardcoded log warnings: it is "found" in a log when that warning fires, so
+    speeches can be suggested for it. Otherwise it is an ordinary tag - it can
+    sit on rules (say, extra alert rules for the same problem) and have a
+    regex - but it cannot be deleted.
+    """
+
+    NAME_MAX_LENGTH = 64
+
+    SCOPE_DESCRIPTION = 'description'
+    SCOPE_SOURCE = 'source'
+    SCOPE_ANY = 'any'
+    SCOPE_CHOICES = [
+        (SCOPE_DESCRIPTION, 'description'),
+        (SCOPE_SOURCE, 'source line'),
+        (SCOPE_ANY, 'anywhere'),
+    ]
+
+    name = models.CharField(max_length=NAME_MAX_LENGTH)
+    description = models.TextField(blank=True)
+    # The conditions a rule must meet to match the tag; all set ones must hold
+    # (see tagging.TagConditions). A tag with none of regex, statuses or entry
+    # types matches nothing and is applied by hand only.
+    match_pattern = models.TextField(blank=True)
+    exclude_pattern = models.TextField(blank=True)
+    match_scope = models.CharField(max_length=16, choices=SCOPE_CHOICES, default=SCOPE_ANY)
+    match_statuses = models.JSONField(default=list, blank=True)
+    match_entry_types = models.JSONField(default=list, blank=True)
+    auto_apply = models.BooleanField(default=False)
+    builtin_code = models.CharField(max_length=64, null=True, blank=True, unique=True, default=None)
+    # Sets the badge colour. Deleting a category moves its tags to the default
+    # one first (views.tags.tag_categories_view), so PROTECT never fires there.
+    category = models.ForeignKey(
+        TagCategory, on_delete=models.PROTECT, default=default_tag_category_id, related_name='tags',
+    )
+    created_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_rule_tags',
+    )
+    updated_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name='updated_rule_tags',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(Lower('name'), name='unique_rule_tag_name_ci'),
+        ]
+
+    def __str__(self):
+        return self.name
 
 
 LOG_TYPE_UNKNOWN = 'Unknown'
@@ -1042,12 +1185,23 @@ class Speech(models.Model):
     category = models.CharField(max_length=255, default=DEFAULT_CATEGORY)
     is_shared = models.BooleanField(default=False)
     analyzer_users = models.ManyToManyField(User, related_name='analyzer_speeches', blank=True)
+    # The analyzer suggests the speech when one of these tags is found in the
+    # analysed log (built-in tags included, for the hardcoded warnings).
+    trigger_tags = models.ManyToManyField(RuleTag, blank=True, related_name='speeches')
+    # The helper's FRST fix message: edited in the profile, copied from the
+    # fixlist page, and listed here among the speeches. One per helper.
+    is_fix_message = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['name']
         unique_together = ('owner', 'name')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['owner'], condition=Q(is_fix_message=True), name='one_fix_message_speech_per_owner',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.owner.username})"
@@ -1357,6 +1511,55 @@ def _drop_rule_set_caches_on_user_delete(sender, instance, **kwargs):
     from .analyzer import invalidate_rule_buckets_cache
     invalidate_rule_buckets_cache(None)
     UploadedLogAnalysis.objects.filter(rule_set_key=f'private:{instance.id}').delete()
+
+
+@receiver(post_save, sender=User)
+def _give_new_account_a_fix_message_speech(sender, instance, created, raw=False, **kwargs):
+    """Every new helper starts with the default FRST fix message as a speech.
+
+    Accounts nobody can log in to (rule_owner_fallback and other passwordless
+    placeholders) never write a reply, so they get none. An empty password
+    counts as "usable" to Django, hence the explicit check - rule_owner_fallback
+    is created that way, inside a migration that runs before speeches exist.
+    """
+    if raw or not created or not instance.is_active:
+        return
+    if not instance.password or not instance.has_usable_password():
+        return
+    from .fix_message import ensure_fix_message_speech
+    ensure_fix_message_speech(instance)
+
+
+# The rule fields a tag's conditions look at (see tagging.TagConditions).
+_TAG_CONDITION_FIELDS = ('description', 'source_text', 'status', 'entry_type')
+
+
+@receiver(pre_save, sender=ClassificationRule)
+def _note_rule_tag_fields_change(sender, instance, raw=False, **kwargs):
+    """Remember whether this save changes what tag conditions look at.
+
+    Auto tags are added only to new rules and to rules whose description,
+    source line, status or entry type changes, so a tag removed from a rule by
+    hand stays removed.
+    """
+    if raw:
+        instance._tag_fields_changed = False
+        return
+    if instance.pk is None:
+        instance._tag_fields_changed = True
+        return
+    previous = sender.objects.filter(pk=instance.pk).values_list(*_TAG_CONDITION_FIELDS).first()
+    current = tuple(getattr(instance, field) for field in _TAG_CONDITION_FIELDS)
+    instance._tag_fields_changed = previous != current
+
+
+@receiver(post_save, sender=ClassificationRule)
+def _auto_tag_saved_rule(sender, instance, raw=False, **kwargs):
+    if raw or not getattr(instance, '_tag_fields_changed', False):
+        return
+    instance._tag_fields_changed = False
+    from .tagging import auto_tag_rules
+    auto_tag_rules([instance])
 
 
 @receiver(post_save, sender=UploadedLog)

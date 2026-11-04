@@ -104,46 +104,53 @@ def _build_warning(code: str, title: str, message: str, details: Iterable[str] |
 
 
 def _build_alert_rule_warnings(analyzed_lines: list[dict]) -> list[dict]:
-    seen_descriptions = set()
-    ordered_descriptions = []
+    # description -> ids of the alert rules raising it, in first-seen order. The
+    # ids let the served analysis attach those rules' tags to the warning.
+    rule_ids_by_description = {}
 
     for entry in analyzed_lines:
-        for description in entry.get("_alert_descriptions", []):
+        for description, rule_id in entry.get("_alert_descriptions", []):
             value = (description or "").strip()
-            if not value or value in seen_descriptions:
+            if not value:
                 continue
-            seen_descriptions.add(value)
-            ordered_descriptions.append(value)
+            ids = rule_ids_by_description.setdefault(value, [])
+            if rule_id not in ids:
+                ids.append(rule_id)
 
     warnings = []
-    for index, description in enumerate(ordered_descriptions, start=1):
-        warnings.append(
-            _build_warning(
-                code=f"alert_rule_{index}",
-                title="Alert rule matched",
-                message=description,
-            )
+    for index, (description, rule_ids) in enumerate(rule_ids_by_description.items(), start=1):
+        warning = _build_warning(
+            code=f"alert_rule_{index}",
+            title="Alert rule matched",
+            message=description,
         )
+        warning["rule_ids"] = rule_ids
+        warnings.append(warning)
     return warnings
 
 
-def _build_wholelog_alert_warnings(raw_log_text: str, buckets) -> list[dict]:
+def _build_wholelog_alert_warnings(raw_log_text: str, buckets) -> tuple[list[dict], list[int]]:
     """Evaluate whole-log alert rules once against the entire log.
+
+    Returns the warnings and the ids of the rules that fired, so their rule
+    tags can be reported like those of the rules that decided a line.
 
     Whole-log rules (regex or script, alert status) bypass the per-line tier/
     shadowing logic entirely: each is tested once against ``raw_log_text`` and, on
     a match, surfaces its description as a log-level alert warning. Priority plays
     no part -- a matching rule always fires.
     """
-    seen_descriptions = set()
-    ordered_descriptions = []
+    rule_ids_by_description = {}
+    fired_rule_ids = []
 
     def _record(rule):
+        fired_rule_ids.append(rule.pk)
         value = (rule.description or "").strip() or (rule.source_text or "").strip()
-        if not value or value in seen_descriptions:
+        if not value:
             return
-        seen_descriptions.add(value)
-        ordered_descriptions.append(value)
+        ids = rule_ids_by_description.setdefault(value, [])
+        if rule.pk not in ids:
+            ids.append(rule.pk)
 
     for rule, compiled in buckets.get("__wholelog_regex", []):
         if compiled.search(raw_log_text):
@@ -155,15 +162,15 @@ def _build_wholelog_alert_warnings(raw_log_text: str, buckets) -> list[dict]:
             _record(rule)
 
     warnings = []
-    for index, description in enumerate(ordered_descriptions, start=1):
-        warnings.append(
-            _build_warning(
-                code=f"alert_rule_wholelog_{index}",
-                title="Alert rule matched",
-                message=description,
-            )
+    for index, (description, rule_ids) in enumerate(rule_ids_by_description.items(), start=1):
+        warning = _build_warning(
+            code=f"alert_rule_wholelog_{index}",
+            title="Alert rule matched",
+            message=description,
         )
-    return warnings
+        warning["rule_ids"] = rule_ids
+        warnings.append(warning)
+    return warnings, fired_rule_ids
 
 
 def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
@@ -1234,7 +1241,7 @@ def _status_and_reason_from_matches(matches):
         if rule.description:
             reasons.append(f"{rule.status}: {rule.description}{owner_suffix}")
             if rule.status == ClassificationRule.STATUS_ALERT:
-                alert_descriptions.append(rule.description)
+                alert_descriptions.append((rule.description, rule.pk))
         if reason:
             reasons.append(f"{rule.status}: {reason}{owner_suffix}")
     return _ordered_status_codes(statuses), _dedupe(reasons), _dedupe(alert_descriptions)
@@ -1271,13 +1278,14 @@ def _build_line_result(
     entry_type: str,
     reasons: list[str],
     matcher: str,
-    alert_descriptions: list[str] | None = None,
+    alert_descriptions: list[tuple[str, int]] | None = None,
     dates: list[str] | None = None,
     parsed_entry=None,
     paint_base: dict | None = None,
     highlights: list[dict] | None = None,
     verdict_priority: int | None = None,
     fallback_only: bool = False,
+    rule_ids: list[int] | None = None,
 ):
     dominant_status = _dominant_status(status_codes)
     components = {}
@@ -1325,6 +1333,10 @@ def _build_line_result(
         "dates": dates or [],
         "components": components,
         "fixlist_replacement": ex.fixlist_replacement(line),
+        # The rules that decided the verdict (the winning tier, shadowed rules
+        # excluded). Rule tags are attached from these when the analysis is
+        # served, never stored with it - see attach_rule_tags().
+        "rule_ids": rule_ids or [],
         "_alert_descriptions": alert_descriptions or [],
     }
 
@@ -1542,6 +1554,13 @@ def _analyze_single_line(line: str, buckets):
     # already in top-down paint order.
     paint_base, highlights = _resolve_line_paint(line, effective_matches + shadowed_matches)
 
+    # Only the rules that decide the verdict carry their tags into the
+    # analysis: a P rule beside the B rule that decides the line adds none.
+    verdict = _dominant_status(status_codes)
+    deciding_rule_ids = list(dict.fromkeys(
+        rule.pk for rule, _reason, _matcher in effective_matches if rule.status == verdict
+    ))
+
     return _build_line_result(
         line,
         status_codes,
@@ -1555,6 +1574,7 @@ def _analyze_single_line(line: str, buckets):
         highlights=highlights,
         verdict_priority=top_priority,
         fallback_only=fallback_only,
+        rule_ids=deciding_rule_ids,
     )
 
 
@@ -1795,7 +1815,9 @@ def inspect_line_matches(
 # Bumped whenever the per-line payload changes shape, so payloads cached by an
 # older version are not handed to a page that expects the new one.
 # 2: line colouring as paint_base + highlights (replacing filepath_highlight).
-ANALYSIS_PAYLOAD_FORMAT = 2
+# 3: per-line rule_ids and top-level wholelog_rule_ids, for rule tags.
+# 4: rule_ids holds only the rules whose status is the line's verdict.
+ANALYSIS_PAYLOAD_FORMAT = 4
 
 
 def analyze_log_text(raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY) -> dict:
@@ -1810,7 +1832,8 @@ def analyze_log_text(raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY)
         analyzed_lines.append(_analyze_single_line(line, buckets))
 
     warnings.extend(_build_alert_rule_warnings(analyzed_lines))
-    warnings.extend(_build_wholelog_alert_warnings(raw_log_text or "", buckets))
+    wholelog_warnings, wholelog_rule_ids = _build_wholelog_alert_warnings(raw_log_text or "", buckets)
+    warnings.extend(wholelog_warnings)
     for entry in analyzed_lines:
         entry.pop("_alert_descriptions", None)
 
@@ -1831,4 +1854,5 @@ def analyze_log_text(raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY)
         "lines": analyzed_lines,
         "summary": summary,
         "warnings": warnings,
+        "wholelog_rule_ids": list(dict.fromkeys(wholelog_rule_ids)),
     }
