@@ -25,6 +25,7 @@ from ..tagging import (
     apply_tag,
     conditions_error,
     conditions_from_payload,
+    linkable_snippets,
     linkable_speeches,
     save_tag,
     matching_rule_ids,
@@ -67,7 +68,7 @@ def _id_list(payload, field):
 @login_required
 @require_http_methods(["GET", "POST"])
 def rule_tags_view(request):
-    """List tags with their rule, speech, pending and unmatched counts; delete tags."""
+    """List tags with their rule, speech, snippet, pending and unmatched counts; delete tags."""
     if request.method == 'POST':
         if request.POST.get('action') == 'delete':
             tag = get_object_or_404(RuleTag, pk=request.POST.get('pk', '').strip() or 0)
@@ -88,6 +89,7 @@ def rule_tags_view(request):
         RuleTag.objects.annotate(
             rule_count=Count('rules', distinct=True),
             speech_count=Count('speeches', distinct=True),
+            snippet_count=Count('snippets', distinct=True),
         ).select_related('updated_by', 'category')
     )
     counts = tag_rule_counts(tags)
@@ -167,6 +169,7 @@ def _entry_type_choices():
 def _tag_editor(request, tag):
     status_labels = dict(ClassificationRule.STATUS_CHOICES)
     linked_ids = set(tag.speeches.values_list('pk', flat=True)) if tag else set()
+    linked_snippet_ids = set(tag.snippets.values_list('pk', flat=True)) if tag else set()
     return render(request, 'rule_tag_editor.html', {
         # Every speech the user can link, for the search box; there can be
         # many, so the page shows only the linked ones and finds the rest by
@@ -183,6 +186,21 @@ def _tag_editor(request, tag):
         ],
         'others_speeches': (
             tag.speeches.exclude(pk__in=linkable_speeches(request.user).values('pk'))
+            .select_related('owner').order_by('name')
+            if tag else []
+        ),
+        # The same for snippets.
+        'linkable_snippets_json': [
+            {
+                'id': snippet.pk,
+                'name': snippet.name if snippet.owner_id == request.user.id else f'{snippet.name} ({snippet.owner.username})',
+                'category': snippet.category,
+                'linked': snippet.pk in linked_snippet_ids,
+            }
+            for snippet in linkable_snippets(request.user).select_related('owner').order_by('category', 'name')
+        ],
+        'others_snippets': (
+            tag.snippets.exclude(pk__in=linkable_snippets(request.user).values('pk'))
             .select_related('owner').order_by('name')
             if tag else []
         ),
@@ -237,11 +255,11 @@ def rule_tag_save_api(request):
 
     Body: {id?, name, description, match_pattern?, exclude_pattern?, match_scope?,
     match_statuses?, match_entry_types?, auto_apply?, add_rule_ids?,
-    remove_rule_ids?, remove_unmatched?, apply_to_existing?, speech_ids?}.
+    remove_rule_ids?, remove_unmatched?, apply_to_existing?, speech_ids?, snippet_ids?}.
     `apply_to_existing` tags every existing rule that meets the conditions - the
-    editor asks first when an auto-apply tag is saved. `speech_ids` sets which of
-    the speeches the caller can link (own or selected for the analyzer) suggest
-    the tag. `remove_unmatched` takes the tag off
+    editor asks first when an auto-apply tag is saved. `speech_ids` and
+    `snippet_ids` set which of the speeches and snippets the caller can link
+    (own or selected for the analyzer) suggest the tag. `remove_unmatched` takes the tag off
     every tagged rule the saved conditions do not match - all of them, not only
     those a capped preview listed. Used by the tag editor, the analyzer's tag
     popover and the rule forms' "create tag" dialog, so all of them validate

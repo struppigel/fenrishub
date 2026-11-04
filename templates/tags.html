@@ -107,7 +107,8 @@
                     <span class="tag-row-meta">
                         {% if tag.builtin_code %}- <span title="also found in a log when the analyzer raises this warning">built-in: <code>{{ tag.builtin_code }}</code></span>{% endif %}
                         - <a href="{% url 'rules' %}?filter=all&amp;tag={{ tag.pk }}">{{ tag.rule_count }} rule{{ tag.rule_count|pluralize }}</a>,
-                        {{ tag.speech_count }} speech{{ tag.speech_count|pluralize:"es" }}
+                        {{ tag.speech_count }} speech{{ tag.speech_count|pluralize:"es" }},
+                        {{ tag.snippet_count }} snippet{{ tag.snippet_count|pluralize }}
                         {% if tag.pending_count %}, <a href="{% url 'rule_tag_edit' tag.pk %}" class="tag-pending" title="rules that meet the conditions but do not carry the tag yet">{{ tag.pending_count }} pending</a>{% endif %}
                         {% if tag.unmatched_count %}, <a href="{% url 'rule_tag_edit' tag.pk %}" class="tag-pending" title="tagged rules that no longer meet the conditions">{{ tag.unmatched_count }} no longer matching</a>{% endif %}
                         {% if tag.auto_apply %}, applied automatically{% endif %}
@@ -121,7 +122,7 @@
                         {% csrf_token %}
                         <input type="hidden" name="action" value="delete">
                         <input type="hidden" name="pk" value="{{ tag.pk }}">
-                        <button type="submit" style="background-color: var(--la-error-bg); color: var(--la-error-text); border-color: var(--la-error-border);" onclick="return confirm('Delete tag &quot;{{ tag.name|escapejs }}&quot;? It is removed from {{ tag.rule_count }} rule(s) and {{ tag.speech_count }} speech(es).');">delete</button>
+                        <button type="submit" style="background-color: var(--la-error-bg); color: var(--la-error-text); border-color: var(--la-error-border);" onclick="return confirm('Delete tag &quot;{{ tag.name|escapejs }}&quot;? It is removed from {{ tag.rule_count }} rule(s), {{ tag.speech_count }} speech(es) and {{ tag.snippet_count }} snippet(s).');">delete</button>
                     </form>
                     {% endif %}
                 </div>

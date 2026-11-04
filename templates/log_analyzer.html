@@ -416,6 +416,8 @@ window.logAnalyzerConfig = {
     initialFixlistId: "{{ initial_fixlist_id|default:''|escapejs }}",
     snippetsApiUrl: "{% url 'snippets_api' %}",
     snippets: {{ snippets_json }},
+    // Other helpers' shared snippets with tags, for tags none of `snippets` covers.
+    sharedTagSnippets: {{ shared_tag_snippets_json }},
     speechesApiUrl: "{% url 'speeches_api' %}",
     speechCreateUrl: "{% url 'speech_create_api' %}",
     speeches: {{ speeches_json }},
@@ -615,6 +617,10 @@ window.logAnalyzerConfig = {
         triggerId: 'snippetMenuTrigger',
         dropdownId: 'snippetMenuDropdown',
         configKey: 'snippets',
+        suggestedKey: 'suggestedSnippetIds',
+        extraKey: 'sharedTagSnippets',
+        extraSuggestedKey: 'suggestedSharedSnippetIds',
+        triggerLabel: 'snippets',
         emptyLabel: 'no snippets selected',
         resolveTarget: function() {
             if (window.getActiveRightTextarea) return window.getActiveRightTextarea();
@@ -658,14 +664,27 @@ window.logAnalyzerConfig = {
         if (speechMenu) speechMenu.insertById(id);
     };
 
-    // Remembers whether the response has had a caret yet, so an insert from
-    // outside the menu goes to the caret or, if none, to the end.
-    var responseTextarea = document.getElementById('responseText');
-    if (responseTextarea) {
-        responseTextarea.addEventListener('focus', function() {
-            responseTextarea.dataset.caretTouched = '1';
-        });
-    }
+    // speech_suggestions.js calls this after every analysis, panel switch and
+    // fixlist or response edit.
+    window.reloadSnippetMenu = function() {
+        if (snippetMenu) snippetMenu.reload();
+        if (typeof refreshWarningSpeechRows === 'function') refreshWarningSpeechRows();
+    };
+
+    window.insertSnippetById = function(id) {
+        if (snippetMenu) snippetMenu.insertById(id);
+    };
+
+    // Remembers whether the fixlist and the response have had a caret yet, so
+    // an insert from outside the menus goes to the caret or, if none, to the end.
+    ['responseText', 'selectedLines'].forEach(function(id) {
+        var textarea = document.getElementById(id);
+        if (textarea) {
+            textarea.addEventListener('focus', function() {
+                textarea.dataset.caretTouched = '1';
+            });
+        }
+    });
 })();
 </script>
 {% endblock %}

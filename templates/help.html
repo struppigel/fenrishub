@@ -91,7 +91,11 @@
                 </ul>
             </li>
             <li><a href="#fixlists">Fixes</a></li>
-            <li><a href="#snippets">Snippets</a></li>
+            <li><a href="#snippets">Snippets</a>
+                <ul>
+                    <li><a href="#suggested-snippets">Suggested snippets</a></li>
+                </ul>
+            </li>
             <li><a href="#speeches">Speeches</a>
                 <ul>
                     <li><a href="#capture-speech">Turning part of a reply into a speech</a></li>
@@ -304,6 +308,14 @@
 
     <img src="{% static 'images/help/10-snippets-hide-preview.png' %}" alt="Snippets list with previews hidden" loading="lazy">
 
+    <h3 id="suggested-snippets">Suggested snippets</h3>
+
+    <p>Snippets are suggested the same way as <a href="#suggested-speeches">speeches</a>. On the add or edit snippet page, <strong>suggest in the analyzer when</strong> names the <a href="#rule-tags">rule tags</a> the snippet fits; the tag editor sets the same link from the other side. After every analysis, the snippets whose tags were found in the log are listed under <strong>suggested</strong> at the top of the <strong>snippets</strong> picker, which then reads for example <strong>snippets (2 suggested)</strong>, and each warning box lists the snippets for its own tags. Built-in tags work here too, so a snippet can come up for one of the analyzer's built-in warnings.</p>
+
+    <p>A snippet goes into whichever right panel is showing. It stops being suggested once all of its lines are in that panel, and comes back when you delete them: a snippet already in the fixlist is still suggested while you write the response, and the other way round. Clicking a log line still adds the line to the fixlist; it never adds a snippet.</p>
+
+    <p>When a tag is found but none of your selected snippets is linked to it, the analyzer suggests the snippets other helpers shared for that tag, under <strong>from other helpers</strong>.</p>
+
     <h2 id="speeches">Speeches</h2>
 
     <p>Speeches are to your written reply what snippets are to your fixlist: reusable blocks of text that you paste into the response you write back to the user. Think greetings, instructions for running a tool, or the all-clear at the end of a case.</p>
@@ -422,11 +434,11 @@
 
     <h3 id="rule-tags">Rule tags</h3>
 
-    <p>A rule tag groups related rules - a malware family such as RenPyLoader, a source such as chrome-mal-ids, a vendor - whatever their status. Tags are shared, and any helper can create and edit them. Their main use is <a href="#suggested-speeches">suggesting speeches</a>: one speech per tag instead of one per rule.</p>
+    <p>A rule tag groups related rules - a malware family such as RenPyLoader, a source such as chrome-mal-ids, a vendor - whatever their status. Tags are shared, and any helper can create and edit them. Their main use is <a href="#suggested-speeches">suggesting speeches</a> and <a href="#suggested-snippets">snippets</a>: one speech or snippet per tag instead of one per rule.</p>
 
     <p>Tags are managed on the <strong>rule tags</strong> page in the menu under your username. <strong>new tag</strong> and <strong>edit</strong> open the tag editor. It starts simple: a name, a <strong>regex</strong>, a description for analysts and <strong>apply automatically</strong>. The regex is searched ignoring case in the rule's description and its source line, URLs included. A new tag applies itself automatically unless you untick it.</p>
 
-    <p><strong>more options</strong> holds further conditions and <strong>suggest these speeches</strong>; it opens by itself for a tag that uses those conditions, and its button says how many speeches are linked. Every condition you set must hold; leave one empty to ignore it:</p>
+    <p><strong>more options</strong> holds further conditions, <strong>suggest these speeches</strong> and <strong>suggest these snippets</strong>; it opens by itself for a tag that uses those conditions, and its button says how many speeches and snippets are linked. Every condition you set must hold; leave one empty to ignore it:</p>
 
     <ul>
         <li><strong>look in</strong> - where the regex and the exclude regex look: the description, the source line, or anywhere (the default).</li>
@@ -444,6 +456,7 @@
         <li><strong>remove tag from all</strong>, next to the rules that no longer match, takes the tag off all of them at once. Saving the tag also asks whether to do that whenever there are such rules, for example after you narrowed its conditions.</li>
         <li><strong>apply automatically to new rules</strong> makes the tag add itself to every new rule that meets the conditions, and to a rule whose description, source line, status or entry type is edited to meet them. When you save the tag with this on, you are asked whether to also tag the existing rules that meet the conditions; with <strong>save &amp; apply to ticked rules</strong> the ticks decide instead. Removing such a tag from a rule by hand sticks as long as those fields stay the same.</li>
         <li><strong>suggest these speeches</strong> links speeches to the tag - your own and any you selected for the analyzer, shared ones by other helpers included. Find them by name or category. A link belongs to the speech, so linking another helper's shared speech suggests it for this tag for everyone who uses it. For your own speeches, the same link can be set from the speech's form on the speeches page.</li>
+        <li><strong>suggest these snippets</strong> does the same for snippets. For your own snippets, the link can also be set on the add or edit snippet page.</li>
         <li>The tag list shows each tag's conditions, how many rules meet them but lack the tag as <strong>pending</strong>, and how many tagged rules no longer meet them.</li>
     </ul>
 

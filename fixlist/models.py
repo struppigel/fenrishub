@@ -1159,6 +1159,9 @@ class FixlistSnippet(models.Model):
     category = models.CharField(max_length=255, default=DEFAULT_CATEGORY)
     is_shared = models.BooleanField(default=False)
     analyzer_users = models.ManyToManyField(User, related_name='analyzer_snippets', blank=True)
+    # The analyzer suggests the snippet when one of these tags is found in the
+    # analysed log (built-in tags included, for the hardcoded warnings).
+    trigger_tags = models.ManyToManyField(RuleTag, blank=True, related_name='snippets')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

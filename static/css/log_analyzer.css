@@ -1314,7 +1314,7 @@ button.lookup-menu-item {
 }
 
 .tag-chip-filter:hover,
-.analysis-warning-speech:hover {
+.analysis-warning-suggestion:hover {
     text-decoration: underline;
 }
 
@@ -1330,7 +1330,7 @@ button.lookup-menu-item {
     text-decoration: line-through;
 }
 
-.analysis-warning-speeches {
+.analysis-warning-suggestions {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
@@ -1339,7 +1339,7 @@ button.lookup-menu-item {
     font-size: 12px;
 }
 
-.analysis-warning-speech {
+.analysis-warning-suggestion {
     padding: 1px 8px;
     font-size: 12px;
 }

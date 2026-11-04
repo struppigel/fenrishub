@@ -1,0 +1,14 @@
+{% comment %}
+"suggest in the analyzer when" field of the speech and snippet forms. `item`
+is "speech" or "snippet"; `prefix` keeps the ids of two forms on one page
+apart. The field names are the same.
+{% endcomment %}
+<fieldset class="tag-triggers" id="{{ prefix }}Triggers">
+    <legend>suggest in the analyzer when</legend>
+    <div class="tag-triggers-help small-note">The {{ item }} is listed under <strong>suggested</strong> in the analyzer's {{ item }}{% if item == 'speech' %}es{% else %}s{% endif %} menu when one of these tags is found in the analysed log. Built-in tags stand for the analyzer's log warnings; alert rules count through their own tags.</div>
+
+    <div class="tag-trigger-group">
+        <span class="tag-trigger-label">rule tags found in the log</span>
+        <div id="{{ prefix }}TagPicker"></div>
+    </div>
+</fieldset>

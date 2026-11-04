@@ -143,3 +143,45 @@ button.tag-chip {
     font-family: inherit;
     font-size: 12px;
 }
+
+/* "suggest in the analyzer when" on the speech and snippet forms
+   (partials/tag_triggers.html), and the "suggested for:" chips in their lists. */
+.tag-triggers {
+    border: 1px solid var(--la-border);
+    padding: 8px 10px;
+    margin: 0 0 12px;
+}
+
+.tag-triggers legend {
+    font-size: 12px;
+    color: var(--la-text-primary);
+    padding: 0 4px;
+}
+
+.tag-trigger-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    align-items: center;
+    margin-top: 8px;
+}
+
+.tag-trigger-group > .tag-trigger-label {
+    flex-basis: 100%;
+    font-size: 11px;
+    color: var(--la-text-muted);
+}
+
+.tag-trigger-group > div {
+    flex-basis: 100%;
+}
+
+.tag-trigger-summary {
+    margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    font-size: 11px;
+    color: var(--la-text-muted);
+}

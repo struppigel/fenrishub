@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<!--
+  Tests for the snippet side of speech_suggestions.js: which snippets are
+  suggested for the rule tags found in a log (snippets menu and warning boxes).
+
+  A snippet is suggested when any of its trigger tags is among the tags found,
+  unless all of its lines are already in the right panel that is showing - the
+  fixlist and the response count separately.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>snippet suggestion tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>speech_suggestions.js – snippet suggestion tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<textarea id="selectedLines" hidden></textarea>
+<textarea id="responseText" hidden></textarea>
+<div id="analysisWarnings"></div>
+
+<script>
+window.logAnalyzerConfig = { speeches: [], snippets: [], sharedTagSnippets: [] };
+// Stands in for analysis.js: which right panel is showing.
+let activePanel = 'fix';
+function getActiveRightTextarea() {
+    return document.getElementById(activePanel === 'response' ? 'responseText' : 'selectedLines');
+}
+</script>
+<script src="../../rule_tag_picker.js"></script>
+<script src="../speech_suggestions.js"></script>
+
+<script>
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    li.className = condition ? 'pass' : 'fail';
+    li.textContent = (condition ? '✓ ' : '✗ ') + description + (!condition && detail ? ' — ' + detail : '');
+    if (condition) passed++; else failed++;
+    list.appendChild(li);
+}
+
+function assertIds(description, actual, expected) {
+    const a = JSON.stringify([...actual].sort());
+    const e = JSON.stringify([...expected].sort());
+    assert(description, a === e, 'got ' + a);
+}
+
+const defender = { id: 1, name: 'defender', content: 'DeleteKey: HKLM\\Defender\nEmptyTemp:', trigger_tag_ids: [7] };
+const browsers = { id: 2, name: 'browsers', content: 'CloseProcesses:', trigger_tag_ids: [8] };
+const untagged = { id: 3, name: 'untagged', content: 'Reboot:', trigger_tag_ids: [] };
+
+(function testSnippetIsInText() {
+    assert('a snippet with all its lines in the text is in it',
+        snippetIsInText(defender, 'Start::\nEmptyTemp:\nDeleteKey: HKLM\\Defender\nEnd::'));
+    assert('one missing line means it is not in the text',
+        !snippetIsInText(defender, 'Start::\nEmptyTemp:\nEnd::'));
+    assert('Windows line endings and surrounding blanks do not matter',
+        snippetIsInText({ content: '  DeleteKey: x  \r\n\r\nEmptyTemp:\r\n' }, 'DeleteKey: x\r\nEmptyTemp:'));
+    assert('part of a line does not count',
+        !snippetIsInText({ content: 'EmptyTemp:' }, 'EmptyTemp: and more'));
+    assert('an empty snippet is never in the text', !snippetIsInText({ content: '  \n' }, 'anything'));
+})();
+
+(function testSuggestedForTags() {
+    const snippets = [defender, browsers, untagged];
+    assertIds('snippets naming a found tag are suggested',
+        suggestedSnippetsForTags([7], snippets).map((s) => s.id), [1]);
+    assertIds('a snippet already in the text is not suggested',
+        suggestedSnippetsForTags([7, 8], snippets, 'CloseProcesses:').map((s) => s.id), [1]);
+    assertIds('no tags found, no suggestions', suggestedSnippetsForTags([], snippets).map((s) => s.id), []);
+})();
+
+(function testSharedFallback() {
+    const theirs7 = { id: 10, name: 'their defender', content: 'Their line one', trigger_tag_ids: [7] };
+    const theirs8 = { id: 11, name: 'their browsers', content: 'Their line two', trigger_tag_ids: [8] };
+    assertIds('shared snippets come only for tags no own snippet covers',
+        fallbackSnippetsForTags([7, 8], [defender], [theirs7, theirs8]).map((s) => s.id), [11]);
+    assertIds('a covered tag gets no fallback even when its own snippet is used',
+        fallbackSnippetsForTags([7], [defender], [theirs7], defender.content).map((s) => s.id), []);
+    assertIds('a shared snippet already in the text is not offered',
+        fallbackSnippetsForTags([8], [defender], [theirs8], 'Their line two').map((s) => s.id), []);
+})();
+
+(function testUsedPerPanel() {
+    const config = window.logAnalyzerConfig;
+    config.snippets = [defender, browsers];
+    const fixlist = document.getElementById('selectedLines');
+    const response = document.getElementById('responseText');
+    fixlist.value = defender.content;
+    response.value = '';
+
+    activePanel = 'fix';
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [{ id: 7, name: 'defender' }, { id: 8, name: 'browsers' }] });
+    assertIds('in the fixlist view a snippet in the fixlist is not suggested', config.suggestedSnippetIds, [2]);
+
+    activePanel = 'response';
+    refreshSnippetSuggestions();
+    assertIds('in the response view the same snippet is suggested again', config.suggestedSnippetIds, [1, 2]);
+
+    response.value = 'CloseProcesses:';
+    refreshSnippetSuggestions();
+    assertIds('a snippet in the response is not suggested in the response view', config.suggestedSnippetIds, [1]);
+
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [] });
+    assertIds('a new analysis without tags clears the suggestions', config.suggestedSnippetIds, []);
+    activePanel = 'fix';
+    fixlist.value = '';
+    response.value = '';
+})();
+
+(function testWarningRow() {
+    const config = window.logAnalyzerConfig;
+    config.snippets = [defender];
+    config.sharedTagSnippets = [{ id: 20, name: 'their browsers', content: 'Their line', trigger_tag_ids: [8] }];
+    const warning = document.createElement('div');
+    warning.className = 'analysis-warning';
+    document.getElementById('analysisWarnings').appendChild(warning);
+
+    warning.dataset.tagIds = JSON.stringify([7]);
+    renderWarningSpeechRow(warning);
+    let row = warning.querySelector('.analysis-warning-snippets');
+    assert('a warning lists its own snippets', row && row.textContent.startsWith('suggested snippets:')
+        && row.querySelector('button').textContent === 'defender', row && row.textContent);
+    assert('no speeches row without speeches', !warning.querySelector('.analysis-warning-speeches'));
+
+    warning.dataset.tagIds = JSON.stringify([8]);
+    refreshWarningSpeechRows();
+    row = warning.querySelector('.analysis-warning-snippets');
+    assert('without an own snippet it offers other helpers\' shared ones',
+        row && row.textContent.startsWith('suggested snippets from other helpers:'), row && row.textContent);
+    assert('refilling a warning does not stack rows',
+        warning.querySelectorAll('.analysis-warning-suggestions').length === 1);
+
+    warning.dataset.tagIds = JSON.stringify([7]);
+    document.getElementById('selectedLines').value = defender.content;
+    renderWarningSpeechRow(warning);
+    assert('a snippet already in the showing panel is not offered in the warning',
+        !warning.querySelector('.analysis-warning-snippets'));
+    document.getElementById('selectedLines').value = '';
+    warning.remove();
+})();
+
+document.getElementById('summary').textContent =
+    failed === 0 ? `ALL PASS (${passed})` : `${failed} FAILED, ${passed} passed`;
+document.getElementById('summary').className = failed === 0 ? 'pass' : 'fail';
+</script>
+</body>
+</html>

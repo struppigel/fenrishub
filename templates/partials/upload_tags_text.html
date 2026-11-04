@@ -1,0 +1,1 @@
+{% load rule_tags %}{% if tags %}<div class="fixlist-meta upload-tags">tags: {% for tag in tags %}<span class="tag-text{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}</div>{% endif %}

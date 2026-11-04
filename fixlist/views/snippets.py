@@ -17,7 +17,8 @@ from django.urls import reverse
 
 from django.contrib.auth.models import User
 
-from ..models import FixlistSnippet
+from ..models import FixlistSnippet, RuleTag
+from ..tagging import parse_tag_ids, serialize_tag
 from .rules import _sanitize_return_q
 
 
@@ -27,6 +28,50 @@ def _snippets_redirect(return_q):
     if safe_query:
         return redirect(f"{reverse('snippets')}?{safe_query}")
     return redirect('snippets')
+
+
+def serialize_snippet_for_analyzer(snippet, user):
+    """The shape the analyzer's snippets menu reads.
+
+    Shared by the analyzer page and the snippets API. Expects `trigger_tags`
+    prefetched when serializing many snippets.
+    """
+    return {
+        'id': snippet.id,
+        'name': snippet.name if snippet.owner_id == user.id else f"{snippet.name} ({snippet.owner.username})",
+        'category': snippet.category,
+        'content': snippet.content,
+        'trigger_tag_ids': [tag.pk for tag in snippet.trigger_tags.all()],
+    }
+
+
+def analyzer_snippets_for(user):
+    """Serialized snippets the user selected for the analyzer, in menu order."""
+    qs = FixlistSnippet.objects.filter(
+        analyzer_users=user,
+    ).select_related('owner').prefetch_related('trigger_tags').order_by('category', 'name')
+    return [serialize_snippet_for_analyzer(snippet, user) for snippet in qs]
+
+
+def shared_tag_snippets_for(user):
+    """Other helpers' shared snippets that suggest at least one tag and that the
+    user has not selected - the analyzer's fallback when a tag found in a log
+    has no snippet of the user's own."""
+    qs = (
+        FixlistSnippet.objects.filter(is_shared=True, trigger_tags__isnull=False)
+        .exclude(owner=user)
+        .exclude(analyzer_users=user)
+        .distinct()
+        .select_related('owner')
+        .prefetch_related('trigger_tags')
+        .order_by('category', 'name')
+    )
+    return [serialize_snippet_for_analyzer(snippet, user) for snippet in qs]
+
+
+def _trigger_tag_ids_from_post(request):
+    """The tag ids picked in the snippet form, built-in tags included."""
+    return parse_tag_ids(request.POST.getlist('trigger_tag_ids'))
 
 
 def _snippet_form_from_post(request) -> dict:
@@ -52,7 +97,7 @@ def _validate_snippet_form(user, form: dict, exclude_pk=None):
     return None
 
 
-def _snippet_form_context(user, form: dict, *, editing: bool, return_q: str = '', snippet=None) -> dict:
+def _snippet_form_context(user, form: dict, *, editing: bool, return_q: str = '', snippet=None, tag_ids=()) -> dict:
     """Context for snippet_editor.html, which serves both the add page and the editor."""
     cancel_url = reverse('snippets')
     if return_q:
@@ -69,6 +114,10 @@ def _snippet_form_context(user, form: dict, *, editing: bool, return_q: str = ''
         'categories': categories,
         'return_q': return_q,
         'cancel_url': cancel_url,
+        # Seeds the "suggest in the analyzer when" tag picker.
+        'trigger_tags_json': [
+            serialize_tag(tag) for tag in RuleTag.objects.filter(pk__in=tag_ids).select_related('category')
+        ],
     }
 
 
@@ -79,12 +128,14 @@ def add_snippet_view(request):
     if request.method == 'POST':
         return_q = request.POST.get('return_q', '')
         form = _snippet_form_from_post(request)
+        tag_ids = _trigger_tag_ids_from_post(request)
         error = _validate_snippet_form(request.user, form)
         if error:
             # Re-render instead of redirecting so long snippet content is not lost.
             messages.error(request, error)
         else:
             snippet = FixlistSnippet.objects.create(owner=request.user, **form)
+            snippet.trigger_tags.set(tag_ids)
             snippet.analyzer_users.add(request.user)
             messages.success(request, f'Snippet "{form["name"]}" created.')
             return _snippets_redirect(return_q)
@@ -94,9 +145,10 @@ def add_snippet_view(request):
             'name': '', 'content': '',
             'category': FixlistSnippet.DEFAULT_CATEGORY, 'is_shared': True,
         }
+        tag_ids = []
 
     return render(request, 'snippet_editor.html', _snippet_form_context(
-        request.user, form, editing=False, return_q=_sanitize_return_q(return_q),
+        request.user, form, editing=False, return_q=_sanitize_return_q(return_q), tag_ids=tag_ids,
     ))
 
 
@@ -109,6 +161,12 @@ def edit_snippet_view(request, pk: int):
     if request.method == 'POST':
         return_q = request.POST.get('return_q', '')
         form = _snippet_form_from_post(request)
+        # A form without the tag picker must not clear them.
+        tags_present = bool(request.POST.get('tags_present'))
+        if tags_present:
+            tag_ids = _trigger_tag_ids_from_post(request)
+        else:
+            tag_ids = list(snippet.trigger_tags.values_list('pk', flat=True))
         error = _validate_snippet_form(request.user, form, exclude_pk=snippet.pk)
         if error:
             messages.error(request, error)
@@ -116,6 +174,8 @@ def edit_snippet_view(request, pk: int):
             for field, value in form.items():
                 setattr(snippet, field, value)
             snippet.save(update_fields=['name', 'content', 'is_shared', 'category', 'updated_at'])
+            if tags_present:
+                snippet.trigger_tags.set(tag_ids)
             messages.success(request, f'Snippet "{form["name"]}" updated.')
             return _snippets_redirect(return_q)
     else:
@@ -124,9 +184,11 @@ def edit_snippet_view(request, pk: int):
             'name': snippet.name, 'content': snippet.content,
             'category': snippet.category, 'is_shared': snippet.is_shared,
         }
+        tag_ids = list(snippet.trigger_tags.values_list('pk', flat=True))
 
     return render(request, 'snippet_editor.html', _snippet_form_context(
         request.user, form, editing=True, return_q=_sanitize_return_q(return_q), snippet=snippet,
+        tag_ids=tag_ids,
     ))
 
 
@@ -180,7 +242,7 @@ def snippets_view(request):
             | Q(owner__username__icontains=search_query)
         )
 
-    snippets = snippets.order_by('name')
+    snippets = snippets.order_by('name').prefetch_related('trigger_tags__category')
     compact_view = request.COOKIES.get('fenrishub_snippets_compact') == '1'
     per_page = 14 if compact_view else 7
     page_obj = Paginator(snippets, per_page).get_page(request.GET.get('page'))
@@ -234,16 +296,7 @@ def snippets_toggle_analyzer_api(request):
 @require_http_methods(["GET"])
 def snippets_api(request):
     """Return snippets selected for the log analyzer by the current user."""
-    qs = FixlistSnippet.objects.filter(
-        analyzer_users=request.user,
-    ).select_related('owner').order_by('category', 'name')
-    snippets = [
-        {
-            'id': s.id,
-            'name': s.name if s.owner_id == request.user.id else f"{s.name} ({s.owner.username})",
-            'category': s.category,
-            'content': s.content,
-        }
-        for s in qs
-    ]
-    return JsonResponse({'snippets': snippets})
+    return JsonResponse({
+        'snippets': analyzer_snippets_for(request.user),
+        'shared_tag_snippets': shared_tag_snippets_for(request.user),
+    })

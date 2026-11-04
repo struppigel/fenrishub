@@ -171,11 +171,7 @@
         <div class="fixlist-meta">
             {{ result.log.original_filename }} | {{ result.log.forum_username }} | {{ result.log.created_at|date:"Y-m-d H:i" }} | lines {{ result.log.total_line_count }}
         </div>
-        {% if result.tags %}
-        <div class="search-result-tags">
-            {% for tag in result.tags %}<span class="tag-chip{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% endfor %}
-        </div>
-        {% endif %}
+        {% include "partials/upload_tags_text.html" with tags=result.tags %}
         {% if result.line_number %}
         <div class="fixlist-meta search-preview"><span class="search-preview-line-number">{{ result.line_number }}:</span>{{ result.before }}<span class="search-hit">{{ result.hit }}</span>{{ result.after }}</div>
         {% endif %}

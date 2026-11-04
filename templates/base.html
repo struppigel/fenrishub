@@ -490,14 +490,6 @@
             margin-bottom: 8px;
         }
 
-        /* The rule tags found in a log, on listing rows. */
-        .search-result-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            margin-top: 4px;
-        }
-
         .search-filter-clear {
             padding: 4px 8px;
             font-size: 12px;
@@ -741,6 +733,7 @@
     </style>
     <style id="tag-category-colors">
     {% for category in tag_category_colors %}.tag-chip.tag-cat-{{ category.id }}, .line-tag-chip.tag-cat-{{ category.id }} { color: {{ category.color }}; border-color: {{ category.color }}; }
+    .tag-text.tag-cat-{{ category.id }} { color: {{ category.color }}; }
     {% endfor %}
     </style>
     {% block extra_head %}{% endblock %}

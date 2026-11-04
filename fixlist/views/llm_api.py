@@ -4,7 +4,8 @@ Read-only token API (/api/v1/) for LLM clients.
 Serves what a logged-in helper can already read in the browser: every
 non-trashed upload, its verdicts under the caller's own rule set, content
 search, infection cases by id, the fixlist snippets and speeches the caller
-owns or that are shared, and the caller's fixlist starter template. Listing cases is limited to the caller's own,
+owns or that are shared, the caller's fixlist starter template, and every
+classification rule, as on the rules page. Listing cases is limited to the caller's own,
 as on the cases page. Authentication, limits and logging live in api_auth.
 
 Fields holding text that came from the infected machine or its user (log lines,
@@ -257,6 +258,8 @@ def _compact_line(number, entry, tag_names):
         'components': entry.get('components', {}),
         'dates': entry.get('dates', []),
         'fixlist_replacement': entry.get('fixlist_replacement'),
+        # The rules that decided the line; get_rule reads one.
+        'rule_ids': entry.get('rule_ids', []),
         # Rule tags of the rules that decided the line (see rule_tags).
         'tag_ids': tag_ids,
         'tags': [tag_names[tag_id] for tag_id in tag_ids if tag_id in tag_names],
@@ -407,9 +410,8 @@ def _visible_library_items(model, user):
         .select_related('owner')
         .order_by('category', 'name', 'pk')
     )
-    if model is Speech:
-        items = items.prefetch_related('trigger_tags')
-    return items
+    # Both kinds name the rule tags the analyzer suggests them for.
+    return items.prefetch_related('trigger_tags')
 
 
 def _library_item_payload(item, user, id_key):
@@ -423,9 +425,9 @@ def _library_item_payload(item, user, id_key):
         'updated_at': _iso(item.updated_at),
         'content': item.content,
     }
+    # The rule tags the analyzer suggests the snippet or speech for.
+    payload['trigger_tags'] = [{'tag_id': tag.pk, 'name': tag.name} for tag in item.trigger_tags.all()]
     if isinstance(item, Speech):
-        # The rule tags the analyzer suggests the speech for.
-        payload['trigger_tags'] = [{'tag_id': tag.pk, 'name': tag.name} for tag in item.trigger_tags.all()]
         payload['is_fix_message'] = item.is_fix_message
     return payload
 
@@ -708,6 +710,7 @@ def _tag_summary(tag):
         'builtin_code': tag.builtin_code,
         'rule_count': tag.rules.count(),
         'speech_count': tag.speeches.count(),
+        'snippet_count': tag.snippets.count(),
     }
 
 
@@ -725,14 +728,14 @@ def _rule_row(rule):
 
 @api_token_required('api_v1_tags')
 def api_tags(request):
-    """All rule tags with their conditions and how many rules and speeches use them."""
+    """All rule tags with their conditions and how many rules, speeches and snippets use them."""
     return JsonResponse({'tags': [_tag_summary(tag) for tag in RuleTag.objects.select_related('category').order_by('name')]})
 
 
 @api_token_required('api_v1_tag')
 def api_tag(request, tag_id):
-    """One rule tag: its conditions, the speeches it suggests that the caller can see,
-    and the rules carrying it (paged with limit/offset)."""
+    """One rule tag: its conditions, the speeches and snippets it suggests that the
+    caller can see, and the rules carrying it (paged with limit/offset)."""
     tag = RuleTag.objects.filter(pk=tag_id).first()
     if tag is None:
         return _not_found()
@@ -742,16 +745,127 @@ def api_tag(request, tag_id):
         return _error('limit and offset must be integers.')
     rules = tag.rules.select_related('owner').order_by('pk')
     speeches = tag.speeches.filter(Q(owner=request.user) | Q(is_shared=True)).select_related('owner')
+    snippets = tag.snippets.filter(Q(owner=request.user) | Q(is_shared=True)).select_related('owner')
     return JsonResponse({
         **_tag_summary(tag),
         'speeches': [
             {'speech_id': speech.pk, 'name': speech.name, 'owner': speech.owner.username}
             for speech in speeches.order_by('name')
         ],
+        'snippets': [
+            {'snippet_id': snippet.pk, 'name': snippet.name, 'owner': snippet.owner.username}
+            for snippet in snippets.order_by('name')
+        ],
         'rules_total': rules.count(),
         'offset': offset,
         'limit': limit,
         'rules': [_rule_row(rule) for rule in rules[offset:offset + limit]],
+    })
+
+
+RULES_DEFAULT_LIMIT = 50
+RULES_MAX_LIMIT = 200
+# The orderings of the rules page (rules_view).
+RULE_SORTS = {
+    'recent': ('-updated_at',),
+    'created': ('-created_at',),
+    'status': ('status', 'match_type', 'source_text'),
+    'priority': ('-priority', 'status', 'match_type', 'source_text'),
+}
+
+
+def _rule_list_row(rule):
+    """`_rule_row` plus what decides when the rule applies, and its tags (prefetched)."""
+    return {
+        **_rule_row(rule),
+        'priority': rule.priority,
+        'is_enabled': rule.is_enabled,
+        'whole_log': rule.whole_log,
+        'updated_at': _iso(rule.updated_at),
+        'tags': [{'tag_id': tag.pk, 'name': tag.name} for tag in rule.tags.all()],
+    }
+
+
+def _visible_rules():
+    """Every rule: the rules page shows every helper's rules to anyone logged in."""
+    return ClassificationRule.objects.select_related('owner').prefetch_related('tags')
+
+
+@api_token_required('api_v1_rules')
+def api_rules(request):
+    """Classification rules, filtered like the rules page and paged with limit/offset."""
+    limit = _int_param(request, 'limit', RULES_DEFAULT_LIMIT, 1, RULES_MAX_LIMIT)
+    offset = _int_param(request, 'offset', 0, 0, LIST_MAX_OFFSET)
+    if limit is None or offset is None:
+        return _error('limit and offset must be integers.')
+
+    rules = _visible_rules()
+    search_query = (request.GET.get('q') or '').strip()[:QUERY_MAX_CHARS]
+    if search_query:
+        rules = rules.filter(Q(source_text__icontains=search_query) | Q(description__icontains=search_query))
+    status = (request.GET.get('status') or '').strip()
+    if status:
+        if status not in dict(ClassificationRule.STATUS_CHOICES):
+            return _error('status must be one letter of B P C A ! G S I J ?')
+        rules = rules.filter(status=status)
+    match_type = (request.GET.get('match_type') or '').strip()
+    if match_type:
+        if match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
+            choices = ', '.join(code for code, _label in ClassificationRule.MATCH_TYPE_CHOICES)
+            return _error(f'match_type must be one of {choices}.')
+        rules = rules.filter(match_type=match_type)
+    tag = (request.GET.get('tag') or '').strip()
+    if tag:
+        if tag.isdigit():
+            rule_tag = RuleTag.objects.filter(pk=int(tag)).first()
+        else:
+            rule_tag = RuleTag.objects.filter(name__iexact=tag).first()
+        if rule_tag is None:
+            return _error(f'Unknown tag: {tag}. list_tags shows the tags.')
+        rules = rules.filter(tags=rule_tag)
+    owner = (request.GET.get('owner') or '').strip()
+    if owner:
+        rules = rules.filter(owner__username__iexact=owner)
+    enabled = (request.GET.get('enabled') or '').strip()
+    if enabled:
+        if enabled not in ('0', '1'):
+            return _error('enabled must be 1, 0 or empty.')
+        rules = rules.filter(is_enabled=enabled == '1')
+    sort = (request.GET.get('sort') or 'recent').strip()
+    if sort not in RULE_SORTS:
+        return _error(f"sort must be one of {', '.join(RULE_SORTS)}.")
+    rules = rules.order_by(*RULE_SORTS[sort], 'pk')
+
+    return JsonResponse({
+        'total': rules.count(),
+        'offset': offset,
+        'limit': limit,
+        'rules': [_rule_list_row(rule) for rule in rules[offset:offset + limit]],
+    })
+
+
+@api_token_required('api_v1_rule')
+def api_rule(request, rule_id):
+    """One classification rule with every field, including its parsed metadata."""
+    rule = _visible_rules().filter(pk=rule_id).first()
+    if rule is None:
+        return _not_found()
+    return JsonResponse({
+        **_rule_list_row(rule),
+        'color_whole_line': rule.color_whole_line,
+        'source_name': rule.source_name,
+        'created_at': _iso(rule.created_at),
+        'parsed': {
+            'clsid': rule.clsid,
+            'name': rule.name,
+            'filepath': rule.filepath,
+            'filename': rule.filename,
+            'company': rule.company,
+            'arguments': rule.arguments,
+            'file_not_signed': rule.file_not_signed,
+            'attributes': rule.attributes,
+            'is_hidden': rule.is_hidden,
+        },
     })
 
 

@@ -256,11 +256,7 @@
                     <span class="stat-b">err {{ uploaded_log.fixlog_error }}</span>
                     {% endif %}
                 </div>
-                {% if uploaded_log.rule_tags %}
-                <div class="search-result-tags">
-                    {% for tag in uploaded_log.rule_tags %}<span class="tag-chip{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% endfor %}
-                </div>
-                {% endif %}
+                {% include "partials/upload_tags_text.html" with tags=uploaded_log.rule_tags %}
             </div>
         </div>
         <div class="fixlist-actions">

@@ -35,4 +35,4 @@ class NoteStyleTests(SimpleTestCase):
                 self.assertIn('small-note', match.group(0))
         self.assertIn("'tag-picker-option-note small-note'", picker)
         self.assertIn("'tag-picker-option-note small-note'", read('templates/rule_tag_editor.html'))
-        self.assertIn('small-note', read('templates/partials/speech_triggers.html'))
+        self.assertIn('small-note', read('templates/partials/tag_triggers.html'))

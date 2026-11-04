@@ -33,7 +33,7 @@ from .analyzer import ANALYSIS_PAYLOAD_FORMAT, _re2, evaluate_regex_pattern
 from django.db.models import F, Q
 
 from .models import (
-    TAG_CATEGORY_COLOR_RE, ClassificationRule, RuleTag, Speech, TagCategory, UploadedLog,
+    TAG_CATEGORY_COLOR_RE, ClassificationRule, FixlistSnippet, RuleTag, Speech, TagCategory, UploadedLog,
     UploadedLogAnalysis,
 )
 from .rule_sets import SHARED_RULE_SET_KEY
@@ -510,13 +510,39 @@ def set_speech_links(tag, user, speech_ids):
     )
 
 
+def linkable_snippets(user):
+    """The snippets a helper can link to a tag: their own and every snippet they
+    selected for the analyzer, shared ones by other helpers included.
+
+    As with speeches, a link belongs to the snippet, so linking someone else's
+    shared snippet makes it suggested for the tag for everyone who uses it.
+    """
+    return FixlistSnippet.objects.filter(Q(owner=user) | Q(analyzer_users=user)).distinct()
+
+
+def set_snippet_links(tag, user, snippet_ids):
+    """Make exactly the linkable snippets in `snippet_ids` suggest `tag`.
+
+    Snippets the user cannot link (not theirs and not selected by them) keep
+    their links untouched.
+    """
+    through = FixlistSnippet.trigger_tags.through
+    linkable_ids = set(linkable_snippets(user).values_list('pk', flat=True))
+    wanted = linkable_ids & set(snippet_ids)
+    through.objects.filter(ruletag_id=tag.pk, fixlistsnippet_id__in=linkable_ids - wanted).delete()
+    through.objects.bulk_create(
+        [through(fixlistsnippet_id=pk, ruletag_id=tag.pk) for pk in wanted],
+        ignore_conflicts=True,
+    )
+
+
 def save_tag(user, tag, payload):
     """Create (`tag` None) or update a tag from a JSON-style payload: (tag, error).
 
     The one place tag fields are validated and stored, shared by the tag editor
     and the token API. Payload fields: name, description, match_pattern,
     exclude_pattern, match_scope, match_statuses, match_entry_types, auto_apply,
-    category_id (null for the default category), speech_ids. Absent fields keep the tag's values. Applying the tag to rules
+    category_id (null for the default category), speech_ids, snippet_ids. Absent fields keep the tag's values. Applying the tag to rules
     is left to the caller.
     """
     for field in ('name', 'description'):
@@ -530,6 +556,12 @@ def save_tag(user, tag, payload):
         or any(isinstance(item, bool) or not isinstance(item, int) for item in speech_ids)
     ):
         return None, 'Field "speech_ids" must contain integers.'
+    snippet_ids = payload.get('snippet_ids')
+    if snippet_ids is not None and (
+        not isinstance(snippet_ids, list)
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in snippet_ids)
+    ):
+        return None, 'Field "snippet_ids" must contain integers.'
     # Every tag has a category: null, or a new tag without one, means the default.
     if 'category_id' in payload:
         category_id = payload['category_id']
@@ -569,6 +601,8 @@ def save_tag(user, tag, payload):
     tag.save()
     if speech_ids is not None:
         set_speech_links(tag, user, speech_ids)
+    if snippet_ids is not None:
+        set_snippet_links(tag, user, snippet_ids)
     return tag, None
 
 

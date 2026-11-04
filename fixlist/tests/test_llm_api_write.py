@@ -175,6 +175,67 @@ class TagReadTests(ApiWriteBase):
         self.assertEqual(body['untrusted_lines'][0]['tag_ids'], [tag.pk])
 
 
+class RuleReadTests(ApiWriteBase):
+    def setUp(self):
+        super().setUp()
+        self.tag = RuleTag.objects.create(name='renloader')
+        self.bad = make_rule('C:\\bad.exe', status='B', owner=self.admin, description='loader dropper')
+        self.bad.tags.add(self.tag)
+        self.pup = make_rule('toolbar', status='P', match_type='substring', owner=self.helper)
+        self.off = make_rule('old entry', status='C', owner=self.helper, is_enabled=False)
+
+    def ids(self, **params):
+        response = self.get('api_v1_rules', data=params)
+        self.assertEqual(response.status_code, 200, response.content)
+        return {row['rule_id'] for row in response.json()['rules']}
+
+    def test_any_token_lists_every_owners_rules(self):
+        self.assertEqual(self.ids(), {self.bad.pk, self.pup.pk, self.off.pk})
+
+    def test_filters_narrow_the_list(self):
+        self.assertEqual(self.ids(q='DROPPER'), {self.bad.pk})
+        self.assertEqual(self.ids(q='bad.exe'), {self.bad.pk})
+        self.assertEqual(self.ids(status='P'), {self.pup.pk})
+        self.assertEqual(self.ids(match_type='substring'), {self.pup.pk})
+        self.assertEqual(self.ids(tag='RENLOADER'), {self.bad.pk})
+        self.assertEqual(self.ids(tag=str(self.tag.pk)), {self.bad.pk})
+        self.assertEqual(self.ids(owner='alice'), {self.pup.pk, self.off.pk})
+        self.assertEqual(self.ids(enabled='0'), {self.off.pk})
+        self.assertEqual(self.ids(enabled='1'), {self.bad.pk, self.pup.pk})
+
+    def test_bad_filters_are_errors(self):
+        for params in ({'tag': 'nope'}, {'status': 'X'}, {'match_type': 'fuzzy'}, {'enabled': 'yes'}, {'sort': 'name'}):
+            self.assertEqual(self.get('api_v1_rules', data=params).status_code, 400, params)
+
+    def test_rows_carry_tags_and_paging(self):
+        body = self.get('api_v1_rules', data={'limit': 2, 'sort': 'status'}).json()
+        self.assertEqual((body['total'], body['offset'], body['limit'], len(body['rules'])), (3, 0, 2, 2))
+        row = body['rules'][0]
+        self.assertEqual(row['rule_id'], self.bad.pk)
+        self.assertEqual(row['tags'], [{'tag_id': self.tag.pk, 'name': 'renloader'}])
+        self.assertEqual((row['owner'], row['is_enabled']), ('root', True))
+
+    def test_get_rule_returns_every_field(self):
+        body = self.get('api_v1_rule', self.bad.pk).json()
+        self.assertEqual(body['source_text'], 'C:\\bad.exe')
+        self.assertEqual(body['tags'], [{'tag_id': self.tag.pk, 'name': 'renloader'}])
+        self.assertIn('filepath', body['parsed'])
+        self.assertIn('created_at', body)
+
+    def test_unknown_rule_is_404(self):
+        self.assertEqual(self.get('api_v1_rule', 999999).status_code, 404)
+
+    def test_needs_a_token(self):
+        response = self.client.get(reverse('api_v1_rules'), secure=True)
+        self.assertEqual(response.status_code, 401)
+
+    def test_analysis_lines_carry_rule_ids(self):
+        rule = make_rule('BAD LINE', owner=self.admin)
+        make_uploaded_log('amber-falcon', content='BAD LINE')
+        body = self.get('api_v1_upload_analysis', 'amber-falcon').json()
+        self.assertEqual(body['untrusted_lines'][0]['rule_ids'], [rule.pk])
+
+
 class BackwardCompatibilityTests(ApiWriteBase):
     """Older MCP clients read these keys; they must stay."""
 

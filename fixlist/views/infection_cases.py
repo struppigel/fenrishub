@@ -19,6 +19,8 @@ from ..models import (
     InfectionCaseResponse,
     UploadedLog,
 )
+from ..rule_sets import resolve_user_rule_set_key
+from ..tagging import found_tags_by_upload
 from ..upload_utils import execute_merge, resolve_ordered_logs_for_merge
 from .utils import (
     _autoclose_stale_cases,
@@ -699,6 +701,11 @@ def view_infection_case(request, case_id):
     )
 
     timeline_items = _build_case_timeline(infection_case)
+    # The tags found in each linked log, under the viewer's rule set like the uploads list.
+    case_logs = [item['uploaded_log'] for item in timeline_items if item['item_type'] == 'log']
+    tags_by_upload = found_tags_by_upload([log.pk for log in case_logs], resolve_user_rule_set_key(request.user))
+    for uploaded_log in case_logs:
+        uploaded_log.rule_tags = tags_by_upload.get(uploaded_log.pk, [])
 
     selectable_uploads = UploadedLog.objects.none()
     selectable_fixlists = Fixlist.objects.none()

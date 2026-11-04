@@ -247,6 +247,10 @@ function setActiveRightPanel(panel, { focus = true } = {}) {
         localStorage.setItem(ACTIVE_RIGHT_PANEL_KEY, activeRightPanel);
     } catch (e) {}
     applyRightPanelState();
+    // A snippet counts as used per panel (speech_suggestions.js).
+    if (typeof refreshSnippetSuggestions === 'function') {
+        refreshSnippetSuggestions();
+    }
     if (focus) {
         const textarea = getActiveRightTextarea();
         if (textarea) textarea.focus();
@@ -646,8 +650,9 @@ function renderWarnings(warnings) {
             warningElement.appendChild(detailsList);
         }
 
-        // Speeches suggested for this warning: those triggered by the built-in
-        // tag of its code or by its alert rules' tags (speech_suggestions.js).
+        // Speeches and snippets suggested for this warning: those triggered by
+        // the built-in tag of its code or by its alert rules' tags
+        // (speech_suggestions.js).
         warningElement.dataset.tagIds = JSON.stringify(Array.isArray(warning.tag_ids) ? warning.tag_ids : []);
         if (typeof renderWarningSpeechRow === 'function') {
             renderWarningSpeechRow(warningElement);
@@ -1951,26 +1956,6 @@ function setCopiedState(index, isCopied) {
 function fixlistTextForEntry(entry) {
     if (entry && entry.fixlist_replacement) return entry.fixlist_replacement;
     return entry ? (entry.line || '') : '';
-}
-
-// Presence lookup over the fixlist text, used to keep the "copied" marks in
-// sync. A replacement can span several lines (a browser extension becomes a
-// `Comment:` plus the extension folder), so a plain per-line Set isn't enough —
-// those have to be matched as a run of consecutive lines.
-function buildFixlistPresence(value) {
-    const lines = String(value || '').split('\n');
-    const singles = new Set(lines.filter((segment) => segment.length > 0));
-    return function has(text) {
-        if (!text) return false;
-        if (!text.includes('\n')) return singles.has(text);
-        const block = text.split('\n');
-        for (let start = 0; start + block.length <= lines.length; start++) {
-            if (block.every((segment, offset) => lines[start + offset] === segment)) {
-                return true;
-            }
-        }
-        return false;
-    };
 }
 
 function removeLine(line, index) {

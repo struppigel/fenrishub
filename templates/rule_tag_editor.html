@@ -258,6 +258,23 @@
         </div>
         {% endif %}
     </fieldset>
+    <fieldset class="tag-conditions">
+        <legend>suggest these snippets when the tag is found</legend>
+        <div class="tag-editor-note">Your own snippets and those you selected for the analyzer. A link belongs to the snippet: linking another helper's shared snippet suggests it for this tag for everyone using it.</div>
+        <div class="tag-picker">
+            <div class="tag-picker-chips" id="tagSnippetChips"></div>
+            <div class="tag-picker-input-row">
+                <input type="text" id="tagSnippetSearch" class="tag-picker-input" placeholder="find a snippet by name or category..." autocomplete="off" aria-label="find a snippet to link">
+                <div class="tag-picker-dropdown" id="tagSnippetResults" hidden></div>
+            </div>
+        </div>
+        {% if others_snippets %}
+        <div class="tag-condition-group">
+            <span class="tag-condition-label">also suggested by snippets you have not selected</span>
+            {% for snippet in others_snippets %}<span class="tag-chip">{{ snippet.name }} ({{ snippet.owner.username }})</span>{% endfor %}
+        </div>
+        {% endif %}
+    </fieldset>
     </div>
     <div class="button-group">
         <button type="button" id="tagSaveButton">save tag</button>
@@ -277,6 +294,7 @@
 
 {{ tag_json|json_script:"tagData" }}
 {{ linkable_speeches_json|json_script:"ownSpeechesData" }}
+{{ linkable_snippets_json|json_script:"ownSnippetsData" }}
 {% endblock %}
 
 {% block extra_js %}
@@ -301,77 +319,92 @@
     const scopeInput = document.getElementById('tagScope');
     const statusBoxes = [...document.querySelectorAll('#tagStatuses input[type="checkbox"]')];
     const entryTypeBoxes = [...document.querySelectorAll('#tagEntryTypes input[type="checkbox"]')];
-    const ownSpeeches = JSON.parse(document.getElementById('ownSpeechesData').textContent || '[]');
-    const linkedSpeechIds = new Set(ownSpeeches.filter((speech) => speech.linked).map((speech) => speech.id));
-    const speechChips = document.getElementById('tagSpeechChips');
-    const speechSearch = document.getElementById('tagSpeechSearch');
-    const speechResults = document.getElementById('tagSpeechResults');
 
-    function renderSpeechChips() {
-        speechChips.innerHTML = '';
-        ownSpeeches.filter((speech) => linkedSpeechIds.has(speech.id)).forEach((speech) => {
-            const chip = document.createElement('span');
-            chip.className = 'tag-chip';
-            chip.title = speech.category;
-            chip.appendChild(document.createTextNode(speech.name));
-            const remove = document.createElement('button');
-            remove.type = 'button';
-            remove.className = 'tag-chip-remove';
-            remove.textContent = '\u00d7';
-            remove.setAttribute('aria-label', `unlink ${speech.name}`);
-            remove.addEventListener('click', () => {
-                linkedSpeechIds.delete(speech.id);
-                renderSpeechChips();
+    // Links the speeches or snippets the user can link to this tag: chips for
+    // the linked ones and a search box for the rest, which can be many.
+    function setupLinkPicker({ dataId, chipsId, searchId, resultsId, noun, nounPlural }) {
+        const items = JSON.parse(document.getElementById(dataId).textContent || '[]');
+        const linkedIds = new Set(items.filter((item) => item.linked).map((item) => item.id));
+        const chips = document.getElementById(chipsId);
+        const search = document.getElementById(searchId);
+        const results = document.getElementById(resultsId);
+
+        function renderChips() {
+            chips.innerHTML = '';
+            items.filter((item) => linkedIds.has(item.id)).forEach((item) => {
+                const chip = document.createElement('span');
+                chip.className = 'tag-chip';
+                chip.title = item.category;
+                chip.appendChild(document.createTextNode(item.name));
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'tag-chip-remove';
+                remove.textContent = '\u00d7';
+                remove.setAttribute('aria-label', `unlink ${item.name}`);
+                remove.addEventListener('click', () => {
+                    linkedIds.delete(item.id);
+                    renderChips();
+                });
+                chip.appendChild(remove);
+                chips.appendChild(chip);
             });
-            chip.appendChild(remove);
-            speechChips.appendChild(chip);
+            chips.hidden = linkedIds.size === 0;
+        }
+
+        function renderResults() {
+            const query = search.value.trim().toLowerCase();
+            results.innerHTML = '';
+            if (!query) {
+                results.hidden = true;
+                return;
+            }
+            const matches = items.filter((item) => !linkedIds.has(item.id) && (
+                item.name.toLowerCase().includes(query) || item.category.toLowerCase().includes(query)
+            )).slice(0, 20);
+            matches.forEach((item) => {
+                const option = document.createElement('button');
+                option.type = 'button';
+                option.className = 'tag-picker-option';
+                option.textContent = `${item.name}  [${item.category}]`;
+                option.addEventListener('mousedown', (event) => event.preventDefault());
+                option.addEventListener('click', () => {
+                    linkedIds.add(item.id);
+                    search.value = '';
+                    results.hidden = true;
+                    renderChips();
+                });
+                results.appendChild(option);
+            });
+            if (!matches.length) {
+                const none = document.createElement('div');
+                none.className = 'tag-picker-option-note small-note';
+                none.textContent = items.length ? `no matching ${noun}` : `you have no ${nounPlural} yet`;
+                results.appendChild(none);
+            }
+            results.hidden = false;
+        }
+
+        search.addEventListener('input', renderResults);
+        search.addEventListener('blur', () => setTimeout(() => { results.hidden = true; }, 100));
+        search.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                const first = results.querySelector('.tag-picker-option');
+                if (first) first.click();
+            }
         });
-        speechChips.hidden = linkedSpeechIds.size === 0;
+        renderChips();
+        return { linkedIds, elements: [chips, results] };
     }
 
-    function renderSpeechResults() {
-        const query = speechSearch.value.trim().toLowerCase();
-        speechResults.innerHTML = '';
-        if (!query) {
-            speechResults.hidden = true;
-            return;
-        }
-        const matches = ownSpeeches.filter((speech) => !linkedSpeechIds.has(speech.id) && (
-            speech.name.toLowerCase().includes(query) || speech.category.toLowerCase().includes(query)
-        )).slice(0, 20);
-        matches.forEach((speech) => {
-            const option = document.createElement('button');
-            option.type = 'button';
-            option.className = 'tag-picker-option';
-            option.textContent = `${speech.name}  [${speech.category}]`;
-            option.addEventListener('mousedown', (event) => event.preventDefault());
-            option.addEventListener('click', () => {
-                linkedSpeechIds.add(speech.id);
-                speechSearch.value = '';
-                speechResults.hidden = true;
-                renderSpeechChips();
-            });
-            speechResults.appendChild(option);
-        });
-        if (!matches.length) {
-            const none = document.createElement('div');
-            none.className = 'tag-picker-option-note small-note';
-            none.textContent = ownSpeeches.length ? 'no matching speech' : 'you have no speeches yet';
-            speechResults.appendChild(none);
-        }
-        speechResults.hidden = false;
-    }
-
-    speechSearch.addEventListener('input', renderSpeechResults);
-    speechSearch.addEventListener('blur', () => setTimeout(() => { speechResults.hidden = true; }, 100));
-    speechSearch.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            const first = speechResults.querySelector('.tag-picker-option');
-            if (first) first.click();
-        }
+    const speechLinks = setupLinkPicker({
+        dataId: 'ownSpeechesData', chipsId: 'tagSpeechChips', searchId: 'tagSpeechSearch',
+        resultsId: 'tagSpeechResults', noun: 'speech', nounPlural: 'speeches',
     });
-    renderSpeechChips();
+    const snippetLinks = setupLinkPicker({
+        dataId: 'ownSnippetsData', chipsId: 'tagSnippetChips', searchId: 'tagSnippetSearch',
+        resultsId: 'tagSnippetResults', noun: 'snippet', nounPlural: 'snippets',
+    });
     const autoApplyInput = document.getElementById('tagAutoApply');
     const descriptionInput = document.getElementById('tagDescription');
     const categoryInput = document.getElementById('tagCategory');
@@ -563,7 +596,8 @@
             // Without a condition the server would refuse it; it has nothing to match.
             auto_apply: autoApplyInput.checked && hasCondition(currentConditions()),
             category_id: Number(categoryInput.value),
-            speech_ids: [...linkedSpeechIds],
+            speech_ids: [...speechLinks.linkedIds],
+            snippet_ids: [...snippetLinks.linkedIds],
         };
         if (tag) body.id = tag.id;
         return body;
@@ -755,11 +789,16 @@
 
     const advancedToggle = document.getElementById('tagAdvancedToggle');
     const advanced = document.getElementById('tagAdvanced');
-    // Says how many speeches are linked, so links behind the closed section
-    // are not out of mind.
+    // Says how many speeches and snippets are linked, so links behind the
+    // closed section are not out of mind.
     function syncAdvancedToggle() {
-        const linked = linkedSpeechIds.size;
-        const suffix = linked ? ` (${linked} speech${linked === 1 ? '' : 'es'} linked)` : '';
+        const speeches = speechLinks.linkedIds.size;
+        const snippets = snippetLinks.linkedIds.size;
+        const counts = [
+            speeches ? `${speeches} speech${speeches === 1 ? '' : 'es'}` : '',
+            snippets ? `${snippets} snippet${snippets === 1 ? '' : 's'}` : '',
+        ].filter(Boolean);
+        const suffix = counts.length ? ` (${counts.join(', ')} linked)` : '';
         advancedToggle.textContent = (advanced.hidden ? 'more options' : 'fewer options') + suffix;
         advancedToggle.setAttribute('aria-expanded', advanced.hidden ? 'false' : 'true');
     }
@@ -767,7 +806,8 @@
         advanced.hidden = !advanced.hidden;
         syncAdvancedToggle();
     });
-    [speechChips, speechResults].forEach((element) => element.addEventListener('click', syncAdvancedToggle));
+    [...speechLinks.elements, ...snippetLinks.elements]
+        .forEach((element) => element.addEventListener('click', syncAdvancedToggle));
     syncAdvancedToggle();
     [patternInput, excludeInput].forEach((input) => {
         input.addEventListener('keydown', (event) => {

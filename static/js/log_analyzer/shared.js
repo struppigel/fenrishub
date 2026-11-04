@@ -566,6 +566,27 @@ function normalizePendingChangesForCurrentLines() {
     });
 }
 
+// Presence lookup over the fixlist text, used to keep the "copied" marks in
+// sync. A replacement can span several lines (a browser extension becomes a
+// `Comment:` plus the extension folder), so a plain per-line Set isn't enough —
+// those have to be matched as a run of consecutive lines. Lives here rather than
+// in analysis.js because the draft restore (draft_autosave.js) needs it too.
+function buildFixlistPresence(value) {
+    const lines = String(value || '').split('\n');
+    const singles = new Set(lines.filter((segment) => segment.length > 0));
+    return function has(text) {
+        if (!text) return false;
+        if (!text.includes('\n')) return singles.has(text);
+        const block = text.split('\n');
+        for (let start = 0; start + block.length <= lines.length; start++) {
+            if (block.every((segment, offset) => lines[start + offset] === segment)) {
+                return true;
+            }
+        }
+        return false;
+    };
+}
+
 // Replace [start, end) in a textarea while keeping the browser's own undo
 // history intact.
 //

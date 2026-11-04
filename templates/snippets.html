@@ -1,10 +1,12 @@
 {% extends 'base.html' %}
+{% load static rule_tags %}
 
 {% block title %}Snippets - Fenris{% endblock %}
 
 {% block page_context_label %}snippets{% endblock %}
 
 {% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
     .snippet-item {
         padding: 10px;
@@ -213,6 +215,11 @@
                     {% endif %}
                 </div>
             </div>
+            {% if snippet.trigger_tags.all %}
+            <div class="tag-trigger-summary">suggested for:
+                {% for tag in snippet.trigger_tags.all %}<span class="tag-chip{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% endfor %}
+            </div>
+            {% endif %}
             <div class="snippet-content-preview">{{ snippet.content }}</div>
             <pre id="snippet-content-{{ snippet.pk }}" style="display:none;">{{ snippet.content }}</pre>
         </div>

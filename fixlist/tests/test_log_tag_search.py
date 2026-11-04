@@ -13,7 +13,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from ..analyzer import ANALYSIS_PAYLOAD_FORMAT
-from ..models import RuleTag, UploadedLog, UploadedLogAnalysis, UserProfile
+from ..models import InfectionCase, InfectionCaseLog, RuleTag, UploadedLog, UploadedLogAnalysis, UserProfile
 from ..tagging import attach_rule_tags, found_tags_by_upload, logs_with_tags
 from .factories import make_rule
 
@@ -314,7 +314,7 @@ class LogSearchTagFilterTests(TagSearchSetupMixin, TestCase):
             'shows-tags': sorted(['miner', self.low_memory.name], key=str.lower),
             'no-analysis': [],
         })
-        self.assertContains(response, f'<span class="tag-chip tag-cat-{self.miner.category_id}" title="">miner</span>', html=True)
+        self.assertContains(response, f'<span class="tag-text tag-cat-{self.miner.category_id}" title="">miner</span>', html=True)
 
     def test_tag_suggestions_list_names_only(self):
         response = self.client.get(reverse('log_search'))
@@ -398,7 +398,13 @@ class UploadsListRowTagsTests(TagSearchSetupMixin, TestCase):
 
         tags = {log.upload_id: [tag['name'] for tag in log.rule_tags] for log in response.context['uploads']}
         self.assertEqual(tags, {'tagged-row': ['miner'], 'untagged-row': []})
-        self.assertContains(response, f'<span class="tag-chip tag-cat-{self.miner.category_id}" title="">miner</span>', html=True)
+        # Text in the category colour, not badges.
+        self.assertContains(
+            response,
+            f'<div class="fixlist-meta upload-tags">tags: <span class="tag-text tag-cat-{self.miner.category_id}" title="">miner</span></div>',
+            html=True,
+        )
+        self.assertNotContains(response, 'class="tag-chip')
 
     def test_trash_rows_show_their_tags(self):
         from django.utils import timezone
@@ -408,3 +414,27 @@ class UploadsListRowTagsTests(TagSearchSetupMixin, TestCase):
         response = self.client.get(reverse('uploads_trash'))
 
         self.assertEqual([tag['name'] for tag in response.context['uploads'][0].rule_tags], ['miner'])
+
+
+class CaseViewLogTagsTests(TagSearchSetupMixin, TestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.client.login(username='alice', password='pw')
+
+    def test_case_logs_show_their_tags_as_text(self):
+        case = InfectionCase.objects.create(owner=self.user, username='forum_user')
+        tagged = self._log('tagged-case-log')
+        self._cache(tagged, _payload(lines=[_line('x', [self.miner_rule.pk])]))
+        untagged = self._log('untagged-case-log')
+        for log in (tagged, untagged):
+            InfectionCaseLog.objects.create(case=case, uploaded_log=log, added_by=self.user)
+
+        response = self.client.get(reverse('view_infection_case', args=[case.case_id]))
+
+        self.assertContains(
+            response,
+            f'<div class="fixlist-meta upload-tags">tags: <span class="tag-text tag-cat-{self.miner.category_id}" title="">miner</span></div>',
+            html=True,
+        )
+        self.assertContains(response, 'upload-tags', count=1)

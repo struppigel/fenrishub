@@ -1,10 +1,12 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block title %}{% if editing %}Edit{% else %}Add{% endif %} Snippet - Fenris{% endblock %}
 
 {% block page_context_label %}snippets / {% if editing %}edit{% else %}add{% endif %}{% endblock %}
 
 {% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
     .snippet-meta-row {
         display: grid;
@@ -75,15 +77,26 @@
         <textarea id="snippetContent" name="content" placeholder="Snippet content to paste into fixlist..." spellcheck="false" required>{{ form.content }}</textarea>
         <div class="editor-hint">ctrl+s saves</div>
     </div>
+    {% include 'partials/tag_triggers.html' with prefix='snippet' item='snippet' %}
     <div class="button-group">
         <button type="submit">{% if editing %}save{% else %}create{% endif %}</button>
         <a href="{{ cancel_url }}"><button type="button">cancel</button></a>
     </div>
 </form>
 
+{{ trigger_tags_json|json_script:"snippetTriggersData" }}
+<script src="{% static 'js/rule_tag_picker.js' %}"></script>
 <script>
 (function () {
     const form = document.getElementById('snippetForm');
+
+    // Existing tags only; new tags are made in the tag editor.
+    createRuleTagPicker({
+        root: document.getElementById('snippetTagPicker'),
+        inputName: 'trigger_tag_ids',
+        urls: { list: "{% url 'rule_tags_api' %}" },
+        initialTags: JSON.parse(document.getElementById('snippetTriggersData').textContent || '[]'),
+    });
 
     document.addEventListener('keydown', function (event) {
         if ((event.ctrlKey || event.metaKey) && (event.key === 's' || event.key === 'S')) {

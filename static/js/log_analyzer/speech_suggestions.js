@@ -1,16 +1,20 @@
-// Suggesting speeches for the log in front of the analyst, and showing the
-// log's rule tags.
+// Suggesting speeches and snippets for the log in front of the analyst, and
+// showing the log's rule tags.
 //
-// A speech names the rule tags it fits. After every analysis the speeches
-// whose tags were found in the log are listed under "suggested" at the top of
-// the speeches picker, and each warning box lists the speeches for its own
-// tags (the built-in tag of a hardcoded warning, or its alert rules' tags).
-// Nothing is inserted on its own - the analyst still picks.
+// A speech or snippet names the rule tags it fits. After every analysis the
+// ones whose tags were found in the log are listed under "suggested" at the
+// top of the speeches and snippets menus, and each warning box lists those
+// for its own tags (the built-in tag of a hardcoded warning, or its alert
+// rules' tags). Nothing is inserted on its own - the analyst still picks.
 //
 // A speech already in the response is not suggested again: it counts as
 // present when its longest fixed passage (the text between placeholders) is
 // found in the response, so a reply reloaded from a saved fixlist counts too,
 // and deleting the text brings the suggestion back.
+//
+// Snippets go into whichever right panel is showing, so a snippet is not
+// suggested while every one of its lines is already in that panel: one in the
+// fixlist is still suggested in the response view, and the other way round.
 //
 // The tags themselves are drawn in the status legend's second row and as
 // chips on each tagged log line, with their notes as tooltips. Clicking a tag
@@ -64,6 +68,14 @@ function currentResponseText() {
     return textarea ? textarea.value : '';
 }
 
+// The panel a snippet would go into right now (fixlist or response).
+function currentSnippetTargetText() {
+    const textarea = typeof getActiveRightTextarea === 'function'
+        ? getActiveRightTextarea()
+        : document.getElementById('selectedLines');
+    return textarea ? textarea.value : '';
+}
+
 const LINE_TAG_CHIP_LIMIT = 3;
 
 // Tags and speeches are listed alphabetically everywhere.
@@ -71,7 +83,8 @@ function byName(left, right) {
     return String(left.name || '').localeCompare(String(right.name || ''), undefined, { sensitivity: 'base' });
 }
 
-// Pure, so the test page can drive it directly.
+// Pure, so the test page can drive it directly. Snippets carry
+// `trigger_tag_ids` too, so this serves both.
 function speechesForTags(tagIds, speeches) {
     const found = new Set(tagIds || []);
     if (!found.size) {
@@ -80,6 +93,49 @@ function speechesForTags(tagIds, speeches) {
     return (speeches || [])
         .filter((speech) => (speech.trigger_tag_ids || []).some((id) => found.has(id)))
         .sort(byName);
+}
+
+// The tags among `tagIds` that none of `selected` names.
+function uncoveredTagIds(tagIds, selected) {
+    const covered = new Set();
+    (selected || []).forEach((item) => {
+        (item.trigger_tag_ids || []).forEach((id) => covered.add(id));
+    });
+    return (tagIds || []).filter((id) => !covered.has(id));
+}
+
+// The trimmed, non-empty lines of `text`.
+function nonEmptyLines(text) {
+    return String(text || '').replace(/\r\n/g, '\n').split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+}
+
+// A snippet is in `text` when every one of its non-empty lines is a line of it.
+function snippetIsInText(snippet, text) {
+    const wanted = nonEmptyLines(snippet && snippet.content);
+    if (!wanted.length) {
+        return false;
+    }
+    const present = new Set(nonEmptyLines(text));
+    return wanted.every((line) => present.has(line));
+}
+
+function withoutUsedSnippets(snippets, text) {
+    return (snippets || []).filter((snippet) => !snippetIsInText(snippet, text));
+}
+
+// The analyst's selected snippets for `tagIds` that are not in `text` yet.
+function suggestedSnippetsForTags(tagIds, snippets, text = '') {
+    return withoutUsedSnippets(speechesForTags(tagIds, snippets), text);
+}
+
+// Other helpers' shared snippets for the tags no selected snippet covers,
+// the snippet side of fallbackSpeechesForTags.
+function fallbackSnippetsForTags(tagIds, selectedSnippets, sharedSnippets, text = '') {
+    return withoutUsedSnippets(
+        speechesForTags(uncoveredTagIds(tagIds, selectedSnippets), sharedSnippets), text,
+    );
 }
 
 // "insert all" adds the menu's speeches in the order the menu lists them.
@@ -95,12 +151,9 @@ function computeSuggestedSpeechIds(speeches, tagIds, responseText = '') {
 // analyst's own selected speeches covers - a covered tag gets no fallback,
 // even when its own speech is already in the response.
 function fallbackSpeechesForTags(tagIds, selectedSpeeches, sharedSpeeches, responseText = '') {
-    const covered = new Set();
-    (selectedSpeeches || []).forEach((speech) => {
-        (speech.trigger_tag_ids || []).forEach((id) => covered.add(id));
-    });
-    const uncovered = (tagIds || []).filter((id) => !covered.has(id));
-    return withoutUsedSpeeches(speechesForTags(uncovered, sharedSpeeches), responseText);
+    return withoutUsedSpeeches(
+        speechesForTags(uncoveredTagIds(tagIds, selectedSpeeches), sharedSpeeches), responseText,
+    );
 }
 
 // The speeches a click on `entry` (a log line) can add to the response: the
@@ -212,14 +265,42 @@ function insertSuggestedSpeech(speechId) {
     }
 }
 
-// Fills (or refills) the "suggested speeches" row of one warning box from its
-// data-tag-ids, so a speech captured later shows up without re-rendering the
-// warnings - which would bring back the ones the analyst closed.
-function renderWarningSpeechRow(warningElement) {
-    const existing = warningElement.querySelector('.analysis-warning-speeches');
-    if (existing) {
-        existing.remove();
+function insertSuggestedSnippet(snippetId) {
+    // Snippets go into whichever panel is showing, as from the snippets menu.
+    if (window.insertSnippetById) {
+        window.insertSnippetById(snippetId);
     }
+}
+
+// One "suggested ..." row of a warning box: the analyst's own items, else
+// other helpers' shared ones. Nothing when there are neither.
+function buildWarningSuggestionRow({ rowClass, noun, own, shared, title, onInsert }) {
+    if (!own.length && !shared.length) {
+        return null;
+    }
+    const row = document.createElement('div');
+    row.className = `analysis-warning-suggestions ${rowClass}`;
+    row.appendChild(document.createTextNode(
+        own.length ? `suggested ${noun}:` : `suggested ${noun} from other helpers:`,
+    ));
+    (own.length ? own : shared).forEach((item) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'analysis-warning-suggestion';
+        button.textContent = item.name;
+        button.title = title;
+        button.addEventListener('click', () => onInsert(item.id));
+        row.appendChild(button);
+    });
+    return row;
+}
+
+// Fills (or refills) the "suggested speeches" and "suggested snippets" rows of
+// one warning box from its data-tag-ids, so a speech captured later shows up
+// without re-rendering the warnings - which would bring back the ones the
+// analyst closed.
+function renderWarningSpeechRow(warningElement) {
+    warningElement.querySelectorAll('.analysis-warning-suggestions').forEach((row) => row.remove());
     let tagIds = [];
     try {
         tagIds = JSON.parse(warningElement.dataset.tagIds || '[]');
@@ -228,24 +309,26 @@ function renderWarningSpeechRow(warningElement) {
     }
     const config = window.logAnalyzerConfig || {};
     const responseText = currentResponseText();
-    const own = withoutUsedSpeeches(speechesForTags(tagIds, config.speeches), responseText);
-    const shared = fallbackSpeechesForTags(tagIds, config.speeches, config.sharedTagSpeeches, responseText);
-    if (!own.length && !shared.length) {
-        return;
-    }
-    const row = document.createElement('div');
-    row.className = 'analysis-warning-speeches';
-    row.appendChild(document.createTextNode(own.length ? 'suggested speeches:' : 'suggested speeches from other helpers:'));
-    (own.length ? own : shared).forEach((speech) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'analysis-warning-speech';
-        button.textContent = speech.name;
-        button.title = 'insert into the response';
-        button.addEventListener('click', () => insertSuggestedSpeech(speech.id));
-        row.appendChild(button);
-    });
-    warningElement.appendChild(row);
+    const snippetText = currentSnippetTargetText();
+    const rows = [
+        buildWarningSuggestionRow({
+            rowClass: 'analysis-warning-speeches',
+            noun: 'speeches',
+            own: withoutUsedSpeeches(speechesForTags(tagIds, config.speeches), responseText),
+            shared: fallbackSpeechesForTags(tagIds, config.speeches, config.sharedTagSpeeches, responseText),
+            title: 'insert into the response',
+            onInsert: insertSuggestedSpeech,
+        }),
+        buildWarningSuggestionRow({
+            rowClass: 'analysis-warning-snippets',
+            noun: 'snippets',
+            own: suggestedSnippetsForTags(tagIds, config.snippets, snippetText),
+            shared: fallbackSnippetsForTags(tagIds, config.snippets, config.sharedTagSnippets, snippetText),
+            title: 'insert into the panel on the right',
+            onInsert: insertSuggestedSnippet,
+        }),
+    ];
+    rows.filter(Boolean).forEach((row) => warningElement.appendChild(row));
 }
 
 function refreshWarningSpeechRows() {
@@ -265,6 +348,22 @@ function refreshSpeechSuggestions() {
     }
 }
 
+// Also runs when the right panel switches, since a snippet counts as used
+// only in the panel it would go into.
+function refreshSnippetSuggestions() {
+    const config = window.logAnalyzerConfig || {};
+    const tagIds = ((lastAnalysisPayload && lastAnalysisPayload.rule_tags) || []).map((tag) => tag.id);
+    const text = currentSnippetTargetText();
+    config.suggestedSnippetIds = suggestedSnippetsForTags(tagIds, config.snippets, text)
+        .map((snippet) => snippet.id);
+    config.suggestedSharedSnippetIds = fallbackSnippetsForTags(
+        tagIds, config.snippets, config.sharedTagSnippets, text,
+    ).map((snippet) => snippet.id);
+    if (window.reloadSnippetMenu) {
+        window.reloadSnippetMenu();
+    }
+}
+
 function updateSpeechSuggestionsFromAnalysis(payload) {
     lastAnalysisPayload = payload || null;
     ruleTagsById = new Map(((payload && payload.rule_tags) || []).map((tag) => [tag.id, tag]));
@@ -273,6 +372,7 @@ function updateSpeechSuggestionsFromAnalysis(payload) {
     applyTagFilterClass();
     renderRuleTagsLine(payload);
     refreshSpeechSuggestions();
+    refreshSnippetSuggestions();
 }
 
 // The tags row sits inside the status legend; the log and fixlist panels
@@ -476,13 +576,25 @@ function setupRuleTagsLine() {
         if (event.key === 'Escape') closeLineSpeechMenu();
     });
     // Suggestions follow the response: a speech typed in or inserted stops
-    // being suggested, and comes back when its text is deleted.
+    // being suggested, and comes back when its text is deleted. Snippets
+    // follow both panels the same way.
     const response = document.getElementById('responseText');
     if (response) {
         let timer = null;
         response.addEventListener('input', () => {
             clearTimeout(timer);
-            timer = setTimeout(refreshSpeechSuggestions, 300);
+            timer = setTimeout(() => {
+                refreshSpeechSuggestions();
+                refreshSnippetSuggestions();
+            }, 300);
+        });
+    }
+    const fixlist = document.getElementById('selectedLines');
+    if (fixlist) {
+        let timer = null;
+        fixlist.addEventListener('input', () => {
+            clearTimeout(timer);
+            timer = setTimeout(refreshSnippetSuggestions, 300);
         });
     }
 }

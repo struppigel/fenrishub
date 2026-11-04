@@ -237,17 +237,26 @@ class TagCategoryColourTests(TagCategorySetupMixin, TestCase):
         self.assertEqual(by_name['miner']['category_id'], self.malware.pk)
         self.assertEqual(by_name['plain']['category_id'], self.default.pk)
 
-    def test_uploads_list_and_log_search_colour_the_badges(self):
+    def test_uploads_list_and_log_search_colour_the_tag_text(self):
         self._tagged_log()
-        coloured = f'<span class="tag-chip tag-cat-{self.malware.pk}" title="">miner</span>'
-        plain = f'<span class="tag-chip tag-cat-{self.default.pk}" title="">plain</span>'
+        tags_line = (
+            '<div class="fixlist-meta upload-tags">tags: '
+            f'<span class="tag-text tag-cat-{self.malware.pk}" title="">miner</span>, '
+            f'<span class="tag-text tag-cat-{self.default.pk}" title="">plain</span></div>'
+        )
 
         for response in (
             self.client.get(reverse('uploaded_logs')),
             self.client.get(reverse('log_search'), {'q': 'needle'}),
         ):
-            self.assertContains(response, coloured, html=True)
-            self.assertContains(response, plain, html=True)
+            self.assertContains(response, tags_line, html=True)
+
+        self.assertNotContains(self.client.get(reverse('uploaded_logs')), 'class="tag-chip')
+
+    def test_base_colours_tag_text_by_category(self):
+        response = self.client.get(reverse('uploaded_logs'))
+
+        self.assertContains(response, f'.tag-text.tag-cat-{self.malware.pk} {{ color: #ff4444; }}')
 
     def test_rules_list_colours_the_badges(self):
         response = self.client.get(reverse('rules'), {'filter': 'all'})

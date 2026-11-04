@@ -24,7 +24,7 @@ from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
     VALID_STATUSES,
 )
-from ..models import ClassificationRule, Fixlist, FixlistSnippet, UploadedLog
+from ..models import ClassificationRule, Fixlist, UploadedLog
 from ..rule_sets import (
     SHARED_RULE_SET_KEY,
     resolve_effective_rule_set_key,
@@ -39,6 +39,7 @@ from ..rule_utils import (
 )
 from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE, effective_analyzer_fixlist_template
 from .guest import deny_guests, guest_or_login_required, is_guest_request
+from .snippets import analyzer_snippets_for, shared_tag_snippets_for
 from .speeches import analyzer_speeches_for, shared_tag_speeches_for
 from .utils import get_action_scoped_uploads, get_updatable_uploads
 
@@ -59,6 +60,7 @@ def log_analyzer_view(request):
                 'initial_response_text': '',
                 'is_superuser': False,
                 'snippets_json': mark_safe('[]'),
+                'shared_tag_snippets_json': mark_safe('[]'),
                 'speeches_json': mark_safe('[]'),
                 'shared_tag_speeches_json': mark_safe('[]'),
                 # A guest has no username, so there is no per-helper upload link
@@ -72,18 +74,8 @@ def log_analyzer_view(request):
     uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True).defer('content')[:200]
     requested_upload_id = (request.GET.get('upload_id') or '').strip()
     initial_upload_id = requested_upload_id if requested_upload_id else ''
-    snippets_qs = FixlistSnippet.objects.filter(
-        analyzer_users=request.user,
-    ).select_related('owner').order_by('category', 'name')
-    snippets_json = mark_safe(json.dumps([
-        {
-            'id': s.id,
-            'name': s.name if s.owner_id == request.user.id else f"{s.name} ({s.owner.username})",
-            'category': s.category,
-            'content': s.content,
-        }
-        for s in snippets_qs
-    ]))
+    snippets_json = mark_safe(json.dumps(analyzer_snippets_for(request.user)))
+    shared_tag_snippets_json = mark_safe(json.dumps(shared_tag_snippets_for(request.user)))
     speeches_json = mark_safe(json.dumps(analyzer_speeches_for(request.user)))
     shared_tag_speeches_json = mark_safe(json.dumps(shared_tag_speeches_for(request.user)))
     # Bases for the {UPLOADLINK_*} speech placeholders. The per-user link needs a
@@ -133,6 +125,7 @@ def log_analyzer_view(request):
             'fixlist_share_url': fixlist_share_url,
             'is_superuser': request.user.is_superuser,
             'snippets_json': snippets_json,
+            'shared_tag_snippets_json': shared_tag_snippets_json,
             'speeches_json': speeches_json,
             'shared_tag_speeches_json': shared_tag_speeches_json,
             'upload_link_helper_base': upload_link_helper_base,

@@ -8,46 +8,6 @@
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
-    .speech-triggers {
-        border: 1px solid var(--la-border);
-        padding: 8px 10px;
-        margin: 0 0 12px;
-    }
-
-    .speech-triggers legend {
-        font-size: 12px;
-        color: var(--la-text-primary);
-        padding: 0 4px;
-    }
-
-    .speech-trigger-group {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px 12px;
-        align-items: center;
-        margin-top: 8px;
-    }
-
-    .speech-trigger-group > .speech-trigger-label {
-        flex-basis: 100%;
-        font-size: 11px;
-        color: var(--la-text-muted);
-    }
-
-    .speech-trigger-group > div {
-        flex-basis: 100%;
-    }
-
-    .speech-trigger-summary {
-        margin-top: 4px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-        align-items: center;
-        font-size: 11px;
-        color: var(--la-text-muted);
-    }
-
     .speech-item {
         padding: 10px;
         margin-bottom: 8px;
@@ -259,7 +219,7 @@
                 <label for="createContent">content</label>
                 <textarea id="createContent" name="content" required placeholder="Write the text you want to paste into the response here.&#10;&#10;Placeholders, filled in when you insert the speech in the analyzer:&#10;&#10;{HELPERNAME} - your own username&#10;{USERNAME} - the forum user of the log loaded in the analyzer&#10;{UPLOADLINK_HELPER} - upload link to your own channel&#10;{UPLOADLINK_HELPER_PREFILLED} - the same link, with the forum user filled in&#10;{UPLOADLINK_GENERAL} - upload link to the general channel&#10;{UPLOADLINK_GENERAL_PREFILLED} - the same link, with the forum user filled in&#10;{COUNTER} - the next step number, counting on across the whole response&#10;&#10;{USERNAME} and the two prefilled links need a loaded log. Without one they are left as they are.&#10;&#10;Filled when the fixlist is saved:&#10;&#10;{FIXLISTLINK} - the share link of the fixlist&#10;{FRSTPATH} - the folder FRST was run from, read from the source log"></textarea>
             </div>
-            {% include 'partials/speech_triggers.html' with prefix='create' %}
+            {% include 'partials/tag_triggers.html' with prefix='create' item='speech' %}
             <div class="form-group">
                 <label class="checkbox-label"><input type="checkbox" name="is_shared" checked> shared with all users</label>
             </div>
@@ -287,7 +247,7 @@
                 <label for="editContent">content</label>
                 <textarea id="editContent" name="content" required placeholder="Write the text you want to paste into the response here.&#10;&#10;Placeholders, filled in when you insert the speech in the analyzer:&#10;&#10;{HELPERNAME} - your own username&#10;{USERNAME} - the forum user of the log loaded in the analyzer&#10;{UPLOADLINK_HELPER} - upload link to your own channel&#10;{UPLOADLINK_HELPER_PREFILLED} - the same link, with the forum user filled in&#10;{UPLOADLINK_GENERAL} - upload link to the general channel&#10;{UPLOADLINK_GENERAL_PREFILLED} - the same link, with the forum user filled in&#10;{COUNTER} - the next step number, counting on across the whole response&#10;&#10;{USERNAME} and the two prefilled links need a loaded log. Without one they are left as they are.&#10;&#10;Filled when the fixlist is saved:&#10;&#10;{FIXLISTLINK} - the share link of the fixlist&#10;{FRSTPATH} - the folder FRST was run from, read from the source log"></textarea>
             </div>
-            {% include 'partials/speech_triggers.html' with prefix='edit' %}
+            {% include 'partials/tag_triggers.html' with prefix='edit' item='speech' %}
             <div class="form-group">
                 <label class="checkbox-label"><input type="checkbox" name="is_shared" id="editIsShared"> shared with all users</label>
             </div>
@@ -352,7 +312,7 @@
                 </div>
             </div>
             {% if speech.trigger_tags.all %}
-            <div class="speech-trigger-summary">suggested for:
+            <div class="tag-trigger-summary">suggested for:
                 {% for tag in speech.trigger_tags.all %}<span class="tag-chip{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% endfor %}
             </div>
             {% endif %}
