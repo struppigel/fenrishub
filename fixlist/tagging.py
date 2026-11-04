@@ -245,6 +245,22 @@ def tag_category_error(name, color, exclude_pk=None):
     return None
 
 
+def parse_tag_category_priority(raw, current):
+    """``(priority, error)`` from a posted priority; blank keeps `current`."""
+    raw = (raw or '').strip()
+    if not raw:
+        return current, None
+    try:
+        priority = int(raw)
+    except ValueError:
+        priority = None
+    if priority is None or not TagCategory.PRIORITY_MIN <= priority <= TagCategory.PRIORITY_MAX:
+        return None, (
+            f'Priority must be a whole number from {TagCategory.PRIORITY_MIN} to {TagCategory.PRIORITY_MAX}.'
+        )
+    return priority, None
+
+
 _RULE_FIELDS = ('pk', 'status', 'entry_type', 'match_type', 'source_text', 'description', 'owner__username')
 
 
@@ -775,7 +791,7 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
 
 
 def found_tags_by_upload(upload_pks, rule_set_key):
-    """``{upload_pk: [{id, name, description, category_id}]}``: the tags found in each log, by name.
+    """``{upload_pk: [{id, name, description, category_id, category_priority}]}``: the tags found in each log, by name.
 
     Finds what attach_rule_tags finds, from the cached analysis a tag search
     reads (the viewer's rule set, else the shared one), in a fixed number of
@@ -829,9 +845,9 @@ def found_tags_by_upload(upload_pks, rule_set_key):
     tags = {
         tag.pk: {
             'id': tag.pk, 'name': tag.name, 'description': tag.description,
-            'category_id': tag.category_id,
+            'category_id': tag.category_id, 'category_priority': tag.category.priority,
         }
-        for tag in RuleTag.objects.filter(pk__in=all_tag_ids)
+        for tag in RuleTag.objects.filter(pk__in=all_tag_ids).select_related('category')
     } if all_tag_ids else {}
     for upload_pk, tag_ids in tag_ids_by_upload.items():
         found[upload_pk] = sorted(
@@ -839,6 +855,18 @@ def found_tags_by_upload(upload_pks, rule_set_key):
             key=lambda tag: tag['name'].lower(),
         )
     return found
+
+
+def tags_for_listing(tags):
+    """The found tags an uploads list or case log row shows (see found_tags_by_upload).
+
+    Tags of priority-0 categories are left out - they are in nearly every log;
+    the rest come highest category priority first, then by name.
+    """
+    return sorted(
+        (tag for tag in tags if tag['category_priority'] > 0),
+        key=lambda tag: (-tag['category_priority'], tag['name'].lower()),
+    )
 
 
 def selected_tags_for_picker(tag_ids):

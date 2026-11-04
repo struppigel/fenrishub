@@ -1,0 +1,3 @@
+<select name="priority" aria-label="category priority" title="orders tags on the uploads list and in cases, highest first; 0 hides them there">
+    {% for value in priority_choices %}<option value="{{ value }}"{% if value == selected %} selected{% endif %}>{% if value == 0 %}priority 0 (hidden in uploads and cases){% else %}priority {{ value }}{% endif %}</option>{% endfor %}
+</select>

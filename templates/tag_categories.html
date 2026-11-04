@@ -77,6 +77,8 @@
     a category gives its tags a color: every badge of a tag in the category takes it, everywhere tags are shown.
     every tag has a category; new tags get the default one, and the tags of a deleted category move to it.
     pick a tag's category in the tag editor.
+    the priority orders tags on the uploads list and in cases, highest first; priority 0 hides them there
+    (for tags found in nearly every log).
 </div>
 
 {% for category in categories %}
@@ -86,6 +88,7 @@
     <span class="tag-chip tag-cat-{{ category.pk }} category-preview" data-preview>{{ category.name }}</span>
     <input type="text" name="name" value="{{ category.name }}" maxlength="64" aria-label="category name" required>
     <input type="color" name="color" value="{{ category.color }}" aria-label="category color">
+    {% include "partials/tag_category_priority_select.html" with selected=category.priority %}
     <button type="submit" name="action" value="edit">save</button>
     {% if not category.is_default %}
     <button type="submit" name="action" value="delete" class="delete-btn"
@@ -102,6 +105,7 @@
     <span class="tag-chip category-preview" data-preview>new category</span>
     <input type="text" name="name" maxlength="64" placeholder="category name, e.g. ransomware" aria-label="new category name" required>
     <input type="color" name="color" value="{{ default_color }}" aria-label="new category color">
+    {% include "partials/tag_category_priority_select.html" with selected=default_priority %}
     <button type="submit" name="action" value="add">add category</button>
 </form>
 {% endblock %}

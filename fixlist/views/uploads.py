@@ -22,7 +22,7 @@ from ..log_converters import convert_log_to_response
 from ..models import LOG_TYPE_UNKNOWN, RuleTag, UploadedLog
 from ..permissions import user_can_delete_uploaded_log
 from ..rule_sets import resolve_user_rule_set_key
-from ..tagging import found_tags_by_upload, logs_with_tags
+from ..tagging import found_tags_by_upload, logs_with_tags, tags_for_listing
 from ..upload_utils import (
     soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
     schedule_analysis_stats_recalc,
@@ -341,7 +341,7 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     # The tags found in each listed log, under the viewer's rule set like the tag search.
     tags_by_upload = found_tags_by_upload([log.pk for log in page_obj.object_list], rule_set_key)
     for uploaded_log in page_obj.object_list:
-        uploaded_log.rule_tags = tags_by_upload.get(uploaded_log.pk, [])
+        uploaded_log.rule_tags = tags_for_listing(tags_by_upload.get(uploaded_log.pk, []))
 
     pagination_params = {}
     if username_filter:

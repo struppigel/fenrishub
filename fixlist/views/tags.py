@@ -27,6 +27,7 @@ from ..tagging import (
     conditions_from_payload,
     linkable_snippets,
     linkable_speeches,
+    parse_tag_category_priority,
     save_tag,
     matching_rule_ids,
     preview_conditions,
@@ -102,22 +103,27 @@ def rule_tags_view(request):
 @login_required
 @require_http_methods(["GET", "POST"])
 def tag_categories_view(request):
-    """List, add, rename, recolour and delete tag categories.
+    """List, add, rename, recolour, reprioritise and delete tag categories.
 
-    A category only sets the colour of its tags' badges. Every tag has one:
-    deleting a category moves its tags to the default category, which itself
-    can be renamed and recoloured but not deleted.
+    A category sets the colour of its tags' badges and, by its priority, their
+    order on uploads list and case log rows (0 hides them there). Every tag has
+    one: deleting a category moves its tags to the default category, which
+    itself can be edited but not deleted.
     """
     if request.method == 'POST':
         action = request.POST.get('action', '')
         name = request.POST.get('name', '').strip()
         color = request.POST.get('color', '').strip().lower()
+        raw_priority = request.POST.get('priority', '')
         if action == 'add':
-            message = tag_category_error(name, color)
+            priority, message = parse_tag_category_priority(raw_priority, TagCategory.DEFAULT_PRIORITY)
+            message = message or tag_category_error(name, color)
             if message:
                 messages.error(request, message)
             else:
-                TagCategory.objects.create(name=name, color=color, created_by=request.user, updated_by=request.user)
+                TagCategory.objects.create(
+                    name=name, color=color, priority=priority, created_by=request.user, updated_by=request.user,
+                )
                 messages.success(request, f'Category "{name}" added.')
         elif action in ('edit', 'delete'):
             category = get_object_or_404(TagCategory, pk=request.POST.get('pk', '').strip() or 0)
@@ -132,12 +138,14 @@ def tag_categories_view(request):
                 moved = '1 tag moved' if count == 1 else f'{count} tags moved'
                 messages.success(request, f'Category "{category.name}" deleted; {moved} to "{default.name}".')
             else:
-                message = tag_category_error(name, color, exclude_pk=category.pk)
+                priority, message = parse_tag_category_priority(raw_priority, category.priority)
+                message = message or tag_category_error(name, color, exclude_pk=category.pk)
                 if message:
                     messages.error(request, message)
                 else:
                     category.name = name
                     category.color = color
+                    category.priority = priority
                     category.updated_by = request.user
                     category.save()
                     messages.success(request, f'Category "{name}" saved.')
@@ -154,6 +162,8 @@ def tag_categories_view(request):
     return render(request, 'tag_categories.html', {
         'categories': categories,
         'default_color': DEFAULT_TAG_CATEGORY_COLOR,
+        'default_priority': TagCategory.DEFAULT_PRIORITY,
+        'priority_choices': range(TagCategory.PRIORITY_MIN, TagCategory.PRIORITY_MAX + 1),
     })
 
 

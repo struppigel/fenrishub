@@ -8,7 +8,9 @@ from django.urls import reverse
 
 from ..analyzer import ANALYSIS_PAYLOAD_FORMAT
 from ..context_processors import tag_category_colors
-from ..models import RuleTag, Speech, TagCategory, UploadedLog, UploadedLogAnalysis
+from ..models import (
+    InfectionCase, InfectionCaseLog, RuleTag, Speech, TagCategory, UploadedLog, UploadedLogAnalysis,
+)
 from ..tagging import attach_rule_tags, found_tags_by_upload, save_tag, serialize_tag
 from ..templatetags.rule_tags import tag_category_class
 from .factories import make_rule
@@ -270,3 +272,100 @@ class TagCategoryColourTests(TagCategorySetupMixin, TestCase):
         response = self.client.get(reverse('speeches'))
 
         self.assertContains(response, f'class="tag-chip tag-cat-{self.malware.pk}"')
+
+
+class TagCategoryPriorityTests(TagCategorySetupMixin, TestCase):
+
+    def _post(self, **data):
+        return self.client.post(reverse('tag_categories'), data)
+
+    def _tags_line(self, *tags):
+        spans = ', '.join(f'<span class="tag-text tag-cat-{tag.category_id}" title="">{tag.name}</span>' for tag in tags)
+        return f'<div class="fixlist-meta upload-tags">tags: {spans}</div>'
+
+    def _tagged_case_log(self):
+        log = UploadedLog.objects.create(
+            upload_id='prioritised', forum_username='poster', original_filename='x.txt',
+            content='needle', log_type='FRST', recipient_user=self.user,
+        )
+        UploadedLogAnalysis.objects.create(
+            upload=log, rule_set_key='shared', source_content_hash=log.content_hash,
+            payload={
+                'format': ANALYSIS_PAYLOAD_FORMAT,
+                'lines': [{'line': 'needle', 'rule_ids': [self.rule.pk]}],
+                'warnings': [],
+            },
+        )
+        # Linked by hand; auto-assign would link the log itself.
+        case = InfectionCase.objects.create(owner=self.user, username='poster', auto_assign_new_items=False)
+        InfectionCaseLog.objects.create(case=case, uploaded_log=log, added_by=self.user)
+        return case
+
+    def test_categories_default_to_priority_5(self):
+        self.assertEqual((self.default.priority, self.malware.priority), (5, 5))
+        self._post(action='add', name='adware', color='#33aa33')
+        self.assertEqual(TagCategory.objects.get(name='adware').priority, 5)
+
+    def test_add_and_edit_set_the_priority(self):
+        self._post(action='add', name='adware', color='#33aa33', priority='0')
+        self._post(action='edit', pk=self.malware.pk, name='malware', color='#ff4444', priority='9')
+
+        self.assertEqual(TagCategory.objects.get(name='adware').priority, 0)
+        self.malware.refresh_from_db()
+        self.assertEqual(self.malware.priority, 9)
+
+    def test_edit_without_priority_keeps_it(self):
+        TagCategory.objects.filter(pk=self.malware.pk).update(priority=2)
+
+        self._post(action='edit', pk=self.malware.pk, name='renamed', color='#ff4444')
+
+        self.malware.refresh_from_db()
+        self.assertEqual((self.malware.name, self.malware.priority), ('renamed', 2))
+
+    def test_rejects_invalid_priorities(self):
+        for priority in ('11', '-1', 'abc', '2.5'):
+            self._post(action='edit', pk=self.malware.pk, name='changed', color='#ff4444', priority=priority)
+            self._post(action='add', name='adware', color='#33aa33', priority=priority)
+
+        self.malware.refresh_from_db()
+        self.assertEqual((self.malware.name, self.malware.priority), ('malware', 5))
+        self.assertFalse(TagCategory.objects.filter(name='adware').exists())
+
+    def test_page_offers_priorities_0_to_10(self):
+        response = self.client.get(reverse('tag_categories'))
+
+        self.assertContains(response, '<option value="0">priority 0 (hidden in uploads and cases)</option>', html=True)
+        self.assertContains(response, '<option value="10">priority 10</option>', html=True)
+
+    def test_priority_0_hides_tags_in_uploads_and_cases_but_not_log_search(self):
+        TagCategory.objects.filter(pk=self.default.pk).update(priority=0)
+        case = self._tagged_case_log()
+
+        for response in (
+            self.client.get(reverse('uploaded_logs')),
+            self.client.get(reverse('view_infection_case', args=[case.case_id])),
+        ):
+            self.assertContains(response, self._tags_line(self.tag), html=True)
+            self.assertNotContains(response, '>plain</span>')
+
+        search = self.client.get(reverse('log_search'), {'q': 'needle'})
+        self.assertContains(search, self._tags_line(self.tag, self.plain), html=True)
+
+    def test_higher_priority_tags_come_first(self):
+        TagCategory.objects.filter(pk=self.default.pk).update(priority=9)
+        case = self._tagged_case_log()
+
+        for response in (
+            self.client.get(reverse('uploaded_logs')),
+            self.client.get(reverse('view_infection_case', args=[case.case_id])),
+        ):
+            self.assertContains(response, self._tags_line(self.plain, self.tag), html=True)
+
+    def test_found_tags_carry_the_category_priority(self):
+        TagCategory.objects.filter(pk=self.malware.pk).update(priority=3)
+        self._tagged_case_log()
+        log = UploadedLog.objects.get(upload_id='prioritised')
+
+        by_name = {tag['name']: tag for tag in found_tags_by_upload([log.pk], 'shared')[log.pk]}
+
+        self.assertEqual((by_name['miner']['category_priority'], by_name['plain']['category_priority']), (3, 5))

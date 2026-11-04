@@ -561,12 +561,23 @@ class TagCategory(models.Model):
     Every tag has a category. Exactly one is the default (`is_default`): new
     tags get it, the tags of a deleted category move to it, and it cannot be
     deleted itself.
+
+    `priority` (0-10) orders the tags on the uploads list and case log rows,
+    highest first; priority 0 hides them there (for tags found in nearly
+    every log).
     """
 
     NAME_MAX_LENGTH = 64
+    PRIORITY_MIN = 0
+    PRIORITY_MAX = 10
+    DEFAULT_PRIORITY = 5
 
     name = models.CharField(max_length=NAME_MAX_LENGTH)
     color = models.CharField(max_length=7, default=DEFAULT_TAG_CATEGORY_COLOR)
+    priority = models.PositiveSmallIntegerField(
+        default=DEFAULT_PRIORITY,
+        validators=[MinValueValidator(PRIORITY_MIN), MaxValueValidator(PRIORITY_MAX)],
+    )
     is_default = models.BooleanField(default=False)
     created_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_tag_categories',
@@ -609,8 +620,14 @@ class TagCategory(models.Model):
 
 
 def default_tag_category_id():
-    """Field default of RuleTag.category: a new tag starts in the default category."""
-    return TagCategory.get_default().pk
+    """Field default of RuleTag.category: a new tag starts in the default category.
+
+    Reads only the id: migration 0083 calls this with the current model, before
+    later migrations add TagCategory's newer columns, so loading whole rows here
+    breaks migrating a fresh database.
+    """
+    pk = TagCategory.objects.filter(is_default=True).values_list('pk', flat=True).first()
+    return pk if pk is not None else TagCategory.get_default().pk
 
 
 class RuleTag(models.Model):
