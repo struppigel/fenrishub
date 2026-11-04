@@ -387,7 +387,10 @@ function renderRuleTagsLine(payload) {
     if (!line) {
         return;
     }
-    const tags = (payload && payload.rule_tags) || [];
+    // Only tags with matched lines: the row filters the log by tag, and a
+    // built-in or whole-log tag has no lines to filter to (its warning box
+    // shows it instead).
+    const tags = ((payload && payload.rule_tags) || []).filter((tag) => tag.line_count);
     line.innerHTML = '';
     line.hidden = tags.length === 0;
     if (!tags.length) {
@@ -395,39 +398,31 @@ function renderRuleTagsLine(payload) {
         return;
     }
 
-    line.appendChild(document.createTextNode('tags:'));
     tags.forEach((tag) => {
+        // Text in the category colour, like the status entries above it.
         const chip = document.createElement('span');
-        chip.className = `tag-chip${tagChipCategoryClass(tag)}`;
+        chip.className = `tag-text${tagChipCategoryClass(tag)}`;
 
-        // A tag with lines filters the log to them; a built-in or whole-log
-        // tag has no lines, so it is a label only.
-        if (tag.line_count) {
-            const filter = document.createElement('button');
-            filter.type = 'button';
-            filter.className = 'tag-chip-filter';
-            const pressed = activeTagFilterId === tag.id;
-            filter.setAttribute('aria-pressed', pressed ? 'true' : 'false');
-            const action = pressed ? 'click to show all lines again' : 'click to show only its lines';
-            filter.title = tag.description ? `${tag.description}\n\n${action}` : action;
-            // "(n)" like the status counts in the legend row above.
-            filter.textContent = `${tag.name} (${tag.line_count})`;
-            filter.addEventListener('click', (event) => {
-                event.stopPropagation();
-                setTagFilter(activeTagFilterId === tag.id ? null : tag.id);
-            });
-            chip.appendChild(filter);
-            if (pressed) {
-                chip.classList.add('tag-chip-active');
-            } else if (activeTagFilterId !== null) {
-                // Like a hidden status in the legend: its lines are not shown.
-                chip.classList.add('tag-chip-filtered-out');
-            }
-        } else {
-            const label = document.createElement('span');
-            label.textContent = tag.builtin ? `${tag.name} (warning)` : `${tag.name} (log)`;
-            label.title = tag.description || '';
-            chip.appendChild(label);
+        // Clicking a tag filters the log to its lines.
+        const filter = document.createElement('button');
+        filter.type = 'button';
+        filter.className = 'tag-chip-filter';
+        const pressed = activeTagFilterId === tag.id;
+        filter.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+        const action = pressed ? 'click to show all lines again' : 'click to show only its lines';
+        filter.title = tag.description ? `${tag.description}\n\n${action}` : action;
+        // "(n)" like the status counts in the legend row above.
+        filter.textContent = `${tag.name} (${tag.line_count})`;
+        filter.addEventListener('click', (event) => {
+            event.stopPropagation();
+            setTagFilter(activeTagFilterId === tag.id ? null : tag.id);
+        });
+        chip.appendChild(filter);
+        if (pressed) {
+            chip.classList.add('tag-chip-active');
+        } else if (activeTagFilterId !== null) {
+            // Like a hidden status in the legend: its lines are not shown.
+            chip.classList.add('tag-chip-filtered-out');
         }
         line.appendChild(chip);
     });

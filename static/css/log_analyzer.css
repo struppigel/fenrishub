@@ -1268,9 +1268,8 @@ button.lookup-menu-item {
 }
 
 
-/* Rule tags found in the analysed log, under the status legend. */
-/* The second row of the status legend: the log's rule tags as badges, sized
-   and spaced like the status entries above them. */
+/* The second row of the status legend: the log's rule tags as text in their
+   category colour, sized and spaced like the status entries above them. */
 .rule-tags-line {
     display: flex;
     flex-wrap: wrap;
@@ -1285,10 +1284,8 @@ button.lookup-menu-item {
     display: none;
 }
 
-.rule-tags-line .tag-chip {
+.rule-tags-line .tag-text {
     font-size: 12px;
-    padding: 0 6px;
-    gap: 2px;
 }
 
 
@@ -1318,14 +1315,14 @@ button.lookup-menu-item {
     text-decoration: underline;
 }
 
-/* The filtering tag: a state, shown by its border, not a hover effect. */
-.tag-chip.tag-chip-active {
-    border-color: var(--la-info);
+/* The filtering tag: a state, shown in bold, not a hover effect. */
+.rule-tags-line .tag-chip-active {
+    font-weight: bold;
 }
 
 /* While one tag filters the log, the others look like hidden statuses in the
    legend above them: struck through and faded. */
-.tag-chip.tag-chip-filtered-out {
+.rule-tags-line .tag-chip-filtered-out {
     opacity: 0.35;
     text-decoration: line-through;
 }
