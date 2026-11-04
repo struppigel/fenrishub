@@ -423,7 +423,8 @@ class CaseViewLogTagsTests(TagSearchSetupMixin, TestCase):
         self.client.login(username='alice', password='pw')
 
     def test_case_logs_show_their_tags_as_text(self):
-        case = InfectionCase.objects.create(owner=self.user, username='forum_user')
+        # Linked by hand below; auto-assign would link the new logs itself.
+        case = InfectionCase.objects.create(owner=self.user, username='forum_user', auto_assign_new_items=False)
         tagged = self._log('tagged-case-log')
         self._cache(tagged, _payload(lines=[_line('x', [self.miner_rule.pk])]))
         untagged = self._log('untagged-case-log')
