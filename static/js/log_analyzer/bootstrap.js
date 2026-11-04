@@ -117,9 +117,9 @@ async function loadSelectedUploadForAnalyzer() {
     );
     if (placeholderOption) {
         const filename = String(contentPayload.original_filename || '');
-        // Match the template's truncatechars:40 so long filenames don't
+        // Match the template's truncatechars:24 so long filenames don't
         // stretch the select; the full name stays in the tooltip.
-        const shortFilename = filename.length > 40 ? `${filename.slice(0, 39)}…` : filename;
+        const shortFilename = filename.length > 24 ? `${filename.slice(0, 23)}…` : filename;
         const fullParts = [
             contentPayload.upload_id || uploadId,
             filename,
@@ -477,44 +477,14 @@ function bindLegendToggle() {
     });
 }
 
-// The right-panel picker reuses the snippet menu's markup and dismissal
-// behaviour: click the trigger to open, click anywhere else to close.
-function bindRightPanelMenu() {
-    const menu = document.getElementById('panelMenu');
-    const trigger = document.getElementById('panelMenuTrigger');
-    const dropdown = document.getElementById('panelMenuDropdown');
-    if (!menu || !trigger || !dropdown) return;
-
-    function closeMenu() {
-        menu.classList.remove('open');
-        trigger.setAttribute('aria-expanded', 'false');
-    }
-    // The snippet menu lives in an inline script in the template; let it close
-    // this one so the two dropdowns are never open at once.
-    window.closeRightPanelMenu = closeMenu;
-
-    trigger.addEventListener('click', (event) => {
+function bindRightPanelTabs() {
+    const tabs = document.getElementById('panelTabs');
+    if (!tabs) return;
+    tabs.addEventListener('click', (event) => {
+        const tab = event.target.closest('[data-panel-view]');
+        if (!tab) return;
         event.preventDefault();
-        event.stopPropagation();
-        ['snippetMenu', 'speechMenu'].forEach((id) => {
-            const other = document.getElementById(id);
-            if (other) other.classList.remove('open');
-        });
-        const open = menu.classList.toggle('open');
-        trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
-    });
-
-    dropdown.addEventListener('click', (event) => {
-        const item = event.target.closest('[data-panel-view]');
-        event.stopPropagation();
-        if (!item) return;
-        closeMenu();
-        selectRightPanelView(item.dataset.panelView);
-    });
-
-    document.addEventListener('click', () => closeMenu());
-    document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') closeMenu();
+        selectRightPanelView(tab.dataset.panelView);
     });
 }
 
@@ -568,7 +538,7 @@ function bindAnalyzerControls() {
         });
     });
 
-    bindRightPanelMenu();
+    bindRightPanelTabs();
 
     const selectedLinesTextarea = document.getElementById('selectedLines');
     if (selectedLinesTextarea) {
@@ -750,9 +720,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (typeof applyCleanCursorModeState === 'function') {
         applyCleanCursorModeState();
-    }
-    if (typeof initFixlistPanelState === 'function') {
-        initFixlistPanelState();
     }
     if (typeof initPanelSplitter === 'function') {
         initPanelSplitter();

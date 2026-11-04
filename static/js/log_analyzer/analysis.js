@@ -53,20 +53,13 @@ let questionCursorModeActive = false;
 let cleanCursorModeActive = false;
 let lineInspectorInFlight = false;
 
-const FIXLIST_PANEL_HIDDEN_KEY = 'fenrishub_fixlist_panel_hidden';
 const IGNORE_FIREWALL_RULES_KEY = 'fenrishub_ignore_firewall_rules';
-let fixlistPanelHidden = false;
 
 // The right column hosts two editors — the fixlist and the (not yet persisted)
 // response to the user — and shows one at a time. Both stay in the DOM while
 // the other is showing, so the browser keeps their text, caret and scroll
-// position across a switch. Which one is up, and whether the column is
-// collapsed at all, is picked from a single dropdown ("fixlist" / "response" /
-// "hidden").
-//
-// The collapsed flag is kept separate from the fix/response choice on purpose:
-// inserting a line must not re-open a column the analyst deliberately
-// collapsed to get a full-width log view.
+// position across a switch. Which one is up is picked from two tabs
+// ("fixlist" / "response").
 const ACTIVE_RIGHT_PANEL_KEY = 'fenrishub_right_panel_active';
 let activeRightPanel = 'fix';
 
@@ -74,49 +67,12 @@ function getActiveRightTextarea() {
     return document.getElementById(activeRightPanel === 'response' ? 'responseText' : 'selectedLines');
 }
 
-function currentRightPanelView() {
-    return fixlistPanelHidden ? 'hidden' : activeRightPanel;
-}
-
-const RIGHT_PANEL_VIEW_LABELS = { fix: 'fixlist', response: 'response', hidden: 'hidden' };
-
-function applyRightPanelMenuState() {
-    const view = currentRightPanelView();
-    const trigger = document.getElementById('panelMenuTrigger');
-    if (trigger) {
-        trigger.textContent = RIGHT_PANEL_VIEW_LABELS[view] + ' ▾';
-    }
-    document.querySelectorAll('[data-panel-view]').forEach((item) => {
-        const isSelected = item.dataset.panelView === view;
-        item.classList.toggle('is-selected', isSelected);
-        item.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+function applyRightPanelTabsState() {
+    document.querySelectorAll('#panelTabs [data-panel-view]').forEach((tab) => {
+        const isSelected = tab.dataset.panelView === activeRightPanel;
+        tab.classList.toggle('is-selected', isSelected);
+        tab.setAttribute('aria-selected', isSelected ? 'true' : 'false');
     });
-}
-
-function applyFixlistPanelState() {
-    const box = document.querySelector('.textareas-box');
-    if (box) {
-        box.classList.toggle('fixlist-hidden', fixlistPanelHidden);
-    }
-    applyRightPanelMenuState();
-}
-
-function initFixlistPanelState() {
-    try {
-        fixlistPanelHidden = localStorage.getItem(FIXLIST_PANEL_HIDDEN_KEY) === '1';
-    } catch (e) {
-        fixlistPanelHidden = false;
-    }
-    applyFixlistPanelState();
-}
-
-function setFixlistPanelHidden(hidden) {
-    if (hidden === fixlistPanelHidden) return;
-    fixlistPanelHidden = hidden;
-    try {
-        localStorage.setItem(FIXLIST_PANEL_HIDDEN_KEY, fixlistPanelHidden ? '1' : '0');
-    } catch (e) {}
-    applyFixlistPanelState();
 }
 
 // Share of the row the log takes; the rest goes to the right column. Dragged
@@ -236,7 +192,7 @@ function applyRightPanelState() {
         }
     }
 
-    applyRightPanelMenuState();
+    applyRightPanelTabsState();
 }
 
 function setActiveRightPanel(panel, { focus = true } = {}) {
@@ -268,20 +224,15 @@ function initRightPanelState() {
     applyRightPanelState();
 }
 
-// The single entry point behind the picker.
+// The single entry point behind the tabs.
 function selectRightPanelView(view) {
-    if (view === 'hidden') {
-        setFixlistPanelHidden(true);
-        return;
-    }
-    setFixlistPanelHidden(false);
     setActiveRightPanel(view);
     const textarea = getActiveRightTextarea();
     if (textarea) textarea.focus();
 }
 
 // Inserting or removing a line always targets the fixlist, so flip back to it
-// to keep the edit visible. A collapsed column stays collapsed.
+// to keep the edit visible.
 function ensureFixlistPanelActive() {
     setActiveRightPanel('fix');
 }

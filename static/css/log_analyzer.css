@@ -278,15 +278,6 @@ body.clean-cursor-mode .line-text {
     padding: 12px;
 }
 
-.textareas-box.fixlist-hidden {
-    grid-template-columns: minmax(0, 1fr);
-}
-
-.textareas-box.fixlist-hidden .right-panel,
-.textareas-box.fixlist-hidden .panel-splitter {
-    display: none;
-}
-
 .panel-splitter {
     position: relative;
     cursor: col-resize;

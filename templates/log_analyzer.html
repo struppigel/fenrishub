@@ -148,20 +148,48 @@
         color: var(--la-info);
     }
 
-    /* Right-panel picker — the snippet menu's dropdown, sized for its three
-       items and marking the current selection. */
-    .panel-menu > .snippet-menu-dropdown {
-        min-width: 110px;
+    /* Right-panel tabs sit on top of the editor they switch. The active tab
+       shares the editor's border and background and covers the editor's top
+       border beneath it, so the two read as one piece; the other tab is only
+       outlined along its top and sides. */
+    .right-panel {
+        flex-direction: column;
     }
 
-    .panel-menu-item.is-selected {
+    .right-panel > #selectedLines,
+    .right-panel > #responseText {
+        flex: 1 1 auto;
+        height: auto;
+        min-height: 0;
+    }
+
+    .panel-tabs {
+        display: flex;
+        gap: 2px;
+        flex: 0 0 auto;
+    }
+
+    .panel-tabs .panel-tab {
+        position: relative;
+        padding: 4px 14px;
+        margin-bottom: -1px;
+        background-color: transparent;
+        color: var(--la-text-muted);
+        border: 1px solid var(--la-border-muted);
+        border-bottom-color: transparent;
+    }
+
+    .panel-tabs .panel-tab.is-selected {
+        z-index: 1;
+        background-color: var(--la-bg-4);
         color: var(--la-text-primary);
+        border-color: var(--la-text-primary);
+        border-bottom-color: var(--la-bg-4);
+        cursor: default;
     }
 
-    .panel-menu-item.is-selected::after {
-        content: '\2713';
-        float: right;
-        margin-left: 12px;
+    .panel-tabs .panel-tab.is-selected:hover {
+        text-decoration: none;
     }
 
 
@@ -208,14 +236,6 @@
             <div class="snippet-menu-dropdown" id="snippetMenuDropdown"></div>
         </div>
         {% endif %}
-        <div class="snippet-menu panel-menu" id="panelMenu">
-            <button type="button" class="snippet-menu-trigger" id="panelMenuTrigger" aria-haspopup="true" aria-expanded="false" title="choose what the right panel shows">fixlist &#x25BE;</button>
-            <div class="snippet-menu-dropdown" id="panelMenuDropdown" role="menu">
-                <div class="snippet-menu-item panel-menu-item" data-panel-view="fix" role="menuitemradio" aria-checked="true">fixlist</div>
-                <div class="snippet-menu-item panel-menu-item" data-panel-view="response" role="menuitemradio" aria-checked="false">response</div>
-                <div class="snippet-menu-item panel-menu-item" data-panel-view="hidden" role="menuitemradio" aria-checked="false">hidden</div>
-            </div>
-        </div>
         {% if not is_guest %}<button type="button" id="saveFixlistButton" class="save-fixlist-button">save</button>{% endif %}
     </div>
 </div>
@@ -226,7 +246,7 @@
     <select id="uploadSourceSelect">
         <option value="">select upload id</option>
         {% for uploaded_log in uploaded_logs %}
-        <option value="{{ uploaded_log.upload_id }}" title="{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename|truncatechars:40 }} | {{ uploaded_log.forum_username }}</option>
+        <option value="{{ uploaded_log.upload_id }}" title="{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename|truncatechars:24 }} | {{ uploaded_log.forum_username }}</option>
         {% endfor %}
     </select>
     <span id="uploadLoadStatus" class="muted" aria-live="polite"></span>
@@ -240,6 +260,10 @@
     </div>
     <div class="panel-splitter" id="panelSplitter" role="separator" aria-orientation="vertical" aria-label="resize log and fixlist" aria-valuemin="15" aria-valuemax="85" aria-valuenow="50" tabindex="0" title="drag to resize, double-click to reset"></div>
     <div class="right-panel">
+        <div class="panel-tabs" id="panelTabs" role="tablist" aria-label="right panel">
+            <button type="button" class="panel-tab is-selected" data-panel-view="fix" role="tab" aria-selected="true" aria-controls="selectedLines">fixlist</button>
+            <button type="button" class="panel-tab" data-panel-view="response" role="tab" aria-selected="false" aria-controls="responseText">response</button>
+        </div>
         <textarea id="selectedLines">{{ initial_selected_lines }}</textarea>
         <textarea id="responseText" placeholder="Write the response for the user here..." title="saved with the fixlist" hidden>{{ initial_response_text }}</textarea>
     </div>
@@ -473,7 +497,6 @@ window.logAnalyzerConfig = {
 
         trigger.addEventListener('click', function(e) {
             e.stopPropagation();
-            if (window.closeRightPanelMenu) window.closeRightPanelMenu();
             if (options.closeSiblings) options.closeSiblings();
             menu.classList.toggle('open');
         });
