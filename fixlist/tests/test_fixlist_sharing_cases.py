@@ -57,6 +57,26 @@ class SharingAndDownloadTests(TestCase):
         self.assertEqual(response.json(), {"content": self.fixlist.content})
         self.assertEqual(AccessLog.objects.filter(fixlist=self.fixlist).count(), 1)
 
+    def test_public_share_endpoints_tell_search_engines_not_to_index(self):
+        """Public share links get posted on forums; crawlers must not index them."""
+        token = self.fixlist.share_token
+        responses = {
+            "share": self.client.get(reverse("shared_fixlist", args=[token])),
+            "download": self.client.get(reverse("download_fixlist", args=[token])),
+            "copy": self.client.post(reverse("copy_api", args=[token])),
+        }
+
+        for name, response in responses.items():
+            with self.subTest(endpoint=name):
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("noindex", response["X-Robots-Tag"])
+
+        self.assertContains(
+            responses["share"],
+            '<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">',
+            html=True,
+        )
+
     def test_shared_page_download_and_copy_never_expose_the_response(self):
         # The response is the helper's private reply draft; nothing on the guest
         # side of the app may leak it.

@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+
+{% block title %}About - FenrisHub{% endblock %}
+{% block page_context_label %}about{% endblock %}
+
+{% block content %}
+<div class="prose-page">
+    <h2>About this website</h2>
+    <p>This website is a convenient way to share FRST.txt, Addition.txt and similar logs with malware removal helpers that occur during malware removal. It makes sure that other people cannot see your logs.</p>
+    <p>Farbar Recovery Scan Tool does not expose private information except for the username and computer name. However, for some people this is already more than they are willing to expose.</p>
+    <p>Sites like pastebin.com sometimes refuse to let you upload logs from these tools because depending on the infection they may contain malware commands that these websites deem suspicious.</p>
+
+    <h2>How it works</h2>
+    <ul>
+        <li>You upload your log on the <a href="{% url 'home' %}">upload page</a>, either by pasting it or by choosing the file.</li>
+        <li>After the upload you get an ID made of two words. Post that ID in your forum topic so your helper can find the log.</li>
+        <li>Only the volunteer helpers who have an account on this website can open uploaded logs. Logs are never public.</li>
+        <li>Your helper may send you a fixlist via a link. Only run a fixlist that was made for your computer.</li>
+    </ul>
+
+    <h2>How long do you keep the logs?</h2>
+    <p>Logs get deleted automatically after 30 days. The <a href="{% url 'privacy' %}">privacy policy</a> has the details on what is stored and for how long.</p>
+
+    <h2>Who created this website?</h2>
+    <p>I am Karsten Hahn, Principal Malware Researcher. I work at GDATA CyberDefense AG, which is an XDR and antivirus vendor. This is a private website, no registration is possible, my employer has nothing to do with it.</p>
+</div>
+{% endblock %}

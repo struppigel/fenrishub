@@ -58,11 +58,11 @@ class TemplateMarkupTests(TestCase):
 
     def test_help_page_uses_no_em_or_en_dashes(self):
         """The help text is written with plain hyphens; long dashes stay out."""
-        content = self._read_template("help.html")
-
-        for dash, name in (("—", "em dash"), ("–", "en dash")):
-            with self.subTest(dash=name):
-                self.assertNotIn(dash, content, f"help.html must not contain a {name}")
+        for template_name in ("help.html", "about.html", "privacy.html"):
+            content = self._read_template(template_name)
+            for dash, name in (("—", "em dash"), ("–", "en dash")):
+                with self.subTest(template=template_name, dash=name):
+                    self.assertNotIn(dash, content, f"{template_name} must not contain a {name}")
 
     def test_no_template_opens_a_multiline_hash_comment(self):
         """

@@ -176,6 +176,18 @@ def _assert_can_access_shared_fixlist(request, fixlist):
         raise Http404
 
 
+# Public share links get posted on forums and end up in search results. The
+# header (not robots.txt) is what keeps them out: a Disallow would stop crawlers
+# from fetching the page and ever seeing the noindex, and it is the only signal
+# that covers the text/plain download.
+NOINDEX_DIRECTIVES = 'noindex, nofollow, noarchive, nosnippet'
+
+
+def _noindex(response):
+    response['X-Robots-Tag'] = NOINDEX_DIRECTIVES
+    return response
+
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def dashboard_view(request):
@@ -458,8 +470,9 @@ def shared_fixlist_view(request, token):
         'is_owner': is_owner,
         'preview_as_guest': preview_as_guest,
         'hide_authenticated_chrome': preview_as_guest,
+        'robots_directives': NOINDEX_DIRECTIVES,
     }
-    return render(request, 'shared_fixlist.html', context)
+    return _noindex(render(request, 'shared_fixlist.html', context))
 
 
 @require_http_methods(["GET"])
@@ -478,7 +491,7 @@ def download_fixlist(request, token):
     
     response = HttpResponse(fixlist.content, content_type='text/plain')
     response['Content-Disposition'] = 'attachment; filename="Fixlist.txt"'
-    return response
+    return _noindex(response)
 
 
 @require_http_methods(["POST"])
@@ -494,4 +507,4 @@ def copy_to_clipboard_api(request, token):
         user_agent=request.META.get('HTTP_USER_AGENT', '')
     )
     
-    return JsonResponse({'content': fixlist.content})
+    return _noindex(JsonResponse({'content': fixlist.content}))

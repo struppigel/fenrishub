@@ -141,3 +141,15 @@ def help_view(request):
 def frst_download_view(request):
     """Public, unlisted page offering the FRST scan tool for download."""
     return render(request, 'frst_download.html')
+
+
+@require_http_methods(["GET"])
+def about_view(request):
+    """Public about page, linked from the footer."""
+    return render(request, 'about.html')
+
+
+@require_http_methods(["GET"])
+def privacy_view(request):
+    """Public privacy policy, linked from the footer."""
+    return render(request, 'privacy.html')

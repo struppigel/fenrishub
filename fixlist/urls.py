@@ -11,7 +11,16 @@ from .views.analyzer import (
 )
 from .views.api_tokens import api_tokens_view
 from .views.api_usage import api_usage_user_view, api_usage_view
-from .views.auth import change_password_view, frst_download_view, help_view, login_view, logout_view, profile_view
+from .views.auth import (
+    about_view,
+    change_password_view,
+    frst_download_view,
+    help_view,
+    login_view,
+    logout_view,
+    privacy_view,
+    profile_view,
+)
 from .views.fixlists import (
     copy_to_clipboard_api,
     create_fixlist_view,
@@ -87,6 +96,8 @@ urlpatterns = [
     path('api-usage/<int:user_id>/', api_usage_user_view, name='api_usage_user'),
     path('help/', help_view, name='help'),
     path('frst-download/', frst_download_view, name='frst_download'),
+    path('about/', about_view, name='about'),
+    path('privacy/', privacy_view, name='privacy'),
     path('fixes/', dashboard_view, name='dashboard'),
     path('uploads/', uploaded_logs_view, name='uploaded_logs'),
     path('uploads/trash/', uploads_trash_view, name='uploads_trash'),

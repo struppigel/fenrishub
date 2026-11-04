@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+
+{% block title %}Privacy - FenrisHub{% endblock %}
+{% block page_context_label %}privacy{% endblock %}
+
+{% block content %}
+<div class="prose-page">
+    <h2>Privacy policy</h2>
+    <p class="muted">Last updated: 2026-11-04</p>
+
+    <h2>Who is responsible</h2>
+    <p>This website is run privately by Karsten Hahn. For any question about your data, or to have it deleted, write to <a href="mailto:portx@gmx.de">portx@gmx.de</a>.</p>
+
+    <h2>Uploaded logs</h2>
+    <p>When you upload a log we store:</p>
+    <ul>
+        <li>the log content. FRST and similar logs contain your Windows username, the computer name, installed programs, file paths and system settings.</li>
+        <li>the forum username you enter.</li>
+        <li>the file name of the uploaded file.</li>
+    </ul>
+    <p>Uploaded logs are only visible to the volunteer helpers who have an account on this website. They are never published.</p>
+    <p>Logs are deleted automatically 30 days after upload, or 7 days after a helper moves them to the trash. A helper can mark a log as protected, for example to keep it as a training example. Protected logs are not deleted automatically. If you want a log deleted earlier, or a protected log removed, contact us with the upload ID.</p>
+
+    <h2>Fixlists</h2>
+    <p>Fixlists are removal scripts that helpers write for you. They are deleted on the same schedule as logs: 30 days after creation, or 7 days after being moved to the trash.</p>
+    <p>A fixlist link can be opened by anyone who has the link, unless the helper restricts it to logged-in helpers. These pages tell search engines not to index them. Each time a fixlist is opened or downloaded we record the IP address and browser user agent, to be able to detect misuse of fixlist links. These records are deleted together with the fixlist.</p>
+
+    <h2>Abuse protection</h2>
+    <p>To limit anonymous uploads, your IP address is counted in the server's memory for a short time window. It is not written to the database and is discarded when the window ends.</p>
+
+    <h2>Helper accounts</h2>
+    <p>Accounts exist only for invited helpers; there is no public registration. For helpers we store the username, a password hash, and the time of the last activity.</p>
+
+    <h2>Cookies and browser storage</h2>
+    <p>We only use the cookies that are technically necessary: a session cookie to keep helpers logged in, and a CSRF cookie that protects forms. There is no analytics, no advertising and no tracking.</p>
+    <p>The log analyzer for helpers stores layout preferences and unsaved drafts in the browser's local storage. That data stays in the browser and is not sent to us.</p>
+
+    <h2>Hosting and third parties</h2>
+    <p>The website is hosted on Railway (railway.com). As part of running the service, Railway's platform processes and logs HTTP requests, including IP addresses.</p>
+    <p>The statistics page, which only helpers can open, loads the Chart.js library from cdn.jsdelivr.net, which receives the visitor's IP address.</p>
+    <p>We do not sell or share your data with anyone else.</p>
+
+    <h2>Legal basis</h2>
+    <p>We process this data on the basis of Art. 6(1)(f) GDPR: the legitimate interest in providing a place to share logs with malware removal helpers and in protecting the service from abuse.</p>
+
+    <h2>Your rights</h2>
+    <p>You have the right to access, correct and delete your data, to restrict or object to its processing, and to lodge a complaint with a data protection supervisory authority. To exercise these rights, use the contact address above. For logs, include the upload ID so we can find them.</p>
+</div>
+{% endblock %}
