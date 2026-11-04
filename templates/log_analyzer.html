@@ -26,7 +26,8 @@
     .upload-source-row select {
         width: auto;
         min-width: 280px;
-        max-width: 100%;
+        max-width: min(100%, 560px);
+        text-overflow: ellipsis;
         padding: 8px;
         background-color: var(--la-bg-1);
         color: var(--la-text-main);
@@ -225,7 +226,7 @@
     <select id="uploadSourceSelect">
         <option value="">select upload id</option>
         {% for uploaded_log in uploaded_logs %}
-        <option value="{{ uploaded_log.upload_id }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }}</option>
+        <option value="{{ uploaded_log.upload_id }}" title="{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename|truncatechars:40 }} | {{ uploaded_log.forum_username }}</option>
         {% endfor %}
     </select>
     <span id="uploadLoadStatus" class="muted" aria-live="polite"></span>

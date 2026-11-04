@@ -116,12 +116,22 @@ async function loadSelectedUploadForAnalyzer() {
         (option) => option.value === uploadId,
     );
     if (placeholderOption) {
-        const parts = [
+        const filename = String(contentPayload.original_filename || '');
+        // Match the template's truncatechars:40 so long filenames don't
+        // stretch the select; the full name stays in the tooltip.
+        const shortFilename = filename.length > 40 ? `${filename.slice(0, 39)}…` : filename;
+        const fullParts = [
             contentPayload.upload_id || uploadId,
-            contentPayload.original_filename,
+            filename,
             contentPayload.forum_username,
         ].filter((part) => part && String(part).trim().length > 0);
-        placeholderOption.textContent = parts.join(' | ');
+        const shortParts = [
+            contentPayload.upload_id || uploadId,
+            shortFilename,
+            contentPayload.forum_username,
+        ].filter((part) => part && String(part).trim().length > 0);
+        placeholderOption.textContent = shortParts.join(' | ');
+        placeholderOption.title = fullParts.join(' | ');
     }
 
     // Speech placeholders resolve {USERNAME} against whichever log is loaded.
