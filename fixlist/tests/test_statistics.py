@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -395,3 +395,130 @@ class StatisticsViewTests(TestCase):
 
         self.assertEqual(rows['FRST&Addition']['total'], 0)
         self.assertEqual(rows['FRST&Addition']['percent'], 0.0)
+
+
+class StatisticsRangeAndGroupingTests(TestCase):
+    """The range never reaches past today or before the oldest data (the default
+    30-day window excepted), and long ranges are grouped by week or month."""
+
+    def setUp(self):
+        self.helper = User.objects.create_user(username='alice', password='pw')
+        self.client.force_login(self.helper)
+        self.today = timezone.localdate()
+
+    def _log_on(self, day, recipient=None):
+        log = UploadedLog.objects.create(
+            forum_username='forumuser', original_filename='a.txt', content='x',
+            recipient_user=recipient or self.helper,
+        )
+        noon = timezone.make_aware(datetime.combine(day, time(12)), timezone.get_current_timezone())
+        UploadedLogStat.objects.filter(source_id=log.pk).update(created_at=noon)
+        return log
+
+    def _get(self, **params):
+        response = self.client.get(reverse('statistics'), params)
+        self.assertEqual(response.status_code, 200)
+        return response
+
+    def _range(self, response):
+        return response.context['start_date'], response.context['end_date']
+
+    def test_huge_range_is_clamped_to_the_data_and_today(self):
+        first = self.today - timedelta(days=400)
+        self._log_on(first)
+
+        response = self._get(start='0001-01-01', end='9999-12-31')
+
+        self.assertEqual(self._range(response), (first.isoformat(), self.today.isoformat()))
+        self.assertEqual(response.context['granularity'], 'week')
+        self.assertLessEqual(len(response.context['uploads_per_day']), 60)
+        self.assertLess(len(response.content), 500_000)
+
+    def test_start_before_the_data_moves_to_the_first_data(self):
+        first = self.today - timedelta(days=100)
+        self._log_on(first)
+
+        response = self._get(start=(self.today - timedelta(days=500)).isoformat())
+
+        self.assertEqual(response.context['start_date'], first.isoformat())
+
+    def test_default_window_stays_whole_with_recent_data(self):
+        self._log_on(self.today - timedelta(days=3))
+
+        response = self._get()
+
+        self.assertEqual(response.context['start_date'], (self.today - timedelta(days=29)).isoformat())
+        self.assertEqual(len(response.context['uploads_per_day']), 30)
+
+    def test_future_dates_become_today(self):
+        response = self._get(end='2999-01-01')
+        self.assertEqual(response.context['end_date'], self.today.isoformat())
+
+        response = self._get(start='2999-01-01', end='2999-02-01')
+        self.assertEqual(self._range(response), (self.today.isoformat(), self.today.isoformat()))
+
+    def test_all_time_starts_at_the_oldest_upload_or_fixlist(self):
+        self._log_on(self.today - timedelta(days=50))
+        fixlist = Fixlist.objects.create(owner=self.helper, username='ta', content='x')
+        oldest = self.today - timedelta(days=200)
+        FixlistStat.objects.filter(source_id=fixlist.pk).update(
+            created_at=timezone.make_aware(datetime.combine(oldest, time(12)), timezone.get_current_timezone()),
+        )
+
+        response = self._get(all='1')
+
+        self.assertEqual(self._range(response), (oldest.isoformat(), self.today.isoformat()))
+
+    def test_up_to_90_days_is_daily(self):
+        start = self.today - timedelta(days=89)
+        self._log_on(start)
+
+        response = self._get(start=start.isoformat())
+
+        self.assertEqual(response.context['granularity'], 'day')
+        self.assertEqual(len(response.context['uploads_per_day']), 90)
+
+    def test_longer_ranges_are_weekly_and_sum_each_week(self):
+        start = self.today - timedelta(days=100)
+        self._log_on(start)
+        monday = self.today - timedelta(days=60)
+        monday -= timedelta(days=monday.weekday())
+        bob = User.objects.create_user(username='bob', password='pw')
+        self._log_on(monday)
+        self._log_on(monday + timedelta(days=1), recipient=bob)
+
+        response = self._get(start=start.isoformat())
+
+        self.assertEqual(response.context['granularity'], 'week')
+        rows = {row['day']: row['count'] for row in response.context['uploads_per_day']}
+        self.assertEqual(rows[monday.isoformat()], 2)
+        self.assertEqual(sum(rows.values()), 3)
+        self.assertTrue(all(date.fromisoformat(day).weekday() == 0 for day in rows))
+        series = response.context['logs_per_helper_series']
+        index = series['days'].index(monday.isoformat())
+        self.assertEqual({s['username']: s['data'][index] for s in series['series']}, {'alice': 1, 'bob': 1})
+
+    def test_more_than_two_years_is_monthly(self):
+        start = self.today - timedelta(days=800)
+        self._log_on(start)
+        month_start = (self.today - timedelta(days=400)).replace(day=1)
+        self._log_on(month_start)
+        self._log_on(month_start + timedelta(days=14))
+
+        response = self._get(start=start.isoformat())
+
+        self.assertEqual(response.context['granularity'], 'month')
+        rows = {row['day']: row['count'] for row in response.context['uploads_per_day']}
+        self.assertEqual(rows[month_start.strftime('%Y-%m')], 2)
+        self.assertEqual(sum(rows.values()), 3)
+        months = (self.today.year - start.year) * 12 + self.today.month - start.month + 1
+        self.assertEqual(len(rows), months)
+
+    def test_page_offers_all_time_and_names_the_grouping(self):
+        start = self.today - timedelta(days=100)
+        self._log_on(start)
+
+        response = self._get(start=start.isoformat())
+
+        self.assertContains(response, f'{reverse("statistics")}?all=1')
+        self.assertContains(response, 'uploads per week')

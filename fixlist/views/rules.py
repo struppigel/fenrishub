@@ -914,6 +914,8 @@ def test_rule_api(request):
 LOG_PREVIEW_MAX_LOGS = 50
 LOG_PREVIEW_MAX_LINES = 200
 LOG_PREVIEW_TIME_BUDGET_S = 3.0
+# Only complete scans: FRST and Addition merged into one log.
+LOG_PREVIEW_LOG_TYPE = 'FRST&Addition'
 
 
 @deny_guests
@@ -922,8 +924,8 @@ LOG_PREVIEW_TIME_BUDGET_S = 3.0
 def test_rule_logs_api(request):
     """Test a rule definition against the newest stored logs.
 
-    Scans the logs the user can open in the analyzer (own and general channel,
-    not trashed) and returns the distinct lines the rule matches, each with the
+    Scans the FRST&Addition logs the user can open in the analyzer (own and
+    general channel, not trashed) and returns the distinct lines the rule matches, each with the
     same per-line verdict `test_rule_api` gives plus the logs it occurs in. A
     whole-log alert rule instead returns the logs it would fire on.
     """
@@ -947,7 +949,7 @@ def test_rule_logs_api(request):
 
     logs = (
         get_action_scoped_uploads(request.user)
-        .filter(deleted_at__isnull=True)
+        .filter(deleted_at__isnull=True, log_type=LOG_PREVIEW_LOG_TYPE)
         .order_by('-created_at')
         .values_list('upload_id', 'content')[:LOG_PREVIEW_MAX_LOGS]
         .iterator(chunk_size=10)

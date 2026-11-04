@@ -22,6 +22,10 @@ class RuleLogsPreviewApiTests(TestCase):
     def _lines_by_text(self, data):
         return {result["line"]: result for result in data["results"]}
 
+    def _log(self, upload_id, **overrides):
+        # The preview only scans FRST&Addition logs.
+        return make_uploaded_log(upload_id, **{"log_type": "FRST&Addition", **overrides})
+
     # -- Auth & validation --
 
     def test_requires_login(self):
@@ -37,7 +41,7 @@ class RuleLogsPreviewApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_rejects_invalid_regex(self):
-        make_uploaded_log("log-a", content="anything")
+        self._log("log-a", content="anything")
         response = self._post({"source_text": "(unclosed", "match_type": "regex"})
         self.assertEqual(response.status_code, 400)
         self.assertIn("error", response.json())
@@ -47,7 +51,7 @@ class RuleLogsPreviewApiTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_refuses_slow_regex(self):
-        make_uploaded_log("log-a", content="anything")
+        self._log("log-a", content="anything")
         slow = {
             "stdlib_ok": True, "stdlib_error": None, "re2_ok": False, "re2_error": "x",
             "is_slow": True, "worst_ms": 900.0, "worst_input": "aaaa",
@@ -60,9 +64,9 @@ class RuleLogsPreviewApiTests(TestCase):
     # -- Matching --
 
     def test_collapses_identical_lines_across_logs(self):
-        make_uploaded_log("log-a", content="header\nC:\\evil\\evil.exe\nfooter")
-        make_uploaded_log("log-b", content="C:\\evil\\evil.exe\nC:\\evil\\evil.exe\nother")
-        make_uploaded_log("log-c", content="nothing here")
+        self._log("log-a", content="header\nC:\\evil\\evil.exe\nfooter")
+        self._log("log-b", content="C:\\evil\\evil.exe\nC:\\evil\\evil.exe\nother")
+        self._log("log-c", content="nothing here")
 
         data = self._post({"source_text": "evil.exe", "match_type": "substring", "status": "B"}).json()
 
@@ -80,40 +84,66 @@ class RuleLogsPreviewApiTests(TestCase):
         self.assertFalse(data["timed_out"])
 
     def test_most_widespread_line_comes_first(self):
-        make_uploaded_log("log-a", content="evil one")
-        make_uploaded_log("log-b", content="evil two")
-        make_uploaded_log("log-c", content="evil two")
+        self._log("log-a", content="evil one")
+        self._log("log-b", content="evil two")
+        self._log("log-c", content="evil two")
 
         data = self._post({"source_text": "evil", "match_type": "substring"}).json()
 
         self.assertEqual([r["line"] for r in data["results"]], ["evil two", "evil one"])
 
     def test_exact_match_ignores_surrounding_whitespace(self):
-        make_uploaded_log("log-a", content="  EVIL-PROCESS.EXE  \r\nEVIL-PROCESS.EXE.bak")
+        self._log("log-a", content="  EVIL-PROCESS.EXE  \r\nEVIL-PROCESS.EXE.bak")
 
         data = self._post({"source_text": "EVIL-PROCESS.EXE", "match_type": "exact"}).json()
 
         self.assertEqual([r["line"] for r in data["results"]], ["EVIL-PROCESS.EXE"])
 
     def test_skips_trashed_logs(self):
-        make_uploaded_log("log-a", content="evil", deleted_at=timezone.now())
+        self._log("log-a", content="evil", deleted_at=timezone.now())
 
         data = self._post({"source_text": "evil", "match_type": "substring"}).json()
 
         self.assertEqual(data["results"], [])
         self.assertEqual(data["logs_scanned"], 0)
 
+    def test_scans_only_frst_and_addition_logs(self):
+        self._log("log-merged", content="evil")
+        for log_type in ("FRST", "Addition", "Fixlog", "Unknown"):
+            self._log(f"log-{log_type.lower()}", content="evil", log_type=log_type)
+
+        data = self._post({"source_text": "evil", "match_type": "substring"}).json()
+
+        self.assertEqual([ref["upload_id"] for ref in data["results"][0]["logs"]], ["log-merged"])
+        self.assertEqual(data["logs_scanned"], 1)
+
+    def test_newest_count_ignores_other_log_types(self):
+        self._log("log-merged", content="evil")
+        self._log("log-fixlog", content="evil", log_type="Fixlog")
+        UploadedLog.objects.filter(upload_id="log-merged").update(
+            created_at=timezone.now() - timedelta(days=1)
+        )
+
+        with patch("fixlist.views.rules.LOG_PREVIEW_MAX_LOGS", 1):
+            data = self._post({"source_text": "evil", "match_type": "substring"}).json()
+
+        self.assertEqual([ref["upload_id"] for ref in data["results"][0]["logs"]], ["log-merged"])
+
+    def test_page_names_the_log_type(self):
+        response = self.client.get(reverse("add_rule"))
+        self.assertContains(response, "newest uploaded FRST&amp;Addition logs")
+
     def test_skips_logs_sent_to_another_helper(self):
         other = make_user("bob")
-        make_uploaded_log("log-bob", content="evil", recipient_user=other)
-        make_uploaded_log("log-mine", content="evil", recipient_user=self.user)
+        self._log("log-bob", content="evil", recipient_user=other)
+        self._log("log-mine", content="evil", recipient_user=self.user)
 
         data = self._post({"source_text": "evil", "match_type": "substring"}).json()
 
         self.assertEqual([ref["upload_id"] for ref in data["results"][0]["logs"]], ["log-mine"])
 
     def test_reports_existing_rules_on_matched_lines(self):
-        make_uploaded_log("log-a", content="evil.exe")
+        self._log("log-a", content="evil.exe")
         make_rule("evil.exe", status="C", match_type="exact")
 
         data = self._post({"source_text": "evil", "match_type": "substring", "status": "B"}).json()
@@ -123,7 +153,7 @@ class RuleLogsPreviewApiTests(TestCase):
         self.assertEqual(len(result["existing_matches"]), 1)
 
     def test_excludes_the_rule_being_edited(self):
-        make_uploaded_log("log-a", content="evil.exe")
+        self._log("log-a", content="evil.exe")
         rule = make_rule("evil.exe", status="B", match_type="exact", owner=self.user)
 
         data = self._post({
@@ -136,7 +166,7 @@ class RuleLogsPreviewApiTests(TestCase):
     # -- Limits --
 
     def test_stops_after_max_distinct_lines(self):
-        make_uploaded_log("log-a", content="evil 1\nevil 2\nevil 3")
+        self._log("log-a", content="evil 1\nevil 2\nevil 3")
 
         with patch("fixlist.views.rules.LOG_PREVIEW_MAX_LINES", 2):
             data = self._post({"source_text": "evil", "match_type": "substring"}).json()
@@ -145,8 +175,8 @@ class RuleLogsPreviewApiTests(TestCase):
         self.assertTrue(data["truncated"])
 
     def test_scans_only_the_newest_logs(self):
-        make_uploaded_log("log-old", content="evil old")
-        make_uploaded_log("log-new", content="evil new")
+        self._log("log-old", content="evil old")
+        self._log("log-new", content="evil new")
         # auto_now_add ignores a passed value, and two quick creates can share a tick.
         UploadedLog.objects.filter(upload_id="log-old").update(
             created_at=timezone.now() - timedelta(days=1)
@@ -159,7 +189,7 @@ class RuleLogsPreviewApiTests(TestCase):
         self.assertEqual(data["max_logs"], 1)
 
     def test_reports_running_out_of_time(self):
-        make_uploaded_log("log-a", content="evil")
+        self._log("log-a", content="evil")
 
         with patch("fixlist.views.rules.LOG_PREVIEW_TIME_BUDGET_S", -1):
             data = self._post({"source_text": "evil", "match_type": "substring"}).json()
@@ -170,8 +200,8 @@ class RuleLogsPreviewApiTests(TestCase):
     # -- Whole-log alerts --
 
     def test_whole_log_rule_lists_the_logs_it_fires_on(self):
-        make_uploaded_log("log-a", content="first\nevil\nevil again")
-        make_uploaded_log("log-b", content="clean")
+        self._log("log-a", content="first\nevil\nevil again")
+        self._log("log-b", content="clean")
 
         data = self._post({
             "source_text": "evil", "match_type": "regex", "status": "A", "whole_log": True,
