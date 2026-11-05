@@ -59,7 +59,8 @@ const IGNORE_FIREWALL_RULES_KEY = 'fenrishub_ignore_firewall_rules';
 // response to the user — and shows one at a time. Both stay in the DOM while
 // the other is showing, so the browser keeps their text, caret and scroll
 // position across a switch. Which one is up is picked from two tabs
-// ("fixlist" / "response").
+// ("fixlist" / "response"). Every log opens on the fixlist; the choice is not
+// remembered across page loads.
 const ACTIVE_RIGHT_PANEL_KEY = 'fenrishub_right_panel_active';
 let activeRightPanel = 'fix';
 
@@ -199,9 +200,6 @@ function setActiveRightPanel(panel, { focus = true } = {}) {
     const target = panel === 'response' ? 'response' : 'fix';
     if (target === activeRightPanel) return;
     activeRightPanel = target;
-    try {
-        localStorage.setItem(ACTIVE_RIGHT_PANEL_KEY, activeRightPanel);
-    } catch (e) {}
     applyRightPanelState();
     // A snippet counts as used per panel (speech_suggestions.js).
     if (typeof refreshSnippetSuggestions === 'function') {
@@ -214,13 +212,12 @@ function setActiveRightPanel(panel, { focus = true } = {}) {
 }
 
 function initRightPanelState() {
+    activeRightPanel = 'fix';
+    // Clean up the tab choice older versions stored, which made a new log
+    // open on the response.
     try {
-        // 'speech' is the pre-rename value; treat it as 'response'.
-        const stored = localStorage.getItem(ACTIVE_RIGHT_PANEL_KEY);
-        activeRightPanel = (stored === 'response' || stored === 'speech') ? 'response' : 'fix';
-    } catch (e) {
-        activeRightPanel = 'fix';
-    }
+        localStorage.removeItem(ACTIVE_RIGHT_PANEL_KEY);
+    } catch (e) {}
     applyRightPanelState();
 }
 

@@ -1416,6 +1416,13 @@ class UploadedLogStat(models.Model):
     fixlog_success = models.PositiveIntegerField(default=0)
     fixlog_not_found = models.PositiveIntegerField(default=0)
     fixlog_error = models.PositiveIntegerField(default=0)
+    # What the shared analysis credited - its rules and the codes of its
+    # warnings - so /stats/ can count rule tags. Tags are resolved from these
+    # when the page is served, like everywhere else, so tagging a rule later
+    # counts for past logs too. None: never recorded (the snapshot predates
+    # tag stats and its log was gone before they could be backfilled).
+    rule_ids = models.JSONField(null=True, blank=True, default=None)
+    warning_codes = models.JSONField(null=True, blank=True, default=None)
 
     class Meta:
         ordering = ['-created_at']
@@ -1472,7 +1479,20 @@ def update_uploaded_log_stat_snapshot(instance, shared_payload):
             defaults[field_name] = 0
         else:
             defaults[field_name] = max(0, int(status_counts.get(status_code, 0) or 0))
+    defaults['rule_ids'], defaults['warning_codes'] = _stat_tag_sources(shared_payload)
     UploadedLogStat.objects.update_or_create(source_id=instance.pk, defaults=defaults)
+
+
+def _stat_tag_sources(payload):
+    """``(rule_ids, warning_codes)`` to snapshot from an analysis payload; empty lists without one."""
+    if not isinstance(payload, dict):
+        return [], []
+    from .tagging import payload_rule_ids
+    codes = {
+        warning.get('code') for warning in payload.get('warnings') or []
+        if isinstance(warning, dict) and warning.get('code')
+    }
+    return sorted(payload_rule_ids(payload)), sorted(codes)
 
 
 def _fixlist_stat_defaults(instance):

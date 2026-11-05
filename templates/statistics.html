@@ -1,10 +1,12 @@
 {% extends 'base.html' %}
+{% load static rule_tags %}
 
 {% block title %}Statistics - Fenris{% endblock %}
 
 {% block page_context_label %}stats{% endblock %}
 
 {% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
     .stats-section {
         margin-top: 24px;
@@ -112,6 +114,38 @@
         height: 100% !important;
     }
 
+    .stats-tag-controls {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+    }
+
+    .stats-tag-controls select {
+        height: 28px;
+        background: var(--la-bg-1);
+        color: var(--la-text-main);
+        border: 1px solid var(--la-border);
+        padding: 0 6px;
+        font-family: inherit;
+        font-size: 12px;
+    }
+
+    .stats-tag-note {
+        font-size: 12px;
+        color: var(--la-text-muted);
+        margin: 4px 0 8px;
+    }
+
+    .stats-table a.tag-chip {
+        text-decoration: none;
+    }
+
+    .stats-table a.tag-chip:hover {
+        text-decoration: underline;
+    }
+
     @media (max-width: 720px) {
         .stats-grid-two { grid-template-columns: 1fr; }
     }
@@ -123,9 +157,11 @@
     <form method="get" class="stats-range-form">
         <label>start date<input type="date" name="start" value="{{ start_date }}"></label>
         <label>end date<input type="date" name="end" value="{{ end_date }}"></label>
+        {% if selected_tag_category %}<input type="hidden" name="tag_category" value="{{ selected_tag_category }}">{% endif %}
+        {% for tag in selected_tags %}<input type="hidden" name="tags" value="{{ tag.id }}">{% endfor %}
         <button type="submit">apply</button>
         <a href="{% url 'statistics' %}"><button type="button">reset</button></a>
-        <a href="{% url 'statistics' %}?all=1"><button type="button" title="everything from the first upload or fixlist on">all time</button></a>
+        <a href="{% url 'statistics' %}?all=1{% if selected_tag_category %}&amp;tag_category={{ selected_tag_category }}{% endif %}{% for tag in selected_tags %}&amp;tags={{ tag.id }}{% endfor %}"><button type="button" title="everything from the first upload or fixlist on">all time</button></a>
         <span style="font-size: 12px; color: var(--la-text-muted);">showing {{ start_date }} &rarr; {{ end_date }}</span>
     </form>
 
@@ -182,6 +218,48 @@
                 <canvas id="malwareByTypeChart" height="180"></canvas>
             </div>
         </div>
+    </div>
+
+    <div class="stats-section">
+        <h3>logs with tag, per {{ granularity }}</h3>
+        <form method="get" class="stats-tag-controls">
+            <input type="hidden" name="start" value="{{ start_date }}">
+            <input type="hidden" name="end" value="{{ end_date }}">
+            <select name="tag_category" title="only tags of this category" onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit();">
+                <option value="">all categories</option>
+                {% for category in tag_categories %}
+                <option value="{{ category.id }}" {% if category.id == selected_tag_category %}selected{% endif %}>{{ category.name }}</option>
+                {% endfor %}
+            </select>
+            {% include "partials/tag_filter_picker.html" with tag_filter_title="draw these tags instead of the most found ones" tag_filter_placeholder="chart tags..." %}
+        </form>
+        <div class="stats-tag-note">
+            counts analyzed logs whose shared analysis contains the tag; {% if selected_tags %}showing the picked tags{% else %}showing the {{ tag_chart_top_n }} most found{% if selected_tag_category %} in the category{% endif %}{% endif %}.
+            {% if tag_unrecorded_count %}{{ tag_unrecorded_count }} analyzed log{{ tag_unrecorded_count|pluralize }} in range {{ tag_unrecorded_count|pluralize:"has,have" }} no tag data (deleted before tag stats existed, or not rescanned since) and {{ tag_unrecorded_count|pluralize:"is,are" }} not counted.{% endif %}
+        </div>
+        {% if tag_stats or selected_tags %}
+        <div class="stats-chart-wrap">
+            <canvas id="tagTimelineChart"></canvas>
+        </div>
+        {% endif %}
+        {% if tag_stats %}
+        <table class="stats-table" style="margin-top: 12px;">
+            <thead>
+                <tr><th>tag</th><th class="num">logs</th><th class="num">% of {{ tag_counted_count }} analyzed logs</th></tr>
+            </thead>
+            <tbody>
+                {% for row in tag_stats %}
+                <tr>
+                    <td><a class="tag-chip{{ row|tag_category_class }}" href="{% url 'log_search' %}?tags={{ row.id }}" title="find the logs with this tag">{{ row.name }}</a></td>
+                    <td class="num">{{ row.count }}</td>
+                    <td class="num">{{ row.percent }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="info-box">no {% if selected_tag_category %}tags of this category{% else %}tags{% endif %} found in the analyzed logs of the selected range.</div>
+        {% endif %}
     </div>
 
     <div class="stats-section">
@@ -267,6 +345,7 @@
 {{ fixlog_summary|json_script:"data-fixlog-summary" }}
 {{ logs_per_helper_series|json_script:"data-logs-per-helper-series" }}
 {{ fixlists_per_helper_series|json_script:"data-fixlists-per-helper-series" }}
+{{ tag_series|json_script:"data-tag-series" }}
 {% endblock %}
 
 {% block extra_js %}
@@ -403,15 +482,17 @@
         colors.primary, colors.info, colors.warning, colors.error,
         '#b48ead', '#a3be8c', '#d08770', '#88c0d0', '#bf616a', '#ebcb8b',
     ];
-    const logsPerHelperSeries = readJson('data-logs-per-helper-series') || { days: [], series: [] };
-    const helperCanvas = document.getElementById('logsPerHelperChart');
-    if (helperCanvas && logsPerHelperSeries.series.length) {
-        new Chart(helperCanvas, {
+    // One line per series over the bucket axis: {days, series: [{label|username, data}]}.
+    function seriesLineChart(canvasId, dataId) {
+        const seriesData = readJson(dataId) || { days: [], series: [] };
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || !seriesData.series.length) return;
+        new Chart(canvas, {
             type: 'line',
             data: {
-                labels: logsPerHelperSeries.days,
-                datasets: logsPerHelperSeries.series.map((s, i) => ({
-                    label: s.username,
+                labels: seriesData.days,
+                datasets: seriesData.series.map((s, i) => ({
+                    label: s.label || s.username,
                     data: s.data,
                     borderColor: seriesPalette[i % seriesPalette.length],
                     backgroundColor: seriesPalette[i % seriesPalette.length],
@@ -424,26 +505,9 @@
         });
     }
 
-    const fixlistsPerHelperSeries = readJson('data-fixlists-per-helper-series') || { days: [], series: [] };
-    const fixlistsHelperCanvas = document.getElementById('fixlistsPerHelperChart');
-    if (fixlistsHelperCanvas && fixlistsPerHelperSeries.series.length) {
-        new Chart(fixlistsHelperCanvas, {
-            type: 'line',
-            data: {
-                labels: fixlistsPerHelperSeries.days,
-                datasets: fixlistsPerHelperSeries.series.map((s, i) => ({
-                    label: s.username,
-                    data: s.data,
-                    borderColor: seriesPalette[i % seriesPalette.length],
-                    backgroundColor: seriesPalette[i % seriesPalette.length],
-                    tension: 0.2,
-                    pointRadius: 2,
-                    fill: false,
-                })),
-            },
-            options: baseOptions,
-        });
-    }
+    seriesLineChart('tagTimelineChart', 'data-tag-series');
+    seriesLineChart('logsPerHelperChart', 'data-logs-per-helper-series');
+    seriesLineChart('fixlistsPerHelperChart', 'data-fixlists-per-helper-series');
 })();
 </script>
 {% endblock %}

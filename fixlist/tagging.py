@@ -790,6 +790,35 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
     return [pk for pk in candidate_pks if pk in matched], unanalyzed_count
 
 
+def tag_ids_by_key(rule_ids_by_key, codes_by_key):
+    """``{key: set(tag_ids)}``: the tags found from each key's credited rules and warning codes.
+
+    A tag is found the way attach_rule_tags finds one: a rule carrying it was
+    credited, or the tag's built-in warning fired. Two queries for any number
+    of keys.
+    """
+    tags_by_rule = {}
+    all_rule_ids = set().union(*rule_ids_by_key.values()) if rule_ids_by_key else set()
+    if all_rule_ids:
+        links = ClassificationRule.tags.through.objects.filter(
+            classificationrule_id__in=all_rule_ids,
+        ).values_list('classificationrule_id', 'ruletag_id')
+        for rule_id, tag_id in links:
+            tags_by_rule.setdefault(rule_id, set()).add(tag_id)
+    builtin_by_code = dict(
+        RuleTag.objects.filter(builtin_code__isnull=False).values_list('builtin_code', 'pk')
+    )
+
+    result = {}
+    for key, rule_ids in rule_ids_by_key.items():
+        tag_ids = {tag_id for rule_id in rule_ids for tag_id in tags_by_rule.get(rule_id, ())}
+        tag_ids.update(
+            builtin_by_code[code] for code in codes_by_key.get(key) or () if code in builtin_by_code
+        )
+        result[key] = tag_ids
+    return result
+
+
 def found_tags_by_upload(upload_pks, rule_set_key):
     """``{upload_pk: [{id, name, description, category_id, category_priority}]}``: the tags found in each log, by name.
 
@@ -821,26 +850,7 @@ def found_tags_by_upload(upload_pks, rule_set_key):
     if not rule_ids_by_upload:
         return found
 
-    tags_by_rule = {}
-    all_rule_ids = set().union(*rule_ids_by_upload.values())
-    if all_rule_ids:
-        links = ClassificationRule.tags.through.objects.filter(
-            classificationrule_id__in=all_rule_ids,
-        ).values_list('classificationrule_id', 'ruletag_id')
-        for rule_id, tag_id in links:
-            tags_by_rule.setdefault(rule_id, set()).add(tag_id)
-    builtin_by_code = dict(
-        RuleTag.objects.filter(builtin_code__isnull=False).values_list('builtin_code', 'pk')
-    )
-
-    tag_ids_by_upload = {}
-    for upload_pk, rule_ids in rule_ids_by_upload.items():
-        tag_ids = {tag_id for rule_id in rule_ids for tag_id in tags_by_rule.get(rule_id, ())}
-        tag_ids.update(
-            builtin_by_code[code] for code in codes_by_upload[upload_pk] if code in builtin_by_code
-        )
-        tag_ids_by_upload[upload_pk] = tag_ids
-
+    tag_ids_by_upload = tag_ids_by_key(rule_ids_by_upload, codes_by_upload)
     all_tag_ids = set().union(*tag_ids_by_upload.values())
     tags = {
         tag.pk: {

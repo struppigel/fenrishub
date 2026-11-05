@@ -9,13 +9,16 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
-from ..models import FixlistStat, UploadedLogStat
+from ..models import FixlistStat, RuleTag, TagCategory, UploadedLogStat
+from ..tagging import parse_tag_ids, selected_tags_for_picker, tag_ids_by_key
 
 
 ANALYZED_LOG_TYPES = ['FRST', 'Addition', 'FRST&Addition']
 UNASSIGNED_LABEL = 'Unassigned'
 DEFAULT_RANGE_DAYS = 30
 TOP_N = 20
+# Tags the tag timeline draws when none are picked: the most found ones.
+TAG_CHART_TOP_N = 10
 # Charts group by day up to this many days, by week up to WEEKLY_MAX_DAYS,
 # by month beyond, so a long range stays readable and the page small.
 DAILY_MAX_DAYS = 90
@@ -154,6 +157,93 @@ def _helper_series(counts, axis, granularity):
     }
 
 
+def _parse_category_id(raw, categories):
+    """The id of the category `raw` names among `categories`, or None for all / an invalid one."""
+    try:
+        category_id = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return category_id if any(category['id'] == category_id for category in categories) else None
+
+
+def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
+    """Logs per rule tag in the range: the table rows, the timeline and how many logs were counted.
+
+    Tags come from the rules and warning codes each snapshot recorded, resolved
+    now (see tagging.tag_ids_by_key), so a rule tagged later counts for past
+    logs too. Without a category the table leaves out priority-0 categories -
+    tags in nearly every log - as the uploads list does; a picked category shows
+    all of its tags. Picked tags replace the most found ones in the chart.
+    """
+    trunc = TRUNC_BY_GRANULARITY[granularity]
+    rows = (
+        analyzed_qs.annotate(bucket=trunc('created_at', tzinfo=tz))
+        .values_list('bucket', 'rule_ids', 'warning_codes')
+    )
+    bucket_by_row = {}
+    rule_ids_by_row = {}
+    codes_by_row = {}
+    unrecorded = 0
+    for index, (bucket, rule_ids, codes) in enumerate(rows.iterator(chunk_size=500)):
+        if rule_ids is None:
+            unrecorded += 1
+            continue
+        if bucket is None:
+            continue
+        bucket_by_row[index] = _as_local_date(bucket, tz)
+        rule_ids_by_row[index] = rule_ids
+        codes_by_row[index] = codes or []
+
+    counts = {}
+    for index, tag_ids in tag_ids_by_key(rule_ids_by_row, codes_by_row).items():
+        bucket = bucket_by_row[index]
+        for tag_id in tag_ids:
+            by_bucket = counts.setdefault(tag_id, {})
+            by_bucket[bucket] = by_bucket.get(bucket, 0) + 1
+
+    counted = len(rule_ids_by_row)
+    tags = RuleTag.objects.select_related('category').in_bulk(set(counts) | set(picked_ids))
+
+    def shown(tag):
+        if category_id is not None:
+            return tag.category_id == category_id
+        return tag.category.priority > 0
+
+    table = sorted(
+        (
+            {
+                'id': tag_id,
+                'name': tags[tag_id].name,
+                'category_id': tags[tag_id].category_id,
+                'count': sum(by_bucket.values()),
+                'percent': round(sum(by_bucket.values()) / counted * 100, 1) if counted else 0.0,
+            }
+            for tag_id, by_bucket in counts.items()
+            if tag_id in tags and shown(tags[tag_id])
+        ),
+        key=lambda row: (-row['count'], row['name'].lower()),
+    )
+
+    picked = [tag_id for tag_id in picked_ids if tag_id in tags]
+    charted = picked or [row['id'] for row in table[:TAG_CHART_TOP_N]]
+    series = {
+        'days': [_bucket_label(bucket, granularity) for bucket in axis],
+        'series': [
+            {
+                'label': tags[tag_id].name,
+                'data': [counts.get(tag_id, {}).get(bucket, 0) for bucket in axis],
+            }
+            for tag_id in charted
+        ],
+    }
+    return {
+        'rows': table,
+        'series': series,
+        'counted': counted,
+        'unrecorded': unrecorded,
+    }
+
+
 def _bucket_recipient(row):
     username = (row.get('recipient_username') or '').strip()
     return username or UNASSIGNED_LABEL
@@ -284,6 +374,11 @@ def statistics_view(request):
         _counts_by_bucket_and_label(fixlist_qs, 'owner_username', granularity, tz), axis, granularity,
     )
 
+    tag_categories = list(TagCategory.objects.order_by('name').values('id', 'name'))
+    selected_tag_category = _parse_category_id(request.GET.get('tag_category'), tag_categories)
+    picked_tag_ids = parse_tag_ids(request.GET.getlist('tags'))
+    tag_stats = _tag_stats(analyzed_qs, axis, granularity, tz, selected_tag_category, picked_tag_ids)
+
     context = {
         'start_date': start_date.isoformat(),
         'end_date': end_date.isoformat(),
@@ -299,5 +394,13 @@ def statistics_view(request):
         'fixlists_per_helper': fixlists_per_helper,
         'fixlists_per_helper_top': fixlists_per_helper[:TOP_N],
         'fixlists_per_helper_series': fixlists_per_helper_series,
+        'tag_stats': tag_stats['rows'],
+        'tag_series': tag_stats['series'],
+        'tag_counted_count': tag_stats['counted'],
+        'tag_unrecorded_count': tag_stats['unrecorded'],
+        'tag_categories': tag_categories,
+        'tag_chart_top_n': TAG_CHART_TOP_N,
+        'selected_tag_category': selected_tag_category,
+        'selected_tags': selected_tags_for_picker(picked_tag_ids),
     }
     return render(request, 'statistics.html', context)

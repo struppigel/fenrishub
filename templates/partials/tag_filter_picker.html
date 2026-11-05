@@ -4,10 +4,12 @@ it inside the <form>; picking or removing a tag submits the form, and the
 picked ids go along as repeated `tags` params. Needs css/rule_tags.css.
 
 Context:
-  selected_tags   [{id, name, description}] to show as already picked
+  selected_tags            [{id, name, description}] to show as already picked
+  tag_filter_title         optional tooltip (default: the search meaning)
+  tag_filter_placeholder   optional input placeholder (default: "filter by tag...")
 {% endcomment %}
 {% load static %}
-<div id="tagFilterPicker" class="tag-filter-picker" title="only logs that contain every selected tag"></div>
+<div id="tagFilterPicker" class="tag-filter-picker" title="{{ tag_filter_title|default:'only logs that contain every selected tag' }}"></div>
 {{ selected_tags|json_script:"tagFilterInitial" }}
 <script src="{% static 'js/rule_tag_picker.js' %}"></script>
 <script>
@@ -21,7 +23,7 @@ Context:
         showDescriptions: false,
         initialTags: JSON.parse(document.getElementById('tagFilterInitial').textContent || '[]'),
         urls: { list: "{% url 'rule_tags_api' %}" },
-        placeholder: 'filter by tag...',
+        placeholder: '{{ tag_filter_placeholder|default:"filter by tag..."|escapejs }}',
         onChange: function () {
             if (form.requestSubmit) form.requestSubmit();
             else form.submit();
