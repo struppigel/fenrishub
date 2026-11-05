@@ -507,7 +507,8 @@ window.logAnalyzerConfig = {
             e.stopPropagation();
         });
 
-        function insertItem(itemId) {
+        // opts.blankLineBefore: an empty line above the insert ("insert all").
+        function insertItem(itemId, opts) {
             // Extra items (other helpers' shared speeches) can be inserted
             // too, though they are not listed in the categories.
             var extra = options.extraKey ? ((window.logAnalyzerConfig || {})[options.extraKey] || []) : [];
@@ -521,7 +522,7 @@ window.logAnalyzerConfig = {
             var content = options.transform ? options.transform(entry.content) : entry.content;
             var inserted = content.replace(/\r\n/g, '\n');
             if (!inserted.endsWith('\n')) inserted += '\n';
-            if (pos > 0 && text[pos - 1] !== '\n') inserted = '\n' + inserted;
+            inserted = insertionPrefix(text.substring(0, pos), Boolean(opts && opts.blankLineBefore)) + inserted;
 
             var after = text.substring(pos);
             // Shared helper from shared.js: keeps the insert in the browser's
@@ -616,14 +617,14 @@ window.logAnalyzerConfig = {
 
         // Insert without the menu, e.g. from a warning box's suggestions: at
         // the caret if the analyst has been in the target, else at the end.
-        function insertById(itemId) {
+        function insertById(itemId, opts) {
             var target = options.resolveTarget();
             if (!target) return;
             lastCursorTarget = target;
             lastCursorPos = target.dataset.caretTouched === '1'
                 ? target.selectionStart
                 : target.value.length;
-            insertItem(itemId);
+            insertItem(itemId, opts);
         }
 
         load();
@@ -684,8 +685,8 @@ window.logAnalyzerConfig = {
         if (typeof refreshWarningSpeechRows === 'function') refreshWarningSpeechRows();
     };
 
-    window.insertSpeechById = function(id) {
-        if (speechMenu) speechMenu.insertById(id);
+    window.insertSpeechById = function(id, opts) {
+        if (speechMenu) speechMenu.insertById(id, opts);
     };
 
     // speech_suggestions.js calls this after every analysis, panel switch and

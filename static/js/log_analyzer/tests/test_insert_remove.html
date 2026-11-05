@@ -627,6 +627,19 @@ const EXTENSION_ENTRY = {
 })();
 
 // ---------------------------------------------------------------------------
+// insertionPrefix: the newlines a speech or snippet menu puts before an insert
+// ---------------------------------------------------------------------------
+(function testInsertionPrefix() {
+    assert('nothing before the first insert into an empty panel', insertionPrefix('') === '');
+    assert('an insert after a finished line needs no newline', insertionPrefix('Hi,\n') === '');
+    assert('an insert mid-line starts a new line', insertionPrefix('Hi,') === '\n');
+    assert('with a blank line: none into an empty panel', insertionPrefix('', true) === '');
+    assert('with a blank line: one newline after a finished line', insertionPrefix('first speech\n', true) === '\n');
+    assert('with a blank line: two newlines mid-line', insertionPrefix('first speech', true) === '\n\n');
+    assert('with a blank line: none when an empty line is already there', insertionPrefix('first\n\n', true) === '');
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 const summary = document.getElementById('summary');

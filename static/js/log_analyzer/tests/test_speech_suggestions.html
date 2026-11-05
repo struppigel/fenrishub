@@ -91,11 +91,6 @@ const speeches = [
             === JSON.stringify([['adware', ''], ['renloader', 'RenPy loader family']]));
     assert('unknown tag ids are skipped', ruleTagsFor([99]).length === 0);
 
-    const chips = buildLineTagChips([7]);
-    assert('one chip per line tag', chips.length === 1 && chips[0].textContent === 'renloader');
-    assert('a chip carries the tag description as its title',
-        chips[0].title === 'renloader: RenPy loader family', chips[0].title);
-
     assert('no filter: no line counts as a filter match', !lineMatchesTagFilter({ tag_ids: [7] }));
     setTagFilter(7);
     assert('with a filter, a line carrying the tag matches', lineMatchesTagFilter({ tag_ids: [7, 8] }));
@@ -231,12 +226,6 @@ const speeches = [
     updateSpeechSuggestionsFromAnalysis({
         rule_tags: ['echo', 'alpha', 'delta', 'Charlie', 'bravo'].map((name, index) => ({ id: 100 + index, name })),
     });
-    const chips = buildLineTagChips([100, 101, 102, 103, 104]);
-    const labels = chips.map((chip) => chip.textContent);
-    assert('three name chips in alphabetical order, then +N',
-        JSON.stringify(labels) === JSON.stringify(['alpha', 'bravo', 'Charlie', '+2']), JSON.stringify(labels));
-    assert('the +N chip names the rest', chips[3].title === 'delta, echo', chips[3].title);
-    assert('a line with few tags gets no +N chip', buildLineTagChips([100, 101]).length === 2);
 
     const speeches = [
         { id: 1, name: 'zulu speech', content: 'A long enough passage for zulu here.', trigger_tag_ids: [100] },
@@ -306,14 +295,131 @@ const speeches = [
         ruleTagsFor([301])[0].category_id === 4);
     assert('the inspector rows keep the category',
         lineInspectorTagRows([301])[0].category_id === 4);
-    const [coloured, plain] = [buildLineTagChips([301])[0], buildLineTagChips([302])[0]];
-    assert('a line chip of a categorised tag gets its colour class',
-        coloured.className === 'line-tag-chip tag-cat-4', coloured.className);
-    assert('a line chip without a category keeps the default look',
-        plain.className === 'line-tag-chip', plain.className);
     assert('tagCategoryClass is empty without a category',
         tagCategoryClass({ category_id: null }) === '' && tagCategoryClass({ category_id: 9 }) === ' tag-cat-9');
     updateSpeechSuggestionsFromAnalysis({ rule_tags: [] });
+})();
+
+(function testLineSuggestionItems() {
+    const config = {
+        speeches: [
+            { id: 1, name: 'own b', trigger_tag_ids: [7] },
+            { id: 2, name: 'own a', trigger_tag_ids: [7, 8] },
+        ],
+        sharedTagSpeeches: [
+            { id: 3, name: 'shared for 7', trigger_tag_ids: [7] },
+            { id: 4, name: 'shared for 9', trigger_tag_ids: [9] },
+        ],
+        snippets: [],
+        sharedTagSnippets: [{ id: 5, name: 'shared snippet', trigger_tag_ids: [7] }],
+    };
+    const names = (list) => JSON.stringify(list.map((entry) => [entry.item.name, entry.shared]));
+    const forSeven = lineSuggestionItems([7], config);
+    assert('own speeches come alphabetically and win over shared ones',
+        names(forSeven.speeches) === JSON.stringify([['own a', false], ['own b', false]]), names(forSeven.speeches));
+    assert('with no own snippet, shared ones fill in',
+        names(forSeven.snippets) === JSON.stringify([['shared snippet', true]]), names(forSeven.snippets));
+    assert('a tag no own speech covers gets the shared one',
+        names(lineSuggestionItems([9], config).speeches) === JSON.stringify([['shared for 9', true]]));
+    const none = lineSuggestionItems([42], config);
+    assert('a line no item fits gets nothing', !none.speeches.length && !none.snippets.length);
+})();
+
+(function testLineSuggestionChips() {
+    const config = window.logAnalyzerConfig;
+    const saved = { speeches: config.speeches, snippets: config.snippets };
+    const response = document.createElement('textarea');
+    response.id = 'responseText';
+    const fixlist = document.createElement('textarea');
+    fixlist.id = 'selectedLines';
+    document.body.append(response, fixlist);
+    config.speeches = [
+        { id: 60, name: 'reset browser', content: 'Reset your browser settings to their defaults.', trigger_tag_ids: [7] },
+        { id: 61, name: 'adw cleaner', content: 'Download AdwCleaner and run a scan please.', trigger_tag_ids: [7] },
+    ];
+    config.snippets = [{ id: 62, name: 'empty temp', content: 'EmptyTemp:', trigger_tag_ids: [7] }];
+
+    let chips = buildLineSuggestionChips([7]);
+    const labels = chips.map((chip) => chip.textContent);
+    assert('speeches first, alphabetically, then snippets',
+        JSON.stringify(labels) === JSON.stringify(['adw cleaner', 'reset browser', 'empty temp']), JSON.stringify(labels));
+    assert('speech and snippet chips look different',
+        chips[0].classList.contains('line-speech-chip') && chips[2].classList.contains('line-snippet-chip'));
+    assert('nothing is faded before it is used', !chips.some((chip) => chip.classList.contains('line-chip-used')));
+
+    response.value = 'Hi,\n\nReset your   browser settings to their defaults.\n';
+    fixlist.value = 'EmptyTemp:\n';
+    chips = buildLineSuggestionChips([7]);
+    assert('a speech in the response is faded',
+        chips[1].classList.contains('line-chip-used') && !chips[0].classList.contains('line-chip-used'));
+    assert('a snippet in the panel showing is faded', chips[2].classList.contains('line-chip-used'));
+    assert('a faded chip says why', chips[1].title.includes('already in the response'), chips[1].title);
+
+    const calls = [];
+    const savedInsertSpeech = window.insertSpeechById;
+    const savedInsertSnippet = window.insertSnippetById;
+    window.insertSpeechById = (id) => calls.push(['speech', id]);
+    window.insertSnippetById = (id) => calls.push(['snippet', id]);
+    let bubbled = false;
+    const line = document.createElement('div');
+    line.addEventListener('click', () => { bubbled = true; });
+    chips.forEach((chip) => line.appendChild(chip));
+    chips[0].click();
+    chips[2].click();
+    assert('clicking a chip inserts its speech or snippet',
+        JSON.stringify(calls) === JSON.stringify([['speech', 61], ['snippet', 62]]), JSON.stringify(calls));
+    assert('a chip click does not reach the line', !bubbled);
+
+    config.speeches = [1, 2, 3, 4].map((n) => ({ id: 70 + n, name: `speech ${n}`, content: 'x', trigger_tag_ids: [7] }));
+    chips = buildLineSuggestionChips([7]);
+    assert('three chips, then +N for the rest',
+        JSON.stringify(chips.map((chip) => chip.textContent)) === JSON.stringify(['speech 1', 'speech 2', 'speech 3', '+2']),
+        JSON.stringify(chips.map((chip) => chip.textContent)));
+
+    // The chips follow edits: refreshLineSuggestionChips rebuilds the boxes.
+    const logLines = document.createElement('div');
+    logLines.id = 'logLines';
+    const box = document.createElement('span');
+    box.className = 'line-tag-chips';
+    box.dataset.tagIds = '[7]';
+    logLines.appendChild(box);
+    document.body.appendChild(logLines);
+    config.speeches = saved.speeches;
+    config.snippets = [{ id: 62, name: 'empty temp', content: 'EmptyTemp:', trigger_tag_ids: [7] }];
+    fixlist.value = '';
+    refreshLineSuggestionChips();
+    assert('a refresh rebuilds a line\'s chips',
+        box.children.length === 1 && !box.firstChild.classList.contains('line-chip-used'));
+    fixlist.value = 'EmptyTemp:';
+    refreshLineSuggestionChips();
+    assert('and fades one that is now used', box.firstChild.classList.contains('line-chip-used'));
+    config.snippets = saved.snippets;
+    refreshLineSuggestionChips();
+    assert('a box with nothing left goes away', !logLines.contains(box));
+
+    window.insertSpeechById = savedInsertSpeech;
+    window.insertSnippetById = savedInsertSnippet;
+    logLines.remove();
+    response.remove();
+    fixlist.remove();
+})();
+
+(function testInsertAllLeavesEmptyLinesBetweenSpeeches() {
+    const calls = [];
+    const saved = window.insertSpeechById;
+    window.insertSpeechById = (id, options) => calls.push([id, Boolean(options && options.blankLineBefore)]);
+    const anchor = document.createElement('div');
+    document.body.appendChild(anchor);
+    openLineSpeechMenu([
+        { id: 2, name: 'b', trigger_tag_ids: [] },
+        { id: 1, name: 'a', trigger_tag_ids: [] },
+        { id: 3, name: 'c', trigger_tag_ids: [] },
+    ], anchor);
+    document.querySelector('#lineSpeechMenu .line-speech-menu-item').click();
+    assert('insert all puts an empty line above every speech but the first',
+        JSON.stringify(calls) === JSON.stringify([[1, false], [2, true], [3, true]]), JSON.stringify(calls));
+    window.insertSpeechById = saved;
+    anchor.remove();
 })();
 
 document.getElementById('summary').textContent =

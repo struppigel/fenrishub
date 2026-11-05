@@ -587,6 +587,23 @@ function buildFixlistPresence(value) {
     };
 }
 
+// The newlines a speech or snippet menu puts before an insert after
+// `textBefore`: it starts on a line of its own, and with `blankLine` (the
+// second and later speeches of "insert all") an empty line sits above it.
+function insertionPrefix(textBefore, blankLine = false) {
+    const text = String(textBefore || '');
+    if (!text) {
+        return '';
+    }
+    if (!blankLine) {
+        return text.endsWith('\n') ? '' : '\n';
+    }
+    if (text.endsWith('\n\n')) {
+        return '';
+    }
+    return text.endsWith('\n') ? '\n' : '\n\n';
+}
+
 // Replace [start, end) in a textarea while keeping the browser's own undo
 // history intact.
 //
