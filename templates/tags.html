@@ -20,6 +20,16 @@
         padding: 4px 8px;
     }
 
+    .tags-toolbar select.search-filter-select {
+        width: auto;
+    }
+
+    .tags-count {
+        font-size: 12px;
+        color: var(--la-text-muted);
+        margin-bottom: 8px;
+    }
+
     .tag-row {
         padding: 8px 10px;
         margin-bottom: 6px;
@@ -91,16 +101,31 @@
 
 {% block content %}
 <div>
-    <div class="tags-toolbar">
-        <input type="text" id="tagFilter" placeholder="filter tags" aria-label="filter tags">
+    <form method="get" action="{% url 'rule_tags' %}" class="tags-toolbar">
+        <input type="text" name="q" value="{{ search_query }}" placeholder="search name, notes" aria-label="search tags" class="search-filter-input">
+        <select name="category" onchange="this.form.submit()" class="search-filter-select" aria-label="filter by category">
+            <option value="">all categories</option>
+            {% for category in categories %}
+            <option value="{{ category.pk }}" {% if category_filter == category.pk|stringformat:"d" %}selected{% endif %}>{{ category.name }}</option>
+            {% endfor %}
+        </select>
+        <select name="usage" onchange="this.form.submit()" class="search-filter-select" aria-label="filter by usage">
+            <option value="">all tags</option>
+            {% for value, label in usage_choices %}
+            <option value="{{ value }}" {% if usage_filter == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit">search</button>
+        {% if has_filters %}<a href="{% url 'rule_tags' %}" class="search-filter-clear">clear</a>{% endif %}
         <span style="flex: 1;"></span>
         <a href="{% url 'tag_categories' %}"><button type="button" title="name categories and give their tags a color">categories</button></a>
         <a href="{% url 'rule_tag_add' %}"><button type="button">new tag</button></a>
-    </div>
+    </form>
 
     {% if tags %}
+        <div class="tags-count">{{ page_obj.paginator.count }} tag{{ page_obj.paginator.count|pluralize }}{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
         {% for tag in tags %}
-        <div class="tag-row" data-tag-search="{{ tag.name|lower }} {{ tag.description|lower }}">
+        <div class="tag-row">
             <div class="tag-row-header">
                 <span>
                     <span class="tag-chip tag-row-name{{ tag|tag_category_class }}">{{ tag.name }}</span>
@@ -122,6 +147,7 @@
                         {% csrf_token %}
                         <input type="hidden" name="action" value="delete">
                         <input type="hidden" name="pk" value="{{ tag.pk }}">
+                        <input type="hidden" name="return_q" value="{{ current_query_string }}">
                         <button type="submit" style="background-color: var(--la-error-bg); color: var(--la-error-text); border-color: var(--la-error-border);" onclick="return confirm('Delete tag &quot;{{ tag.name|escapejs }}&quot;? It is removed from {{ tag.rule_count }} rule(s), {{ tag.speech_count }} speech(es) and {{ tag.snippet_count }} snippet(s).');">delete</button>
                     </form>
                     {% endif %}
@@ -130,6 +156,11 @@
             {% if tag.description %}<div class="tag-row-description">{{ tag.description }}</div>{% endif %}
         </div>
         {% endfor %}
+        {% include "partials/pagination.html" %}
+    {% elif has_any_tags %}
+        <div class="info-box">
+            no tags match. <a href="{% url 'rule_tags' %}">show all tags</a>
+        </div>
     {% else %}
         <div class="info-box">
             no tags yet. A tag groups related rules - a malware family, a source such as chrome-mal-ids, a vendor - e.g. every RenPyLoader rule, so speeches can be suggested for the group instead of rule by rule.
@@ -137,15 +168,4 @@
     {% endif %}
 
 </div>
-{% endblock %}
-
-{% block extra_js %}
-<script>
-document.getElementById('tagFilter').addEventListener('input', function(event) {
-    const query = event.target.value.trim().toLowerCase();
-    document.querySelectorAll('[data-tag-search]').forEach(function(row) {
-        row.hidden = Boolean(query) && !row.dataset.tagSearch.includes(query);
-    });
-});
-</script>
 {% endblock %}

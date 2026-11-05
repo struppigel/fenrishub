@@ -104,6 +104,79 @@ const speeches = [
     assert('a new analysis clears the filter', !lineMatchesTagFilter({ tag_ids: [7] }));
 })();
 
+(function testTaggedAndSpeechFilters() {
+    const config = window.logAnalyzerConfig;
+    const savedSpeeches = config.speeches;
+    config.speeches = [{ id: 40, name: 'own', trigger_tag_ids: [7] }];
+    config.sharedTagSpeeches = [{ id: 41, name: 'shared', trigger_tag_ids: [9] }];
+    const lines = [
+        { tag_ids: [7] }, { tag_ids: [8] }, { tag_ids: [9, 8] }, { tag_ids: [] }, {},
+    ];
+    const speechTags = speechTriggerTagIds(config.speeches, config.sharedTagSpeeches);
+    const counts = tagFilterCounts(lines, speechTags);
+    assert('"tagged" counts every line with a tag', counts.tagged === 3, JSON.stringify(counts));
+    assert('"with speech" counts lines an own or shared speech fits', counts.withSpeech === 2, JSON.stringify(counts));
+
+    setTagFilter(TAG_FILTER_ANY_TAG);
+    assert('"tagged" shows a line with any tag',
+        lineMatchesTagFilter({ tag_ids: [8] }) && lineMatchesTagFilter({ tag_ids: [7] }));
+    assert('"tagged" hides lines without tags',
+        !lineMatchesTagFilter({ tag_ids: [] }) && !lineMatchesTagFilter({}));
+
+    setTagFilter(TAG_FILTER_WITH_SPEECH);
+    assert('"with speech" shows a line an own speech fits', lineMatchesTagFilter({ tag_ids: [7] }));
+    assert('"with speech" shows a line only a shared speech fits', lineMatchesTagFilter({ tag_ids: [8, 9] }));
+    assert('"with speech" hides a tagged line no speech fits', !lineMatchesTagFilter({ tag_ids: [8] }));
+
+    setTagFilter(null);
+    assert('no filter after clearing it', !lineMatchesTagFilter({ tag_ids: [7] }));
+    config.speeches = savedSpeeches;
+    delete config.sharedTagSpeeches;
+})();
+
+(function testTagsRowFilterButtons() {
+    const row = document.createElement('div');
+    row.id = 'ruleTagsLine';
+    document.body.appendChild(row);
+    const config = window.logAnalyzerConfig;
+    const savedSpeeches = config.speeches;
+    config.speeches = [{ id: 50, name: 'own', trigger_tag_ids: [7] }];
+    window.analyzedLines = [{ tag_ids: [7] }, { tag_ids: [8] }, { tag_ids: [] }];
+    updateSpeechSuggestionsFromAnalysis({
+        rule_tags: [{ id: 7, name: 'renloader', line_count: 1 }, { id: 8, name: 'adware', line_count: 1 }],
+    });
+    const button = (id) => row.querySelector(`[data-tag-filter="${id}"]`);
+    assert('the tags row has a "tagged" button with its count',
+        button(TAG_FILTER_ANY_TAG) && button(TAG_FILTER_ANY_TAG).textContent === 'tagged (2)',
+        button(TAG_FILTER_ANY_TAG) && button(TAG_FILTER_ANY_TAG).textContent);
+    assert('the tags row has a "with speech" button with its count',
+        button(TAG_FILTER_WITH_SPEECH) && button(TAG_FILTER_WITH_SPEECH).textContent === 'with speech (1)',
+        button(TAG_FILTER_WITH_SPEECH) && button(TAG_FILTER_WITH_SPEECH).textContent);
+
+    button(TAG_FILTER_WITH_SPEECH).click();
+    assert('clicking "with speech" filters by it', activeTagFilterId === TAG_FILTER_WITH_SPEECH);
+    assert('a tag with a speech is not faded under "with speech"',
+        !button(7).parentElement.classList.contains('tag-chip-filtered-out'));
+    assert('a tag without a speech is faded under "with speech"',
+        button(8).parentElement.classList.contains('tag-chip-filtered-out'));
+    button(TAG_FILTER_WITH_SPEECH).click();
+    assert('clicking it again clears the filter', activeTagFilterId === null);
+
+    button(TAG_FILTER_ANY_TAG).click();
+    assert('under "tagged" no tag is faded',
+        !row.querySelector('.tag-text.tag-chip-filtered-out'));
+    button(TAG_FILTER_ANY_TAG).click();
+
+    config.speeches = [];
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [{ id: 8, name: 'adware', line_count: 1 }] });
+    assert('"with speech" is disabled when no line has a speech', button(TAG_FILTER_WITH_SPEECH).disabled);
+
+    config.speeches = savedSpeeches;
+    delete window.analyzedLines;
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [] });
+    row.remove();
+})();
+
 (function testAlreadyInTheResponse() {
     const greeting = { id: 20, content: 'Hi {USERNAME},\nplease run FRST and post both logs here.', trigger_tag_ids: [7] };
     const short = { id: 21, content: '{COUNTER}. ok', trigger_tag_ids: [7] };

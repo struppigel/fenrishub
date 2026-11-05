@@ -811,3 +811,97 @@ class BasicTagEditorTests(TestCase):
     def test_tags_saved_without_scope_look_anywhere(self):
         post_json(self.client, 'rule_tag_save_api', {'name': 'renloader', 'match_pattern': 'renpy'})
         self.assertEqual(RuleTag.objects.get(name='renloader').match_scope, RuleTag.SCOPE_ANY)
+
+
+class RuleTagListFilterTests(TestCase):
+    """The tags page: server-side search, category and usage filters, 12 per page."""
+
+    def setUp(self):
+        from ..models import TagCategory
+        self.user = make_user()
+        self.client.force_login(self.user)
+        self.malware = TagCategory.objects.create(name='malware', color='#ff4444')
+        self.ren = RuleTag.objects.create(name='renloader', description='RenPy Loader family', category=self.malware)
+        self.adware = RuleTag.objects.create(name='adware')
+        self.rule = make_rule('a', description='renpy one', owner=self.user)
+        self.ren.rules.add(self.rule)
+        self.speech = Speech.objects.create(owner=self.user, name='cleanup', content='x')
+        self.speech.trigger_tags.add(self.ren)
+
+    def names(self, params=None):
+        response = self.client.get(reverse('rule_tags'), params or {})
+        self.assertEqual(response.status_code, 200)
+        return [tag.name for tag in response.context['tags']]
+
+    def test_search_matches_name_and_notes_ignoring_case(self):
+        self.assertEqual(self.names({'q': 'RENLOAD'}), ['renloader'])
+        self.assertEqual(self.names({'q': 'renpy loader'}), ['renloader'])
+        self.assertEqual(self.names({'q': 'nothing like it'}), [])
+
+    def test_no_match_shows_a_hint_not_the_empty_state(self):
+        response = self.client.get(reverse('rule_tags'), {'q': 'nothing like it'})
+        self.assertContains(response, 'no tags match')
+        self.assertNotContains(response, 'no tags yet')
+
+    def test_category_filter_narrows_the_list(self):
+        self.assertEqual(self.names({'category': self.malware.pk}), ['renloader'])
+
+    def test_a_malformed_category_is_ignored(self):
+        self.assertIn('adware', self.names({'category': 'abc'}))
+        self.assertIn('renloader', self.names({'category': 'abc'}))
+
+    def test_usage_filters(self):
+        self.assertNotIn('renloader', self.names({'usage': 'unused'}))
+        self.assertIn('adware', self.names({'usage': 'unused'}))
+        self.assertNotIn('renloader', self.names({'usage': 'no_speech'}))
+        self.assertIn('adware', self.names({'usage': 'no_speech'}))
+        self.assertNotIn('renloader', self.names({'usage': 'no_rules'}))
+        self.assertIn('adware', self.names({'usage': 'no_rules'}))
+        self.assertIn('renloader', self.names({'usage': 'bogus'}))
+
+    def test_a_tag_with_only_a_speech_is_not_unused(self):
+        lonely = RuleTag.objects.create(name='spoken')
+        self.speech.trigger_tags.add(lonely)
+        self.assertNotIn('spoken', self.names({'usage': 'unused'}))
+        self.assertIn('spoken', self.names({'usage': 'no_rules'}))
+
+    def test_twelve_tags_per_page_and_the_links_keep_the_filters(self):
+        for index in range(15):
+            RuleTag.objects.create(name=f'page tag {index:02d}', category=self.malware)
+        params = {'q': 'page tag', 'category': self.malware.pk}
+        first = self.client.get(reverse('rule_tags'), params)
+        self.assertEqual(len(first.context['tags']), 12)
+        self.assertEqual(first.context['page_obj'].paginator.count, 15)
+        self.assertContains(first, f'page=2&amp;q=page+tag&amp;category={self.malware.pk}')
+        second = self.names({**params, 'page': 2})
+        self.assertEqual(second, ['page tag 12', 'page tag 13', 'page tag 14'])
+
+    def test_names_are_sorted_ignoring_case(self):
+        RuleTag.objects.create(name='Zeta')
+        RuleTag.objects.create(name='alpha')
+        names = self.names({'usage': 'unused', 'q': 'a'})
+        self.assertLess(names.index('alpha'), names.index('Zeta'))
+
+    def test_pending_counts_are_right_on_later_pages(self):
+        for index in range(13):
+            RuleTag.objects.create(name=f'aa filler {index:02d}')
+        RuleTag.objects.create(name='zz renpy', match_pattern='renpy')
+        # Sorted by name, the 13 fillers push "zz renpy" onto page 2.
+        response = self.client.get(reverse('rule_tags'), {'page': 2})
+        tags = {tag.name: tag for tag in response.context['tags']}
+        self.assertEqual(tags['zz renpy'].pending_count, 1)
+
+    def test_delete_returns_to_the_filtered_page(self):
+        response = self.client.post(reverse('rule_tags'), {
+            'action': 'delete', 'pk': self.adware.pk, 'return_q': 'q=ad&page=2',
+        })
+        self.assertFalse(RuleTag.objects.filter(pk=self.adware.pk).exists())
+        self.assertEqual(response['Location'], f"{reverse('rule_tags')}?q=ad&page=2")
+
+    def test_delete_ignores_a_hostile_return_q(self):
+        response = self.client.post(reverse('rule_tags'), {
+            'action': 'delete', 'pk': self.adware.pk, 'return_q': '//evil.example',
+        })
+        # Re-encoded into a query string on the tags page, never another host.
+        self.assertTrue(response['Location'].startswith(f"{reverse('rule_tags')}?"), response['Location'])
+        self.assertNotIn('//', response['Location'])

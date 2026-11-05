@@ -9,12 +9,17 @@ all rule descriptions, and suggesting tags for a description. Tags are shared
 and any logged-in helper may edit them; built-in tags cannot be deleted.
 """
 
+from urllib.parse import urlencode
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Q
+from django.db.models.functions import Lower
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from ..analyzer import parse_rule_line
@@ -39,6 +44,16 @@ from ..tagging import (
     unmatched_tagged_rule_ids,
 )
 from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
+from .rules import _sanitize_return_q
+
+TAGS_PER_PAGE = 12
+
+# ?usage= on the tag list: {value: (label, filter on the list's count annotations)}.
+TAG_USAGE_FILTERS = {
+    'unused': ('unused', {'rule_count': 0, 'speech_count': 0, 'snippet_count': 0}),
+    'no_speech': ('without speech', {'speech_count': 0}),
+    'no_rules': ('without rules', {'rule_count': 0}),
+}
 
 
 def _json_payload(request):
@@ -79,6 +94,10 @@ def rule_tags_view(request):
                 name = tag.name
                 tag.delete()
                 messages.success(request, f'Tag "{name}" deleted.')
+        # Back to the page and filters the delete came from.
+        safe_query = _sanitize_return_q(request.POST.get('return_q'))
+        if safe_query:
+            return redirect(f"{reverse('rule_tags')}?{safe_query}")
         return redirect('rule_tags')
 
     # Older ?edit=<id> links open the editor page.
@@ -86,18 +105,61 @@ def rule_tags_view(request):
     if edit_id.isdigit():
         return redirect('rule_tag_edit', pk=int(edit_id))
 
-    tags = list(
-        RuleTag.objects.annotate(
-            rule_count=Count('rules', distinct=True),
-            speech_count=Count('speeches', distinct=True),
-            snippet_count=Count('snippets', distinct=True),
-        ).select_related('updated_by', 'category')
-    )
+    search_query = request.GET.get('q', '').strip()
+    category_filter = request.GET.get('category', '').strip()
+    if not category_filter.isdigit():
+        category_filter = ''
+    usage_filter = request.GET.get('usage', '').strip()
+    if usage_filter not in TAG_USAGE_FILTERS:
+        usage_filter = ''
+
+    has_any_tags = RuleTag.objects.exists()
+    tags_qs = RuleTag.objects.annotate(
+        rule_count=Count('rules', distinct=True),
+        speech_count=Count('speeches', distinct=True),
+        snippet_count=Count('snippets', distinct=True),
+    ).select_related('updated_by', 'category')
+    if search_query:
+        tags_qs = tags_qs.filter(
+            Q(name__icontains=search_query)
+            | Q(description__icontains=search_query)
+            | Q(builtin_code__icontains=search_query)
+        )
+    if category_filter:
+        tags_qs = tags_qs.filter(category_id=int(category_filter))
+    if usage_filter:
+        tags_qs = tags_qs.filter(**TAG_USAGE_FILTERS[usage_filter][1])
+    tags_qs = tags_qs.order_by(Lower('name'), 'pk')
+
+    page_obj = Paginator(tags_qs, TAGS_PER_PAGE).get_page(request.GET.get('page'))
+    # The pending/unmatched counts run every tag's conditions over every
+    # rule, so only the tags on this page get them.
+    tags = list(page_obj.object_list)
     counts = tag_rule_counts(tags)
     for tag in tags:
         tag.pending_count, tag.unmatched_count = counts.get(tag.pk, (0, 0))
 
-    return render(request, 'tags.html', {'tags': tags})
+    pagination_params = {}
+    if search_query:
+        pagination_params['q'] = search_query
+    if category_filter:
+        pagination_params['category'] = category_filter
+    if usage_filter:
+        pagination_params['usage'] = usage_filter
+
+    return render(request, 'tags.html', {
+        'tags': tags,
+        'page_obj': page_obj,
+        'has_any_tags': has_any_tags,
+        'search_query': search_query,
+        'category_filter': category_filter,
+        'usage_filter': usage_filter,
+        'categories': TagCategory.objects.order_by(Lower('name')),
+        'usage_choices': [(key, label) for key, (label, _filter) in TAG_USAGE_FILTERS.items()],
+        'pagination_query': urlencode(pagination_params),
+        'has_filters': bool(pagination_params),
+        'current_query_string': request.GET.urlencode(),
+    })
 
 
 @login_required

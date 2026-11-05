@@ -1306,6 +1306,19 @@ button.lookup-menu-item {
     text-decoration: underline;
 }
 
+.tag-chip-filter:disabled {
+    cursor: default;
+    text-decoration: none;
+    opacity: 0.5;
+}
+
+/* "tagged" and "with speech": filters over all tags, muted like "all" in the
+   status row above. */
+.rule-tags-line .tag-filter-separator,
+.rule-tags-line .tag-filter-special {
+    color: var(--la-text-muted);
+}
+
 /* The filtering tag: a state, shown in bold, not a hover effect. */
 .rule-tags-line .tag-chip-active {
     font-weight: bold;

@@ -18,12 +18,18 @@
 //
 // The tags themselves are drawn in the status legend's second row and as
 // chips on each tagged log line, with their notes as tooltips. Clicking a tag
-// filters the log to its lines. With the response panel open, clicking a
-// tagged log line adds its speech.
+// filters the log to its lines; "tagged" and "with speech" at the end of the
+// row filter to every tagged line, or to every line with a speech to add.
+// With the response panel open, clicking a tagged log line adds its speech.
 
 let ruleTagsById = new Map();
 let lastAnalysisPayload = null;
+// null, a tag id, or one of the two filters below.
 let activeTagFilterId = null;
+const TAG_FILTER_ANY_TAG = 'any-tag';
+const TAG_FILTER_WITH_SPEECH = 'with-speech';
+// The tags some speech (own or shared) fits, for the "with speech" filter.
+let speechTagIdsForFilter = new Set();
 
 const SPEECH_FINGERPRINT_MIN_LENGTH = 12;
 const speechFingerprintCache = new Map();
@@ -235,8 +241,48 @@ function buildLineTagChips(tagIds) {
     return chips;
 }
 
+// The tags any of the analyst's speeches or other helpers' shared ones fits.
+// A line has a speech to add exactly when one of its tags is among them
+// (speechesForLineClick falls back to shared ones when no own one fits).
+function speechTriggerTagIds(speeches, sharedSpeeches) {
+    const ids = new Set();
+    [...(speeches || []), ...(sharedSpeeches || [])].forEach((speech) => {
+        (speech.trigger_tag_ids || []).forEach((id) => ids.add(id));
+    });
+    return ids;
+}
+
+function refreshSpeechTagIdsForFilter() {
+    const config = window.logAnalyzerConfig || {};
+    speechTagIdsForFilter = speechTriggerTagIds(config.speeches, config.sharedTagSpeeches);
+}
+
+function lineHasSpeechTag(entry, speechTagIds) {
+    return (entry.tag_ids || []).some((id) => speechTagIds.has(id));
+}
+
+// How many lines the "tagged" and "with speech" filters would show.
+function tagFilterCounts(lines, speechTagIds) {
+    let tagged = 0;
+    let withSpeech = 0;
+    (lines || []).forEach((entry) => {
+        if ((entry.tag_ids || []).length) tagged += 1;
+        if (lineHasSpeechTag(entry, speechTagIds)) withSpeech += 1;
+    });
+    return { tagged, withSpeech };
+}
+
 function lineMatchesTagFilter(entry) {
-    return activeTagFilterId !== null && (entry.tag_ids || []).includes(activeTagFilterId);
+    if (activeTagFilterId === null) {
+        return false;
+    }
+    if (activeTagFilterId === TAG_FILTER_ANY_TAG) {
+        return (entry.tag_ids || []).length > 0;
+    }
+    if (activeTagFilterId === TAG_FILTER_WITH_SPEECH) {
+        return lineHasSpeechTag(entry, speechTagIdsForFilter);
+    }
+    return (entry.tag_ids || []).includes(activeTagFilterId);
 }
 
 function applyTagFilterClass() {
@@ -248,6 +294,7 @@ function applyTagFilterClass() {
 
 function setTagFilter(tagId) {
     activeTagFilterId = tagId;
+    refreshSpeechTagIdsForFilter();
     applyTagFilterClass();
     if (typeof renderLogLines === 'function') {
         renderLogLines();
@@ -398,35 +445,80 @@ function renderRuleTagsLine(payload) {
         return;
     }
 
-    tags.forEach((tag) => {
-        // Text in the category colour, like the status entries above it.
-        const chip = document.createElement('span');
-        chip.className = `tag-text${tagChipCategoryClass(tag)}`;
+    refreshSpeechTagIdsForFilter();
+    const filterActive = activeTagFilterId !== null;
 
-        // Clicking a tag filters the log to its lines.
-        const filter = document.createElement('button');
-        filter.type = 'button';
-        filter.className = 'tag-chip-filter';
-        const pressed = activeTagFilterId === tag.id;
-        filter.setAttribute('aria-pressed', pressed ? 'true' : 'false');
-        const action = pressed ? 'click to show all lines again' : 'click to show only its lines';
-        filter.title = tag.description ? `${tag.description}\n\n${action}` : action;
-        // "(n)" like the status counts in the legend row above.
-        filter.textContent = `${tag.name} (${tag.line_count})`;
-        filter.addEventListener('click', (event) => {
-            event.stopPropagation();
-            setTagFilter(activeTagFilterId === tag.id ? null : tag.id);
-        });
-        chip.appendChild(filter);
-        if (pressed) {
-            chip.classList.add('tag-chip-active');
-        } else if (activeTagFilterId !== null) {
-            // Like a hidden status in the legend: its lines are not shown.
-            chip.classList.add('tag-chip-filtered-out');
-        }
-        line.appendChild(chip);
+    tags.forEach((tag) => {
+        // Every line of the tag is still shown by "tagged", and by "with
+        // speech" when a speech fits the tag; then it is not faded.
+        const shown = activeTagFilterId === TAG_FILTER_ANY_TAG
+            || (activeTagFilterId === TAG_FILTER_WITH_SPEECH && speechTagIdsForFilter.has(tag.id));
+        line.appendChild(buildTagFilterItem({
+            // Text in the category colour, like the status entries above it.
+            className: `tag-text${tagChipCategoryClass(tag)}`,
+            // "(n)" like the status counts in the legend row above.
+            label: `${tag.name} (${tag.line_count})`,
+            description: tag.description,
+            filterId: tag.id,
+            hint: 'click to show only its lines',
+            fadedOut: filterActive && !shown,
+        }));
     });
+
+    // Like "all" at the end of the status row: filters over every tag.
+    const separator = document.createElement('span');
+    separator.className = 'tag-filter-separator';
+    separator.textContent = '|';
+    line.appendChild(separator);
+    const lines = typeof analyzedLines !== 'undefined' ? analyzedLines : [];
+    const counts = tagFilterCounts(lines, speechTagIdsForFilter);
+    line.appendChild(buildTagFilterItem({
+        className: 'tag-filter-special',
+        label: `tagged (${counts.tagged})`,
+        filterId: TAG_FILTER_ANY_TAG,
+        hint: 'click to show only lines with a tag',
+        fadedOut: filterActive && activeTagFilterId !== TAG_FILTER_ANY_TAG,
+    }));
+    line.appendChild(buildTagFilterItem({
+        className: 'tag-filter-special',
+        label: `with speech (${counts.withSpeech})`,
+        filterId: TAG_FILTER_WITH_SPEECH,
+        hint: 'click to show only lines with a speech to add (yours, or shared by other helpers)',
+        // "tagged" shows every line with a speech too.
+        fadedOut: filterActive && activeTagFilterId !== TAG_FILTER_WITH_SPEECH
+            && activeTagFilterId !== TAG_FILTER_ANY_TAG,
+        disabled: counts.withSpeech === 0 && activeTagFilterId !== TAG_FILTER_WITH_SPEECH,
+    }));
     syncLegendExtraHeight(line);
+}
+
+// One clickable entry of the tags row: a tag, "tagged" or "with speech".
+// Clicking it filters the log to its lines, clicking it again shows all.
+function buildTagFilterItem({ className, label, description = '', filterId, hint, fadedOut, disabled = false }) {
+    const chip = document.createElement('span');
+    chip.className = className;
+    const filter = document.createElement('button');
+    filter.type = 'button';
+    filter.className = 'tag-chip-filter';
+    filter.dataset.tagFilter = String(filterId);
+    const pressed = activeTagFilterId === filterId;
+    filter.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+    const action = pressed ? 'click to show all lines again' : hint;
+    filter.title = description ? `${description}\n\n${action}` : action;
+    filter.textContent = label;
+    filter.disabled = disabled;
+    filter.addEventListener('click', (event) => {
+        event.stopPropagation();
+        setTagFilter(activeTagFilterId === filterId ? null : filterId);
+    });
+    chip.appendChild(filter);
+    if (pressed) {
+        chip.classList.add('tag-chip-active');
+    } else if (fadedOut) {
+        // Like a hidden status in the legend: its lines are not shown.
+        chip.classList.add('tag-chip-filtered-out');
+    }
+    return chip;
 }
 
 function closeLineSpeechMenu() {
