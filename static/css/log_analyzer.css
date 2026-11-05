@@ -1345,8 +1345,8 @@ button.lookup-menu-item {
     font-size: 12px;
 }
 
-/* The speeches and snippets of a log line's tags, after its text; clicking
-   one inserts it. */
+/* A log line's rule tags, after its text; clicking one lists the tag's
+   speeches and snippets to insert. */
 .line-tag-chips {
     display: inline-flex;
     flex-wrap: wrap;
@@ -1372,19 +1372,6 @@ button.lookup-menu-item {
 .line-speech-menu-item:hover {
     text-decoration: underline;
 }
-
-/* Snippets in the fixlist green, speeches in the default chip blue. */
-.line-tag-chip.line-snippet-chip {
-    color: var(--la-text-secondary);
-}
-
-/* Already in the response (a snippet: in the panel showing). A state, like a
-   hidden status in the legend, not a hover effect. */
-.line-tag-chip.line-chip-used {
-    opacity: 0.35;
-    text-decoration: line-through;
-}
-
 /* Speeches a clicked line can add, when several fit (response panel). */
 .line-speech-menu {
     position: absolute;

@@ -1848,16 +1848,12 @@ function renderLogLines() {
         const reasons = Array.isArray(entry.reasons) ? entry.reasons : [];
         const lineTags = typeof ruleTagsFor === 'function' ? ruleTagsFor(entry.tag_ids) : [];
         lineDiv.title = buildLineTooltip(line, reasons, lineTags);
-        // The speeches and snippets of the line's tags as chips, to insert
-        // with one click (speech_suggestions.js rebuilds them on edits).
-        const suggestionChips = lineTags.length && typeof buildLineSuggestionChips === 'function'
-            ? buildLineSuggestionChips(entry.tag_ids)
-            : [];
-        if (suggestionChips.length) {
+        // The line's tags as chips, so they show without hovering; clicking
+        // one lists the tag's speeches and snippets.
+        if (lineTags.length && typeof buildLineTagChips === 'function') {
             const chipBox = document.createElement('span');
             chipBox.className = 'line-tag-chips';
-            chipBox.dataset.tagIds = JSON.stringify(entry.tag_ids || []);
-            suggestionChips.forEach((chip) => chipBox.appendChild(chip));
+            buildLineTagChips(entry.tag_ids).forEach((chip) => chipBox.appendChild(chip));
             lineDiv.insertBefore(chipBox, copyBtn);
         }
         // The tag filter (speech_suggestions.js) hides lines without this class.

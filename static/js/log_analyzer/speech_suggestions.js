@@ -21,10 +21,9 @@
 // and "with speech" at the end of the row filter to every tagged line, or to
 // every line with a speech to add.
 //
-// Each tagged log line ends with chips naming the speeches and snippets of
-// its tags; clicking one inserts it. One already in the response (a snippet:
-// in the panel showing) is faded. With the response panel open, clicking a
-// tagged log line itself adds its speech.
+// Each tagged log line ends with chips naming its tags; clicking one lists
+// the tag's speeches and snippets to insert. With the response panel open,
+// clicking a tagged log line itself adds its speech.
 
 let ruleTagsById = new Map();
 let lastAnalysisPayload = null;
@@ -227,47 +226,58 @@ function lineSuggestionItems(tagIds, config) {
     };
 }
 
-// Chips naming the speeches and snippets of a line's tags, speeches first;
-// clicking one inserts it. A line with many shows the first few and a "+N"
-// chip for the rest.
-function buildLineSuggestionChips(tagIds) {
+// The menu entries for the speeches and snippets of `tagIds`, speeches first:
+// selecting one inserts it; one already in the response (a snippet: in the
+// panel showing) says so.
+function lineSuggestionMenuEntries(tagIds) {
     const { speeches, snippets } = lineSuggestionItems(tagIds, window.logAnalyzerConfig);
     const responseText = currentResponseText();
     const snippetText = currentSnippetTargetText();
-    const entries = [
+    const note = (kind, shared, used, where) => [kind, shared ? 'from other helpers' : '', used ? where : '']
+        .filter(Boolean).join(', ');
+    return [
         ...speeches.map(({ item, shared }) => ({
-            item,
-            shared,
-            kind: 'speech',
-            used: speechIsInResponse(item, responseText),
-            where: 'in the response',
-            action: 'insert into the response',
-            insert: insertSuggestedSpeech,
+            label: item.name,
+            note: note('speech', shared, speechIsInResponse(item, responseText), 'in the response'),
+            title: 'insert into the response',
+            onSelect: () => insertSuggestedSpeech(item.id),
         })),
         ...snippets.map(({ item, shared }) => ({
-            item,
-            shared,
-            kind: 'snippet',
-            used: snippetIsInText(item, snippetText),
-            where: 'in the panel',
-            action: 'insert into the panel on the right',
-            insert: insertSuggestedSnippet,
+            label: item.name,
+            note: note('snippet', shared, snippetIsInText(item, snippetText), 'in the panel'),
+            title: 'insert into the panel on the right',
+            onSelect: () => insertSuggestedSnippet(item.id),
         })),
     ];
-    const shown = entries.slice(0, LINE_TAG_CHIP_LIMIT);
-    const rest = entries.slice(LINE_TAG_CHIP_LIMIT);
-    const chips = shown.map((entry) => {
+}
+
+// Clicking a tag on a line lists its speeches and snippets to insert.
+function openTagItemsMenu(anchor, tag, point = null) {
+    const entries = lineSuggestionMenuEntries([tag.id]);
+    if (!entries.length) {
+        showLineHint(anchor, `no speech or snippet for ${tag.name}`, point);
+        return;
+    }
+    openLineMenu(anchor, entries, point);
+}
+
+// Small chips naming a line's tags; clicking one lists the tag's speeches
+// and snippets. A line with many tags shows the first few and a "+N" chip
+// for the rest.
+function buildLineTagChips(tagIds) {
+    const tags = ruleTagsFor(tagIds);
+    const shown = tags.slice(0, LINE_TAG_CHIP_LIMIT);
+    const rest = tags.slice(LINE_TAG_CHIP_LIMIT);
+    const chips = shown.map((tag) => {
         const chip = document.createElement('button');
         chip.type = 'button';
-        chip.className = `line-tag-chip line-${entry.kind}-chip${entry.used ? ' line-chip-used' : ''}`;
-        chip.textContent = entry.item.name;
-        chip.title = `${entry.kind} - ${entry.action}`
-            + (entry.shared ? ', shared by other helpers' : '')
-            + (entry.used ? ` (already ${entry.where})` : '');
+        chip.className = `line-tag-chip${tagChipCategoryClass(tag)}`;
+        chip.textContent = tag.name;
+        chip.title = tag.description ? `${tag.name}: ${tag.description}` : tag.name;
         chip.addEventListener('click', (event) => {
             // Not a click on the line: no copy, no cursor mode, no line speech.
             event.stopPropagation();
-            entry.insert(entry.item.id);
+            openTagItemsMenu(chip, tag, clickPoint(event));
         });
         return chip;
     });
@@ -276,37 +286,20 @@ function buildLineSuggestionChips(tagIds) {
         more.type = 'button';
         more.className = 'line-tag-chip';
         more.textContent = `+${rest.length}`;
-        more.title = rest.map((entry) => entry.item.name).join(', ');
+        more.title = rest.map((tag) => tag.name).join(', ');
         more.addEventListener('click', (event) => {
             event.stopPropagation();
-            openLineMenu(more, rest.map((entry) => ({
-                label: entry.item.name,
-                note: entry.used ? `${entry.kind}, ${entry.where}` : entry.kind,
-                onSelect: () => entry.insert(entry.item.id),
-            })), clickPoint(event));
+            const point = clickPoint(event);
+            openLineMenu(more, rest.map((tag) => ({
+                label: tag.name,
+                title: tag.description,
+                // This menu closes first, then the tag's own one opens.
+                onSelect: () => openTagItemsMenu(more, tag, point),
+            })), point);
         });
         chips.push(more);
     }
     return chips;
-}
-
-// Rebuilds the chips of every line, so a speech or snippet fades as soon as
-// it is in the response or panel, and comes back when its text is deleted.
-function refreshLineSuggestionChips() {
-    document.querySelectorAll('#logLines .line-tag-chips').forEach((box) => {
-        let tagIds = [];
-        try {
-            tagIds = JSON.parse(box.dataset.tagIds || '[]');
-        } catch (e) {
-            tagIds = [];
-        }
-        const chips = buildLineSuggestionChips(tagIds);
-        if (!chips.length) {
-            box.remove();
-            return;
-        }
-        box.replaceChildren(...chips);
-    });
 }
 
 // The tags any of the analyst's speeches or other helpers' shared ones fits.
@@ -478,9 +471,6 @@ function refreshSnippetSuggestions() {
     if (window.reloadSnippetMenu) {
         window.reloadSnippetMenu();
     }
-    // Here rather than in refreshSpeechSuggestions too: this one runs on every
-    // response and fixlist edit and panel switch, the other never alone.
-    refreshLineSuggestionChips();
 }
 
 function updateSpeechSuggestionsFromAnalysis(payload) {
