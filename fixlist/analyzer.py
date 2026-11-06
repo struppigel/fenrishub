@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 from datetime import datetime
@@ -8,11 +9,12 @@ try:
 except ImportError:
     _re2 = None
 
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import F, Q
 
 from . import frst_extractors as ex
 from . import script_matcher
-from .models import ClassificationRule, ParsedFilepathExclusion, get_default_rule_owner_id, detect_log_type
+from .models import ClassificationRule, ParsedFilepathExclusion, SiteConfig, get_default_rule_owner_id, detect_log_type
 from .rule_sets import SHARED_RULE_SET_KEY, parse_rule_set_key
 from .status_types import (
     STATUS_PRECEDENCE,
@@ -732,20 +734,51 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
     }
 
 
+logger = logging.getLogger(__name__)
+
+# rule_set_key -> (buckets, loaded at (monotonic), rules_version when loaded).
 _rule_buckets_cache: dict = {}
 _RULE_BUCKETS_CACHE_TTL = 60
+
+
+def _current_rules_version():
+    """SiteConfig.rules_version, or None when it cannot be read (no DB access)."""
+    try:
+        return SiteConfig.objects.filter(pk=1).values_list('rules_version', flat=True).first() or 0
+    except Exception:
+        return None
+
+
+def _bump_rules_version() -> None:
+    """Tell the other worker processes their cached buckets are stale.
+
+    Inside a transaction the bump becomes visible with the rule change it
+    belongs to, on commit. The savepoint keeps a failure here from breaking a
+    caller's transaction.
+    """
+    try:
+        with transaction.atomic():
+            if not SiteConfig.objects.filter(pk=1).update(rules_version=F('rules_version') + 1):
+                SiteConfig.objects.get_or_create(pk=1)
+                SiteConfig.objects.filter(pk=1).update(rules_version=F('rules_version') + 1)
+    except Exception:
+        logger.warning('Could not bump rules_version; other workers keep their rule buckets up to %ss.',
+                       _RULE_BUCKETS_CACHE_TTL, exc_info=True)
 
 
 def invalidate_rule_buckets_cache(rule_set_key: str | None = None) -> None:
     """Drop one cached bucket set, or all of them when `rule_set_key` is None.
 
     Clears the dict in place so that callers holding a reference to the module
-    attribute (e.g. tests) observe the change.
+    attribute (e.g. tests) observe the change. Also bumps
+    SiteConfig.rules_version, which makes every other worker process reload
+    its buckets (all keys) on its next analysis.
     """
     if rule_set_key is None:
         _rule_buckets_cache.clear()
     else:
         _rule_buckets_cache.pop(rule_set_key, None)
+    _bump_rules_version()
 
 
 REPARSE_FIELDS = (
@@ -934,12 +967,15 @@ def find_rule_duplicates(queryset):
 
 
 def _get_cached_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
+    # Read the version before loading, so a rule saved mid-load leaves this
+    # entry tagged with the old version and reloaded next time.
+    version = _current_rules_version()
     now = time.monotonic()
     entry = _rule_buckets_cache.get(rule_set_key)
-    if entry is not None and (now - entry[1]) < _RULE_BUCKETS_CACHE_TTL:
+    if entry is not None and (now - entry[1]) < _RULE_BUCKETS_CACHE_TTL and entry[2] == version:
         return entry[0]
     buckets = _load_rule_buckets(rule_set_key)
-    _rule_buckets_cache[rule_set_key] = (buckets, now)
+    _rule_buckets_cache[rule_set_key] = (buckets, now, version)
     return buckets
 
 

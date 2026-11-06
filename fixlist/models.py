@@ -180,6 +180,10 @@ class SiteConfig(models.Model):
         default=False,
         help_text='Kill switch for the read-only token API (/api/v1/) used by LLM clients. Off: every API request gets 503.',
     )
+    # Bumped whenever the analyzer's in-memory rule buckets are invalidated, so
+    # every worker process (not just the one that saved the rule) reloads them.
+    # See analyzer.invalidate_rule_buckets_cache.
+    rules_version = models.PositiveBigIntegerField(default=0, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -1173,6 +1177,11 @@ class UploadedLogAnalysis(models.Model):
     # A tag whose signature differs or is missing is recomputed on read (see
     # tagging.fresh_line_tags); None means never computed.
     line_tags = models.JSONField(null=True, blank=True, default=None)
+    # What listings and tag search need from `payload`, so they never decode
+    # it: {"format": payload format, "rule_ids": [...], "codes": [warning code]}.
+    # Derived from `payload` on every save (see tagging.tag_summary_of); None
+    # only for rows written around save(), which readers then derive on read.
+    tag_summary = models.JSONField(null=True, blank=True, default=None)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1183,6 +1192,15 @@ class UploadedLogAnalysis(models.Model):
                 name='uploaded_log_analysis_unique_per_key',
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        from .tagging import tag_summary_of
+
+        self.tag_summary = tag_summary_of(self.payload)
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None and 'payload' in update_fields and 'tag_summary' not in update_fields:
+            kwargs['update_fields'] = [*update_fields, 'tag_summary']
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f'cached analysis for {self.upload_id} [{self.rule_set_key}]'

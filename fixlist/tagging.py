@@ -40,6 +40,7 @@ import json
 import logging
 import re
 import threading
+import time
 from collections import Counter
 from dataclasses import dataclass
 from functools import cached_property
@@ -48,7 +49,9 @@ from . import frst_extractors
 from .analyzer import ANALYSIS_PAYLOAD_FORMAT, _re2, evaluate_regex_pattern
 from django.conf import settings
 from django.db import connections, transaction
-from django.db.models import F, Q
+from django.db.models import Case, F, IntegerField, JSONField, Q, Value, When
+from django.db.models.fields.json import KT
+from django.db.models.functions import Cast
 
 from .models import (
     TAG_CATEGORY_COLOR_RE, ClassificationRule, FixlistSnippet, RuleTag, Speech, TagCategory, UploadedLog,
@@ -896,14 +899,13 @@ def line_tag_hits(stored):
     return hits
 
 
-def fresh_line_tags(stored, payload, current, force=()):
-    """``(hits, updated)`` for a cached analysis under the current line tags.
+def _split_line_tags(stored, current, force=()):
+    """``(hits, stale, dropped)``: what of a stored `line_tags` value still holds.
 
-    `hits` is ``{tag_id: [line index]}``. Stored matches are reused where the
-    tag's signature still agrees; tags that changed, are new, or are in
-    `force` are recomputed against `payload`, and tags that no longer match
-    lines are dropped. `updated` is the value to store back, or None when the
-    stored one is still right.
+    `hits` are the stored matches of tags whose signature still agrees,
+    `stale` the ``{tag_id: TagConditions}`` that must be matched against the
+    analysis again (changed, new, or in `force`), and `dropped` whether the
+    stored value names tags that no longer match lines. Needs no payload.
     """
     stored = stored if isinstance(stored, dict) else {}
     sigs = stored.get('sigs') if isinstance(stored.get('sigs'), dict) else {}
@@ -921,9 +923,24 @@ def fresh_line_tags(stored, payload, current, force=()):
     dropped = any(key not in current_keys for key in sigs) or any(
         tag_id not in current for tag_id in stored_hits
     )
+    return hits, stale, dropped
+
+
+def fresh_line_tags(stored, payload, current, force=()):
+    """``(hits, updated)`` for a cached analysis under the current line tags.
+
+    `hits` is ``{tag_id: [line index]}``. Stored matches are reused where the
+    tag's signature still agrees; tags that changed, are new, or are in
+    `force` are recomputed against `payload`, and tags that no longer match
+    lines are dropped. `updated` is the value to store back, or None when the
+    stored one is still right. `payload` may be a callable returning it, so
+    callers only load it when a tag actually has to be matched again.
+    """
+    hits, stale, dropped = _split_line_tags(stored, current, force)
     if not stale and not dropped:
         return hits, None
-    hits.update(LineTagMatcher(stale).hits(payload))
+    if stale:
+        hits.update(LineTagMatcher(stale).hits(payload() if callable(payload) else payload))
     return hits, _stored_line_tags(current, hits)
 
 
@@ -950,10 +967,17 @@ def refresh_line_tags(tag_ids=None):
     pks = list(UploadedLogAnalysis.objects.order_by('pk').values_list('pk', flat=True))
     updated_count = 0
     for start in range(0, len(pks), REFRESH_BATCH_SIZE):
-        batch = UploadedLogAnalysis.objects.filter(pk__in=pks[start:start + REFRESH_BATCH_SIZE]).values_list(
-            'pk', 'upload_id', 'rule_set_key', 'payload', 'line_tags',
-        )
-        for pk, upload_id, rule_set_key, payload, stored in batch:
+        batch = list(UploadedLogAnalysis.objects.filter(pk__in=pks[start:start + REFRESH_BATCH_SIZE]).values_list(
+            'pk', 'upload_id', 'rule_set_key', 'line_tags',
+        ))
+        # Decoding payloads is nearly the whole cost of a refresh; only rows
+        # with a tag to match again need theirs (a deleted tag only drops).
+        needs_payload = {pk for pk, _upload_id, _key, stored in batch if _split_line_tags(stored, current, force)[1]}
+        payloads = dict(
+            UploadedLogAnalysis.objects.filter(pk__in=needs_payload).values_list('pk', 'payload')
+        ) if needs_payload else {}
+        for pk, upload_id, rule_set_key, stored in batch:
+            payload = payloads.get(pk) if pk in needs_payload else {}
             if not isinstance(payload, dict):
                 continue
             hits, updated = fresh_line_tags(stored, payload, current, force=force)
@@ -963,14 +987,55 @@ def refresh_line_tags(tag_ids=None):
             updated_count += 1
             if rule_set_key == SHARED_RULE_SET_KEY:
                 UploadedLogStat.objects.filter(source_id=upload_id).update(line_tag_ids=sorted(hits))
+        # The refresh shares its process with request threads; let them run.
+        time.sleep(0)
     return updated_count
 
 
-def _refresh_line_tags_in_thread(tag_ids):
+# A process runs its background refreshes one at a time: one asked for while
+# another runs is merged into the next run instead of starting its own thread,
+# so a burst of tag saves costs at most two passes, not one each.
+_ALL_TAGS = object()
+_refresh_lock = threading.Lock()
+_refresh_pending = None  # None: nothing queued; _ALL_TAGS; or a set of tag ids.
+_refresh_running = False
+
+
+def _queue_refresh(tag_ids):
+    """Merge `tag_ids` (None: all) into the queued refresh. True if a thread must be started."""
+    global _refresh_pending, _refresh_running
+    with _refresh_lock:
+        if tag_ids is None or _refresh_pending is _ALL_TAGS:
+            _refresh_pending = _ALL_TAGS
+        else:
+            _refresh_pending = (_refresh_pending or set()) | set(tag_ids)
+        if _refresh_running:
+            return False
+        _refresh_running = True
+        return True
+
+
+def _take_queued_refresh():
+    """``(has_work, tag_ids)`` for the next run; marks the thread finished when nothing is queued."""
+    global _refresh_pending, _refresh_running
+    with _refresh_lock:
+        pending, _refresh_pending = _refresh_pending, None
+        if pending is None:
+            _refresh_running = False
+            return False, None
+        return True, None if pending is _ALL_TAGS else sorted(pending)
+
+
+def _refresh_line_tags_in_thread():
     try:
-        refresh_line_tags(tag_ids)
-    except Exception:
-        logger.exception('Background line tag refresh failed (tag_ids=%s)', tag_ids)
+        while True:
+            has_work, tag_ids = _take_queued_refresh()
+            if not has_work:
+                return
+            try:
+                refresh_line_tags(tag_ids)
+            except Exception:
+                logger.exception('Background line tag refresh failed (tag_ids=%s)', tag_ids)
     finally:
         connections.close_all()
 
@@ -980,7 +1045,8 @@ def schedule_line_tag_refresh(tag_ids=None):
 
     Runs synchronously under the test runner. Until it is done, a read of a
     stale analysis recomputes the changed tags itself (fresh_line_tags), so
-    only the stat snapshots wait for it.
+    only the stat snapshots wait for it. Overlapping requests are coalesced
+    (see _queue_refresh).
     """
     tag_ids = None if tag_ids is None else list(tag_ids)
     if getattr(settings, 'TESTING', False):
@@ -988,11 +1054,29 @@ def schedule_line_tag_refresh(tag_ids=None):
         return
 
     def start():
-        threading.Thread(
-            target=_refresh_line_tags_in_thread, args=(tag_ids,), name='line-tag-refresh', daemon=True,
-        ).start()
+        if _queue_refresh(tag_ids):
+            threading.Thread(target=_refresh_line_tags_in_thread, name='line-tag-refresh', daemon=True).start()
 
     transaction.on_commit(start)
+
+
+def tag_summary_of(payload):
+    """`UploadedLogAnalysis.tag_summary` for `payload`: all a tag lookup reads of it.
+
+    ``{"format", "rule_ids", "codes"}`` - the payload format (for the freshness
+    test), every credited rule id (see payload_rule_ids) and the warning codes.
+    None for a payload that is not a dict.
+    """
+    if not isinstance(payload, dict):
+        return None
+    return {
+        'format': payload.get('format'),
+        'rule_ids': sorted(payload_rule_ids(payload)),
+        'codes': sorted({
+            warning.get('code') for warning in payload.get('warnings') or []
+            if isinstance(warning.get('code'), str)
+        }),
+    }
 
 
 def payload_rule_ids(payload):
@@ -1084,13 +1168,79 @@ def _fresh_analyses(candidates, rule_set_key):
 
     The same test as upload_utils.get_fresh_cached_analysis, done in the query:
     written for the upload's current content, in the current payload format.
+    The format is read from the small `tag_summary` - testing it on `payload`
+    makes the database decompress every candidate's whole payload. A CASE,
+    because only it fixes the order: given a plain OR, Postgres may test the
+    payload first.
     """
-    return UploadedLogAnalysis.objects.filter(
+    payload_format = Case(
+        When(tag_summary__isnull=False, then=Cast(KT('tag_summary__format'), IntegerField())),
+        default=Cast(KT('payload__format'), IntegerField()),
+        output_field=IntegerField(),
+    )
+    return UploadedLogAnalysis.objects.alias(_payload_format=payload_format).filter(
+        _payload_format=ANALYSIS_PAYLOAD_FORMAT,
         upload__in=candidates,
         rule_set_key=rule_set_key,
         source_content_hash=F('upload__content_hash'),
-        payload__format=ANALYSIS_PAYLOAD_FORMAT,
     )
+
+
+def _tag_rows(row_sets, current, need_line_hits=True):
+    """``[(upload_pk, rule_ids, codes, line_hits)]`` from cached analyses, decoding few payloads.
+
+    Reads each row's `tag_summary` and stored `line_tags`. The payload comes
+    along in the same query only for a row without a summary, and is loaded
+    afterwards only for a row with a line tag to match again. Summaries and
+    line matches derived on the way are stored back. Without
+    `need_line_hits`, line tags are neither read nor matched.
+    """
+    payload_if_unsummarized = Case(
+        When(tag_summary__isnull=True, then=F('payload')),
+        default=Value(None, output_field=JSONField()),
+        output_field=JSONField(),
+    )
+    rows = []
+    summary_updates = {}
+    payloads = {}
+    late = []
+    for row_set in row_sets:
+        values = (
+            row_set.annotate(_unsummarized_payload=payload_if_unsummarized)
+            .values_list('pk', 'upload_id', 'tag_summary', 'line_tags', '_unsummarized_payload')
+        )
+        for pk, upload_pk, summary, stored, payload in values:
+            needs_lines = need_line_hits and bool(_split_line_tags(stored, current)[1])
+            if summary is None:
+                summary_updates[pk] = summary = tag_summary_of(payload) or {}
+                if needs_lines:
+                    payloads[pk] = payload
+            elif needs_lines:
+                late.append(pk)
+            # Payloads are kept only for rows that match a line tag again.
+            rows.append((pk, upload_pk, summary, stored))
+    for start in range(0, len(late), REFRESH_BATCH_SIZE):
+        payloads.update(
+            UploadedLogAnalysis.objects.filter(pk__in=late[start:start + REFRESH_BATCH_SIZE])
+            .values_list('pk', 'payload')
+        )
+
+    line_updates = {}
+    result = []
+    for pk, upload_pk, summary, stored in rows:
+        line_hits = {}
+        if need_line_hits:
+            line_hits, updated = fresh_line_tags(stored, lambda pk=pk: payloads.get(pk) or {}, current)
+            if updated is not None:
+                line_updates[pk] = updated
+        result.append((
+            upload_pk, set(summary.get('rule_ids') or ()), set(summary.get('codes') or ()), line_hits,
+        ))
+
+    for pk, summary in summary_updates.items():
+        UploadedLogAnalysis.objects.filter(pk=pk).update(tag_summary=summary)
+    _write_line_tags(line_updates)
+    return result
 
 
 def _searched_rows(candidates, rule_set_key):
@@ -1144,9 +1294,7 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
         return [], 0
     searched_line_tags = {tag_id for tag_id in tag_ids if tag_id in current}
 
-    def has_all_tags(payload, line_hits):
-        rule_ids = payload_rule_ids(payload)
-        codes = {warning.get('code') for warning in payload.get('warnings') or []}
+    def has_all_tags(rule_ids, codes, line_hits):
         return all(
             rules_by_tag[tag_id] & rule_ids
             or builtin_codes.get(tag_id) in codes
@@ -1156,20 +1304,11 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
 
     analyzed = set()
     matched = set()
-    updates = {}
-    for rows in _searched_rows(candidates, rule_set_key):
-        for pk, upload_pk, payload, stored in rows.values_list(
-            'pk', 'upload_id', 'payload', 'line_tags',
-        ).iterator(chunk_size=25):
-            analyzed.add(upload_pk)
-            line_hits = {}
-            if searched_line_tags:
-                line_hits, updated = fresh_line_tags(stored, payload, current)
-                if updated is not None:
-                    updates[pk] = updated
-            if has_all_tags(payload, line_hits):
-                matched.add(upload_pk)
-    _write_line_tags(updates)
+    rows = _tag_rows(_searched_rows(candidates, rule_set_key), current, need_line_hits=bool(searched_line_tags))
+    for upload_pk, rule_ids, codes, line_hits in rows:
+        analyzed.add(upload_pk)
+        if has_all_tags(rule_ids, codes, line_hits):
+            matched.add(upload_pk)
 
     # Logs of a type the analyzer skips never have an analysis and hold no
     # tags; only analyzable ones are worth reporting as missed.
@@ -1230,18 +1369,10 @@ def found_tags_by_upload(upload_pks, rule_set_key):
     rule_ids_by_upload = {}
     codes_by_upload = {}
     line_tag_ids_by_upload = {}
-    updates = {}
-    for rows in _searched_rows(candidates, rule_set_key):
-        for pk, upload_pk, payload, stored in rows.values_list('pk', 'upload_id', 'payload', 'line_tags'):
-            rule_ids_by_upload[upload_pk] = payload_rule_ids(payload)
-            codes_by_upload[upload_pk] = {
-                warning.get('code') for warning in payload.get('warnings') or []
-            }
-            line_hits, updated = fresh_line_tags(stored, payload, current)
-            line_tag_ids_by_upload[upload_pk] = set(line_hits)
-            if updated is not None:
-                updates[pk] = updated
-    _write_line_tags(updates)
+    for upload_pk, rule_ids, codes, line_hits in _tag_rows(_searched_rows(candidates, rule_set_key), current):
+        rule_ids_by_upload[upload_pk] = rule_ids
+        codes_by_upload[upload_pk] = codes
+        line_tag_ids_by_upload[upload_pk] = set(line_hits)
     if not rule_ids_by_upload:
         return found
 
