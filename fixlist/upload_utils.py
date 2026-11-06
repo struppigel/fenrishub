@@ -32,13 +32,16 @@ def get_fresh_cached_analysis(uploaded_log: UploadedLog, rule_set_key: str):
 
 
 def store_cached_analysis(uploaded_log: UploadedLog, rule_set_key: str, analysis: dict) -> None:
-    """Write `analysis` as the cached payload for (upload, rule set)."""
+    """Write `analysis` as the cached payload for (upload, rule set), with its line tag matches."""
+    from .tagging import compute_line_tags
+
     UploadedLogAnalysis.objects.update_or_create(
         upload=uploaded_log,
         rule_set_key=rule_set_key,
         defaults={
             'payload': analysis,
             'source_content_hash': uploaded_log.content_hash,
+            'line_tags': compute_line_tags(analysis),
         },
     )
 

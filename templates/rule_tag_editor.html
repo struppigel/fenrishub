@@ -240,6 +240,14 @@
             <label class="checkbox-label"><input type="checkbox" value="{{ value }}"> {{ label }}</label>
             {% endfor %}
         </div>
+        <div class="form-group">
+            <label class="checkbox-label" for="tagMatchLogLines">
+                <input type="checkbox" id="tagMatchLogLines">
+                also match log lines
+            </label>
+            <div class="tag-editor-note">The tag is also found on analyzed log lines that meet these conditions, even when no tagged rule decided them: the regex and exclude regex search the line, the status is the line's verdict and the entry type the line's own parsed entry, whatever rule decided it. The preview below still lists rules only.</div>
+            <div class="tag-editor-note" id="tagLogLinesBroad" hidden>No status is ticked, so every log line is checked whatever its verdict.</div>
+        </div>
     </fieldset>
     <fieldset class="tag-conditions">
         <legend>suggest these speeches when the tag is found</legend>
@@ -319,6 +327,8 @@
     const scopeInput = document.getElementById('tagScope');
     const statusBoxes = [...document.querySelectorAll('#tagStatuses input[type="checkbox"]')];
     const entryTypeBoxes = [...document.querySelectorAll('#tagEntryTypes input[type="checkbox"]')];
+    const logLinesInput = document.getElementById('tagMatchLogLines');
+    const logLinesBroadNote = document.getElementById('tagLogLinesBroad');
 
     // Links the speeches or snippets the user can link to this tag: chips for
     // the linked ones and a search box for the rest, which can be many.
@@ -465,6 +475,10 @@
         };
     }
 
+    function syncLogLinesNote() {
+        logLinesBroadNote.hidden = !(logLinesInput.checked && ticked(statusBoxes).length === 0);
+    }
+
     // An exclude regex alone narrows nothing down, so it does not count.
     function hasCondition(conditions) {
         return Boolean(conditions.match_pattern)
@@ -593,6 +607,8 @@
             name: nameInput.value.trim(),
             description: descriptionInput.value.trim(),
             ...currentConditions(),
+            // Not part of currentConditions: it changes nothing in the rule preview.
+            match_log_lines: logLinesInput.checked,
             // Without a condition the server would refuse it; it has nothing to match.
             auto_apply: autoApplyInput.checked && hasCondition(currentConditions()),
             category_id: Number(categoryInput.value),
@@ -773,8 +789,11 @@
         statusBoxes.forEach((box) => { box.checked = tag.match_statuses.includes(box.value); });
         entryTypeBoxes.forEach((box) => { box.checked = tag.match_entry_types.includes(box.value); });
         autoApplyInput.checked = tag.auto_apply;
+        logLinesInput.checked = tag.match_log_lines;
     }
     syncAutoApply();
+    syncLogLinesNote();
+    [logLinesInput, ...statusBoxes].forEach((box) => box.addEventListener('change', syncLogLinesNote));
     [...statusBoxes, ...entryTypeBoxes].forEach((box) => box.addEventListener('change', syncAutoApply));
     categoryInput.addEventListener('change', syncCategoryPreview);
     nameInput.addEventListener('input', syncCategoryPreview);

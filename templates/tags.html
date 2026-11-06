@@ -118,9 +118,17 @@
         <button type="submit">search</button>
         {% if has_filters %}<a href="{% url 'rule_tags' %}" class="search-filter-clear">clear</a>{% endif %}
         <span style="flex: 1;"></span>
+        {% if has_line_tags %}<button type="submit" form="recomputeLineTagsForm" title="match every tag that also matches log lines against all analyzed logs again, stats included" onclick="return confirm('Recompute the log line tags of all logs? This runs in the background.');">recompute log tags</button>{% endif %}
         <a href="{% url 'tag_categories' %}"><button type="button" title="name categories and give their tags a color">categories</button></a>
         <a href="{% url 'rule_tag_add' %}"><button type="button">new tag</button></a>
     </form>
+    {% if has_line_tags %}
+    <form method="post" id="recomputeLineTagsForm" hidden>
+        {% csrf_token %}
+        <input type="hidden" name="action" value="recompute_line_tags">
+        <input type="hidden" name="return_q" value="{{ current_query_string }}">
+    </form>
+    {% endif %}
 
     {% if tags %}
         <div class="tags-count">{{ page_obj.paginator.count }} tag{{ page_obj.paginator.count|pluralize }}{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
@@ -137,6 +145,7 @@
                         {% if tag.pending_count %}, <a href="{% url 'rule_tag_edit' tag.pk %}" class="tag-pending" title="rules that meet the conditions but do not carry the tag yet">{{ tag.pending_count }} pending</a>{% endif %}
                         {% if tag.unmatched_count %}, <a href="{% url 'rule_tag_edit' tag.pk %}" class="tag-pending" title="tagged rules that no longer meet the conditions">{{ tag.unmatched_count }} no longer matching</a>{% endif %}
                         {% if tag.auto_apply %}, applied automatically{% endif %}
+                        {% if tag.match_log_lines %}, <span title="also found on log lines that meet the conditions">matches log lines</span>{% endif %}
                         {% if tag.updated_by %}, edited by {{ tag.updated_by.username }}{% endif %}
                     </span>
                 </span>

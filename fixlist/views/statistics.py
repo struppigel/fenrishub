@@ -171,20 +171,21 @@ def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
 
     Tags come from the rules and warning codes each snapshot recorded, resolved
     now (see tagging.tag_ids_by_key), so a rule tagged later counts for past
-    logs too. Without a category the table leaves out priority-0 categories -
+    logs too, plus the line tags it recorded (refreshed while the log exists). Without a category the table leaves out priority-0 categories -
     tags in nearly every log - as the uploads list does; a picked category shows
     all of its tags. Picked tags replace the most found ones in the chart.
     """
     trunc = TRUNC_BY_GRANULARITY[granularity]
     rows = (
         analyzed_qs.annotate(bucket=trunc('created_at', tzinfo=tz))
-        .values_list('bucket', 'rule_ids', 'warning_codes')
+        .values_list('bucket', 'rule_ids', 'warning_codes', 'line_tag_ids')
     )
     bucket_by_row = {}
     rule_ids_by_row = {}
     codes_by_row = {}
+    line_tag_ids_by_row = {}
     unrecorded = 0
-    for index, (bucket, rule_ids, codes) in enumerate(rows.iterator(chunk_size=500)):
+    for index, (bucket, rule_ids, codes, line_tag_ids) in enumerate(rows.iterator(chunk_size=500)):
         if rule_ids is None:
             unrecorded += 1
             continue
@@ -193,9 +194,10 @@ def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
         bucket_by_row[index] = _as_local_date(bucket, tz)
         rule_ids_by_row[index] = rule_ids
         codes_by_row[index] = codes or []
+        line_tag_ids_by_row[index] = line_tag_ids or []
 
     counts = {}
-    for index, tag_ids in tag_ids_by_key(rule_ids_by_row, codes_by_row).items():
+    for index, tag_ids in tag_ids_by_key(rule_ids_by_row, codes_by_row, line_tag_ids_by_row).items():
         bucket = bucket_by_row[index]
         for tag_id in tag_ids:
             by_bucket = counts.setdefault(tag_id, {})
@@ -203,6 +205,8 @@ def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
 
     counted = len(rule_ids_by_row)
     tags = RuleTag.objects.select_related('category').in_bulk(set(counts) | set(picked_ids))
+    # A deleted line tag can linger in the snapshots of logs that are gone.
+    counts = {tag_id: by_bucket for tag_id, by_bucket in counts.items() if tag_id in tags}
 
     def shown(tag):
         if category_id is not None:

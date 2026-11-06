@@ -1327,6 +1327,10 @@ def _build_line_result(
         "verdict_priority": verdict_priority,
         "fallback_only": fallback_only,
         "entry_type": entry_type,
+        # The line's own FRST entry, whatever rule decided it: `entry_type`
+        # names the deciding matcher instead (e.g. "substrings"). Tags that
+        # match log lines check their entry types against this one.
+        "parsed_entry_type": parsed_entry.entry_type if parsed_entry is not None else "",
         "reasons": reasons,
         "matcher": matcher,
         "matched": dominant_status != "?",

@@ -671,6 +671,11 @@ class RuleTag(models.Model):
     match_statuses = models.JSONField(default=list, blank=True)
     match_entry_types = models.JSONField(default=list, blank=True)
     auto_apply = models.BooleanField(default=False)
+    # The same conditions also run on every analysed log line: the regex on the
+    # line text, statuses on the line's verdict, entry types on its parsed
+    # entry. A matching line carries the tag even when no tagged rule decided
+    # it. Results are stored per cached analysis (UploadedLogAnalysis.line_tags).
+    match_log_lines = models.BooleanField(default=False)
     builtin_code = models.CharField(max_length=64, null=True, blank=True, unique=True, default=None)
     # Sets the badge colour. Deleting a category moves its tags to the default
     # one first (views.tags.tag_categories_view), so PROTECT never fires there.
@@ -1075,22 +1080,32 @@ class UploadedLog(models.Model):
                     setattr(self, field_name, 0)
         self.save(update_fields=[*self.analysis_stat_update_fields(), 'is_incomplete'])
 
+        from .tagging import compute_line_tags, current_line_tags
+
+        line_tags = current_line_tags()
+        shared_line_tags = compute_line_tags(shared_payload, line_tags) if shared_payload is not None else None
         if shared_payload is not None:
             UploadedLogAnalysis.objects.update_or_create(
                 upload=self,
                 rule_set_key=SHARED_RULE_SET_KEY,
-                defaults={'payload': shared_payload, 'source_content_hash': self.content_hash},
+                defaults={
+                    'payload': shared_payload, 'source_content_hash': self.content_hash,
+                    'line_tags': shared_line_tags,
+                },
             )
         if effective_payload is not None and effective_key != SHARED_RULE_SET_KEY:
             UploadedLogAnalysis.objects.update_or_create(
                 upload=self,
                 rule_set_key=effective_key,
-                defaults={'payload': effective_payload, 'source_content_hash': self.content_hash},
+                defaults={
+                    'payload': effective_payload, 'source_content_hash': self.content_hash,
+                    'line_tags': compute_line_tags(effective_payload, line_tags),
+                },
             )
         if shared_payload is None and effective_payload is None:
             UploadedLogAnalysis.objects.filter(upload=self).delete()
 
-        update_uploaded_log_stat_snapshot(self, shared_payload)
+        update_uploaded_log_stat_snapshot(self, shared_payload, shared_line_tags)
 
     def _compute_fixlog_stats(self, content):
         total = 0
@@ -1152,6 +1167,12 @@ class UploadedLogAnalysis(models.Model):
     rule_set_key = models.CharField(max_length=64, db_index=True, default='shared')
     payload = models.JSONField()
     source_content_hash = models.CharField(max_length=32)
+    # Which log lines the line-matching tags matched, so listings, tag search
+    # and stats read stored ids instead of running regexes per page view:
+    # {"sigs": {tag_id: conditions signature}, "lines": {tag_id: [line index]}}.
+    # A tag whose signature differs or is missing is recomputed on read (see
+    # tagging.fresh_line_tags); None means never computed.
+    line_tags = models.JSONField(null=True, blank=True, default=None)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1423,6 +1444,11 @@ class UploadedLogStat(models.Model):
     # tag stats and its log was gone before they could be backfilled).
     rule_ids = models.JSONField(null=True, blank=True, default=None)
     warning_codes = models.JSONField(null=True, blank=True, default=None)
+    # The tags matched on the shared analysis's log lines (RuleTag.match_log_lines).
+    # Unlike rule tags these cannot be resolved later - the snapshot keeps no
+    # lines - so they are stored, and refreshed for logs that still exist when
+    # a line tag changes. None: never recorded.
+    line_tag_ids = models.JSONField(null=True, blank=True, default=None)
 
     class Meta:
         ordering = ['-created_at']
@@ -1458,12 +1484,14 @@ def _uploaded_log_stat_metadata(instance):
     }
 
 
-def update_uploaded_log_stat_snapshot(instance, shared_payload):
+def update_uploaded_log_stat_snapshot(instance, shared_payload, shared_line_tags=None):
     """Populate the historical stats snapshot from the SHARED analysis payload.
 
     Called explicitly from `UploadedLog.recalculate_analysis_stats` after the
     shared pass runs. The /stats/ view always reads this snapshot, so it must
     reflect the global ruleset regardless of which user owns the upload.
+    `shared_line_tags` is the line tag matches stored with that analysis
+    (computed here when not given).
     """
     if instance.pk is None or instance.created_at is None:
         return
@@ -1480,6 +1508,7 @@ def update_uploaded_log_stat_snapshot(instance, shared_payload):
         else:
             defaults[field_name] = max(0, int(status_counts.get(status_code, 0) or 0))
     defaults['rule_ids'], defaults['warning_codes'] = _stat_tag_sources(shared_payload)
+    defaults['line_tag_ids'] = _stat_line_tag_ids(shared_payload, shared_line_tags)
     UploadedLogStat.objects.update_or_create(source_id=instance.pk, defaults=defaults)
 
 
@@ -1493,6 +1522,16 @@ def _stat_tag_sources(payload):
         if isinstance(warning, dict) and warning.get('code')
     }
     return sorted(payload_rule_ids(payload)), sorted(codes)
+
+
+def _stat_line_tag_ids(payload, line_tags):
+    """The line tag ids to snapshot from an analysis payload; empty without one."""
+    if not isinstance(payload, dict):
+        return []
+    from .tagging import compute_line_tags, line_tag_hits
+    if line_tags is None:
+        line_tags = compute_line_tags(payload)
+    return sorted(line_tag_hits(line_tags))
 
 
 def _fixlist_stat_defaults(instance):

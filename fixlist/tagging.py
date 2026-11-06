@@ -20,23 +20,43 @@ Conditions run over every rule on each preview and count, so only regexes the
 linear-time re2 engine accepts are allowed, and nothing the slow-pattern
 benchmark flags.
 
+With `match_log_lines` the same conditions also run on every analysed log
+line: the regex and exclude regex on the line text, statuses on the line's
+verdict, entry types on its parsed entry. A matching line carries the tag even
+when no tagged rule decided it. The matches are computed when an analysis is
+cached and stored with it (UploadedLogAnalysis.line_tags), so listings, tag
+search and stats read ids instead of running regexes on every page view. Each
+stored entry carries a signature of the tag's conditions: an entry whose tag
+changed is recomputed when read, and saving or deleting a line tag refreshes
+every stored analysis in the background (see refresh_line_tags).
+
 Built-in tags stand for the analyzer's hardcoded log warnings: besides being
 ordinary tags (on rules, with conditions, applied automatically), they are
 "found" in a log whenever their warning fires. They cannot be deleted.
 """
 
+import hashlib
+import json
+import logging
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass
+from functools import cached_property
 
+from . import frst_extractors
 from .analyzer import ANALYSIS_PAYLOAD_FORMAT, _re2, evaluate_regex_pattern
+from django.conf import settings
+from django.db import connections, transaction
 from django.db.models import F, Q
 
 from .models import (
     TAG_CATEGORY_COLOR_RE, ClassificationRule, FixlistSnippet, RuleTag, Speech, TagCategory, UploadedLog,
-    UploadedLogAnalysis,
+    UploadedLogAnalysis, UploadedLogStat,
 )
 from .rule_sets import SHARED_RULE_SET_KEY
+
+logger = logging.getLogger(__name__)
 
 TAG_NAME_RE = re.compile(r'^\w[\w .+&-]*$')
 ENTRY_TYPE_RE = re.compile(r'^[a-z_]{1,64}$')
@@ -50,6 +70,11 @@ SCOPES = [code for code, _label in RuleTag.SCOPE_CHOICES]
 # Caps what a preview sends back per group; conditions matching more than this
 # are almost certainly too broad, and the page says so instead of rendering it all.
 PREVIEW_GROUP_LIMIT = 2000
+
+# Part of every line signature: bumping it makes all stored line matches stale,
+# for a change in how lines are matched. 2: entry types are the line's own
+# parsed entry, no longer the deciding matcher's label.
+LINE_MATCH_VERSION = 2
 
 # The hardcoded warnings of analyzer._build_log_warnings, each a built-in tag.
 # Migration 0079 seeds them from a frozen copy of this list.
@@ -118,6 +143,8 @@ class TagConditions:
     scope: str = RuleTag.SCOPE_ANY
     statuses: tuple = ()
     entry_types: tuple = ()
+    # Also run the conditions on analysed log lines (RuleTag.match_log_lines).
+    lines: bool = False
 
     @classmethod
     def of(cls, tag):
@@ -127,6 +154,7 @@ class TagConditions:
             scope=tag.match_scope or RuleTag.SCOPE_ANY,
             statuses=tuple(tag.match_statuses or ()),
             entry_types=tuple(tag.match_entry_types or ()),
+            lines=bool(tag.match_log_lines),
         )
 
     @property
@@ -172,6 +200,60 @@ class TagConditions:
             status=rule.status, entry_type=rule.entry_type,
         )[0]
 
+    @property
+    def matches_lines(self):
+        """Whether the conditions run on log lines at all."""
+        return self.lines and not self.is_empty
+
+    def match_line(self, line, parsed_entry_type=None):
+        """Whether an analysed log line (a payload `lines` entry) meets the conditions.
+
+        Statuses look at the line's verdict and entry types at the line's own
+        parsed FRST entry, whatever rule decided it; the regex and exclude
+        regex search the line text. The scope only applies to rules.
+        `parsed_entry_type` is a callable giving that entry type, so a caller
+        checking several tags parses the line at most once.
+        """
+        if not self.matches_lines:
+            return False
+        if self.statuses and line.get('dominant_status') not in self.statuses:
+            return False
+        if self.entry_types:
+            entry_type = parsed_entry_type() if parsed_entry_type is not None else line_parsed_entry_type(line)
+            if entry_type not in self.entry_types:
+                return False
+        text = line.get('line') or ''
+        if self.exclude_pattern:
+            exclude = compile_pattern(self.exclude_pattern)
+            if exclude is not None and exclude.search(text):
+                return False
+        if not self.pattern:
+            return True
+        compiled = compile_pattern(self.pattern)
+        return compiled is not None and compiled.search(text) is not None
+
+    @cached_property
+    def line_signature(self):
+        """A short fingerprint of what decides line matches, stored with them
+        so a changed tag's stored matches are recognised as stale."""
+        raw = json.dumps([
+            LINE_MATCH_VERSION, self.pattern, self.exclude_pattern, sorted(self.statuses), sorted(self.entry_types),
+        ])
+        return hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]
+
+
+def line_parsed_entry_type(line):
+    """The parsed FRST entry type of an analysed line, '' for none.
+
+    Read from the payload; analyses cached before it was recorded there get
+    the line parsed again, with the analyzer's own parser.
+    """
+    entry_type = line.get('parsed_entry_type')
+    if entry_type is None:
+        entry = frst_extractors.get_frst_entry(line.get('line') or '')
+        entry_type = entry.entry_type if entry is not None else ''
+    return entry_type or ''
+
 
 def describe_conditions(conditions):
     """A short reading of the conditions for the tag list, e.g.
@@ -188,6 +270,8 @@ def describe_conditions(conditions):
         parts.append(f'regex "{conditions.pattern}" in {scope}')
     if conditions.exclude_pattern:
         parts.append(f'not "{conditions.exclude_pattern}" in {scope}')
+    if conditions.lines:
+        parts.append('also on log lines')
     return ', '.join(parts)
 
 
@@ -466,6 +550,7 @@ def serialize_tag(tag):
         'match_scope': tag.match_scope,
         'match_statuses': list(tag.match_statuses or []),
         'match_entry_types': list(tag.match_entry_types or []),
+        'match_log_lines': tag.match_log_lines,
         'auto_apply': tag.auto_apply,
         'builtin': tag.builtin_code is not None,
         # The category sets the badge colour (see tag_category_class).
@@ -497,6 +582,12 @@ def conditions_from_payload(payload, tag=None):
             values[attr] = tuple(dict.fromkeys(item.strip() for item in raw if item.strip()))
         else:
             values[attr] = getattr(base, attr)
+    if 'match_log_lines' in payload:
+        if not isinstance(payload['match_log_lines'], bool):
+            return None, 'Field "match_log_lines" must be a boolean.'
+        values['lines'] = payload['match_log_lines']
+    else:
+        values['lines'] = base.lines
     return TagConditions(**values), None
 
 
@@ -557,9 +648,11 @@ def save_tag(user, tag, payload):
 
     The one place tag fields are validated and stored, shared by the tag editor
     and the token API. Payload fields: name, description, match_pattern,
-    exclude_pattern, match_scope, match_statuses, match_entry_types, auto_apply,
-    category_id (null for the default category), speech_ids, snippet_ids. Absent fields keep the tag's values. Applying the tag to rules
-    is left to the caller.
+    exclude_pattern, match_scope, match_statuses, match_entry_types,
+    match_log_lines, auto_apply, category_id (null for the default category),
+    speech_ids, snippet_ids. Absent fields keep the tag's values. Applying the
+    tag to rules is left to the caller; when what the tag matches on log lines
+    changes, the stored line matches are refreshed in the background.
     """
     for field in ('name', 'description'):
         if field in payload and not isinstance(payload[field], str):
@@ -601,7 +694,10 @@ def save_tag(user, tag, payload):
         return None, message
     if auto_apply and conditions.is_empty:
         return None, 'Applying automatically needs a condition: a regex, a status or an entry type.'
+    if conditions.lines and conditions.is_empty:
+        return None, 'Matching log lines needs a condition: a regex, a status or an entry type.'
 
+    line_key_before = _line_key(TagConditions.of(tag)) if tag is not None else None
     if tag is None:
         tag = RuleTag(created_by=user)
     tag.name = name
@@ -611,6 +707,7 @@ def save_tag(user, tag, payload):
     tag.match_scope = conditions.scope
     tag.match_statuses = list(conditions.statuses)
     tag.match_entry_types = list(conditions.entry_types)
+    tag.match_log_lines = conditions.lines
     tag.auto_apply = auto_apply
     tag.category_id = category_id
     tag.updated_by = user
@@ -619,7 +716,23 @@ def save_tag(user, tag, payload):
         set_speech_links(tag, user, speech_ids)
     if snippet_ids is not None:
         set_snippet_links(tag, user, snippet_ids)
+    if _line_key(conditions) != line_key_before:
+        schedule_line_tag_refresh([tag.pk])
     return tag, None
+
+
+def _line_key(conditions):
+    """What a tag matches on log lines: its line signature, or None for nothing."""
+    return conditions.line_signature if conditions.matches_lines else None
+
+
+def delete_tag(tag):
+    """Delete a tag; if it matched log lines, its stored matches are dropped in the background."""
+    was_line_tag = TagConditions.of(tag).matches_lines
+    pk = tag.pk
+    tag.delete()
+    if was_line_tag:
+        schedule_line_tag_refresh([pk])
 
 
 def parse_tag_ids(values):
@@ -640,6 +753,248 @@ def parse_tag_ids(values):
     return result
 
 
+# --- Tags on log lines ------------------------------------------------------
+
+_line_set_cache = {}
+
+
+def _line_regex_set(patterns):
+    """``(re2 Set, positions)`` searching all `patterns` case-insensitively in one
+    pass, or ``(None, [])`` without re2. `positions` maps a Set index back to the
+    pattern's index in `patterns`; patterns the Set refuses are left out and
+    checked one by one instead."""
+    if _re2 is None or not patterns:
+        return None, []
+    key = tuple(patterns)
+    cached = _line_set_cache.get(key)
+    if cached is not None:
+        return cached
+    result = (None, [])
+    try:
+        options = _re2.Options()
+        options.max_mem = 64 * 1024 * 1024
+        regex_set = _re2.Set(_re2._Anchor.UNANCHORED, options)
+        positions = []
+        for index, pattern in enumerate(patterns):
+            try:
+                regex_set.Add(f'(?i){pattern}')
+            except Exception:
+                continue
+            positions.append(index)
+        if positions:
+            regex_set.Compile()
+            result = (regex_set, positions)
+    except Exception:
+        result = (None, [])
+    if len(_line_set_cache) > 50:
+        _line_set_cache.clear()
+    _line_set_cache[key] = result
+    return result
+
+
+class LineTagMatcher:
+    """Finds the lines of an analysis that line-matching tags match.
+
+    The tags' regexes run as one re2 Set per line, so the cost hardly grows
+    with the number of tags; a line whose verdict no regex tag accepts skips
+    the regex pass entirely.
+    """
+
+    def __init__(self, conditions_by_tag):
+        items = [(tag_id, conditions) for tag_id, conditions in conditions_by_tag.items() if conditions.matches_lines]
+        self.empty = not items
+        self.plain = [(tag_id, conditions) for tag_id, conditions in items if not conditions.pattern]
+        patterned = [(tag_id, conditions) for tag_id, conditions in items if conditions.pattern]
+        self.regex_set, positions = _line_regex_set([conditions.pattern for _tag_id, conditions in patterned])
+        self.set_items = [patterned[index] for index in positions]
+        in_set = set(positions)
+        self.loose = [item for index, item in enumerate(patterned) if index not in in_set]
+        # The verdicts any regex tag accepts; None when one accepts every verdict.
+        statuses = set()
+        for _tag_id, conditions in patterned:
+            if not conditions.statuses:
+                statuses = None
+                break
+            statuses.update(conditions.statuses)
+        self.regex_statuses = statuses
+
+    def hits(self, payload):
+        """``{tag_id: [line index]}`` for the tags with at least one matching line."""
+        hits = {}
+        if self.empty or not isinstance(payload, dict):
+            return hits
+        for index, line in enumerate(payload.get('lines') or []):
+            if not isinstance(line, dict):
+                continue
+            candidates = list(self.plain)
+            if self.set_items or self.loose:
+                if self.regex_statuses is None or line.get('dominant_status') in self.regex_statuses:
+                    candidates.extend(self.loose)
+                    if self.regex_set is not None:
+                        try:
+                            matched = self.regex_set.Match(line.get('line') or '')
+                        except Exception:
+                            matched = None
+                        # google-re2's Set.Match returns None (not []) when nothing matched.
+                        candidates.extend(self.set_items[position] for position in matched or ())
+            parsed = []
+
+            def parsed_entry_type(line=line, parsed=parsed):
+                if not parsed:
+                    parsed.append(line_parsed_entry_type(line))
+                return parsed[0]
+
+            for tag_id, conditions in candidates:
+                if conditions.match_line(line, parsed_entry_type):
+                    hits.setdefault(tag_id, []).append(index)
+        return hits
+
+
+def current_line_tags(tags=None):
+    """``{tag_id: TagConditions}`` for every tag that matches log lines (among `tags`, if given)."""
+    if tags is None:
+        tags = RuleTag.objects.filter(match_log_lines=True)
+    result = {}
+    for tag in tags:
+        conditions = TagConditions.of(tag)
+        if conditions.matches_lines:
+            result[tag.pk] = conditions
+    return result
+
+
+def _line_and_builtin_tags():
+    """``(current line tags, {builtin_code: tag pk})`` in one query, for listings."""
+    tags = list(RuleTag.objects.filter(Q(match_log_lines=True) | Q(builtin_code__isnull=False)))
+    builtin_by_code = {tag.builtin_code: tag.pk for tag in tags if tag.builtin_code is not None}
+    return current_line_tags(tags), builtin_by_code
+
+
+def _stored_line_tags(current, hits):
+    """The `line_tags` value stored with a cached analysis."""
+    return {
+        'sigs': {str(tag_id): conditions.line_signature for tag_id, conditions in current.items()},
+        'lines': {str(tag_id): indexes for tag_id, indexes in hits.items() if tag_id in current and indexes},
+    }
+
+
+def compute_line_tags(payload, current=None):
+    """The `line_tags` to store with a cached analysis of `payload`."""
+    if current is None:
+        current = current_line_tags()
+    return _stored_line_tags(current, LineTagMatcher(current).hits(payload))
+
+
+def line_tag_hits(stored):
+    """``{tag_id: [line index]}`` from a stored `line_tags` value, as it is."""
+    lines = (stored or {}).get('lines') if isinstance(stored, dict) else None
+    hits = {}
+    for key, indexes in (lines or {}).items():
+        try:
+            hits[int(key)] = list(indexes)
+        except (TypeError, ValueError):
+            continue
+    return hits
+
+
+def fresh_line_tags(stored, payload, current, force=()):
+    """``(hits, updated)`` for a cached analysis under the current line tags.
+
+    `hits` is ``{tag_id: [line index]}``. Stored matches are reused where the
+    tag's signature still agrees; tags that changed, are new, or are in
+    `force` are recomputed against `payload`, and tags that no longer match
+    lines are dropped. `updated` is the value to store back, or None when the
+    stored one is still right.
+    """
+    stored = stored if isinstance(stored, dict) else {}
+    sigs = stored.get('sigs') if isinstance(stored.get('sigs'), dict) else {}
+    stored_hits = line_tag_hits(stored)
+    force = set(force)
+    hits = {}
+    stale = {}
+    for tag_id, conditions in current.items():
+        if tag_id not in force and sigs.get(str(tag_id)) == conditions.line_signature:
+            if stored_hits.get(tag_id):
+                hits[tag_id] = stored_hits[tag_id]
+        else:
+            stale[tag_id] = conditions
+    current_keys = {str(tag_id) for tag_id in current}
+    dropped = any(key not in current_keys for key in sigs) or any(
+        tag_id not in current for tag_id in stored_hits
+    )
+    if not stale and not dropped:
+        return hits, None
+    hits.update(LineTagMatcher(stale).hits(payload))
+    return hits, _stored_line_tags(current, hits)
+
+
+def _write_line_tags(updates):
+    """Store recomputed `line_tags`: ``{analysis pk: value}``."""
+    for pk, value in updates.items():
+        UploadedLogAnalysis.objects.filter(pk=pk).update(line_tags=value)
+
+
+REFRESH_BATCH_SIZE = 50
+
+
+def refresh_line_tags(tag_ids=None):
+    """Recompute the stored line matches of every cached analysis, and the
+    line tags of the stat snapshots of logs that still have a shared one.
+
+    `tag_ids` limits the recompute to those tags (one just edited, added or
+    deleted); None recomputes every line tag - the tags page's "recompute"
+    button and the recompute_line_tags command. Returns how many cached
+    analyses were updated. Snapshots of logs that are gone keep what they had.
+    """
+    current = current_line_tags()
+    force = set(current) if tag_ids is None else set(tag_ids)
+    pks = list(UploadedLogAnalysis.objects.order_by('pk').values_list('pk', flat=True))
+    updated_count = 0
+    for start in range(0, len(pks), REFRESH_BATCH_SIZE):
+        batch = UploadedLogAnalysis.objects.filter(pk__in=pks[start:start + REFRESH_BATCH_SIZE]).values_list(
+            'pk', 'upload_id', 'rule_set_key', 'payload', 'line_tags',
+        )
+        for pk, upload_id, rule_set_key, payload, stored in batch:
+            if not isinstance(payload, dict):
+                continue
+            hits, updated = fresh_line_tags(stored, payload, current, force=force)
+            if updated is None:
+                continue
+            UploadedLogAnalysis.objects.filter(pk=pk).update(line_tags=updated)
+            updated_count += 1
+            if rule_set_key == SHARED_RULE_SET_KEY:
+                UploadedLogStat.objects.filter(source_id=upload_id).update(line_tag_ids=sorted(hits))
+    return updated_count
+
+
+def _refresh_line_tags_in_thread(tag_ids):
+    try:
+        refresh_line_tags(tag_ids)
+    except Exception:
+        logger.exception('Background line tag refresh failed (tag_ids=%s)', tag_ids)
+    finally:
+        connections.close_all()
+
+
+def schedule_line_tag_refresh(tag_ids=None):
+    """Run refresh_line_tags off the request thread, once the change is committed.
+
+    Runs synchronously under the test runner. Until it is done, a read of a
+    stale analysis recomputes the changed tags itself (fresh_line_tags), so
+    only the stat snapshots wait for it.
+    """
+    tag_ids = None if tag_ids is None else list(tag_ids)
+    if getattr(settings, 'TESTING', False):
+        refresh_line_tags(tag_ids)
+        return
+
+    def start():
+        threading.Thread(
+            target=_refresh_line_tags_in_thread, args=(tag_ids,), name='line-tag-refresh', daemon=True,
+        ).start()
+
+    transaction.on_commit(start)
+
+
 def payload_rule_ids(payload):
     """Every rule id an analysis credits: lines' deciding rules, alert warnings', whole-log."""
     rule_ids = set(payload.get('wholelog_rule_ids') or [])
@@ -650,19 +1005,24 @@ def payload_rule_ids(payload):
     return rule_ids
 
 
-def attach_rule_tags(payload):
+def attach_rule_tags(payload, line_hits=None):
     """Add the rule tags behind an analysis to its payload, in place.
 
-    Each line gets `tag_ids` from its deciding `rule_ids`; each warning gets
-    `tag_ids` from its alert rules' tags plus the built-in tag of its code; and
-    the payload gets `rule_tags`: every tag found, with the number of lines it
+    Each line gets `tag_ids` from its deciding `rule_ids` and from the
+    line-matching tags whose conditions it meets; each warning gets `tag_ids`
+    from its alert rules' tags plus the built-in tag of its code; and the
+    payload gets `rule_tags`: every tag found, with the number of lines it
     covers. Done when the analysis is served rather than when it is computed,
-    so tagging a rule shows up at once without invalidating any cached analysis.
+    so tagging a rule shows up at once without invalidating any cached
+    analysis. `line_hits` (``{tag_id: [line index]}``) defaults to matching
+    the current line tags now - one pass over this one log.
     """
     lines = payload.get('lines') or []
     warnings = payload.get('warnings') or []
     wholelog_rule_ids = payload.get('wholelog_rule_ids') or []
     rule_ids = payload_rule_ids(payload)
+    if line_hits is None:
+        line_hits = LineTagMatcher(current_line_tags()).hits(payload)
 
     tags_by_rule = {}
     if rule_ids:
@@ -675,9 +1035,14 @@ def attach_rule_tags(payload):
     def tags_of(ids):
         return {tag_id for rule_id in ids or [] for tag_id in tags_by_rule.get(rule_id, [])}
 
+    line_tags_by_index = {}
+    for tag_id, indexes in line_hits.items():
+        for index in indexes:
+            line_tags_by_index.setdefault(index, set()).add(tag_id)
+
     line_counts = Counter()
-    for line in lines:
-        tag_ids = sorted(tags_of(line.get('rule_ids')))
+    for index, line in enumerate(lines):
+        tag_ids = sorted(tags_of(line.get('rule_ids')) | line_tags_by_index.get(index, set()))
         line['tag_ids'] = tag_ids
         line_counts.update(tag_ids)
 
@@ -728,6 +1093,18 @@ def _fresh_analyses(candidates, rule_set_key):
     )
 
 
+def _searched_rows(candidates, rule_set_key):
+    """The querysets of cached analyses a tag search reads: the viewer's rule
+    set first, then the shared one for logs the viewer has none for."""
+    row_sets = [_fresh_analyses(candidates, rule_set_key)]
+    if rule_set_key != SHARED_RULE_SET_KEY:
+        row_sets.append(
+            _fresh_analyses(candidates, SHARED_RULE_SET_KEY)
+            .exclude(upload__in=row_sets[0].values('upload'))
+        )
+    return row_sets
+
+
 def logs_with_tags(tag_ids, rule_set_key, candidates):
     """The uploads among `candidates` that contain every tag in `tag_ids`.
 
@@ -735,7 +1112,9 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
     the order of `candidates`, and how many analyzable candidates had no
     usable cached analysis and so could not be searched. A log contains a tag the way
     attach_rule_tags finds one: a rule carrying it decided a line, raised an
-    alert or matched the whole log, or the tag's built-in warning fired.
+    alert or matched the whole log, the tag's built-in warning fired, or one
+    of the log's lines meets the tag's line conditions (stored with the
+    analysis, see fresh_line_tags).
 
     Reads cached analyses only, never analyzing a log, so the result follows
     the analyses as they were last computed. The viewer's rule set is read
@@ -756,32 +1135,41 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
         RuleTag.objects.filter(pk__in=tag_ids, builtin_code__isnull=False)
         .values_list('pk', 'builtin_code')
     )
-    # A tag on no rule and without a warning of its own is in no log.
-    if any(not rules_by_tag[tag_id] and tag_id not in builtin_codes for tag_id in tag_ids):
+    current = current_line_tags()
+    # A tag on no rule, without a warning of its own and not matching lines is in no log.
+    if any(
+        not rules_by_tag[tag_id] and tag_id not in builtin_codes and tag_id not in current
+        for tag_id in tag_ids
+    ):
         return [], 0
+    searched_line_tags = {tag_id for tag_id in tag_ids if tag_id in current}
 
-    def has_all_tags(payload):
+    def has_all_tags(payload, line_hits):
         rule_ids = payload_rule_ids(payload)
         codes = {warning.get('code') for warning in payload.get('warnings') or []}
         return all(
-            rules_by_tag[tag_id] & rule_ids or builtin_codes.get(tag_id) in codes
+            rules_by_tag[tag_id] & rule_ids
+            or builtin_codes.get(tag_id) in codes
+            or bool(line_hits.get(tag_id))
             for tag_id in tag_ids
-        )
-
-    row_sets = [_fresh_analyses(candidates, rule_set_key)]
-    if rule_set_key != SHARED_RULE_SET_KEY:
-        row_sets.append(
-            _fresh_analyses(candidates, SHARED_RULE_SET_KEY)
-            .exclude(upload__in=row_sets[0].values('upload'))
         )
 
     analyzed = set()
     matched = set()
-    for rows in row_sets:
-        for upload_pk, payload in rows.values_list('upload_id', 'payload').iterator(chunk_size=25):
+    updates = {}
+    for rows in _searched_rows(candidates, rule_set_key):
+        for pk, upload_pk, payload, stored in rows.values_list(
+            'pk', 'upload_id', 'payload', 'line_tags',
+        ).iterator(chunk_size=25):
             analyzed.add(upload_pk)
-            if has_all_tags(payload):
+            line_hits = {}
+            if searched_line_tags:
+                line_hits, updated = fresh_line_tags(stored, payload, current)
+                if updated is not None:
+                    updates[pk] = updated
+            if has_all_tags(payload, line_hits):
                 matched.add(upload_pk)
+    _write_line_tags(updates)
 
     # Logs of a type the analyzer skips never have an analysis and hold no
     # tags; only analyzable ones are worth reporting as missed.
@@ -790,13 +1178,15 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
     return [pk for pk in candidate_pks if pk in matched], unanalyzed_count
 
 
-def tag_ids_by_key(rule_ids_by_key, codes_by_key):
-    """``{key: set(tag_ids)}``: the tags found from each key's credited rules and warning codes.
+def tag_ids_by_key(rule_ids_by_key, codes_by_key, line_tag_ids_by_key=None, builtin_by_code=None):
+    """``{key: set(tag_ids)}``: the tags found from each key's credited rules, warning codes and line tags.
 
     A tag is found the way attach_rule_tags finds one: a rule carrying it was
-    credited, or the tag's built-in warning fired. Two queries for any number
-    of keys.
+    credited, the tag's built-in warning fired, or (`line_tag_ids_by_key`,
+    already resolved) one of the log's lines matched it. Two queries for any
+    number of keys (one, when `builtin_by_code` is passed in).
     """
+    line_tag_ids_by_key = line_tag_ids_by_key or {}
     tags_by_rule = {}
     all_rule_ids = set().union(*rule_ids_by_key.values()) if rule_ids_by_key else set()
     if all_rule_ids:
@@ -805,9 +1195,10 @@ def tag_ids_by_key(rule_ids_by_key, codes_by_key):
         ).values_list('classificationrule_id', 'ruletag_id')
         for rule_id, tag_id in links:
             tags_by_rule.setdefault(rule_id, set()).add(tag_id)
-    builtin_by_code = dict(
-        RuleTag.objects.filter(builtin_code__isnull=False).values_list('builtin_code', 'pk')
-    )
+    if builtin_by_code is None:
+        builtin_by_code = dict(
+            RuleTag.objects.filter(builtin_code__isnull=False).values_list('builtin_code', 'pk')
+        )
 
     result = {}
     for key, rule_ids in rule_ids_by_key.items():
@@ -815,6 +1206,7 @@ def tag_ids_by_key(rule_ids_by_key, codes_by_key):
         tag_ids.update(
             builtin_by_code[code] for code in codes_by_key.get(key) or () if code in builtin_by_code
         )
+        tag_ids.update(line_tag_ids_by_key.get(key) or ())
         result[key] = tag_ids
     return result
 
@@ -824,8 +1216,9 @@ def found_tags_by_upload(upload_pks, rule_set_key):
 
     Finds what attach_rule_tags finds, from the cached analysis a tag search
     reads (the viewer's rule set, else the shared one), in a fixed number of
-    queries for any number of logs - for listing pages. A log without a fresh
-    cached analysis gets no tags.
+    queries for any number of logs - for listing pages. Line tags come from
+    the matches stored with each analysis. A log without a fresh cached
+    analysis gets no tags.
     """
     upload_pks = list(upload_pks)
     found = {pk: [] for pk in upload_pks}
@@ -833,24 +1226,28 @@ def found_tags_by_upload(upload_pks, rule_set_key):
         return found
 
     candidates = UploadedLog.objects.filter(pk__in=upload_pks)
-    row_sets = [_fresh_analyses(candidates, rule_set_key)]
-    if rule_set_key != SHARED_RULE_SET_KEY:
-        row_sets.append(
-            _fresh_analyses(candidates, SHARED_RULE_SET_KEY)
-            .exclude(upload__in=row_sets[0].values('upload'))
-        )
+    current, builtin_by_code = _line_and_builtin_tags()
     rule_ids_by_upload = {}
     codes_by_upload = {}
-    for rows in row_sets:
-        for upload_pk, payload in rows.values_list('upload_id', 'payload'):
+    line_tag_ids_by_upload = {}
+    updates = {}
+    for rows in _searched_rows(candidates, rule_set_key):
+        for pk, upload_pk, payload, stored in rows.values_list('pk', 'upload_id', 'payload', 'line_tags'):
             rule_ids_by_upload[upload_pk] = payload_rule_ids(payload)
             codes_by_upload[upload_pk] = {
                 warning.get('code') for warning in payload.get('warnings') or []
             }
+            line_hits, updated = fresh_line_tags(stored, payload, current)
+            line_tag_ids_by_upload[upload_pk] = set(line_hits)
+            if updated is not None:
+                updates[pk] = updated
+    _write_line_tags(updates)
     if not rule_ids_by_upload:
         return found
 
-    tag_ids_by_upload = tag_ids_by_key(rule_ids_by_upload, codes_by_upload)
+    tag_ids_by_upload = tag_ids_by_key(
+        rule_ids_by_upload, codes_by_upload, line_tag_ids_by_upload, builtin_by_code=builtin_by_code,
+    )
     all_tag_ids = set().union(*tag_ids_by_upload.values())
     tags = {
         tag.pk: {
@@ -892,13 +1289,17 @@ def selected_tags_for_picker(tag_ids):
 
 
 def first_tagged_line(payload, tag_ids):
-    """The text of the first line whose deciding rules carry one of `tag_ids`, or None."""
+    """The text of the first line carrying one of `tag_ids` - through its deciding
+    rules or by meeting a tag's line conditions - or None."""
     rule_ids = set(
         ClassificationRule.tags.through.objects.filter(ruletag_id__in=tag_ids)
         .values_list('classificationrule_id', flat=True)
     )
-    for line in payload.get('lines') or []:
-        if rule_ids.intersection(line.get('rule_ids') or []):
+    wanted = set(tag_ids)
+    line_tags = {tag_id: conditions for tag_id, conditions in current_line_tags().items() if tag_id in wanted}
+    hit_indexes = {index for indexes in LineTagMatcher(line_tags).hits(payload).values() for index in indexes}
+    for index, line in enumerate(payload.get('lines') or []):
+        if index in hit_indexes or rule_ids.intersection(line.get('rule_ids') or []):
             return line.get('line')
     return None
 

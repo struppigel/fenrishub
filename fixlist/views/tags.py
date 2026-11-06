@@ -30,12 +30,14 @@ from ..tagging import (
     apply_tag,
     conditions_error,
     conditions_from_payload,
+    delete_tag,
     linkable_snippets,
     linkable_speeches,
     parse_tag_category_priority,
     save_tag,
     matching_rule_ids,
     preview_conditions,
+    schedule_line_tag_refresh,
     serialize_tag,
     suggest_tags,
     tag_category_error,
@@ -84,16 +86,24 @@ def _id_list(payload, field):
 @login_required
 @require_http_methods(["GET", "POST"])
 def rule_tags_view(request):
-    """List tags with their rule, speech, snippet, pending and unmatched counts; delete tags."""
+    """List tags with their rule, speech, snippet, pending and unmatched counts; delete
+    tags; recompute the log line matches of every line tag."""
     if request.method == 'POST':
-        if request.POST.get('action') == 'delete':
+        action = request.POST.get('action')
+        if action == 'delete':
             tag = get_object_or_404(RuleTag, pk=request.POST.get('pk', '').strip() or 0)
             if tag.builtin_code is not None:
                 messages.error(request, f'"{tag.name}" is a built-in tag and cannot be deleted.')
             else:
                 name = tag.name
-                tag.delete()
+                delete_tag(tag)
                 messages.success(request, f'Tag "{name}" deleted.')
+        elif action == 'recompute_line_tags':
+            # Saving a line tag already refreshes its matches; this redoes all
+            # of them, for every cached analysis and the stats of logs that
+            # still exist.
+            schedule_line_tag_refresh(None)
+            messages.success(request, 'Recomputing the log line tags of all logs in the background.')
         # Back to the page and filters the delete came from.
         safe_query = _sanitize_return_q(request.POST.get('return_q'))
         if safe_query:
@@ -149,6 +159,7 @@ def rule_tags_view(request):
 
     return render(request, 'tags.html', {
         'tags': tags,
+        'has_line_tags': RuleTag.objects.filter(match_log_lines=True).exists(),
         'page_obj': page_obj,
         'has_any_tags': has_any_tags,
         'search_query': search_query,
@@ -283,7 +294,7 @@ def _tag_editor(request, tag):
         # nothing that affects matching is hidden.
         'advanced_open': bool(tag and (
             tag.exclude_pattern or tag.match_statuses or tag.match_entry_types
-            or tag.match_scope != RuleTag.SCOPE_ANY
+            or tag.match_scope != RuleTag.SCOPE_ANY or tag.match_log_lines
         )),
         'scope_choices': RuleTag.SCOPE_CHOICES,
         # The default first; get_default() makes sure there is one to preselect.
