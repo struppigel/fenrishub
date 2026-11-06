@@ -18,6 +18,13 @@
     min-width: 0;
 }
 
+.protected-icon {
+    display: inline-flex;
+    color: var(--la-success-text);
+    vertical-align: middle;
+    margin-left: 4px;
+}
+
 .log-merge-select {
     margin-right: 8px;
 }
@@ -330,6 +337,16 @@
     <button type="button" data-url="{{ helper_upload_url }}" onclick="copyUploadUrl(this)" title="copy the upload link to send to {{ infection_case.username }}">upload link</button>
     {% if can_edit %}
     <button type="submit" form="mergeCaseLogsForm" name="action" value="merge_logs" onclick="return confirmMergeCaseLogs();" title="merge the selected logs into a single log linked to this case">merge</button>
+    {% if has_logs %}
+    <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}">
+        {% csrf_token %}
+        {% if has_unprotected_logs %}
+        <button type="submit" name="action" value="protect_logs" title="prevent all logs in this case from being trashed, deleted, merged away or auto-purged">protect logs</button>
+        {% else %}
+        <button type="submit" name="action" value="unprotect_logs" onclick="return confirm('Remove deletion protection from all logs in this case?');" title="allow all logs in this case to be trashed, deleted and auto-purged again">unprotect logs</button>
+        {% endif %}
+    </form>
+    {% endif %}
     <button type="button" style="margin-left: auto;" onclick="document.getElementById('addItemsModal').classList.add('show')">add items</button>
     <form method="post" action="{% url 'view_infection_case' infection_case.case_id %}">
         {% csrf_token %}
@@ -419,7 +436,7 @@
         <div class="timeline-entry log">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title">{% if can_edit %}<input class="log-merge-select" form="mergeCaseLogsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">{% endif %}<span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|log_type_css_slug }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a></div>
+                <div class="fixlist-title">{% if can_edit %}<input class="log-merge-select" form="mergeCaseLogsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">{% endif %}<span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|log_type_css_slug }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>{% if uploaded_log.is_protected %}{% include "partials/protected_icon.html" with what="this log cannot be trashed, deleted, merged away or auto-purged" %}{% endif %}</div>
                 <div class="fixlist-meta">
                     {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}
                 </div>
@@ -602,7 +619,7 @@
         <div class="timeline-entry fixlist">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title"><span class="timeline-type-badge fixlist">Fixlist</span><a href="{% url 'view_fixlist' fixlist.pk %}">{{ fixlist.share_token }}</a></div>
+                <div class="fixlist-title"><span class="timeline-type-badge fixlist">Fixlist</span><a href="{% url 'view_fixlist' fixlist.pk %}">{{ fixlist.share_token }}</a>{% if fixlist.is_protected %}{% include "partials/protected_icon.html" with what="this fixlist cannot be trashed, deleted or auto-purged" %}{% endif %}</div>
                 <div class="fixlist-meta">Fixlist.txt | {{ fixlist.username }} | {{ fixlist.created_at|date:"Y-m-d H:i" }}</div>
                 <div class="fixlist-meta">lines {{ item.line_count }}</div>
                 {% if can_edit %}

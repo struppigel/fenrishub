@@ -195,7 +195,6 @@
             <span id="tagCategoryPreview" class="tag-chip" title="how the tag's badge looks">{% if tag %}{{ tag.name }}{% else %}new tag{% endif %}</span>
             <a href="{% url 'tag_categories' %}" class="tag-category-manage">manage categories</a>
         </div>
-        <div class="tag-editor-note">Sets the color of the tag's badge everywhere.</div>
     </div>
     <div class="form-group">
         <label for="tagPattern">regex</label>
@@ -210,12 +209,11 @@
             <input type="checkbox" id="tagAutoApply">
             apply automatically to new rules that match
         </label>
-        <div class="tag-editor-note">Also when a rule is edited to match. Saving asks whether to also tag the existing rules that match.</div>
     </div>
     <button type="button" id="tagAdvancedToggle" class="tag-advanced-toggle" aria-expanded="{% if advanced_open %}true{% else %}false{% endif %}" aria-controls="tagAdvanced">more options</button>
     <div id="tagAdvanced"{% if not advanced_open %} hidden{% endif %}>
     <fieldset class="tag-conditions">
-        <legend>more conditions - every one that is set must hold</legend>
+        <legend>more conditions</legend>
         <div class="tag-editor-note">Leave a condition empty to ignore it. A tag with no regex, status or entry type matches nothing and is only added by hand.</div>
         <div class="form-group">
             <label for="tagExcludePattern">exclude regex</label>
@@ -226,7 +224,13 @@
             <select id="tagScope" style="width: auto;">
                 {% for value, label in scope_choices %}<option value="{{ value }}"{% if value == 'any' %} selected{% endif %}>{{ label }}</option>{% endfor %}
             </select>
-            <span class="small-note">where the regex and the exclude regex look</span>
+        </div>
+        <div class="form-group">
+            <label class="checkbox-label" for="tagMatchLogLines">
+                <input type="checkbox" id="tagMatchLogLines">
+                also match log lines
+            </label>
+            <div class="tag-editor-note" id="tagLogLinesBroad" hidden>No status is ticked, so every log line is checked whatever its verdict.</div>
         </div>
         <div class="tag-condition-group" id="tagStatuses">
             <span class="tag-condition-label">rule status (any of)</span>
@@ -240,18 +244,10 @@
             <label class="checkbox-label"><input type="checkbox" value="{{ value }}"> {{ label }}</label>
             {% endfor %}
         </div>
-        <div class="form-group">
-            <label class="checkbox-label" for="tagMatchLogLines">
-                <input type="checkbox" id="tagMatchLogLines">
-                also match log lines
-            </label>
-            <div class="tag-editor-note">The tag is also found on analyzed log lines that meet these conditions, even when no tagged rule decided them: the regex and exclude regex search the line, the status is the line's verdict and the entry type the line's own parsed entry, whatever rule decided it. The preview below still lists rules only.</div>
-            <div class="tag-editor-note" id="tagLogLinesBroad" hidden>No status is ticked, so every log line is checked whatever its verdict.</div>
-        </div>
     </fieldset>
     <fieldset class="tag-conditions">
         <legend>suggest these speeches when the tag is found</legend>
-        <div class="tag-editor-note">Your own speeches and those you selected for the analyzer. A link belongs to the speech: linking another helper's shared speech suggests it for this tag for everyone using it.</div>
+        <div class="tag-editor-note">Yours and those you selected for the analyzer. Linking another helper's shared speech suggests it for everyone.</div>
         <div class="tag-picker">
             <div class="tag-picker-chips" id="tagSpeechChips"></div>
             <div class="tag-picker-input-row">
@@ -268,7 +264,7 @@
     </fieldset>
     <fieldset class="tag-conditions">
         <legend>suggest these snippets when the tag is found</legend>
-        <div class="tag-editor-note">Your own snippets and those you selected for the analyzer. A link belongs to the snippet: linking another helper's shared snippet suggests it for this tag for everyone using it.</div>
+        <div class="tag-editor-note">Yours and those you selected for the analyzer. Linking another helper's shared snippet suggests it for everyone.</div>
         <div class="tag-picker">
             <div class="tag-picker-chips" id="tagSnippetChips"></div>
             <div class="tag-picker-input-row">

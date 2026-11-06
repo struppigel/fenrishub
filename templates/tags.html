@@ -16,8 +16,29 @@
     }
 
     .tags-toolbar input[type="text"] {
-        width: 240px;
+        /* Gives way first, so the buttons stay on one row as long as possible. */
+        flex: 0 1 240px;
+        min-width: 120px;
+        width: auto;
         padding: 4px 8px;
+    }
+
+    /* Keep every button one line tall: squeezed labels wrapped and made some
+       buttons taller than the rest. The search box shrinks instead. */
+    .tags-toolbar button {
+        white-space: nowrap;
+    }
+
+    .tags-toolbar > a,
+    .tags-toolbar > button {
+        flex-shrink: 0;
+    }
+
+    .tags-toolbar .search-filter-clear {
+        box-sizing: border-box;
+        height: 32px;
+        display: inline-flex;
+        align-items: center;
     }
 
     .tags-toolbar select.search-filter-select {
@@ -82,10 +103,14 @@
         color: var(--la-caution);
     }
 
-    @media (max-width: 640px) {
+    /* Below this the controls no longer fit on one row, even with the search box shrunk. */
+    @media (max-width: 1000px) {
         .tags-toolbar {
             flex-wrap: wrap;
         }
+    }
+
+    @media (max-width: 640px) {
 
         .tags-toolbar input[type="text"] {
             width: 100%;

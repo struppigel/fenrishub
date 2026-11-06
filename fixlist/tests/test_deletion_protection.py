@@ -319,3 +319,104 @@ class InfectionCaseCascadeProtectionTests(TestCase):
         self.assertIsNone(log.deleted_at)
         self.assertIsNone(fixlist.deleted_at)
         self.assertIsNotNone(case.deleted_at)
+
+
+class InfectionCaseBulkProtectionTests(TestCase):
+    """The case view can protect/unprotect every linked log in one go."""
+
+    def setUp(self):
+        from ..models import InfectionCase
+
+        self.user = _make_user('alice')
+        self.client.login(username='alice', password='password123')
+        self.case = InfectionCase.objects.create(owner=self.user, username='victim')
+        self.url = reverse('view_infection_case', args=[self.case.case_id])
+
+    def _make_log(self, upload_id, *, link=True, case=None, **kwargs):
+        from ..models import InfectionCaseLog
+
+        kwargs.setdefault('recipient_user', self.user)
+        log = UploadedLog.objects.create(
+            upload_id=upload_id,
+            forum_username='victim',
+            original_filename='x.txt',
+            content='payload',
+            **kwargs,
+        )
+        # Cases with auto-assign may already link new logs, so only fill in gaps.
+        if link:
+            InfectionCaseLog.objects.get_or_create(case=case or self.case, uploaded_log=log)
+        else:
+            InfectionCaseLog.objects.filter(uploaded_log=log).delete()
+        return log
+
+    def test_protect_logs_protects_every_linked_log(self):
+        first = self._make_log('first-log')
+        second = self._make_log('second-log')
+        unlinked = self._make_log('loose-log', link=False)
+        trashed = self._make_log('trashed-log', deleted_at=timezone.now())
+
+        self.client.post(self.url, {'action': 'protect_logs'})
+
+        for log in (first, second, unlinked, trashed):
+            log.refresh_from_db()
+        self.assertTrue(first.is_protected)
+        self.assertTrue(second.is_protected)
+        self.assertFalse(unlinked.is_protected)
+        self.assertFalse(trashed.is_protected)
+
+    def test_unprotect_logs_clears_every_linked_log(self):
+        first = self._make_log('first-log', is_protected=True)
+        second = self._make_log('second-log', is_protected=True)
+
+        self.client.post(self.url, {'action': 'unprotect_logs'})
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertFalse(first.is_protected)
+        self.assertFalse(second.is_protected)
+
+    def test_non_owner_cannot_protect_case_logs(self):
+        log = self._make_log('first-log')
+        _make_user('bob')
+        self.client.login(username='bob', password='password123')
+
+        self.client.post(self.url, {'action': 'protect_logs'})
+
+        log.refresh_from_db()
+        self.assertFalse(log.is_protected)
+
+    def test_logs_assigned_to_another_helper_are_skipped(self):
+        from ..models import InfectionCase
+
+        bob = _make_user('bob')
+        training_case = InfectionCase.objects.create(owner=self.user, username='victim', is_training=True)
+        mine = self._make_log('my-log', case=training_case)
+        bobs = self._make_log('bobs-log', case=training_case, recipient_user=bob)
+
+        response = self.client.post(
+            reverse('view_infection_case', args=[training_case.case_id]),
+            {'action': 'protect_logs'},
+            follow=True,
+        )
+
+        mine.refresh_from_db()
+        bobs.refresh_from_db()
+        self.assertTrue(mine.is_protected)
+        self.assertFalse(bobs.is_protected)
+        self.assertContains(response, '1 skipped')
+
+    def test_case_page_shows_lock_icon_and_matching_button(self):
+        self._make_log('open-log')
+        self._make_log('locked-log', is_protected=True)
+
+        response = self.client.get(self.url)
+        self.assertContains(response, 'class="protected-icon"', count=1)
+        self.assertContains(response, 'value="protect_logs"')
+        self.assertNotContains(response, 'value="unprotect_logs"')
+
+        UploadedLog.objects.update(is_protected=True)
+        response = self.client.get(self.url)
+        self.assertContains(response, 'class="protected-icon"', count=2)
+        self.assertContains(response, 'value="unprotect_logs"')
+        self.assertNotContains(response, 'value="protect_logs"')

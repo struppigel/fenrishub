@@ -19,6 +19,7 @@ from ..models import (
     InfectionCaseResponse,
     UploadedLog,
 )
+from ..permissions import user_can_delete_uploaded_log
 from ..rule_sets import resolve_user_rule_set_key
 from ..tagging import found_tags_by_upload, tags_for_listing
 from ..upload_utils import execute_merge, resolve_ordered_logs_for_merge
@@ -568,6 +569,27 @@ def view_infection_case(request, case_id):
                 messages.error(request, 'The selected log is not linked to this case.')
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
+        if action in {'protect_logs', 'unprotect_logs'}:
+            protect = action == 'protect_logs'
+            case_logs = list(_case_log_queryset(infection_case).defer('content'))
+            if not case_logs:
+                messages.error(request, 'This case has no logs to change.')
+                return redirect('view_infection_case', case_id=infection_case.case_id)
+            # Same rule as the single-log toggle: observe cases can hold logs
+            # from other helpers' channels, and those stay as they are.
+            allowed_pks = [log.pk for log in case_logs if user_can_delete_uploaded_log(request.user, log)]
+            skipped = len(case_logs) - len(allowed_pks)
+            # .update() bypasses auto_now, so stamp updated_at like the single toggle does.
+            changed = UploadedLog.objects.filter(pk__in=allowed_pks).update(
+                is_protected=protect, updated_at=timezone.now(),
+            )
+            state = 'protected from deletion' if protect else 'no longer deletion-protected'
+            message = f'{changed} log{"s" if changed != 1 else ""} {state}.'
+            if skipped:
+                message += f' {skipped} skipped (assigned to another helper).'
+            (messages.success if changed else messages.error)(request, message)
+            return redirect('view_infection_case', case_id=infection_case.case_id)
+
         if action == 'unlink_fixlist':
             fixlist_id = (request.POST.get('fixlist_id') or '').strip()
             deleted_count, _ = InfectionCaseFixlist.objects.filter(
@@ -753,6 +775,8 @@ def view_infection_case(request, case_id):
             'case_status_choices': InfectionCase.STATUS_CHOICES,
             'show_metadata_edit': show_metadata_edit,
             'can_edit': can_edit,
+            'has_logs': bool(case_logs),
+            'has_unprotected_logs': any(not log.is_protected for log in case_logs),
         },
     )
 
