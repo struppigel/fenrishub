@@ -14,8 +14,18 @@
     color: var(--la-status-b);
 }
 
+/* Same box as the <a> wrappers around the other buttons (see .fixlist-actions a
+   in base.html), so all buttons in the row share one height. */
 .fixlist-actions .case-status-form {
-    display: contents;
+    margin: 0;
+    padding: 6px 10px;
+    flex-shrink: 0;
+}
+
+/* "open" and "close" differ in length; a fixed width (5 monospace chars plus
+   padding and border) keeps the delete button in the same column on every row. */
+.fixlist-actions .case-status-form button {
+    width: calc(5ch + 22px);
 }
 
 .fixlist-actions .delete-btn {
