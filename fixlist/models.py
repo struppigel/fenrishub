@@ -1,7 +1,7 @@
 from django.db import IntegrityError, models
 from django.db.models import Q
 from django.db.models.functions import Lower
-from django.db.models.signals import post_save, pre_delete, pre_save
+from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -1648,6 +1648,20 @@ def _note_rule_tag_fields_change(sender, instance, raw=False, **kwargs):
     previous = sender.objects.filter(pk=instance.pk).values_list(*_TAG_CONDITION_FIELDS).first()
     current = tuple(getattr(instance, field) for field in _TAG_CONDITION_FIELDS)
     instance._tag_fields_changed = previous != current
+
+
+@receiver([post_save, post_delete], sender=ClassificationRule)
+def _drop_tag_rule_match_cache(sender, raw=False, **kwargs):
+    """A saved or deleted rule can change which rules a tag's conditions match.
+
+    Other processes notice through the rules fingerprint; this drops this
+    process's cache at once, even when the fingerprint would not move (a
+    rolled-back test reusing primary keys within one clock tick).
+    """
+    if raw:
+        return
+    from .tagging import clear_rule_match_cache
+    clear_rule_match_cache()
 
 
 @receiver(post_save, sender=ClassificationRule)

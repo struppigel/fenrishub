@@ -49,7 +49,7 @@ from . import frst_extractors
 from .analyzer import ANALYSIS_PAYLOAD_FORMAT, _re2, evaluate_regex_pattern
 from django.conf import settings
 from django.db import connections, transaction
-from django.db.models import Case, F, IntegerField, JSONField, Q, Value, When
+from django.db.models import Case, Count, F, IntegerField, JSONField, Max, Q, Value, When
 from django.db.models.fields.json import KT
 from django.db.models.functions import Cast
 
@@ -494,39 +494,159 @@ def auto_tag_rules(rules):
         through.objects.bulk_create(links, ignore_conflicts=True)
 
 
+# Which rules meet a tag's conditions, per process: {conditions key: frozenset(rule ids)}.
+# Valid for one state of the rules table (see _rules_fingerprint); the whole
+# cache is dropped when it changes. Which rules *carry* a tag is never cached.
+_rule_match_lock = threading.Lock()
+_rule_match_cache = {'fingerprint': None, 'sets': {}}
+
+
+def clear_rule_match_cache():
+    """Forget which rules each tag's conditions match (in this process)."""
+    with _rule_match_lock:
+        _rule_match_cache['fingerprint'] = None
+        _rule_match_cache['sets'] = {}
+
+
+def _rules_fingerprint():
+    """Changes whenever a rule is added, edited or deleted - in any code path.
+
+    Not SiteConfig.rules_version: that is bumped by the views that call
+    invalidate_rule_buckets_cache, which not every path writing rules does.
+    `updated_at` is auto_now; the one bulk update of rules (admin owner
+    reassignment) changes no field a tag matches on.
+    """
+    agg = ClassificationRule.objects.aggregate(count=Count('pk'), max_pk=Max('pk'), max_updated=Max('updated_at'))
+    return agg['count'], agg['max_pk'], agg['max_updated']
+
+
+def _conditions_key(conditions):
+    """What decides which rules a tag matches; its `lines` flag plays no part."""
+    return (
+        conditions.pattern, conditions.exclude_pattern, conditions.scope,
+        tuple(conditions.statuses), tuple(conditions.entry_types),
+    )
+
+
+def _scan_matching_rule_ids(conditions_by_key):
+    """``{conditions key: set(rule ids)}`` for every rule meeting each conditions, in one pass.
+
+    The regexes run as one re2 Set per text field, so a rule is searched once
+    per field whatever the number of tags; a Set hit only makes the tag a
+    candidate and TagConditions.match decides, so the result is exactly what
+    matching each tag on its own gives. Patterns the Set refuses are tried on
+    every rule, as before.
+    """
+    items = list(conditions_by_key.items())
+    result = {key: set() for key, _conditions in items}
+    if not items:
+        return result
+
+    rules = ClassificationRule.objects.all()
+    # Narrow the rows in SQL only where that is exact for every tag scanned.
+    if all(conditions.statuses for _key, conditions in items):
+        rules = rules.filter(status__in={status for _key, c in items for status in c.statuses})
+    if all(conditions.entry_types for _key, conditions in items):
+        rules = rules.filter(entry_type__in={value for _key, c in items for value in c.entry_types})
+    scopes = {conditions.scope for _key, conditions in items}
+    need_description = scopes != {RuleTag.SCOPE_SOURCE}
+    need_source = scopes != {RuleTag.SCOPE_DESCRIPTION}
+
+    plain = [item for item in items if not item[1].pattern]
+    patterned = [item for item in items if item[1].pattern]
+    regex_set, positions = _line_regex_set([conditions.pattern for _key, conditions in patterned])
+    set_items = [patterned[index] for index in positions]
+    in_set = set(positions)
+    loose = [item for index, item in enumerate(patterned) if index not in in_set]
+    always = plain + loose
+
+    fields = ['pk', 'status', 'entry_type']
+    if need_description:
+        fields.append('description')
+    if need_source:
+        fields.append('source_text')
+    for row in rules.values(*fields).iterator(chunk_size=2000):
+        description = row.get('description') or ''
+        source_text = row.get('source_text') or ''
+        candidates = always
+        if regex_set is not None:
+            hits = set()
+            for text in (description, source_text):
+                if not text:
+                    continue
+                try:
+                    matched = regex_set.Match(text)
+                except Exception:
+                    matched = None
+                # google-re2's Set.Match returns None (not []) when nothing matched.
+                hits.update(matched or ())
+            if hits:
+                candidates = always + [set_items[position] for position in hits]
+        for key, conditions in candidates:
+            if conditions.match(
+                description=description, source_text=source_text,
+                status=row['status'], entry_type=row['entry_type'],
+            )[0]:
+                result[key].add(row['pk'])
+    return result
+
+
+def matching_rule_ids_by_tag(conditions_by_pk):
+    """``{tag pk: frozenset(rule ids)}``: the rules meeting each tag's (non-empty) conditions.
+
+    Served from a per-process cache while the rules table is unchanged, so
+    paging through the tag list does not rescan every rule; only conditions
+    not seen yet are scanned, all in one pass.
+    """
+    fingerprint = _rules_fingerprint()
+    keys = {pk: _conditions_key(conditions) for pk, conditions in conditions_by_pk.items()}
+    with _rule_match_lock:
+        if _rule_match_cache['fingerprint'] != fingerprint:
+            _rule_match_cache['fingerprint'] = fingerprint
+            _rule_match_cache['sets'] = {}
+        known = dict(_rule_match_cache['sets'])
+    missing = {}
+    for pk, key in keys.items():
+        if key not in known:
+            missing[key] = conditions_by_pk[pk]
+    if missing:
+        scanned = {key: frozenset(ids) for key, ids in _scan_matching_rule_ids(missing).items()}
+        known.update(scanned)
+        with _rule_match_lock:
+            # Rules changed during the scan: the next call starts over anyway.
+            if _rule_match_cache['fingerprint'] == fingerprint:
+                _rule_match_cache['sets'].update(scanned)
+    return {pk: known[key] for pk, key in keys.items()}
+
+
 def tag_rule_counts(tags):
     """{tag pk: (pending, unmatched)} for the tag list.
 
     pending: rules meeting the conditions that lack the tag - it catches rules
     from paths that show no suggestions, so the backlog stays visible.
     unmatched: rules carrying the tag that no longer meet them.
+
+    Which rules meet the conditions comes from matching_rule_ids_by_tag
+    (cached while the rules are unchanged); which rules carry the tag is read
+    live, so tagging or untagging a rule shows at once.
     """
     conditions_by_pk = {tag.pk: TagConditions.of(tag) for tag in tags}
     active = {pk: conditions for pk, conditions in conditions_by_pk.items() if not conditions.is_empty}
-    pending = {pk: 0 for pk in conditions_by_pk}
-    unmatched = {pk: 0 for pk in conditions_by_pk}
     if not active:
         return {pk: (0, 0) for pk in conditions_by_pk}
 
-    tagged = set(
-        ClassificationRule.tags.through.objects.filter(
-            ruletag_id__in=active.keys(),
-        ).values_list('classificationrule_id', 'ruletag_id')
-    )
-    matched = set()
-    fields = ('pk', 'description', 'source_text', 'status', 'entry_type')
-    for row in ClassificationRule.objects.values(*fields).iterator():
-        for tag_pk, conditions in active.items():
-            if conditions.match(
-                description=row['description'], source_text=row['source_text'],
-                status=row['status'], entry_type=row['entry_type'],
-            )[0]:
-                matched.add((row['pk'], tag_pk))
-                if (row['pk'], tag_pk) not in tagged:
-                    pending[tag_pk] += 1
-    for pair in tagged - matched:
-        unmatched[pair[1]] += 1
-    return {pk: (pending[pk], unmatched[pk]) for pk in conditions_by_pk}
+    tagged_by_pk = {pk: set() for pk in active}
+    for rule_id, tag_id in ClassificationRule.tags.through.objects.filter(
+        ruletag_id__in=active.keys(),
+    ).values_list('classificationrule_id', 'ruletag_id'):
+        tagged_by_pk[tag_id].add(rule_id)
+    matched_by_pk = matching_rule_ids_by_tag(active)
+
+    counts = {pk: (0, 0) for pk in conditions_by_pk}
+    for pk in active:
+        matched, tagged = matched_by_pk[pk], tagged_by_pk[pk]
+        counts[pk] = (len(matched - tagged), len(tagged - matched))
+    return counts
 
 
 def suggest_tags(*, description='', source_text='', status='', entry_type='', exclude_ids=()):
