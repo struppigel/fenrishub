@@ -369,6 +369,7 @@ def infection_cases_view(request):
         case.last_activity = max(
             [
                 case.created_at,
+                *([case.reopened_at] if case.reopened_at else []),
                 *[item.created_at for item in visible_logs],
                 *[item.created_at for item in visible_fixlists],
                 *[item.created_at for item in visible_notes],
@@ -464,8 +465,7 @@ def view_infection_case(request, case_id):
             infection_case.reference_url = (request.POST.get('reference_url') or '').strip()
             requested_status = (request.POST.get('status') or '').strip()
             infection_case.auto_assign_new_items = (request.POST.get('auto_assign_new_items') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
-            if requested_status in {InfectionCase.STATUS_OPEN, InfectionCase.STATUS_CLOSED}:
-                infection_case.status = requested_status
+            infection_case.set_status(requested_status)
             try:
                 infection_case.full_clean()
             except ValidationError as exc:
@@ -844,6 +844,22 @@ def infection_case_add_items_view(request, case_id):
 
     messages.success(request, 'Selected items were added to this infection case.')
     return redirect('view_infection_case', case_id=infection_case.case_id)
+
+
+@login_required
+@require_http_methods(['POST'])
+def infection_case_set_status_view(request, case_id):
+    infection_case = get_object_or_404(_case_queryset_for_user(request.user), case_id=case_id)
+    requested_status = (request.POST.get('status') or '').strip()
+
+    if not infection_case.set_status(requested_status):
+        messages.error(request, 'Invalid case status.')
+        return redirect('infection_cases')
+
+    infection_case.save(update_fields=['status', 'reopened_at', 'updated_at'])
+    verb = 'reopened' if requested_status == InfectionCase.STATUS_OPEN else 'closed'
+    messages.success(request, f'Case {infection_case.case_id} {verb}.')
+    return redirect('infection_cases')
 
 
 @login_required

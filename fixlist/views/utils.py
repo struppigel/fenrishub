@@ -50,7 +50,8 @@ def _autoclose_stale_cases():
     """Close open infection cases with no activity in over 30 days. Excludes training cases.
 
     Activity mirrors the cases-list view: the latest created_at across the case itself and its
-    non-deleted logs, fixlists, and notes. Returns the number of cases closed.
+    non-deleted logs, fixlists, and notes, plus the time the case was last reopened.
+    Returns the number of cases closed.
     """
     cutoff = timezone.now() - timedelta(days=30)
     candidates = (
@@ -79,7 +80,7 @@ def _autoclose_stale_cases():
     for case in candidates:
         last_activity = max(
             ts
-            for ts in (case.created_at, case.last_log, case.last_fixlist, case.last_note)
+            for ts in (case.created_at, case.reopened_at, case.last_log, case.last_fixlist, case.last_note)
             if ts is not None
         )
         if last_activity < cutoff:

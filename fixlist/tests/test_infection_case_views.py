@@ -973,6 +973,95 @@ class InfectionCaseViewTests(TestCase):
         self.assertEqual(case.status, InfectionCase.STATUS_CLOSED)
         self.assertFalse(case.auto_assign_new_items)
 
+    def test_update_case_reopening_sets_reopened_at(self):
+        case = InfectionCase.objects.create(
+            owner=self.user, username='target_user', status=InfectionCase.STATUS_CLOSED,
+        )
+
+        self.client.post(
+            reverse('view_infection_case', args=[case.case_id]),
+            {'action': 'update_case', 'status': InfectionCase.STATUS_OPEN},
+        )
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+        self.assertIsNotNone(case.reopened_at)
+
+    def test_set_status_closes_open_case_without_touching_reopened_at(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user')
+
+        response = self.client.post(
+            reverse('infection_case_set_status', args=[case.case_id]),
+            {'status': InfectionCase.STATUS_CLOSED},
+        )
+
+        self.assertRedirects(response, reverse('infection_cases'))
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_CLOSED)
+        self.assertIsNone(case.reopened_at)
+
+    def test_set_status_reopens_closed_case_and_sets_reopened_at(self):
+        case = InfectionCase.objects.create(
+            owner=self.user, username='target_user', status=InfectionCase.STATUS_CLOSED,
+        )
+
+        response = self.client.post(
+            reverse('infection_case_set_status', args=[case.case_id]),
+            {'status': InfectionCase.STATUS_OPEN},
+        )
+
+        self.assertRedirects(response, reverse('infection_cases'))
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+        self.assertIsNotNone(case.reopened_at)
+
+    def test_set_status_ignores_invalid_status(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user')
+
+        response = self.client.post(
+            reverse('infection_case_set_status', args=[case.case_id]),
+            {'status': 'bogus'},
+        )
+
+        self.assertRedirects(response, reverse('infection_cases'))
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+
+    def test_set_status_rejects_get(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user')
+
+        response = self.client.get(reverse('infection_case_set_status', args=[case.case_id]))
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_set_status_on_other_users_case_returns_404(self):
+        case = InfectionCase.objects.create(owner=self.other_user, username='target_user')
+
+        response = self.client.post(
+            reverse('infection_case_set_status', args=[case.case_id]),
+            {'status': InfectionCase.STATUS_CLOSED},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+
+    def test_cases_list_shows_close_for_open_and_open_for_closed(self):
+        open_case = InfectionCase.objects.create(owner=self.user, username='open_user')
+        closed_case = InfectionCase.objects.create(
+            owner=self.user, username='closed_user', status=InfectionCase.STATUS_CLOSED,
+        )
+
+        response = self.client.get(reverse('infection_cases'))
+
+        content = response.content.decode()
+        open_form = content.split(reverse('infection_case_set_status', args=[open_case.case_id]))[1].split('</form>')[0]
+        closed_form = content.split(reverse('infection_case_set_status', args=[closed_case.case_id]))[1].split('</form>')[0]
+        self.assertIn('value="closed"', open_form)
+        self.assertIn('>close</button>', open_form)
+        self.assertIn('value="open"', closed_form)
+        self.assertIn('>open</button>', closed_form)
+
     def test_confirm_username_change_updates_mismatched_fixlist_and_links_it(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         mismatched_fixlist = Fixlist.objects.create(owner=self.user, username='other_user', content='fix')
@@ -1496,6 +1585,40 @@ class AutoCloseStaleCasesTests(TestCase):
         self._backdate_case(second, self.stale_time)
 
         self.assertEqual(_autoclose_stale_cases(), 2)
+
+    def test_stale_case_reopened_recently_stays_open(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        InfectionCase.objects.filter(pk=case.pk).update(created_at=self.stale_time, reopened_at=self.recent_time)
+
+        _autoclose_stale_cases()
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
+
+    def test_stale_case_reopened_long_ago_is_closed(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        InfectionCase.objects.filter(pk=case.pk).update(created_at=self.stale_time, reopened_at=self.stale_time)
+
+        _autoclose_stale_cases()
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_CLOSED)
+
+    def test_reopening_stale_case_from_list_survives_reload(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
+        InfectionCase.objects.filter(pk=case.pk).update(
+            created_at=self.stale_time, status=InfectionCase.STATUS_CLOSED,
+        )
+
+        response = self.client.post(
+            reverse('infection_case_set_status', args=[case.case_id]),
+            {'status': InfectionCase.STATUS_OPEN},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
 
     def test_loading_cases_list_triggers_autoclose(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)

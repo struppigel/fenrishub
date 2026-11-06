@@ -1284,6 +1284,9 @@ class InfectionCase(models.Model):
     is_training = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    # Reopening counts as activity for auto-close, otherwise a reopened stale case
+    # would be closed again on the next load of the cases list.
+    reopened_at = models.DateTimeField(null=True, blank=True, default=None)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
 
     class Meta:
@@ -1301,6 +1304,15 @@ class InfectionCase(models.Model):
         self.username = (self.username or '').strip()
         if not self.username:
             raise ValidationError({'username': 'Username is required.'})
+
+    def set_status(self, new_status):
+        """Apply a requested status. Returns False (and changes nothing) if it is invalid."""
+        if new_status not in {self.STATUS_OPEN, self.STATUS_CLOSED}:
+            return False
+        if new_status == self.STATUS_OPEN and self.status == self.STATUS_CLOSED:
+            self.reopened_at = timezone.now()
+        self.status = new_status
+        return True
 
     def save(self, *args, **kwargs):
         self.clean()

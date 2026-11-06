@@ -14,6 +14,10 @@
     color: var(--la-status-b);
 }
 
+.fixlist-actions .case-status-form {
+    display: contents;
+}
+
 .fixlist-actions .delete-btn {
     background-color: var(--la-error-bg);
     color: var(--la-error-text);
@@ -44,6 +48,16 @@
             </div>
             <div class="fixlist-actions">
                 <a href="{% url 'view_infection_case' case.case_id %}"><button type="button">view</button></a>
+                <form method="post" action="{% url 'infection_case_set_status' case.case_id %}" class="case-status-form">
+                    {% csrf_token %}
+                    {% if case.status == 'open' %}
+                    <input type="hidden" name="status" value="closed">
+                    <button type="submit">close</button>
+                    {% else %}
+                    <input type="hidden" name="status" value="open">
+                    <button type="submit">open</button>
+                    {% endif %}
+                </form>
                 <a href="{% url 'infection_case_delete' case.case_id %}"><button type="button" class="delete-btn">delete</button></a>
             </div>
         </div>
