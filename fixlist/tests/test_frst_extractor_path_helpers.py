@@ -162,6 +162,17 @@ class FindValuePositionDenormalizedTests(TestCase):
             r"C:\Users\jsnip\AppData\Local\BraveSoftware\Brave-Browser\User Data\Default\Extensions\abc",
         )
 
+    def test_chromium_profile_normalization_matches_vivaldi(self):
+        source = r"VIV Extension: (X) - C:\Users\Sammy\AppData\Local\Vivaldi\User Data\Default\Extensions\abc"
+        normalized = r"c:\users\username\appdata\local\vivaldi\user data\profile\extensions\abc"
+        result = find_value_position(normalized, source, field_name="filepath")
+        self.assertIsNotNone(result)
+        start, end = result
+        self.assertEqual(
+            source[start:end],
+            r"C:\Users\Sammy\AppData\Local\Vivaldi\User Data\Default\Extensions\abc",
+        )
+
     def test_non_path_field_does_not_use_fuzzy_fallback(self):
         # `name` shouldn't be treated as a path; if literal misses, return None.
         source = "Some line with username Lucian on it"

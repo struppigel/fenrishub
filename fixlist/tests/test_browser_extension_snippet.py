@@ -21,8 +21,28 @@ class BrowserExtensionSnippetTests(TestCase):
             r"\Extensions\ghbmnnjooekpmoecnnnilnnbdlolhkhi",
         )
 
-    def test_edge_brave_and_firefox_prefixes(self):
-        for prefix in ("Edge", "BRA", "FF"):
+    def test_vivaldi_extension(self):
+        line = (
+            r"VIV Extension: (McAfee® WebAdvisor) - "
+            r"C:\Users\Sammy\AppData\Local\Vivaldi\User Data\Default"
+            r"\Extensions\fheoggkfdfchfphceeifdbepaooicaho [2022-04-17]"
+        )
+        self.assertEqual(
+            browser_extension_snippet(line),
+            "Comment: Browser extension - McAfee® WebAdvisor\n"
+            r"C:\Users\Sammy\AppData\Local\Vivaldi\User Data\Default"
+            r"\Extensions\fheoggkfdfchfphceeifdbepaooicaho",
+        )
+
+    def test_vivaldi_profile_line_is_not_an_extension(self):
+        self.assertIsNone(
+            browser_extension_snippet(
+                r"VIV Profile: C:\Users\Sammy\AppData\Local\Vivaldi\User Data\Default [2022-04-17]"
+            )
+        )
+
+    def test_edge_brave_firefox_and_vivaldi_prefixes(self):
+        for prefix in ("Edge", "BRA", "FF", "VIV"):
             with self.subTest(prefix=prefix):
                 line = rf"{prefix} Extension: (Some Ext) - C:\ext\abcd [2026-05-30]"
                 self.assertEqual(

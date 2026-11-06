@@ -572,7 +572,7 @@ def extract_process(line):
 # keeps the path literal. Only the `<BROWSER> Extension: (Name) - <path>` form
 # is covered - the registry-forced `CHR HKLM\...\Chrome\Extension: [id]` lines
 # carry no path and FRST removes them as written.
-_BROWSER_EXTENSION_RE = r"(Edge|CHR|FF|BRA) (Extension): \((.*)\) - ([^\[]*)(\[(.*)\])?"
+_BROWSER_EXTENSION_RE = r"(Edge|CHR|FF|BRA|VIV) (Extension): \((.*)\) - ([^\[]*)(\[(.*)\])?"
 
 
 def extract_browser_extension(line):
