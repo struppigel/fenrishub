@@ -473,11 +473,26 @@ function refreshSnippetSuggestions() {
     }
 }
 
+// Whether a tag filter still has lines in a new analysis. The background
+// rescan after loading an upload (and "save rules + rescan") re-applies the
+// analysis, and a filter clicked meanwhile has to survive it. "tagged" and
+// "with speech" stay while the tags row shows at all; a single tag stays while
+// the row still lists it (it has matched lines).
+function tagFilterStillApplies(filterId, payload) {
+    const tagsWithLines = ((payload && payload.rule_tags) || []).filter((tag) => tag.line_count);
+    if (filterId === TAG_FILTER_ANY_TAG || filterId === TAG_FILTER_WITH_SPEECH) {
+        return tagsWithLines.length > 0;
+    }
+    return tagsWithLines.some((tag) => tag.id === filterId);
+}
+
 function updateSpeechSuggestionsFromAnalysis(payload) {
     lastAnalysisPayload = payload || null;
     ruleTagsById = new Map(((payload && payload.rule_tags) || []).map((tag) => [tag.id, tag]));
     // A new analysis may not have the filtered tag at all.
-    activeTagFilterId = null;
+    if (activeTagFilterId !== null && !tagFilterStillApplies(activeTagFilterId, payload)) {
+        activeTagFilterId = null;
+    }
     applyTagFilterClass();
     renderRuleTagsLine(payload);
     refreshSpeechSuggestions();

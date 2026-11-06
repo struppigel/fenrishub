@@ -134,6 +134,44 @@ const speeches = [
     delete config.sharedTagSpeeches;
 })();
 
+(function testFilterSurvivesReanalysis() {
+    // Loading an upload paints the cached analysis, then a background rescan
+    // re-applies it; a filter clicked in between must stay on.
+    const row = document.createElement('div');
+    row.id = 'ruleTagsLine';
+    document.body.appendChild(row);
+    const withRenloader = (lineCount) => ({
+        rule_tags: [
+            { id: 7, name: 'renloader', line_count: lineCount },
+            { id: 8, name: 'adware', line_count: 1 },
+        ],
+    });
+
+    updateSpeechSuggestionsFromAnalysis(withRenloader(2));
+    setTagFilter(7);
+    updateSpeechSuggestionsFromAnalysis(withRenloader(2));
+    assert('a re-analysis that still has the tag keeps its filter', activeTagFilterId === 7, String(activeTagFilterId));
+    const chip = row.querySelector('[data-tag-filter="7"]');
+    assert('the kept filter is still shown as pressed',
+        chip && chip.getAttribute('aria-pressed') === 'true');
+
+    updateSpeechSuggestionsFromAnalysis(withRenloader(0));
+    assert('a re-analysis where the tag has no lines clears its filter', activeTagFilterId === null);
+
+    setTagFilter(7);
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [{ id: 8, name: 'adware', line_count: 1 }] });
+    assert('a re-analysis without the tag clears its filter', activeTagFilterId === null);
+
+    setTagFilter(TAG_FILTER_ANY_TAG);
+    updateSpeechSuggestionsFromAnalysis(withRenloader(1));
+    assert('"tagged" survives a re-analysis with tagged lines', activeTagFilterId === TAG_FILTER_ANY_TAG);
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [{ id: 8, name: 'adware', line_count: 0 }] });
+    assert('"tagged" is cleared when no line is tagged any more', activeTagFilterId === null);
+
+    updateSpeechSuggestionsFromAnalysis({ rule_tags: [] });
+    row.remove();
+})();
+
 (function testTagsRowFilterButtons() {
     const row = document.createElement('div');
     row.id = 'ruleTagsLine';
