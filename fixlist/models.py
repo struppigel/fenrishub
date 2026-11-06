@@ -248,7 +248,7 @@ class ApiToken(models.Model):
         on_delete=models.SET_NULL,
         related_name='revoked_api_tokens',
     )
-    # Lets the token create and change rule tags and speeches. Only superusers
+    # Lets the token create and change rule tags, speeches and rules. Only superusers
     # can issue one, and every write re-checks that the user still is one.
     can_write = models.BooleanField(default=False)
 

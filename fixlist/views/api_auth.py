@@ -153,7 +153,7 @@ def _day_limit_violation(user, upload_id, limits):
 
 
 def _target_for(request, kwargs) -> str:
-    for key in ('upload_id', 'case_id', 'forum_username', 'snippet_id', 'speech_id'):
+    for key in ('upload_id', 'case_id', 'forum_username', 'snippet_id', 'speech_id', 'rule_id'):
         if kwargs.get(key):
             return str(kwargs[key])[:TARGET_MAX_CHARS]
     for key in ('q', 'username'):

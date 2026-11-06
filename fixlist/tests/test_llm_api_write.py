@@ -1,4 +1,4 @@
-"""Rule tags and speeches through the token API.
+"""Rule tags, speeches and classification rules through the token API.
 
 Reading tags is open to every token. Writing needs a superuser's write token,
 re-checked on every request. Everything is additive: existing endpoints keep
@@ -82,13 +82,19 @@ class WriteAuthTests(ApiWriteBase):
         self.assertEqual(write_names, {
             'api_v1_tag_create', 'api_v1_tag_update', 'api_v1_tag_apply',
             'api_v1_speech_create', 'api_v1_speech_update',
+            'api_v1_rule_create', 'api_v1_rule_update',
         })
         tag = RuleTag.objects.create(name='renloader')
         speech = Speech.objects.create(owner=self.admin, name='mine', content='x')
         snippet = FixlistSnippet.objects.create(owner=self.admin, name='fix', content='x')
-        args = {'api_v1_tag_update': [tag.pk], 'api_v1_tag_apply': [tag.pk], 'api_v1_speech_update': [speech.pk]}
+        rule = make_rule('C:\\mine.exe', owner=self.admin)
+        args = {
+            'api_v1_tag_update': [tag.pk], 'api_v1_tag_apply': [tag.pk], 'api_v1_speech_update': [speech.pk],
+            'api_v1_rule_update': [rule.pk],
+        }
         body = {'name': 'changed', 'content': 'changed', 'mode': 'add_rules', 'rule_ids': [], 'confirm': True,
-                'snippet_ids': [snippet.pk], 'speech_ids': [speech.pk]}
+                'snippet_ids': [snippet.pk], 'speech_ids': [speech.pk],
+                'status': 'B', 'match_type': 'exact', 'source_text': 'changed', 'description': 'changed'}
 
         for name in sorted(write_names):
             for raw in (self.helper_raw, self.admin_read_raw):
@@ -101,6 +107,9 @@ class WriteAuthTests(ApiWriteBase):
         self.assertFalse(tag.snippets.exists() or tag.speeches.exists())
         self.assertFalse(RuleTag.objects.filter(name='changed').exists())
         self.assertFalse(Speech.objects.filter(name='changed').exists())
+        rule.refresh_from_db()
+        self.assertEqual((rule.source_text, rule.description), ('C:\\mine.exe', ''))
+        self.assertFalse(ClassificationRule.objects.filter(source_text='changed').exists())
 
     def test_every_other_endpoint_is_get_only(self):
         for pattern in self._api_v1_patterns():
@@ -305,6 +314,184 @@ class RuleReadTests(ApiWriteBase):
         make_uploaded_log('amber-falcon', content='BAD LINE')
         body = self.get('api_v1_upload_analysis', 'amber-falcon').json()
         self.assertEqual(body['untrusted_lines'][0]['rule_ids'], [rule.pk])
+
+
+class RuleWriteTests(ApiWriteBase):
+    def create(self, **body):
+        return self.post('api_v1_rule_create', body=body)
+
+    def test_create_makes_a_rule_owned_by_the_caller(self):
+        response = self.create(status='B', match_type='exact', source_text='C:\\bad.exe', description='dropper')
+
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertEqual(body['skipped'], [])
+        self.assertEqual(len(body['created']), 1)
+        row = body['created'][0]
+        rule = ClassificationRule.objects.get(pk=row['rule_id'])
+        self.assertEqual(
+            (rule.owner, rule.status, rule.match_type, rule.source_text, rule.description, rule.is_enabled),
+            (self.admin, 'B', 'exact', 'C:\\bad.exe', 'dropper', True),
+        )
+        self.assertEqual((row['owner'], row['source_text']), ('root', 'C:\\bad.exe'))
+        self.assertIn('parsed', row)
+
+    def test_create_stores_parsed_metadata_like_the_add_rule_page(self):
+        from ..analyzer import parse_rule_line
+        line = r'S3 BadSvc; C:\Windows\System32\drivers\badsvc.sys [12345 2024-01-01] (Evil Corp) [File not signed]'
+        parsed = parse_rule_line(line, status='B')
+        self.assertTrue(parsed and parsed.get('filepath'), 'test line must parse')
+
+        response = self.create(status='B', match_type='parsed', source_text=line)
+
+        self.assertEqual(response.status_code, 201, response.content)
+        rule = ClassificationRule.objects.get(pk=response.json()['created'][0]['rule_id'])
+        self.assertEqual((rule.entry_type, rule.filepath), (parsed['entry_type'], parsed['filepath']))
+
+    def test_create_applies_auto_tags_unless_tag_ids_are_given(self):
+        auto = RuleTag.objects.create(name='pup', match_statuses=['P'], auto_apply=True)
+        other = RuleTag.objects.create(name='other')
+
+        auto_rule = self.create(status='P', match_type='substring', source_text='toolbar').json()['created'][0]
+        picked = self.create(
+            status='P', match_type='substring', source_text='coupon', tag_ids=[other.pk],
+        ).json()['created'][0]
+
+        self.assertEqual([t['tag_id'] for t in auto_rule['tags']], [auto.pk])
+        self.assertEqual([t['tag_id'] for t in picked['tags']], [other.pk])
+
+    def test_one_rule_per_line_and_duplicates_skipped(self):
+        make_rule('second', owner=self.admin)
+        response = self.create(status='B', match_type='exact', source_text='first\nsecond\nthird')
+
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual([row['source_text'] for row in body['created']], ['first', 'third'])
+        self.assertEqual(body['skipped'], ['second'])
+
+    def test_all_duplicates_is_a_conflict(self):
+        make_rule('dup', owner=self.admin)
+        response = self.create(status='B', match_type='exact', source_text='dup')
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['skipped'], ['dup'])
+        self.assertEqual(ClassificationRule.objects.filter(source_text='dup').count(), 1)
+
+    def test_another_helpers_identical_rule_is_no_duplicate(self):
+        make_rule('shared line', owner=self.helper)
+        self.assertEqual(self.create(status='B', match_type='exact', source_text='shared line').status_code, 201)
+
+    def test_create_validation_matches_the_add_rule_page(self):
+        cases = [
+            {'match_type': 'exact', 'source_text': 'x'},
+            {'status': 'B', 'source_text': 'x'},
+            {'status': 'B', 'match_type': 'exact'},
+            {'status': '?', 'match_type': 'exact', 'source_text': 'x'},
+            {'status': 'X', 'match_type': 'exact', 'source_text': 'x'},
+            {'status': 'B', 'match_type': 'fuzzy', 'source_text': 'x'},
+            {'status': 'B', 'match_type': 'exact', 'source_text': 'x', 'whole_log': True},
+            {'status': 'B', 'match_type': 'exact', 'source_text': 5},
+            {'status': 'B', 'match_type': 'exact', 'source_text': 'x', 'priority': 'high'},
+            {'status': 'B', 'match_type': 'exact', 'source_text': 'x', 'whole_log': 'yes'},
+            {'status': 'B', 'match_type': 'exact', 'source_text': 'x', 'tag_ids': ['a']},
+        ]
+        for body in cases:
+            self.assertEqual(self.create(**body).status_code, 400, body)
+        self.assertFalse(ClassificationRule.objects.exists())
+
+    def test_invalid_regex_is_rejected(self):
+        response = self.create(status='B', match_type='regex', source_text='bad(')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Invalid regex', response.json()['error'])
+        self.assertFalse(ClassificationRule.objects.exists())
+
+    def test_valid_regex_is_created(self):
+        response = self.create(status='B', match_type='regex', source_text='^Task: evil')
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()['warnings'], [])
+
+    def test_priority_is_stored(self):
+        row = self.create(status='B', match_type='exact', source_text='x', priority=17).json()['created'][0]
+        self.assertEqual(row['priority'], 17)
+
+    def test_created_rule_is_used_by_the_analyzer_right_away(self):
+        make_uploaded_log('amber-falcon', content='BAD LINE')
+        rule_id = self.create(status='B', match_type='exact', source_text='BAD LINE').json()['created'][0]['rule_id']
+
+        body = self.get('api_v1_upload_analysis', 'amber-falcon', raw=self.write_raw).json()
+        self.assertEqual(body['untrusted_lines'][0]['rule_ids'], [rule_id])
+
+    def test_update_changes_only_the_fields_sent(self):
+        tag = RuleTag.objects.create(name='keep')
+        rule = make_rule('C:\\bad.exe', owner=self.admin, description='old', priority=12)
+        rule.tags.add(tag)
+
+        response = self.post('api_v1_rule_update', rule.pk, body={'description': 'new', 'is_enabled': False})
+
+        self.assertEqual(response.status_code, 200, response.content)
+        rule.refresh_from_db()
+        self.assertEqual(
+            (rule.description, rule.is_enabled, rule.source_text, rule.status, rule.priority),
+            ('new', False, 'C:\\bad.exe', 'B', 12),
+        )
+        self.assertEqual(list(rule.tags.values_list('pk', flat=True)), [tag.pk])
+        self.assertEqual(response.json()['description'], 'new')
+
+    def test_update_replaces_tags_when_given(self):
+        old = RuleTag.objects.create(name='old')
+        new = RuleTag.objects.create(name='new')
+        rule = make_rule('x', owner=self.admin)
+        rule.tags.add(old)
+
+        self.post('api_v1_rule_update', rule.pk, body={'tag_ids': [new.pk]})
+
+        self.assertEqual(list(rule.tags.values_list('pk', flat=True)), [new.pk])
+
+    def test_priority_null_resets_to_the_match_type_default(self):
+        rule = make_rule('x', owner=self.admin, priority=17)
+        self.post('api_v1_rule_update', rule.pk, body={'priority': None})
+        rule.refresh_from_db()
+        self.assertEqual(rule.priority, ClassificationRule.default_priority_for('exact'))
+
+    def test_update_is_seen_by_the_analyzer_right_away(self):
+        make_uploaded_log('amber-falcon', content='BAD LINE')
+        rule = make_rule('OTHER LINE', owner=self.admin)
+
+        self.post('api_v1_rule_update', rule.pk, body={'source_text': 'BAD LINE'})
+
+        body = self.get('api_v1_upload_analysis', 'amber-falcon', raw=self.write_raw).json()
+        self.assertEqual(body['untrusted_lines'][0]['rule_ids'], [rule.pk])
+
+    def test_cannot_update_another_helpers_rule(self):
+        rule = make_rule('theirs', owner=self.helper, description='keep')
+
+        response = self.post('api_v1_rule_update', rule.pk, body={'description': 'hijacked'})
+
+        self.assertEqual(response.status_code, 404)
+        rule.refresh_from_db()
+        self.assertEqual(rule.description, 'keep')
+
+    def test_update_into_a_duplicate_is_refused(self):
+        make_rule('one', owner=self.admin)
+        two = make_rule('two', owner=self.admin)
+
+        response = self.post('api_v1_rule_update', two.pk, body={'source_text': 'one'})
+
+        self.assertEqual(response.status_code, 400)
+        two.refresh_from_db()
+        self.assertEqual(two.source_text, 'two')
+
+    def test_update_validation(self):
+        rule = make_rule('x', owner=self.admin)
+        for body in ({'status': '?'}, {'match_type': 'fuzzy'}, {'source_text': ''}, {'source_text': 'a\nb'},
+                     {'is_enabled': 'no'}, {'match_type': 'regex', 'source_text': 'bad('}):
+            self.assertEqual(self.post('api_v1_rule_update', rule.pk, body=body).status_code, 400, body)
+        rule.refresh_from_db()
+        self.assertEqual((rule.source_text, rule.status, rule.match_type), ('x', 'B', 'exact'))
+
+    def test_unknown_rule_update_is_404(self):
+        self.assertEqual(self.post('api_v1_rule_update', 999999, body={'description': 'x'}).status_code, 404)
 
 
 class BackwardCompatibilityTests(ApiWriteBase):

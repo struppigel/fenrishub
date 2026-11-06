@@ -1,0 +1,8 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+<li>
+    <a href="{% url 'admin:fixlist_uploadedlog_reanalyze' %}">Reanalyze logs by type</a>
+</li>
+{{ block.super }}
+{% endblock %}

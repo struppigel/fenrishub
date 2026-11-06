@@ -1,7 +1,9 @@
 """
-Read-only token API (/api/v1/) for LLM clients.
+Token API (/api/v1/) for LLM clients.
 
-Serves what a logged-in helper can already read in the browser: every
+Mostly read-only: the write endpoints (rule tags, speeches and classification
+rules) need a superuser's write token, see api_auth. Serves what a logged-in
+helper can already read in the browser: every
 non-trashed upload, its verdicts under the caller's own rule set, content
 search, infection cases by id, the fixlist snippets and speeches the caller
 owns or that are shared, the caller's fixlist starter template, and every
@@ -20,6 +22,7 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django.urls import reverse
 
+from ..analyzer import evaluate_regex_pattern
 from ..models import ClassificationRule, FixlistSnippet, InfectionCase, InfectionCaseLog, RuleTag, Speech, UploadedLog
 from ..rule_sets import SHARED_RULE_SET_KEY, resolve_user_rule_set_key
 from ..status_types import STATUS_LABELS, VALID_STATUSES
@@ -41,6 +44,7 @@ from .api_auth import api_token_required, charge_api_units, rate_limited_respons
 from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE, effective_analyzer_fixlist_template
 from .infection_cases import _build_case_timeline
 from .log_search import _first_hit, _first_tagged_hit, _logs_in_id_order, search_matching_log_ids
+from .rules import _apply_rule_edit, _patterns_for, _rule_form_from_rule, create_rules
 from .speeches import _speech_validation_error, speeches_for_tags
 from .uploads import filter_uploads_by_text
 
@@ -850,7 +854,12 @@ def api_rule(request, rule_id):
     rule = _visible_rules().filter(pk=rule_id).first()
     if rule is None:
         return _not_found()
-    return JsonResponse({
+    return JsonResponse(_rule_detail(rule))
+
+
+def _rule_detail(rule):
+    """Every field of one rule (tags prefetched), as get_rule returns it."""
+    return {
         **_rule_list_row(rule),
         'color_whole_line': rule.color_whole_line,
         'source_name': rule.source_name,
@@ -866,7 +875,7 @@ def api_rule(request, rule_id):
             'attributes': rule.attributes,
             'is_hidden': rule.is_hidden,
         },
-    })
+    }
 
 
 def _write_payload(request):
@@ -1036,3 +1045,133 @@ def api_speech_update(request, speech_id):
     if fields['tag_ids'] is not None:
         speech.trigger_tags.set(fields['tag_ids'])
     return JsonResponse(_own_speech_payload(request, speech))
+
+
+RULE_STRING_FIELDS = ('status', 'match_type', 'source_text', 'description')
+RULE_BOOL_FIELDS = ('is_enabled', 'whole_log', 'color_whole_line')
+
+
+def _rule_write_fields(payload):
+    """(fields, error) from a rule write body: only the fields present, type-checked.
+
+    `priority` comes back as the rule editor's string ('' for the match type's default).
+    """
+    fields = {}
+    for field in RULE_STRING_FIELDS:
+        if field in payload:
+            if not isinstance(payload[field], str):
+                return None, f'Field "{field}" must be a string.'
+            fields[field] = payload[field].strip()
+    for field in RULE_BOOL_FIELDS:
+        if field in payload:
+            if not isinstance(payload[field], bool):
+                return None, f'Field "{field}" must be a boolean.'
+            fields[field] = payload[field]
+    if 'priority' in payload:
+        priority = payload['priority']
+        if priority is not None and (isinstance(priority, bool) or not isinstance(priority, int)):
+            return None, 'Field "priority" must be an integer or null.'
+        fields['priority'] = '' if priority is None else str(priority)
+    if 'tag_ids' in payload:
+        tag_ids = payload['tag_ids']
+        if not isinstance(tag_ids, list) or any(isinstance(item, bool) or not isinstance(item, int) for item in tag_ids):
+            return None, 'Field "tag_ids" must be a list of integers.'
+        fields['tag_ids'] = parse_tag_ids(tag_ids)
+    return fields, None
+
+
+def _regex_check(match_type, patterns):
+    """(warnings, error) for regex rule patterns: an error when one cannot compile at all.
+
+    re2-incompatible and slow patterns are saved, with a warning, as on the rules page.
+    """
+    if match_type != ClassificationRule.MATCH_REGEX:
+        return [], None
+    warnings = []
+    for pattern in patterns:
+        result = evaluate_regex_pattern(pattern)
+        if result['stdlib_error']:
+            return [], f'Invalid regex {pattern!r}: {result["stdlib_error"]}'
+        if result['re2_error']:
+            warnings.append(
+                f'Regex {pattern!r} is not supported by the fast matcher (re2) and runs slower: '
+                f'{result["re2_error"]}'
+            )
+        if result['is_slow']:
+            warnings.append(f'Regex {pattern!r} is slow on adversarial input ({result["worst_ms"]:.0f} ms).')
+    return warnings, None
+
+
+@api_token_required('api_v1_rule_create', write=True)
+def api_rule_create(request):
+    """Create rules owned by the caller, as the add-rule page does: one per line of source_text.
+
+    Body: {status, match_type, source_text, description?, priority?, whole_log?,
+    color_whole_line?, tag_ids?}. Without tag_ids the auto-apply tags decide.
+    Patterns duplicating one of the caller's rules are skipped; 409 when all are.
+    """
+    payload, error = _write_payload(request)
+    if error:
+        return error
+    fields, message = _rule_write_fields(payload)
+    if message:
+        return _error(message)
+    for field in ('status', 'match_type', 'source_text'):
+        if not fields.get(field):
+            return _error(f'Field "{field}" is required.')
+    patterns = _patterns_for(fields['match_type'], fields['source_text'])
+    warnings, message = _regex_check(fields['match_type'], patterns)
+    if message:
+        return _error(message)
+    created, skipped, message = create_rules(
+        request.user,
+        status=fields['status'],
+        match_type=fields['match_type'],
+        source_text=fields['source_text'],
+        description=fields.get('description', ''),
+        raw_priority=fields.get('priority', ''),
+        whole_log=fields.get('whole_log', False),
+        color_whole_line=fields.get('color_whole_line', False),
+        tag_ids=fields.get('tag_ids'),
+        source_name=f'api:{request.user.username}',
+    )
+    if message:
+        return _error(message)
+    if not created:
+        return JsonResponse({
+            'error': 'No rules created: every pattern duplicates one of your rules.',
+            'skipped': skipped,
+        }, status=409)
+    rules = _visible_rules().filter(pk__in=[rule.pk for rule in created]).order_by('pk')
+    return JsonResponse({
+        'created': [_rule_detail(rule) for rule in rules],
+        'skipped': skipped,
+        'warnings': warnings,
+    }, status=201)
+
+
+@api_token_required('api_v1_rule_update', write=True)
+def api_rule_update(request, rule_id):
+    """Change one of the caller's own rules, as the rule editor does; fields left out keep their values.
+
+    Body: any of {status, match_type, source_text, description, is_enabled,
+    whole_log, color_whole_line, priority, tag_ids}. tag_ids replaces the
+    rule's tags. Other helpers' rules are not found, as in the rule editor.
+    """
+    rule = ClassificationRule.objects.filter(pk=rule_id, owner=request.user).first()
+    if rule is None:
+        return _not_found()
+    payload, error = _write_payload(request)
+    if error:
+        return error
+    fields, message = _rule_write_fields(payload)
+    if message:
+        return _error(message)
+    form = {**_rule_form_from_rule(rule), 'tag_ids': None, **fields}
+    warnings, message = _regex_check(form['match_type'], [form['source_text']])
+    if message:
+        return _error(message)
+    message = _apply_rule_edit(rule, form, request.user)
+    if message:
+        return _error(message)
+    return JsonResponse({**_rule_detail(_visible_rules().get(pk=rule.pk)), 'warnings': warnings})

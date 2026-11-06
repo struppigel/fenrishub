@@ -5,7 +5,9 @@ import re
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.auth.models import User
+from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
+from django.db.models import Count
 from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
@@ -17,6 +19,7 @@ from .analyzer import (
 )
 from .rule_sets import invalidate_for_rule_owner
 from .tagging import auto_tag_rules
+from .upload_utils import start_reanalysis_process
 
 
 def _invalidate_for_owner_ids(owner_ids):
@@ -886,6 +889,51 @@ class UploadedLogAdmin(admin.ModelAdmin):
         }),
         ('Timestamps', {'fields': ('created_at', 'updated_at', 'deleted_at')}),
     )
+    change_list_template = 'admin/fixlist/uploadedlog/change_list.html'
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                'reanalyze/',
+                self.admin_site.admin_view(self.reanalyze_view),
+                name='fixlist_uploadedlog_reanalyze',
+            ),
+        ]
+        return custom_urls + urls
+
+    def reanalyze_view(self, request):
+        """Start a background reanalysis of every log of one type (manage.py reanalyze_logs)."""
+        if not self.has_change_permission(request):
+            raise PermissionDenied
+        log_types = list(
+            UploadedLog.objects.filter(deleted_at__isnull=True)
+            .values('log_type').annotate(count=Count('pk')).order_by('log_type')
+        )
+
+        if request.method == 'POST':
+            log_type = request.POST.get('log_type', '')
+            only_untagged = request.POST.get('only_untagged') == 'on'
+            if log_type not in {row['log_type'] for row in log_types}:
+                self.message_user(request, 'Choose a log type from the list.', level=messages.ERROR)
+                return HttpResponseRedirect(reverse('admin:fixlist_uploadedlog_reanalyze'))
+            pid = start_reanalysis_process(log_type, only_untagged)
+            qualifier = ' without tags' if only_untagged else ''
+            self.message_user(
+                request,
+                f'Started reanalysis of {log_type} logs{qualifier} in the background (pid {pid}). '
+                'Progress is written to the server log.',
+                level=messages.SUCCESS,
+            )
+            return HttpResponseRedirect(reverse('admin:fixlist_uploadedlog_changelist'))
+
+        context = {
+            **self.admin_site.each_context(request),
+            'opts': self.model._meta,
+            'title': 'Reanalyze logs by type',
+            'log_types': log_types,
+        }
+        return TemplateResponse(request, 'admin/fixlist/uploadedlog/reanalyze.html', context)
 
 
 @admin.register(LogTypeDetectionRule)

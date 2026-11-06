@@ -583,6 +583,80 @@ def rules_view(request):
     return render(request, 'rules.html', context)
 
 
+def create_rules(user, *, status, match_type, source_text, description='', raw_priority='',
+                 whole_log=False, color_whole_line=False, tag_ids=None, source_name=''):
+    """Validate and create rules for `user`, one per line of `source_text` (a script rule stays one).
+
+    Returns ``(created, skipped, error)``: the new rules, the patterns skipped
+    as duplicates of the user's existing rules, and an error message (nothing
+    created) or None. `tag_ids` None leaves the tags to auto-apply; a list
+    becomes the new rules' tags. Shared by the add-rule page and the token API.
+    """
+    color_whole_line = _color_whole_line_for(color_whole_line, match_type)
+    patterns = _patterns_for(match_type, source_text)
+    script_error = _script_rule_error(match_type, source_text, user, whole_log)
+    whole_log_error = _whole_log_error(whole_log, status, match_type)
+    if not patterns:
+        return [], [], 'Rule source text is required.'
+    if status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
+        return [], [], 'Invalid status.'
+    if match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
+        return [], [], 'Invalid match type.'
+    if whole_log_error:
+        return [], [], whole_log_error
+    if script_error:
+        return [], [], script_error
+
+    priority = _coerce_priority(raw_priority, match_type)
+    existing = set(
+        ClassificationRule.objects.filter(
+            owner=user,
+            status=status,
+            match_type=match_type,
+            whole_log=whole_log,
+            source_text__in=patterns,
+        ).values_list('source_text', flat=True)
+    )
+
+    to_create = []
+    skipped = []
+    for pattern in patterns:
+        if pattern in existing:
+            skipped.append(pattern)
+            continue
+        parsed = parse_rule_line(pattern, status=status, source_name=source_name)
+        if parsed and match_type in (ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH):
+            parsed['match_type'] = match_type
+        create_kwargs = {
+            'owner': user,
+            'status': status,
+            'match_type': match_type,
+            'source_text': pattern,
+            'description': description,
+            'priority': priority,
+            'whole_log': whole_log,
+            'color_whole_line': color_whole_line,
+        }
+        if parsed:
+            for field in ('entry_type', 'clsid', 'name', 'filepath', 'normalized_filepath',
+                          'filename', 'company', 'arguments', 'file_not_signed', 'source_name'):
+                if parsed.get(field):
+                    create_kwargs[field] = parsed[field]
+        to_create.append(ClassificationRule(**create_kwargs))
+
+    if not to_create:
+        return [], skipped, None
+    created = ClassificationRule.objects.bulk_create(to_create)
+    # bulk_create sends no signals, so auto tags are added here.
+    auto_tag_rules(created)
+    # The picker already shows the auto tags filled in, so with a
+    # picker its tags are the rules' tags - a removed auto tag stays off.
+    if tag_ids is not None:
+        _set_rule_tags(created, tag_ids)
+    invalidate_for_rule_owner(user)
+    return created, skipped, None
+
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def add_rule_view(request):
@@ -620,71 +694,23 @@ def add_rule_view(request):
         form_whole_log = whole_log
         form_color_whole_line = color_whole_line
         form_tag_ids = _tag_ids_from_post(request)
-        patterns = _patterns_for(match_type, source_text)
-        script_error = _script_rule_error(match_type, source_text, request.user, whole_log)
-        whole_log_error = _whole_log_error(whole_log, status, match_type)
-        if not patterns:
-            messages.error(request, 'Rule source text is required.')
-        elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
-            messages.error(request, 'Invalid status.')
-        elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
-            messages.error(request, 'Invalid match type.')
-        elif whole_log_error:
-            messages.error(request, whole_log_error)
-        elif script_error:
-            messages.error(request, script_error)
+        created, skipped, error = create_rules(
+            request.user,
+            status=status,
+            match_type=match_type,
+            source_text=source_text,
+            description=description,
+            raw_priority=raw_priority,
+            whole_log=whole_log,
+            color_whole_line=color_whole_line,
+            tag_ids=form_tag_ids,
+            source_name=f'web-add-rule:{request.user.username}',
+        )
+        if error:
+            messages.error(request, error)
         else:
-            priority = _coerce_priority(raw_priority, match_type)
-            existing = set(
-                ClassificationRule.objects.filter(
-                    owner=request.user,
-                    status=status,
-                    match_type=match_type,
-                    whole_log=whole_log,
-                    source_text__in=patterns,
-                ).values_list('source_text', flat=True)
-            )
-
-            to_create = []
-            skipped = []
-            for pattern in patterns:
-                if pattern in existing:
-                    skipped.append(pattern)
-                    continue
-                parsed = parse_rule_line(
-                    pattern,
-                    status=status,
-                    source_name=f'web-add-rule:{request.user.username}',
-                )
-                if parsed and match_type in (ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH):
-                    parsed['match_type'] = match_type
-                create_kwargs = {
-                    'owner': request.user,
-                    'status': status,
-                    'match_type': match_type,
-                    'source_text': pattern,
-                    'description': description,
-                    'priority': priority,
-                    'whole_log': whole_log,
-                    'color_whole_line': color_whole_line,
-                }
-                if parsed:
-                    for field in ('entry_type', 'clsid', 'name', 'filepath', 'normalized_filepath',
-                                  'filename', 'company', 'arguments', 'file_not_signed', 'source_name'):
-                        if parsed.get(field):
-                            create_kwargs[field] = parsed[field]
-                to_create.append(ClassificationRule(**create_kwargs))
-
-            if to_create:
-                created = ClassificationRule.objects.bulk_create(to_create)
-                # bulk_create sends no signals, so auto tags are added here.
-                auto_tag_rules(created)
-                # The picker already shows the auto tags filled in, so with a
-                # picker its tags are the rules' tags - a removed auto tag stays off.
-                if form_tag_ids is not None:
-                    _set_rule_tags(created, form_tag_ids)
-                invalidate_for_rule_owner(request.user)
-                n = len(to_create)
+            if created:
+                n = len(created)
                 messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
                 if skipped:
                     summary = _format_skipped(skipped)

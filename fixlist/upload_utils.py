@@ -90,6 +90,35 @@ def schedule_analysis_stats_recalc(upload: UploadedLog) -> None:
     thread.start()
 
 
+def start_reanalysis_process(log_type: str, only_untagged: bool) -> int:
+    """Start `manage.py reanalyze_logs` as a separate low-priority process; returns its pid.
+
+    A process of its own, not a thread, so it gets a lower OS priority than
+    the web workers and outlives a worker restart. Its output goes to the
+    server's own stdout/stderr (the deploy log).
+    """
+    import subprocess
+    import sys
+
+    args = [
+        sys.executable, str(settings.BASE_DIR / 'manage.py'), 'reanalyze_logs',
+        '--log-type', log_type,
+    ]
+    if only_untagged:
+        args.append('--only-untagged')
+    if sys.platform == 'win32':
+        platform_kwargs = {
+            'creationflags': subprocess.BELOW_NORMAL_PRIORITY_CLASS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        }
+    else:
+        # The command lowers its own priority with os.nice.
+        platform_kwargs = {'start_new_session': True}
+    process = subprocess.Popen(
+        args, stdin=subprocess.DEVNULL, close_fds=True, cwd=str(settings.BASE_DIR), **platform_kwargs,
+    )
+    return process.pid
+
+
 def soft_delete_uploaded_log(log: UploadedLog) -> None:
     """Move an uploaded log to trash (soft delete)."""
     log.deleted_at = timezone.now()
