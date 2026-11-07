@@ -275,6 +275,10 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
     Shared by the quick-edit panel on the rules list and the full-page editor so the
     two cannot drift. `source_text` is a single value -- never split per line -- so a
     script rule keeps its newlines and one rule in stays one rule out.
+
+    `user` is the editor and decides what may be authored (script rules). The
+    duplicate check and cache invalidation follow the rule's owner, who differs
+    from the editor when a superuser edits another helper's rule via the API.
     """
     priority = _coerce_priority(form['priority'], form['match_type'])
     script_error = _script_rule_error(
@@ -304,7 +308,7 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
         return script_error
 
     duplicate = ClassificationRule.objects.filter(
-        owner=user, status=form['status'], match_type=form['match_type'],
+        owner_id=rule.owner_id, status=form['status'], match_type=form['match_type'],
         source_text=form['source_text'], whole_log=form['whole_log'],
     ).exclude(pk=rule.pk).exists()
     if duplicate:
@@ -327,7 +331,7 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
     # result, so changing them needs no invalidation of their own.
     if form.get('tag_ids') is not None:
         _set_rule_tags([rule], form['tag_ids'])
-    invalidate_for_rule_owner(user)
+    invalidate_for_rule_owner(rule.owner)
     return None
 
 

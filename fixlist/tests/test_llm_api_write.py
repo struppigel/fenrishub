@@ -463,14 +463,38 @@ class RuleWriteTests(ApiWriteBase):
         body = self.get('api_v1_upload_analysis', 'amber-falcon', raw=self.write_raw).json()
         self.assertEqual(body['untrusted_lines'][0]['rule_ids'], [rule.pk])
 
-    def test_cannot_update_another_helpers_rule(self):
-        rule = make_rule('theirs', owner=self.helper, description='keep')
+    def test_superuser_can_update_another_helpers_rule(self):
+        rule = make_rule('theirs', owner=self.helper, description='old')
 
-        response = self.post('api_v1_rule_update', rule.pk, body={'description': 'hijacked'})
+        response = self.post('api_v1_rule_update', rule.pk, body={'description': 'fixed'})
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 200, response.content)
         rule.refresh_from_db()
-        self.assertEqual(rule.description, 'keep')
+        self.assertEqual(rule.description, 'fixed')
+        self.assertEqual(rule.owner, self.helper)
+        self.assertEqual(response.json()['owner'], 'alice')
+
+    def test_update_of_another_helpers_rule_checks_duplicates_in_their_set(self):
+        make_rule('one', owner=self.helper)
+        two = make_rule('two', owner=self.helper)
+        make_rule('admins only', owner=self.admin)
+
+        refused = self.post('api_v1_rule_update', two.pk, body={'source_text': 'one'})
+        allowed = self.post('api_v1_rule_update', two.pk, body={'source_text': 'admins only'})
+
+        self.assertEqual(refused.status_code, 400)
+        self.assertEqual(allowed.status_code, 200, allowed.content)
+        two.refresh_from_db()
+        self.assertEqual(two.source_text, 'admins only')
+
+    def test_update_of_another_helpers_rule_is_seen_by_the_analyzer(self):
+        make_uploaded_log('amber-falcon', content='BAD LINE')
+        rule = make_rule('OTHER LINE', owner=self.helper)
+
+        self.post('api_v1_rule_update', rule.pk, body={'source_text': 'BAD LINE'})
+
+        body = self.get('api_v1_upload_analysis', 'amber-falcon', raw=self.write_raw).json()
+        self.assertEqual(body['untrusted_lines'][0]['rule_ids'], [rule.pk])
 
     def test_update_into_a_duplicate_is_refused(self):
         make_rule('one', owner=self.admin)

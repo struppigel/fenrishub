@@ -1152,13 +1152,18 @@ def api_rule_create(request):
 
 @api_token_required('api_v1_rule_update', write=True)
 def api_rule_update(request, rule_id):
-    """Change one of the caller's own rules, as the rule editor does; fields left out keep their values.
+    """Change a rule, as the rule editor does; fields left out keep their values.
 
     Body: any of {status, match_type, source_text, description, is_enabled,
     whole_log, color_whole_line, priority, tag_ids}. tag_ids replaces the
-    rule's tags. Other helpers' rules are not found, as in the rule editor.
+    rule's tags. A superuser may change any helper's rule; it keeps its owner,
+    and duplicates are checked within that owner's rules.
     """
-    rule = ClassificationRule.objects.filter(pk=rule_id, owner=request.user).first()
+    rules = ClassificationRule.objects.filter(pk=rule_id)
+    # Write tokens are superuser-only already; the check stays here in case that ever changes.
+    if not request.user.is_superuser:
+        rules = rules.filter(owner=request.user)
+    rule = rules.select_related('owner').first()
     if rule is None:
         return _not_found()
     payload, error = _write_payload(request)
