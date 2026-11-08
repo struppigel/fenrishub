@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% load rule_tags %}
+{% load rule_tags static %}
 
 {% block title %}Uploaded Log - Fenris{% endblock %}
 
@@ -82,7 +82,43 @@
         color: var(--la-error-text);
         border-color: var(--la-error-border);
     }
+
+    /* "maximize": hide metadata and summary, let the log fill the window. */
+    .uploaded-log-page.log-maximized > h3,
+    .uploaded-log-page.log-maximized > .divider,
+    .uploaded-log-page.log-maximized > .meta-grid,
+    .uploaded-log-page.log-maximized > .hl-summary {
+        display: none;
+    }
+
+    .uploaded-log-page.log-maximized .uploaded-content {
+        height: calc(100vh - 110px);
+        max-height: none;
+    }
+
+    /* Row above the log: hint / collapse-all on the left, the double-chevron
+       maximize toggle on the right (it flips downwards while maximized). */
+    .log-view-toolbar {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 4px;
+    }
+
+    .log-maximize-toggle {
+        display: inline-flex;
+        padding: 0 2px;
+        line-height: 0;
+        color: var(--la-text-muted);
+        cursor: pointer;
+    }
+
+    .uploaded-log-page.log-maximized .log-maximize-toggle svg {
+        transform: rotate(180deg);
+    }
 </style>
+{% if highlight %}<link rel="stylesheet" href="{% static 'css/log_highlight.css' %}">{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -179,8 +215,41 @@
     {% endif %}
 </div>
 
+{% if highlight and highlight.has_summary %}
+<div class="hl-summary" id="highlightSummary">
+    <div class="hl-summary-head">
+        {% if highlight.summary_title %}<span class="hl-summary-title">{{ highlight.summary_title }}</span>{% endif %}
+        {% for stat in highlight.stats %}<span class="hl-stat"><span class="hl-stat-label">{{ stat.label }}:</span> <span class="hl-sev-{{ stat.severity }}">{{ stat.value }}</span></span>{% endfor %}
+    </div>
+    {% if highlight.summary %}
+    <ul class="hl-summary-list">
+        {% for item in highlight.summary_shown %}
+        <li><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}"><span class="hl-jump-line">L{{ item.line_no }}</span> <span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}</a></li>
+        {% endfor %}
+    </ul>
+    {% if highlight.summary_hidden_count %}<div class="hl-summary-more">and {{ highlight.summary_hidden_count }} more</div>{% endif %}
+    {% elif highlighted_html %}
+    <div class="hl-summary-empty">nothing found</div>
+    {% endif %}
+</div>
+{% endif %}
+
 <div class="form-group">
+    <div class="log-view-toolbar">
+        {% if highlighted_html %}<div class="hl-copy-hint">
+            {% if highlight.has_sections %}<button type="button" id="toggleSectionsButton" class="hl-toggle-sections" onclick="toggleAllSections(this)">collapse all</button>{% endif %}
+            click a path, registry key, GUID or hash to copy it, Alt+click copies only the file name
+        </div>{% else %}<div></div>{% endif %}
+        <span id="maximizeLogToggle" class="log-maximize-toggle" role="button" tabindex="0"
+              aria-label="maximize log view" title="maximize log view (Esc restores)"
+              onclick="toggleLogMaximized()"
+              onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleLogMaximized(); }"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8.5 8 4l5 4.5M3 13 8 8.5l5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    </div>
+    {% if highlighted_html %}
+    <div id="uploadedContent" class="uploaded-content hl-log" tabindex="0">{{ highlighted_html }}</div>
+    {% else %}
     <div id="uploadedContent" class="uploaded-content" tabindex="0">{% for chunk in uploaded_log.content|chunk_log:100 %}<div class="log-chunk">{{ chunk }}</div>{% endfor %}</div>
+    {% endif %}
 </div>
 
 {% if converted_response %}{{ converted_response|json_script:"convertedResponse" }}{% endif %}
@@ -189,12 +258,109 @@
 // The content is rendered as chunked .log-chunk blocks (see chunk_log filter)
 // so the browser can skip off-screen layout. Each chunk drops its trailing
 // newline, so rejoin the chunk text with '\n' to rebuild the full log.
+// Highlighted logs (log_highlighting.py) render one .hl-line per log line,
+// with line numbers as pseudo-content, so joining the lines rebuilds the log.
 function getFullContent() {
     const root = document.getElementById('uploadedContent');
+    const lines = root.querySelectorAll('.hl-line');
+    if (lines.length) return Array.from(lines, l => l.textContent).join('\n');
     const chunks = root.querySelectorAll('.log-chunk');
     if (!chunks.length) return root.textContent;
     return Array.from(chunks, c => c.textContent).join('\n');
 }
+
+// Maximized view: metadata and summary hidden, log fills the window. The
+// choice is remembered per browser; storage may be unavailable, so guard it.
+const LOG_MAXIMIZED_KEY = 'uploadedLogMaximized';
+
+function toggleLogMaximized(force) {
+    const page = document.querySelector('.uploaded-log-page');
+    if (!page) return;
+    const on = typeof force === 'boolean' ? force : !page.classList.contains('log-maximized');
+    page.classList.toggle('log-maximized', on);
+    const toggle = document.getElementById('maximizeLogToggle');
+    if (toggle) {
+        const label = on ? 'restore log view' : 'maximize log view (Esc restores)';
+        toggle.setAttribute('aria-label', on ? 'restore log view' : 'maximize log view');
+        toggle.title = label;
+    }
+    try { localStorage.setItem(LOG_MAXIMIZED_KEY, on ? '1' : '0'); } catch (e) {}
+    if (on) page.querySelector('.log-action-bar').scrollIntoView({ block: 'start' });
+}
+
+(function () {
+    let saved = null;
+    try { saved = localStorage.getItem(LOG_MAXIMIZED_KEY); } catch (e) {}
+    if (saved === '1') toggleLogMaximized(true);
+    document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape') return;
+        const page = document.querySelector('.uploaded-log-page');
+        if (page && page.classList.contains('log-maximized')) toggleLogMaximized(false);
+    });
+})();
+
+// One click collapses every section of the highlighted log, the next one
+// expands them all again.
+function toggleAllSections(button) {
+    const root = document.getElementById('uploadedContent');
+    const sections = root.querySelectorAll('details.hl-section');
+    if (!sections.length) return;
+    const anyOpen = Array.from(sections).some(s => s.open);
+    sections.forEach(s => { s.open = !anyOpen; });
+    button.textContent = anyOpen ? 'expand all' : 'collapse all';
+}
+
+// Click a path / registry key / GUID / hash token to copy it; Alt+click on a
+// path copies only its last component (file name). A drag-selection is left
+// alone so normal text selection keeps working.
+function lastPathComponent(text) {
+    const trimmed = text.replace(/[\\\/]+$/, '');
+    const parts = trimmed.split(/[\\\/]/);
+    return parts[parts.length - 1] || trimmed;
+}
+
+(function () {
+    const root = document.getElementById('uploadedContent');
+    if (!root || !root.classList.contains('hl-log')) return;
+    root.addEventListener('click', function (event) {
+        const token = event.target.closest('.hl-path, .hl-reg, .hl-guid, .hl-hash');
+        if (!token || !root.contains(token)) return;
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed) return;
+        event.preventDefault();
+        const full = token.textContent.trim();
+        const isPath = token.matches('.hl-path, .hl-reg');
+        const text = event.altKey && isPath ? lastPathComponent(full) : full;
+        if (!text || !navigator.clipboard) return;
+        navigator.clipboard.writeText(text).then(function () {
+            token.classList.remove('hl-copied');
+            void token.offsetWidth;
+            token.classList.add('hl-copied');
+            setTimeout(() => token.classList.remove('hl-copied'), 900);
+        });
+    });
+})();
+
+// Summary entries jump to their log line: open its section, scroll the log
+// container to it and mark it briefly.
+(function () {
+    const summary = document.getElementById('highlightSummary');
+    if (!summary) return;
+    summary.addEventListener('click', function (event) {
+        const link = event.target.closest('a.hl-jump');
+        if (!link) return;
+        const line = document.getElementById('L' + link.dataset.line);
+        if (!line) return;
+        event.preventDefault();
+        const section = line.closest('details');
+        if (section && !section.open) section.open = true;
+        line.scrollIntoView({ block: 'center' });
+        line.classList.remove('hl-flash');
+        void line.offsetWidth;
+        line.classList.add('hl-flash');
+        setTimeout(() => line.classList.remove('hl-flash'), 1500);
+    });
+})();
 
 function viewRawContent() {
     const content = getFullContent();

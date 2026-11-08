@@ -1,0 +1,230 @@
+/* Tool-aware highlighting for logs on the uploaded-log page.
+   Markup comes from fixlist/log_highlighting.py. Colors reuse theme.css
+   variables; the only hover effect is an underline. */
+
+/* Each log line is its own block; the line number (and, for FRST types, the
+   rule status letter) is pseudo-content, so it is never part of textContent
+   or a copied selection. Lines without a status pad the letter's place so
+   the numbers stay aligned. */
+.uploaded-content .hl-line {
+    display: block;
+    padding-left: 7em;
+    text-indent: -7em;
+    min-height: 1.25em;
+}
+
+.uploaded-content .hl-line::before {
+    content: attr(data-n) '\00a0\00a0';
+    display: inline-block;
+    width: 6em;
+    margin-right: 1em;
+    text-align: right;
+    text-indent: 0;
+    color: var(--la-text-disabled);
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.uploaded-content.hl-log {
+    padding-left: 0;
+}
+
+/* Sections: <details open> with the header line as <summary>. */
+.uploaded-content .hl-section-header {
+    cursor: pointer;
+    list-style: none;
+    font-weight: 600;
+}
+
+.uploaded-content .hl-section-header::-webkit-details-marker {
+    display: none;
+}
+
+.uploaded-content .hl-section-header::after {
+    content: '  [-]';
+    color: var(--la-text-disabled);
+    font-weight: normal;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.uploaded-content details:not([open]) > .hl-section-header::after {
+    content: '  [+ ' attr(data-count) ' lines]';
+}
+
+/* Tokens */
+.hl-title { color: var(--la-text-primary); font-weight: 600; }
+.hl-header { color: var(--la-text-primary); }
+.hl-product { color: var(--la-status-s); }
+.hl-subheader { color: var(--la-text-secondary); font-weight: 600; }
+.hl-key { color: var(--la-text-muted); }
+.hl-value-strong { color: var(--la-status-i); font-weight: 600; }
+.hl-dim { color: var(--la-text-disabled); }
+.hl-note { color: var(--la-text-neutral); font-style: italic; }
+.hl-accent { color: var(--la-parsed-entry-type); }
+.hl-path { color: var(--la-parsed-filepath); }
+.hl-reg { color: var(--la-parsed-name); }
+.hl-guid { color: var(--la-parsed-clsid); }
+.hl-url { color: var(--la-info); }
+.hl-hash { color: var(--la-text-disabled); }
+.hl-company { color: var(--la-parsed-company); }
+.hl-entry { font-weight: 600; }
+.hl-bold { font-weight: 600; }
+
+/* SecurityCheck BBCode tags: hidden, but still in textContent, so the copy /
+   download buttons keep returning the raw log. */
+.uploaded-content .hl-bbtag { display: none; }
+
+/* Severity colors; later rules win over the token colors above. */
+.hl-sev-b { color: var(--la-status-b); }
+.hl-sev-p { color: var(--la-status-p); }
+.hl-sev-g { color: var(--la-status-g); }
+.hl-sev-w { color: var(--la-status-w); }
+.hl-sev-c { color: var(--la-status-c); }
+.hl-sev-j { color: var(--la-status-j); }
+.hl-sev-i { color: var(--la-status-s); }
+.hl-sev-u { color: var(--la-status-unknown); }
+
+/* Click-to-copy paths and registry keys (see view_uploaded_log.html). The
+   only hover effect is an underline; .hl-copied briefly confirms a copy. */
+.uploaded-content .hl-path,
+.uploaded-content .hl-reg,
+.uploaded-content .hl-guid,
+.uploaded-content .hl-hash {
+    cursor: copy;
+}
+
+.uploaded-content .hl-path:hover,
+.uploaded-content .hl-reg:hover,
+.uploaded-content .hl-guid:hover,
+.uploaded-content .hl-hash:hover {
+    text-decoration: underline;
+}
+
+.hl-copy-hint .hl-toggle-sections {
+    min-width: 0;
+    margin-right: 8px;
+    padding: 1px 8px;
+    font-size: 11px;
+}
+
+/* VirusTotal report links (the only URLs rendered as links). */
+.uploaded-content a.hl-vt {
+    color: var(--la-info);
+    text-decoration: none;
+}
+
+.uploaded-content a.hl-vt:hover {
+    text-decoration: underline;
+}
+
+.uploaded-content .hl-copied {
+    background: color-mix(in srgb, var(--la-status-c) 30%, transparent);
+}
+
+.hl-copy-hint {
+    font-size: 11px;
+    color: var(--la-text-disabled);
+}
+
+/* FRST types: a line classified by the rules takes its status colour (over
+   the syntax token colours, like in the analyzer) and shows the status
+   letter next to its line number. Unknown (?) lines keep the syntax colours. */
+.uploaded-content .hl-line[data-st]::before {
+    content: attr(data-n) ' ' attr(data-st);
+}
+
+.uploaded-content .hl-st-b, .uploaded-content .hl-st-b * { color: var(--la-status-b); }
+.uploaded-content .hl-st-p, .uploaded-content .hl-st-p * { color: var(--la-status-p); }
+.uploaded-content .hl-st-c, .uploaded-content .hl-st-c * { color: var(--la-status-c); }
+.uploaded-content .hl-st-w, .uploaded-content .hl-st-w * { color: var(--la-status-w); }
+.uploaded-content .hl-st-a, .uploaded-content .hl-st-a * { color: var(--la-status-a); }
+.uploaded-content .hl-st-g, .uploaded-content .hl-st-g * { color: var(--la-status-g); }
+.uploaded-content .hl-st-s, .uploaded-content .hl-st-s * { color: var(--la-status-s); }
+.uploaded-content .hl-st-i, .uploaded-content .hl-st-i * { color: var(--la-status-i); }
+.uploaded-content .hl-st-j, .uploaded-content .hl-st-j * { color: var(--la-status-j); }
+
+.hl-sev-a { color: var(--la-status-a); }
+.hl-sev-s { color: var(--la-status-s); }
+
+/* Briefly marks the line a summary entry jumped to. */
+.uploaded-content .hl-line.hl-flash {
+    background: color-mix(in srgb, var(--la-status-w) 25%, transparent);
+}
+
+/* Summary box above the log */
+.hl-summary {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background-color: var(--la-bg-2);
+    border: 1px solid var(--la-border);
+    font-size: 12px;
+}
+
+.hl-summary-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 14px;
+    margin-bottom: 6px;
+}
+
+.hl-summary-title {
+    color: var(--la-text-primary);
+    font-weight: 600;
+}
+
+.hl-stat .hl-stat-label {
+    color: var(--la-text-muted);
+}
+
+.hl-summary-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 220px;
+    overflow: auto;
+}
+
+.hl-summary-list li {
+    margin: 1px 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hl-summary-list a.hl-jump {
+    color: inherit;
+    text-decoration: none;
+}
+
+.hl-summary-list a.hl-jump:hover {
+    text-decoration: underline;
+}
+
+.hl-summary-list .hl-jump-line {
+    display: inline-block;
+    min-width: 4.5em;
+    color: var(--la-text-disabled);
+}
+
+.hl-summary-list .hl-jump-name {
+    font-weight: 600;
+}
+
+.hl-summary-list .hl-jump-target {
+    color: var(--la-text-neutral);
+}
+
+.hl-summary-list .hl-jump-action {
+    color: var(--la-text-muted);
+}
+
+.hl-summary-more {
+    margin-top: 4px;
+    color: var(--la-text-disabled);
+}
+
+.hl-summary-empty {
+    color: var(--la-text-disabled);
+}

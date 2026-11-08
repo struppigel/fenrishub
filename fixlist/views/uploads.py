@@ -19,13 +19,16 @@ from urllib.parse import urlencode
 
 from ..forms import UploadedLogForm
 from ..log_converters import convert_log_to_response
+from ..log_highlighting import (
+    HighlightResult, Stat, apply_analysis_statuses, highlight_log, render_highlighted_html,
+)
 from ..models import LOG_TYPE_UNKNOWN, RuleTag, UploadedLog
 from ..permissions import user_can_delete_uploaded_log
-from ..rule_sets import resolve_user_rule_set_key
+from ..rule_sets import SHARED_RULE_SET_KEY, resolve_effective_rule_set_key, resolve_user_rule_set_key
 from ..tagging import found_tags_by_upload, logs_with_tags, tags_for_listing
 from ..upload_utils import (
     soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
-    schedule_analysis_stats_recalc,
+    schedule_analysis_stats_recalc, get_fresh_cached_analysis, schedule_cached_analysis_refresh,
 )
 from .guest import deny_guests
 from .upload_actions import (
@@ -375,6 +378,37 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     }
 
 
+_FRST_STAT_FIELDS = (
+    ('B', 'count_malware', 'b'), ('P', 'count_pup', 'p'), ('C', 'count_clean', 'c'),
+    ('A', 'count_alert', 'a'), ('!', 'count_warning', 'w'), ('G', 'count_grayware', 'g'),
+    ('S', 'count_security', 's'), ('I', 'count_info', 'i'), ('J', 'count_junk', 'j'),
+    ('?', 'count_unknown', 'u'),
+)
+
+
+def _apply_frst_rule_statuses(uploaded_log, highlight):
+    """Colour FRST lines by their rule verdicts and fill the summary box.
+
+    Only the cached analysis is read (the same rule set the uploads list
+    counts use); the request never runs the analyzer. A missing or stale
+    cache (e.g. written by an older analyzer) keeps the syntax colours for
+    now and is refreshed in the background for the next page load.
+    """
+    rule_set_key = resolve_effective_rule_set_key(uploaded_log)
+    label = 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private'
+    payload = get_fresh_cached_analysis(uploaded_log, rule_set_key)
+    applied = payload is not None and apply_analysis_statuses(highlight, uploaded_log.content, payload)
+    if applied:
+        highlight.summary_title = f'{label} rules'
+    else:
+        schedule_cached_analysis_refresh(uploaded_log, rule_set_key)
+        highlight.summary_title = f'{label} rules (analysis is being refreshed, reload in a moment)'
+    highlight.stats = [
+        Stat(code, str(getattr(uploaded_log, field_name)), severity)
+        for code, field_name, severity in _FRST_STAT_FIELDS
+    ] + highlight.stats
+
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def view_uploaded_log(request, upload_id):
@@ -457,9 +491,29 @@ def view_uploaded_log(request, upload_id):
     # Empty unless the log type has a converter and it found something to report.
     converted_response = convert_log_to_response(uploaded_log.log_type, uploaded_log.content)
 
+    # None for log types without a highlighter (FRST etc.), which keep the plain view.
+    highlight = highlight_log(uploaded_log.log_type, uploaded_log.content)
+    if highlight is not None and uploaded_log.log_type in UploadedLog.ANALYZED_LOG_TYPES:
+        _apply_frst_rule_statuses(uploaded_log, highlight)
+    if uploaded_log.log_type == 'Fixlog':
+        # Same numbers as the Fixlog chips in the uploads / cases lists.
+        fixlog_stats = [
+            Stat('ops', str(uploaded_log.fixlog_total), ''),
+            Stat('ok', str(uploaded_log.fixlog_success), 'c'),
+            Stat('n/f', str(uploaded_log.fixlog_not_found), 'u'),
+            Stat('err', str(uploaded_log.fixlog_error), 'b'),
+        ]
+        if highlight is None:
+            # Too big to highlight: still show the stats above the plain view.
+            highlight = HighlightResult(sections=[], summary=[], summary_title='Fixlog', stats=fixlog_stats)
+        else:
+            highlight.stats = fixlog_stats + highlight.stats
+
     return render(request, 'view_uploaded_log.html', {
         'uploaded_log': uploaded_log,
         'converted_response': converted_response,
+        'highlight': highlight,
+        'highlighted_html': render_highlighted_html(highlight),
     })
 
 

@@ -15,6 +15,19 @@ def log_type_css_slug(name):
     return _log_type_css_slug(name or '')
 
 
+@register.filter(name='stat_class')
+def stat_class(value, severity):
+    """'stat-<severity>' for a stats chip, or 'stat-j' (grey) when the count is 0.
+
+    Same rule as the precomputed tool_stats chips and the log page summary,
+    so a coloured number always means something was found."""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        count = 0
+    return f'stat-{severity if count else "j"}'
+
+
 @register.filter(name='tag_category_class')
 def tag_category_class(tag):
     """' tag-cat-<id>' for a tag badge whose tag has a category, else ''.

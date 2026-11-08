@@ -64,6 +64,39 @@ def get_or_compute_upload_analysis(uploaded_log: UploadedLog, rule_set_key: str)
     return payload, True
 
 
+def _refresh_cached_analysis_in_thread(upload_pk: int, rule_set_key: str) -> None:
+    try:
+        upload = UploadedLog.objects.get(pk=upload_pk)
+        get_or_compute_upload_analysis(upload, rule_set_key)
+    except Exception:
+        logger.exception('Background analysis cache refresh failed (upload_pk=%s)', upload_pk)
+    finally:
+        connections.close_all()
+
+
+def schedule_cached_analysis_refresh(upload: UploadedLog, rule_set_key: str) -> bool:
+    """Re-run the analyzer for (upload, rule set) off the request thread and
+    cache the result, e.g. when the cached payload predates the current
+    analyzer format. Only the cache row is written, never the count_* stats.
+    A short cache lock keeps repeated page loads from starting duplicate runs.
+    Returns True when a refresh was started."""
+    from django.core.cache import cache
+
+    if not cache.add(f'analysis-refresh:{upload.pk}:{rule_set_key}', 1, timeout=300):
+        return False
+    if getattr(settings, 'TESTING', False):
+        get_or_compute_upload_analysis(upload, rule_set_key)
+        return True
+    thread = threading.Thread(
+        target=_refresh_cached_analysis_in_thread,
+        args=(upload.pk, rule_set_key),
+        name=f'analysis-refresh-{upload.pk}',
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
 def _recalculate_analysis_stats_in_thread(upload_pk: int) -> None:
     try:
         upload = UploadedLog.objects.get(pk=upload_pk)

@@ -758,6 +758,47 @@ def _load_compiled_logtype_rules():
     return compiled
 
 
+_FIXLIST_CONTENT_RE = re.compile(r'^fixlist content:\s*$', re.I)
+_FIXLIST_STARS_RE = re.compile(r'^\*{5,}\s*$')
+
+
+def count_fixlog_results(content: str) -> dict:
+    """Count the ` => ` result lines of a Fixlog.
+
+    A Fixlog first echoes the fixlist it ran ("fixlist content:" followed by
+    the fixlist between two '*****' lines). Those echoed lines often contain
+    ` => ` too (FRST entries such as "FirewallRules: [...] => (Block) ...") but
+    are not results, so they are skipped. Pure function: also used by the
+    migration that recounts stored Fixlogs.
+    """
+    counts = {'total': 0, 'success': 0, 'not_found': 0, 'error': 0}
+    in_fixlist = False
+    stars = 0
+    for line in (content or '').splitlines():
+        if in_fixlist:
+            if _FIXLIST_STARS_RE.match(line):
+                stars += 1
+                if stars >= 2:
+                    in_fixlist = False
+            continue
+        if _FIXLIST_CONTENT_RE.match(line):
+            in_fixlist = True
+            stars = 0
+            continue
+        idx = line.find(' => ')
+        if idx == -1:
+            continue
+        counts['total'] += 1
+        status = line[idx + 4:]
+        if 'successfully' in status:
+            counts['success'] += 1
+        elif 'not found' in status:
+            counts['not_found'] += 1
+        elif 'Error' in status:
+            counts['error'] += 1
+    return counts
+
+
 def detect_log_type(content: str) -> str:
     if not content:
         return LOG_TYPE_UNKNOWN
@@ -955,6 +996,9 @@ class UploadedLog(models.Model):
     fixlog_not_found = models.PositiveIntegerField(default=0)
     fixlog_error = models.PositiveIntegerField(default=0)
     FIXLOG_STAT_FIELDS = ['fixlog_total', 'fixlog_success', 'fixlog_not_found', 'fixlog_error']
+    # Small precomputed [[label, value, severity], ...] chips for tool logs
+    # (ESET, MAU, SecurityCheck, ...) shown in the uploads / cases lists.
+    tool_stats = models.JSONField(default=list, blank=True)
     ANALYSIS_STATUS_FIELD_MAP = {
         'B': 'count_malware',
         'P': 'count_pup',
@@ -1087,7 +1131,9 @@ class UploadedLog(models.Model):
             else:
                 for field_name in self.FIXLOG_STAT_FIELDS:
                     setattr(self, field_name, 0)
-        self.save(update_fields=[*self.analysis_stat_update_fields(), 'is_incomplete'])
+        from .log_highlighting import compute_tool_stats
+        self.tool_stats = compute_tool_stats(self.log_type, self.content or '')
+        self.save(update_fields=[*self.analysis_stat_update_fields(), 'is_incomplete', 'tool_stats'])
 
         from .tagging import compute_line_tags, current_line_tags
 
@@ -1117,26 +1163,11 @@ class UploadedLog(models.Model):
         update_uploaded_log_stat_snapshot(self, shared_payload, shared_line_tags)
 
     def _compute_fixlog_stats(self, content):
-        total = 0
-        success = 0
-        not_found = 0
-        error = 0
-        for line in content.splitlines():
-            idx = line.find(' => ')
-            if idx == -1:
-                continue
-            total += 1
-            status = line[idx + 4:]
-            if 'successfully' in status:
-                success += 1
-            elif 'not found' in status:
-                not_found += 1
-            elif 'Error' in status:
-                error += 1
-        self.fixlog_total = total
-        self.fixlog_success = success
-        self.fixlog_not_found = not_found
-        self.fixlog_error = error
+        counts = count_fixlog_results(content)
+        self.fixlog_total = counts['total']
+        self.fixlog_success = counts['success']
+        self.fixlog_not_found = counts['not_found']
+        self.fixlog_error = counts['error']
 
     def recalculate_log_type(self) -> bool:
         """Re-run detection; saves and returns True only when the type changed."""
