@@ -724,6 +724,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (typeof initPanelSplitter === 'function') {
         initPanelSplitter();
     }
+    if (typeof initRightPanelToggle === 'function') {
+        initRightPanelToggle();
+    }
     if (typeof initRightPanelState === 'function') {
         initRightPanelState();
     }

@@ -170,6 +170,57 @@ function initPanelSplitter() {
     });
 }
 
+// The whole right column can be closed so the log takes the full row. The
+// choice is remembered across page loads. Inserting lines, snippets or
+// speeches while it is closed still edits the hidden textareas and leaves the
+// column closed; only the toggle buttons open it again.
+const RIGHT_PANEL_CLOSED_KEY = 'fenrishub_right_panel_closed';
+let rightPanelClosed = false;
+
+function applyRightPanelClosed(closed) {
+    rightPanelClosed = Boolean(closed);
+    const box = document.querySelector('.textareas-box');
+    if (box) box.classList.toggle('right-panel-closed', rightPanelClosed);
+    const expanded = rightPanelClosed ? 'false' : 'true';
+    ['rightPanelOpenButton', 'rightPanelCloseButton'].forEach((id) => {
+        const button = document.getElementById(id);
+        if (button) button.setAttribute('aria-expanded', expanded);
+    });
+}
+
+function setRightPanelClosed(closed) {
+    const target = Boolean(closed);
+    if (target === rightPanelClosed) return;
+    const panel = document.getElementById('rightPanel');
+    const focusWasInside = Boolean(panel && panel.contains(document.activeElement));
+    applyRightPanelClosed(target);
+    try {
+        localStorage.setItem(RIGHT_PANEL_CLOSED_KEY, target ? '1' : '0');
+    } catch (e) {}
+    if (target) {
+        if (focusWasInside) {
+            const openButton = document.getElementById('rightPanelOpenButton');
+            if (openButton) openButton.focus();
+        }
+    } else {
+        const textarea = getActiveRightTextarea();
+        if (textarea) textarea.focus();
+    }
+}
+
+function initRightPanelToggle() {
+    let stored = null;
+    try {
+        stored = localStorage.getItem(RIGHT_PANEL_CLOSED_KEY);
+    } catch (e) {}
+    applyRightPanelClosed(stored === '1');
+
+    const openButton = document.getElementById('rightPanelOpenButton');
+    if (openButton) openButton.addEventListener('click', () => setRightPanelClosed(false));
+    const closeButton = document.getElementById('rightPanelCloseButton');
+    if (closeButton) closeButton.addEventListener('click', () => setRightPanelClosed(true));
+}
+
 function applyRightPanelState() {
     const fixlist = document.getElementById('selectedLines');
     const response = document.getElementById('responseText');

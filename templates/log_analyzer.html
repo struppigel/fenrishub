@@ -163,10 +163,67 @@
         min-height: 0;
     }
 
+    .panel-tabs-row {
+        display: flex;
+        align-items: center;
+        flex: 0 0 auto;
+    }
+
+    .panel-tabs-row .panel-tabs {
+        align-self: flex-end;
+    }
+
     .panel-tabs {
         display: flex;
         gap: 2px;
         flex: 0 0 auto;
+    }
+
+    /* The right column can be closed so the log gets the whole row. The
+       toggles are bare glyphs: » at the far end of the tab row closes it,
+       « at the top of the remaining strip opens it again. The splitter goes
+       with the column; its stored ratio applies again on reopen. */
+    .right-panel-toggle {
+        padding: 2px 6px;
+        background: none;
+        border: none;
+        color: var(--la-text-muted);
+        font-size: 14px;
+        line-height: 1;
+    }
+
+    .panel-tabs-row .right-panel-close {
+        margin-left: auto;
+    }
+
+    .right-panel-open {
+        display: none;
+    }
+
+    /* Closed: the log is the only grid column, and the reopen button sits in
+       the box's right padding gutter instead of taking a column of its own. */
+    .textareas-box.right-panel-closed {
+        position: relative;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .textareas-box.right-panel-closed .panel-splitter,
+    .textareas-box.right-panel-closed .right-panel > :not(.right-panel-open) {
+        display: none;
+    }
+
+    .textareas-box.right-panel-closed .right-panel {
+        position: absolute;
+        top: 12px;
+        right: 0;
+        width: 12px;
+    }
+
+    .textareas-box.right-panel-closed .right-panel-open {
+        display: block;
+        width: 12px;
+        padding: 0;
+        text-align: center;
     }
 
     .panel-tabs .panel-tab {
@@ -259,10 +316,14 @@
         <div id="logLines" class="log-lines-container" style="display: none;"></div>
     </div>
     <div class="panel-splitter" id="panelSplitter" role="separator" aria-orientation="vertical" aria-label="resize log and fixlist" aria-valuemin="15" aria-valuemax="85" aria-valuenow="50" tabindex="0" title="drag to resize, double-click to reset"></div>
-    <div class="right-panel">
-        <div class="panel-tabs" id="panelTabs" role="tablist" aria-label="right panel">
-            <button type="button" class="panel-tab is-selected" data-panel-view="fix" role="tab" aria-selected="true" aria-controls="selectedLines">fixlist</button>
-            <button type="button" class="panel-tab" data-panel-view="response" role="tab" aria-selected="false" aria-controls="responseText">response</button>
+    <div class="right-panel" id="rightPanel">
+        <button type="button" id="rightPanelOpenButton" class="right-panel-toggle right-panel-open" aria-controls="rightPanel" aria-expanded="false" aria-label="show fixlist and response" title="show fixlist / response">&laquo;</button>
+        <div class="panel-tabs-row">
+            <div class="panel-tabs" id="panelTabs" role="tablist" aria-label="right panel">
+                <button type="button" class="panel-tab is-selected" data-panel-view="fix" role="tab" aria-selected="true" aria-controls="selectedLines">fixlist</button>
+                <button type="button" class="panel-tab" data-panel-view="response" role="tab" aria-selected="false" aria-controls="responseText">response</button>
+            </div>
+            <button type="button" id="rightPanelCloseButton" class="right-panel-toggle right-panel-close" aria-controls="rightPanel" aria-expanded="true" aria-label="hide fixlist and response" title="hide fixlist / response">&raquo;</button>
         </div>
         <textarea id="selectedLines">{{ initial_selected_lines }}</textarea>
         <textarea id="responseText" placeholder="Write the response for the user here..." title="saved with the fixlist" hidden>{{ initial_response_text }}</textarea>

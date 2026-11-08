@@ -61,6 +61,15 @@ class LogAnalyzerViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'id="speechCaptureShared"')
         self.assertContains(response, 'id="speechCapturePlaceholders"')
 
+    def test_renders_right_panel_close_and_reopen_buttons(self):
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('log_analyzer'))
+
+        self.assertContains(response, 'id="rightPanel"')
+        self.assertContains(response, 'id="rightPanelCloseButton"')
+        self.assertContains(response, 'id="rightPanelOpenButton"')
+
     def test_speech_capture_shares_by_default(self):
         self.client.login(username='alice', password='password123')
 
