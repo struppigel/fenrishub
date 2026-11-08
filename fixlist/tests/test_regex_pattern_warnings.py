@@ -127,6 +127,51 @@ class TestRuleApiRegexWarningsTests(TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn('Invalid regex', resp.json().get('error', ''))
 
+    def test_leading_case_insensitive_flag_emits_warning(self):
+        resp = self._post(r'(?i)dControl')
+        self.assertEqual(resp.status_code, 200)
+        warnings = resp.json().get('regex_warnings') or []
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('case_insensitive', warnings[0]['kinds'])
+        self.assertEqual(warnings[0]['pattern'], r'(?i)dControl')
+
+    def test_case_insensitive_warning_names_only_the_flagged_pattern(self):
+        resp = self._post('(?i)alpha\nbeta')
+        self.assertEqual(resp.status_code, 200)
+        flagged = [
+            w['pattern'] for w in resp.json().get('regex_warnings') or []
+            if 'case_insensitive' in w['kinds']
+        ]
+        self.assertEqual(flagged, ['(?i)alpha'])
+
+    def test_case_insensitive_flag_not_at_start_emits_no_such_warning(self):
+        resp = self._post(r'dControl(?:x)?')
+        self.assertEqual(resp.status_code, 200)
+        for w in resp.json().get('regex_warnings') or []:
+            self.assertNotIn('case_insensitive', w['kinds'])
+
+    def test_case_insensitive_flag_in_substring_rule_emits_no_warning(self):
+        resp = self._post(r'(?i)dControl', match_type=ClassificationRule.MATCH_SUBSTRING)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('regex_warnings', resp.json())
+
+    def test_whole_log_regex_gets_case_insensitive_warning(self):
+        resp = self.client.post(
+            self.url,
+            data=json.dumps({
+                'source_text': r'(?i)dControl',
+                'match_type': ClassificationRule.MATCH_REGEX,
+                'status': ClassificationRule.STATUS_ALERT,
+                'whole_log': True,
+                'lines': ['some line', 'dcontrol here'],
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        warnings = resp.json().get('regex_warnings') or []
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('case_insensitive', warnings[0]['kinds'])
+
     def test_warnings_only_emitted_for_regex_match_type(self):
         # A pattern that would trigger a warning if treated as regex, but as
         # substring it is just literal text — no warning expected.

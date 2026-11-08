@@ -269,6 +269,15 @@ def _assign_parsed_metadata(rule, form: dict) -> None:
             setattr(rule, field, parsed.get(field))
 
 
+def _rule_for_editor_or_404(request, pk):
+    """The rule `request.user` may edit: their own, or any rule for a superuser.
+    The rule keeps its owner either way."""
+    rules = ClassificationRule.objects.select_related('owner')
+    if not request.user.is_superuser:
+        rules = rules.filter(owner=request.user)
+    return get_object_or_404(rules, pk=pk)
+
+
 def _apply_rule_edit(rule, form: dict, user) -> str | None:
     """Validate and save an edit to one rule. Returns an error message, or None.
 
@@ -476,7 +485,7 @@ def rules_view(request):
 
         if action == 'edit':
             pk = request.POST.get('pk', '').strip()
-            rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
+            rule = _rule_for_editor_or_404(request, pk)
             error = _apply_rule_edit(rule, _rule_form_from_post(request), request.user)
             if error:
                 messages.error(request, error)
@@ -486,18 +495,19 @@ def rules_view(request):
 
         if action == 'delete':
             pk = request.POST.get('pk', '').strip()
-            rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
+            rule = _rule_for_editor_or_404(request, pk)
+            owner = rule.owner
             rule.delete()
-            invalidate_for_rule_owner(request.user)
+            invalidate_for_rule_owner(owner)
             messages.success(request, 'Rule deleted.')
             return _rules_redirect(request.POST.get('return_q', ''))
 
         if action == 'toggle':
             pk = request.POST.get('pk', '').strip()
-            rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
+            rule = _rule_for_editor_or_404(request, pk)
             rule.is_enabled = not rule.is_enabled
             rule.save(update_fields=['is_enabled', 'updated_at'])
-            invalidate_for_rule_owner(request.user)
+            invalidate_for_rule_owner(rule.owner)
             label = 'enabled' if rule.is_enabled else 'disabled'
             messages.success(request, f'Rule {label}.')
             return redirect('rules')
@@ -764,7 +774,7 @@ def edit_rule_view(request, pk: int):
     shares its template) and saves through `_apply_rule_edit`, so the quick-edit panel
     on the rules list and this page apply identical rules.
     """
-    rule = get_object_or_404(ClassificationRule, pk=pk, owner=request.user)
+    rule = _rule_for_editor_or_404(request, pk)
 
     if request.method == 'POST':
         return_q = request.POST.get('return_q', '')
@@ -789,6 +799,36 @@ def edit_rule_view(request, pk: int):
         request.user, form,
         editing=True, return_q=_sanitize_return_q(return_q), rule=rule,
     ))
+
+
+CASE_INSENSITIVE_FLAG = '(?i)'
+
+
+def _regex_pattern_warnings(patterns) -> list[dict]:
+    """Warnings for valid but suspect regex patterns, one entry per pattern that
+    has any: rejected by re2 (fallback), slow on adversarial input (slow), or
+    starting with the (?i) flag, which makes regex matching slow
+    (case_insensitive)."""
+    regex_warnings = []
+    for pattern in patterns:
+        evaluation = evaluate_regex_pattern(pattern)
+        warning_kinds = []
+        if not evaluation['re2_ok']:
+            warning_kinds.append('fallback')
+        if evaluation['is_slow']:
+            warning_kinds.append('slow')
+        if pattern.lstrip().startswith(CASE_INSENSITIVE_FLAG):
+            warning_kinds.append('case_insensitive')
+        if not warning_kinds:
+            continue
+        regex_warnings.append({
+            'pattern': pattern,
+            'kinds': warning_kinds,
+            're2_error': evaluation['re2_error'],
+            'worst_ms': round(evaluation['worst_ms'], 2),
+            'worst_input': evaluation['worst_input'],
+        })
+    return regex_warnings
 
 
 def _read_rule_test_payload(request):
@@ -877,23 +917,7 @@ def test_rule_api(request):
         except ValueError as exc:
             return JsonResponse({'error': str(exc)}, status=400)
         if match_type == ClassificationRule.MATCH_REGEX:
-            regex_warnings = []
-            for pattern in patterns:
-                evaluation = evaluate_regex_pattern(pattern)
-                warning_kinds = []
-                if not evaluation['re2_ok']:
-                    warning_kinds.append('fallback')
-                if evaluation['is_slow']:
-                    warning_kinds.append('slow')
-                if not warning_kinds:
-                    continue
-                regex_warnings.append({
-                    'pattern': pattern,
-                    'kinds': warning_kinds,
-                    're2_error': evaluation['re2_error'],
-                    'worst_ms': round(evaluation['worst_ms'], 2),
-                    'worst_input': evaluation['worst_input'],
-                })
+            regex_warnings = _regex_pattern_warnings(patterns)
             if regex_warnings:
                 result_payload['regex_warnings'] = regex_warnings
         return JsonResponse(result_payload)
@@ -913,25 +937,8 @@ def test_rule_api(request):
     if match_type == ClassificationRule.MATCH_REGEX:
         # Invalid patterns are already rejected with HTTP 400 by
         # build_rule_test_results, so by the time we get here every pattern
-        # compiles in stdlib re. Warnings only cover the "valid but suspect"
-        # cases: rejected by re2 (fallback), or slow on adversarial input.
-        regex_warnings = []
-        for pattern in patterns:
-            evaluation = evaluate_regex_pattern(pattern)
-            warning_kinds = []
-            if not evaluation['re2_ok']:
-                warning_kinds.append('fallback')
-            if evaluation['is_slow']:
-                warning_kinds.append('slow')
-            if not warning_kinds:
-                continue
-            regex_warnings.append({
-                'pattern': pattern,
-                'kinds': warning_kinds,
-                're2_error': evaluation['re2_error'],
-                'worst_ms': round(evaluation['worst_ms'], 2),
-                'worst_input': evaluation['worst_input'],
-            })
+        # compiles in stdlib re.
+        regex_warnings = _regex_pattern_warnings(patterns)
         if regex_warnings:
             response_payload['regex_warnings'] = regex_warnings
 

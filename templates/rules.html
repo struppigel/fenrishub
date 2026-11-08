@@ -307,6 +307,15 @@
     .rule-source .parsed-filename { color: var(--la-parsed-filename); }
     .rule-source .parsed-company { color: var(--la-parsed-company); }
     .rule-source .parsed-arguments { color: var(--la-parsed-arguments); }
+
+    .regex-warning {
+        font-size: 12px;
+        padding: 6px 10px;
+        margin-top: 6px;
+        color: var(--la-warning-text);
+        background-color: var(--la-warning-bg);
+        border: 1px solid var(--la-warning-border);
+    }
 </style>
 {% endblock %}
 
@@ -352,6 +361,7 @@
             <div class="form-group">
                 <label for="editSourceText" id="editSourceTextLabel">source text</label>
                 <textarea id="editSourceText" name="source_text" required></textarea>
+                <div id="editCaseInsensitiveWarning" class="regex-warning" style="display: none;"></div>
                 <div id="editScriptHelp" style="display: none; font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">
                     Python snippet. <code>line</code> holds the log line and the <code>re</code> module is available; set <code>result</code> to truthy or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.
                 </div>
@@ -439,7 +449,7 @@
                 <span class="rule-priority" title="priority">p{{ rule.priority }}</span>
                 <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
                 {% if filter_mode != 'own' %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
-                {% if rule.owner_id == request.user.id %}
+                {% if rule.owner_id == request.user.id or request.user.is_superuser %}
                 <div class="rule-actions">
                     <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
                     <button type="button" class="rule-act" onclick="startEdit({{ rule.pk }}, '{{ rule.status|escapejs }}', '{{ rule.match_type|escapejs }}', '{{ rule.source_text|escapejs }}', '{{ rule.description|escapejs }}', {{ rule.is_enabled|yesno:'true,false' }}, {{ rule.priority }}, {{ rule.whole_log|yesno:'true,false' }}, {{ rule.color_whole_line|yesno:'true,false' }})">edit</button>
@@ -480,6 +490,17 @@
 
 <script>
 const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
+const PRIORITY_MAX = {{ priority_max }};
+const HIGHEST_PRIORITY_WARNING = 'highest priority should only be used in exceptional cases, are you sure?';
+const CASE_INSENSITIVE_WARNING = 'Regex warning: starts with (?i), this will make regex matching slow. Write the needed letter cases explicitly instead, e.g. [Ff]oo';
+
+function syncEditCaseInsensitiveWarning() {
+    const box = document.getElementById('editCaseInsensitiveWarning');
+    const show = document.getElementById('editMatchType').value === 'regex' &&
+        document.getElementById('editSourceText').value.trim().startsWith('(?i)');
+    box.textContent = show ? CASE_INSENSITIVE_WARNING : '';
+    box.style.display = show ? '' : 'none';
+}
 /* reverse('edit_rule', args=[0]) -> /rules/0/edit/; startEdit swaps in the real pk. */
 const EDIT_RULE_URL_TEMPLATE = "{% url 'edit_rule' 0 %}";
 
@@ -542,6 +563,7 @@ function startEdit(pk, status, matchType, sourceText, description, isEnabled, pr
     document.getElementById('editDescription').value = description;
     document.getElementById('editIsEnabled').checked = isEnabled;
     document.getElementById('editPriority').value = String(priority);
+    document.getElementById('editPriority').dataset.prevValue = String(priority);
     document.getElementById('editPriority').dataset.userTouched = 'true';
     document.getElementById('editWholeLog').checked = !!wholeLog;
     document.getElementById('editColorWholeLine').checked = !!colorWholeLine;
@@ -551,6 +573,7 @@ function startEdit(pk, status, matchType, sourceText, description, isEnabled, pr
     syncEditSourceTextMode();
     syncEditWholeLogMode();
     syncEditColorWholeLineMode();
+    syncEditCaseInsensitiveWarning();
     document.getElementById('editSourceText').focus();
 }
 
@@ -560,12 +583,16 @@ document.getElementById('editMatchType').addEventListener('change', function () 
         const fallback = DEFAULT_PRIORITY_BY_MATCH_TYPE[this.value];
         if (fallback !== undefined) {
             priorityInput.value = String(fallback);
+            priorityInput.dataset.prevValue = priorityInput.value;
         }
     }
     syncEditSourceTextMode();
     syncEditWholeLogMode();
     syncEditColorWholeLineMode();
+    syncEditCaseInsensitiveWarning();
 });
+
+document.getElementById('editSourceText').addEventListener('input', syncEditCaseInsensitiveWarning);
 
 document.getElementById('editStatus').addEventListener('change', syncEditWholeLogMode);
 document.getElementById('editWholeLog').addEventListener('change', function () {
@@ -574,6 +601,11 @@ document.getElementById('editWholeLog').addEventListener('change', function () {
 });
 
 document.getElementById('editPriority').addEventListener('change', function () {
+    if (parseInt(this.value, 10) === PRIORITY_MAX && !confirm(HIGHEST_PRIORITY_WARNING)) {
+        this.value = this.dataset.prevValue || '';
+        return;
+    }
+    this.dataset.prevValue = this.value;
     this.dataset.userTouched = 'true';
 });
 

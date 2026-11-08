@@ -280,6 +280,9 @@
 <div class="add-rule-top">
     <div class="rule-form-panel">
         <h2>{% if editing %}edit{% else %}add{% endif %} rule</h2>
+        {% if editing and rule.owner_id != request.user.id %}
+        <div id="ruleOwnerNote" class="regex-warning">editing a rule owned by {{ rule.owner.username|default:"another user" }}; they stay the owner</div>
+        {% endif %}
         <form method="post" id="addRuleForm">
             {% csrf_token %}
             {% if editing %}<input type="hidden" name="return_q" value="{{ return_q }}">{% endif %}
@@ -399,6 +402,8 @@
     const ANALYZER_URL = "{% url 'log_analyzer' %}";
     const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
     const EDITING = {% if editing %}true{% else %}false{% endif %};
+    const PRIORITY_MAX = {{ priority_max }};
+    const HIGHEST_PRIORITY_WARNING = 'highest priority should only be used in exceptional cases, are you sure?';
     /* Editing: hide the saved copy of this rule from the preview's existing-match
      * report, so it is not listed as already matching and cannot appear to shadow
      * the user's own pending edit. */
@@ -620,6 +625,9 @@
             }
             if ((w.kinds || []).indexOf('slow') !== -1) {
                 labels.push('slow on adversarial input (' + w.worst_ms + ' ms on ' + w.worst_input + ' — possible catastrophic backtracking)');
+            }
+            if ((w.kinds || []).indexOf('case_insensitive') !== -1) {
+                labels.push('starts with (?i), this will make regex matching slow. Write the needed letter cases explicitly instead, e.g. [Ff]oo');
             }
             header.textContent = 'Regex warning: ' + labels.join('; ');
             div.appendChild(header);
@@ -970,6 +978,7 @@
         if (fallback !== undefined && input.dataset.userTouched !== 'true') {
             input.value = String(fallback);
         }
+        input.dataset.prevValue = input.value;
     }
 
     function syncSourceTextMode() {
@@ -1131,6 +1140,11 @@
         scheduleRuleUpdate();
     });
     document.getElementById('rulePriority').addEventListener('change', function () {
+        if (parseInt(this.value, 10) === PRIORITY_MAX && !confirm(HIGHEST_PRIORITY_WARNING)) {
+            this.value = this.dataset.prevValue || '';
+            return;
+        }
+        this.dataset.prevValue = this.value;
         this.dataset.userTouched = 'true';
         scheduleRuleUpdate();
     });
