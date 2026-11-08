@@ -157,8 +157,19 @@ def _helper_series(counts, axis, granularity):
     }
 
 
+DEFAULT_TAG_CHART_CATEGORY = 'family'
+
+
 def _parse_category_id(raw, categories):
-    """The id of the category `raw` names among `categories`, or None for all / an invalid one."""
+    """The id of the category `raw` names among `categories`, or None for all / an invalid one.
+
+    Without the parameter at all (a fresh visit) the chart starts on the
+    "family" category when one exists; an empty value means all categories."""
+    if raw is None:
+        return next(
+            (c['id'] for c in categories if c['name'].strip().lower() == DEFAULT_TAG_CHART_CATEGORY),
+            None,
+        )
     try:
         category_id = int(raw)
     except (TypeError, ValueError):

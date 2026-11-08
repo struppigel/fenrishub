@@ -94,6 +94,9 @@ class TagStatsViewTests(TestCase):
         )
 
     def _get(self, **params):
+        # A fresh visit starts on the "family" category (see the default tests
+        # below); everything else here is about all categories unless it says so.
+        params.setdefault('tag_category', '')
         response = self.client.get(reverse('statistics'), params)
         self.assertEqual(response.status_code, 200)
         return response
@@ -169,6 +172,39 @@ class TagStatsViewTests(TestCase):
         self.assertEqual(set(self._series(response)), {'miner'})
         self.assertEqual(response.context['selected_tag_category'], self.family.pk)
         self.assertContains(response, f'<option value="{self.family.pk}" selected>family</option>', html=True)
+
+    def test_fresh_visit_defaults_to_the_family_category(self):
+        self._stat(rule_ids=[self.miner_rule.pk, self.adware_rule.pk])
+
+        response = self.client.get(reverse('statistics'))
+
+        self.assertEqual(response.context['selected_tag_category'], self.family.pk)
+        self.assertEqual(self._rows(response), {'miner': 1})
+        self.assertContains(response, f'<option value="{self.family.pk}" selected>family</option>', html=True)
+
+    def test_family_default_matches_the_name_case_insensitively(self):
+        self.family.name = 'Family'
+        self.family.save(update_fields=['name'])
+
+        response = self.client.get(reverse('statistics'))
+
+        self.assertEqual(response.context['selected_tag_category'], self.family.pk)
+
+    def test_without_a_family_category_the_default_is_all(self):
+        self.family.name = 'kinship'
+        self.family.save(update_fields=['name'])
+
+        response = self.client.get(reverse('statistics'))
+
+        self.assertIsNone(response.context['selected_tag_category'])
+
+    def test_all_categories_choice_survives_the_date_form_and_all_time(self):
+        response = self._get(tag_category='')
+
+        self.assertIsNone(response.context['selected_tag_category'])
+        # Without the empty value the next submit would fall back to "family".
+        self.assertContains(response, '<input type="hidden" name="tag_category" value="">', html=True)
+        self.assertContains(response, '?all=1&amp;tag_category="')
 
     def test_invalid_category_shows_all(self):
         self._stat(rule_ids=[self.miner_rule.pk, self.adware_rule.pk])

@@ -157,11 +157,11 @@
     <form method="get" class="stats-range-form">
         <label>start date<input type="date" name="start" value="{{ start_date }}"></label>
         <label>end date<input type="date" name="end" value="{{ end_date }}"></label>
-        {% if selected_tag_category %}<input type="hidden" name="tag_category" value="{{ selected_tag_category }}">{% endif %}
+        <input type="hidden" name="tag_category" value="{{ selected_tag_category|default_if_none:'' }}">
         {% for tag in selected_tags %}<input type="hidden" name="tags" value="{{ tag.id }}">{% endfor %}
         <button type="submit">apply</button>
         <a href="{% url 'statistics' %}"><button type="button">reset</button></a>
-        <a href="{% url 'statistics' %}?all=1{% if selected_tag_category %}&amp;tag_category={{ selected_tag_category }}{% endif %}{% for tag in selected_tags %}&amp;tags={{ tag.id }}{% endfor %}"><button type="button" title="everything from the first upload or fixlist on">all time</button></a>
+        <a href="{% url 'statistics' %}?all=1&amp;tag_category={{ selected_tag_category|default_if_none:'' }}{% for tag in selected_tags %}&amp;tags={{ tag.id }}{% endfor %}"><button type="button" title="everything from the first upload or fixlist on">all time</button></a>
         <span style="font-size: 12px; color: var(--la-text-muted);">showing {{ start_date }} &rarr; {{ end_date }}</span>
     </form>
 
