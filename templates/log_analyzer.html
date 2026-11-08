@@ -134,6 +134,13 @@
         display: block;
     }
 
+    /* Set by placeSubmenu() when opening to the right would leave the window
+       (the menus sit at the right edge of the toolbar). */
+    .snippet-submenu.opens-left {
+        left: auto;
+        right: 100%;
+    }
+
     /* "suggested" label above the speeches matching the loaded log: a
        label, not a menu entry, so it does not react to the pointer. */
     .snippet-menu-item.snippet-menu-heading,
@@ -580,6 +587,26 @@ window.logAnalyzerConfig = {
     // menu's root; more go into one "suggested" submenu.
     var SUGGESTED_INLINE_MAX = 3;
 
+    // Keeps a hovered entry's submenu inside the window: it opens to the left
+    // when there is no room on the right, and moves up when it would run past
+    // the bottom. Measured on every hover, since window size and item widths vary.
+    function placeSubmenu(item, sub) {
+        item.addEventListener('mouseenter', function() {
+            sub.classList.remove('opens-left');
+            sub.style.top = '';
+            var margin = 8;
+            var rect = sub.getBoundingClientRect();
+            if (rect.right > window.innerWidth - margin) {
+                var itemRect = item.getBoundingClientRect();
+                if (itemRect.left - rect.width >= margin) sub.classList.add('opens-left');
+            }
+            var overflowBottom = rect.bottom - (window.innerHeight - margin);
+            if (overflowBottom > 0) {
+                sub.style.top = -Math.min(overflowBottom, Math.max(0, rect.top - margin)) + 'px';
+            }
+        });
+    }
+
     function buildInsertMenu(options) {
         const menu = document.getElementById(options.menuId);
         const trigger = document.getElementById(options.triggerId);
@@ -689,6 +716,7 @@ window.logAnalyzerConfig = {
                     appendSuggestedItems(suggestedSub, extraSuggested);
                 }
                 suggestedEntry.appendChild(suggestedSub);
+                placeSubmenu(suggestedEntry, suggestedSub);
                 dropdown.appendChild(suggestedEntry);
             } else {
                 if (suggested.length) {
@@ -725,6 +753,7 @@ window.logAnalyzerConfig = {
                     sub.appendChild(item);
                 });
                 catItem.appendChild(sub);
+                placeSubmenu(catItem, sub);
                 dropdown.appendChild(catItem);
             });
             if (catNames.length === 0) {
