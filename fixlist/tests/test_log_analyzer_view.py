@@ -48,6 +48,31 @@ class LogAnalyzerViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'active-log')
         self.assertNotContains(response, 'trashed-log')
 
+    def test_logs_selector_lists_log_type_instead_of_filename(self):
+        make_uploaded_log(
+            upload_id='typed-log', original_filename='some-very-unique-name.txt',
+            forum_username='victim42', log_type='Addition',
+        )
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('log_analyzer'))
+
+        option = re.search(r'<option value="typed-log"[^>]*>([^<]*)</option>', response.content.decode())
+        self.assertIsNotNone(option)
+        self.assertEqual(option.group(1), 'typed-log | Addition | victim42')
+        # Forum username for the same-user-first ordering; filename stays in the tooltip.
+        self.assertIn('data-forum-username="victim42"', option.group(0))
+        self.assertIn('some-very-unique-name.txt', option.group(0))
+
+    def test_upload_content_api_includes_log_type(self):
+        uploaded = make_uploaded_log(upload_id='typed-log', log_type='FRST')
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('uploaded_log_content_api', args=[uploaded.upload_id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['log_type'], 'FRST')
+
     def test_renders_speech_capture_button_and_modal(self):
         self.client.login(username='alice', password='password123')
 
@@ -69,6 +94,13 @@ class LogAnalyzerViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'id="rightPanel"')
         self.assertContains(response, 'id="rightPanelCloseButton"')
         self.assertContains(response, 'id="rightPanelOpenButton"')
+
+    def test_renders_hidden_alerts_restore_link(self):
+        self.client.login(username='alice', password='password123')
+
+        response = self.client.get(reverse('log_analyzer'))
+
+        self.assertContains(response, 'id="analysisWarningsRestore"')
 
     def test_speech_capture_shares_by_default(self):
         self.client.login(username='alice', password='password123')

@@ -179,6 +179,45 @@
         flex: 0 0 auto;
     }
 
+    /* .analysis-warnings is display: grid, which beats the UA [hidden]
+       rule, so collapsing them needs this. */
+    .analysis-warnings[hidden] {
+        display: none;
+    }
+
+    /* When one toolbar half wraps onto a second line, the grid row grows and
+       the other half's line would stretch with it (tall save button, tall
+       snippets box). Packing the lines at the top keeps every line as tall
+       as its own buttons. */
+    .analyzer-toolbar {
+        align-content: flex-start;
+    }
+
+    /* "⚠ n hidden alerts" at the end of the toolbar: shown once any alert
+       warning is hidden, brings all of them back. Bare text, so it costs no
+       line of its own and stays quiet. */
+    .analysis-warnings-restore {
+        padding: 8px 4px;
+        background: none;
+        border: none;
+        color: var(--la-warning-text);
+    }
+
+    /* "hide all" next to the first open warning's x. */
+    .analysis-warning-header-actions {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+    }
+
+    .analysis-warning-hide-all {
+        padding: 0;
+        background: none;
+        border: none;
+        color: var(--la-warning-text);
+        font-size: 12px;
+    }
+
     /* The right column can be closed so the log gets the whole row. The
        toggles are bare glyphs: » at the far end of the tab row closes it,
        « at the top of the remaining strip opens it again. The splitter goes
@@ -268,7 +307,7 @@
         {% if not is_guest %}<button type="button" id="saveRulesRescanButton">save rules</button>{% endif %}
         {% if not is_guest %}<button type="button" id="toggleLoadUploadButton">logs</button>{% endif %}
         <button type="button" id="copyFrstPathButton">FRST path</button>
-        {% if is_superuser %}<button type="button" id="addRemainingCleanButton" title="Mark remaining parsed entries as clean (like CLI --clean_save)">remaining = C</button>{% endif %}
+        <button type="button" id="analysisWarningsRestore" class="analysis-warnings-restore" aria-controls="analysisWarnings" title="show the hidden alerts again" hidden></button>
     </div>
     <div class="analyzer-toolbar analyzer-toolbar-right">
         <div class="bulk-insert-controls" aria-label="bulk insert by status">
@@ -303,7 +342,7 @@
     <select id="uploadSourceSelect">
         <option value="">select upload id</option>
         {% for uploaded_log in uploaded_logs %}
-        <option value="{{ uploaded_log.upload_id }}" title="{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.original_filename|truncatechars:24 }} | {{ uploaded_log.forum_username }}</option>
+        <option value="{{ uploaded_log.upload_id }}" data-forum-username="{{ uploaded_log.forum_username }}" title="{{ uploaded_log.upload_id }} | {{ uploaded_log.log_type }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.original_filename }}">{{ uploaded_log.upload_id }} | {{ uploaded_log.log_type }} | {{ uploaded_log.forum_username }}</option>
         {% endfor %}
     </select>
     <span id="uploadLoadStatus" class="muted" aria-live="polite"></span>
@@ -536,6 +575,11 @@ window.logAnalyzerConfig = {
     // Two dropdowns insert stored text at the caret: `snippets` (fixlist lines)
     // and `speeches` (canned prose). They differ only in their data, their empty
     // label and where they insert, so they share one builder.
+
+    // Up to this many suggestions (own plus other helpers') are listed at the
+    // menu's root; more go into one "suggested" submenu.
+    var SUGGESTED_INLINE_MAX = 3;
+
     function buildInsertMenu(options) {
         const menu = document.getElementById(options.menuId);
         const trigger = document.getElementById(options.triggerId);
@@ -609,38 +653,54 @@ window.logAnalyzerConfig = {
             // their category, and stay in their category as well.
             var suggestedIds = options.suggestedKey ? (config[options.suggestedKey] || []) : [];
             var suggested = items.filter(function(s) { return suggestedIds.indexOf(s.id) !== -1; });
-            if (suggested.length) {
-                var header = document.createElement('div');
-                header.className = 'snippet-menu-item snippet-menu-heading';
-                header.textContent = 'suggested';
-                dropdown.appendChild(header);
-                suggested.forEach(function(s) {
-                    var item = document.createElement('div');
-                    item.className = 'snippet-menu-item snippet-menu-suggested';
-                    item.textContent = s.name;
-                    item.addEventListener('click', function() { insertItem(s.id); });
-                    dropdown.appendChild(item);
-                });
-            }
             // Other helpers' shared speeches, for tags no own speech covers.
             var extraItems = options.extraKey ? (config[options.extraKey] || []) : [];
             var extraIds = options.extraSuggestedKey ? (config[options.extraSuggestedKey] || []) : [];
             var extraSuggested = extraItems.filter(function(s) { return extraIds.indexOf(s.id) !== -1; });
-            if (extraSuggested.length) {
-                var extraHeader = document.createElement('div');
-                extraHeader.className = 'snippet-menu-item snippet-menu-heading';
-                extraHeader.textContent = 'from other helpers';
-                dropdown.appendChild(extraHeader);
-                extraSuggested.forEach(function(s) {
+            var suggestedCount = suggested.length + extraSuggested.length;
+
+            function appendHeading(container, text) {
+                var heading = document.createElement('div');
+                heading.className = 'snippet-menu-item snippet-menu-heading';
+                heading.textContent = text;
+                container.appendChild(heading);
+            }
+            function appendSuggestedItems(container, list) {
+                list.forEach(function(s) {
                     var item = document.createElement('div');
                     item.className = 'snippet-menu-item snippet-menu-suggested';
                     item.textContent = s.name;
                     item.addEventListener('click', function() { insertItem(s.id); });
-                    dropdown.appendChild(item);
+                    container.appendChild(item);
                 });
             }
+
+            if (suggestedCount > SUGGESTED_INLINE_MAX) {
+                // Too many to list at the root: one "suggested" entry whose
+                // submenu holds them all, the analyst's own first.
+                var suggestedEntry = document.createElement('div');
+                suggestedEntry.className = 'snippet-menu-item has-submenu snippet-menu-suggested';
+                suggestedEntry.textContent = 'suggested (' + suggestedCount + ')';
+                var suggestedSub = document.createElement('div');
+                suggestedSub.className = 'snippet-submenu';
+                appendSuggestedItems(suggestedSub, suggested);
+                if (extraSuggested.length) {
+                    appendHeading(suggestedSub, 'from other helpers');
+                    appendSuggestedItems(suggestedSub, extraSuggested);
+                }
+                suggestedEntry.appendChild(suggestedSub);
+                dropdown.appendChild(suggestedEntry);
+            } else {
+                if (suggested.length) {
+                    appendHeading(dropdown, 'suggested');
+                    appendSuggestedItems(dropdown, suggested);
+                }
+                if (extraSuggested.length) {
+                    appendHeading(dropdown, 'from other helpers');
+                    appendSuggestedItems(dropdown, extraSuggested);
+                }
+            }
             if (options.triggerLabel) {
-                var suggestedCount = suggested.length + extraSuggested.length;
                 trigger.textContent = options.triggerLabel
                     + (suggestedCount ? ' (' + suggestedCount + ' suggested)' : '') + ' ▾';
             }

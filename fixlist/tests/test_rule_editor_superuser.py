@@ -111,31 +111,40 @@ class RuleIdSearchTests(TestCase):
 
     def test_id_finds_another_users_rule_from_the_own_tab(self):
         rule = make_rule("BOB-RULE", owner=self.other)
-        self.assertEqual(self._ids(q=str(rule.pk)), [rule.pk])
+        self.assertEqual(self._ids(q=str(rule.pk), search_mode="id"), [rule.pk])
 
     def test_hash_prefixed_id_works(self):
         rule = make_rule("BOB-RULE", owner=self.other)
-        self.assertEqual(self._ids(q=f"#{rule.pk}"), [rule.pk])
+        self.assertEqual(self._ids(q=f"#{rule.pk}", search_mode="id"), [rule.pk])
 
-    def test_id_match_comes_first_and_text_matches_still_show(self):
+    def test_id_search_shows_only_that_rule(self):
+        rule = make_rule("BOB-RULE", owner=self.other)
+        make_rule(f"C:\\path{rule.pk}\\x.exe", owner=self.user)
+        self.assertEqual(self._ids(q=str(rule.pk), search_mode="id"), [rule.pk])
+
+    def test_text_search_does_not_match_rule_ids(self):
         rule = make_rule("BOB-RULE", owner=self.other)
         text_hit = make_rule(f"C:\\path{rule.pk}\\x.exe", owner=self.user)
-        self.assertEqual(self._ids(q=str(rule.pk)), [rule.pk, text_hit.pk])
-
-    def test_text_matches_keep_the_owner_filter(self):
-        rule = make_rule("BOB-RULE", owner=self.other)
-        make_rule(f"C:\\path{rule.pk}\\x.exe", owner=self.other)
-        self.assertEqual(self._ids(q=str(rule.pk)), [rule.pk])
+        self.assertEqual(self._ids(q=str(rule.pk)), [text_hit.pk])
 
     def test_list_shows_rule_id_and_foreign_owner(self):
         rule = make_rule("BOB-RULE", owner=self.other)
-        response = self.client.get(reverse("rules"), {"q": str(rule.pk)})
+        response = self.client.get(reverse("rules"), {"q": str(rule.pk), "search_mode": "id"})
         self.assertContains(response, f'title="rule id">#{rule.pk}</span>')
         self.assertContains(response, '<span class="rule-owner">bob</span>', html=True)
 
     def test_unknown_id_finds_nothing(self):
         make_rule("BOB-RULE", owner=self.other)
-        self.assertEqual(self._ids(q="999999"), [])
+        self.assertEqual(self._ids(q="999999", search_mode="id"), [])
+
+    def test_id_search_with_non_id_text_finds_nothing(self):
+        make_rule("BOB-RULE", owner=self.other)
+        self.assertEqual(self._ids(q="BOB-RULE", search_mode="id"), [])
+
+    def test_tab_links_keep_the_id_search_and_encode_the_hash(self):
+        rule = make_rule("BOB-RULE", owner=self.other)
+        response = self.client.get(reverse("rules"), {"q": f"#{rule.pk}", "search_mode": "id"})
+        self.assertContains(response, f"&q=%23{rule.pk}&search_mode=id")
 
     def test_line_search_does_not_treat_numbers_as_ids(self):
         rule = make_rule("BOB-RULE", owner=self.other)

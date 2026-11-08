@@ -30,7 +30,7 @@ from ..models import (
     RuleTag,
 )
 from ..rule_sets import invalidate_for_rule_owner
-from ..tagging import auto_tag_rules, parse_tag_ids, serialize_tag
+from ..tagging import auto_tag_rules, parse_tag_ids, selected_tags_for_picker, serialize_tag
 from ..rule_test_service import (
     build_rule_test_results,
     build_wholelog_rule_test_result,
@@ -525,6 +525,8 @@ def rules_view(request):
     filter_match = request.GET.get('match', '')
     search_q = request.GET.get('q', '').strip()
     search_mode = request.GET.get('search_mode', 'text')
+    if search_mode not in ('text', 'line', 'id'):
+        search_mode = 'text'
     sort = request.GET.get('sort', 'recent')
 
     SORT_OPTIONS = {
@@ -542,20 +544,35 @@ def rules_view(request):
         filter_mode = 'own'
         owner_q = Q(owner=request.user)
     rules = ClassificationRule.objects.select_related('owner')
-    # A text search that is a rule id ("27617" or "#27617") also finds that rule
-    # whoever owns it -- ids come up in the MCP API and analyzer tooltips, and the
-    # own/others tab should not hide the one rule asked for.
-    search_rule_id = _rule_id_from_query(search_q) if search_mode != 'line' else None
-    if not (search_q and search_rule_id is not None):
+    # The id search ("27617" or "#27617") finds that rule whoever owns it -- ids
+    # come up in the MCP API and analyzer tooltips, and the own/others tab should
+    # not hide the one rule asked for. Text search does not look at ids.
+    id_search = search_mode == 'id' and bool(search_q)
+    search_rule_id = _rule_id_from_query(search_q) if id_search else None
+    if not id_search:
         rules = rules.filter(owner_q)
 
-    filter_tag = None
-    raw_tag = request.GET.get('tag', '').strip()
-    if raw_tag.isdigit():
-        filter_tag = RuleTag.objects.filter(pk=int(raw_tag)).first()
-    if filter_tag is not None:
-        rules = rules.filter(tags=filter_tag)
+    # Rules must carry every picked tag. `tag` is the older single-tag param,
+    # still used by bookmarks; it is folded into `tags`.
+    filter_tag_ids = parse_tag_ids(request.GET.getlist('tags') + request.GET.getlist('tag'))
+    # One join per tag; each matches at most one row per rule, so no duplicates.
+    for tag_id in filter_tag_ids:
+        rules = rules.filter(tags=tag_id)
     rules = rules.prefetch_related('tags')
+    selected_tags = selected_tags_for_picker(filter_tag_ids)
+
+    filter_priority = request.GET.get('priority', '').strip()
+    if filter_priority.isdigit() and PRIORITY_MIN <= int(filter_priority) <= PRIORITY_MAX:
+        filter_priority = str(int(filter_priority))
+        rules = rules.filter(priority=int(filter_priority))
+    else:
+        filter_priority = ''
+
+    # Appended to the tab, clear and pagination links so they keep these filters.
+    extra_filter_params = [('tags', tag_id) for tag_id in filter_tag_ids]
+    if filter_priority:
+        extra_filter_params.append(('priority', filter_priority))
+    extra_filter_query = ('&' + urlencode(extra_filter_params)) if extra_filter_params else ''
 
     if filter_status and filter_status in dict(ClassificationRule.STATUS_CHOICES):
         rules = rules.filter(status=filter_status)
@@ -573,15 +590,10 @@ def rules_view(request):
             rules = rules.filter(id__in=ordered_ids).order_by(
                 Case(*[When(id=rid, then=pos) for pos, rid in enumerate(ordered_ids)])
             )
+        elif search_mode == 'id':
+            rules = rules.filter(pk=search_rule_id) if search_rule_id is not None else rules.none()
         else:
-            text_q = Q(source_text__icontains=search_q) | Q(description__icontains=search_q)
-            if search_rule_id is not None:
-                rules = rules.filter((owner_q & text_q) | Q(pk=search_rule_id)).order_by(
-                    Case(When(pk=search_rule_id, then=0), default=1),
-                    *ClassificationRule._meta.ordering,
-                )
-            else:
-                rules = rules.filter(owner_q & text_q)
+            rules = rules.filter(Q(source_text__icontains=search_q) | Q(description__icontains=search_q))
     else:
         sort_value = SORT_OPTIONS.get(sort, '-updated_at')
         if isinstance(sort_value, tuple):
@@ -597,7 +609,10 @@ def rules_view(request):
         'filter_mode': filter_mode,
         'filter_status': filter_status,
         'filter_match': filter_match,
-        'filter_tag': filter_tag,
+        'selected_tags': selected_tags,
+        'filter_priority': filter_priority,
+        'extra_filter_query': extra_filter_query,
+        'tag_filter_title': 'only rules that have every selected tag',
         'search_q': search_q,
         'search_mode': search_mode,
         'sort': sort,

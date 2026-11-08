@@ -591,18 +591,76 @@ async function openLineInspectorForIndex(index, options = {}) {
     }
 }
 
+// Alert warnings are hidden where they are: each one's x hides it, and the
+// first open one carries a "hide all" while two or more are open. Hidden ones
+// are only put away, never removed: once any are hidden, a "⚠ n hidden alerts"
+// link at the end of the toolbar brings all of them back. "hide all" is
+// remembered, so the next log's alerts start hidden behind that link until it
+// is clicked; a single x is not remembered.
+const ANALYSIS_WARNINGS_HIDDEN_KEY = 'fenrishub_analysis_warnings_collapsed';
+
+function getAnalysisWarningElements() {
+    return [...document.querySelectorAll('#analysisWarnings > .analysis-warning')];
+}
+
+function applyAnalysisWarningsVisibility() {
+    const container = document.getElementById('analysisWarnings');
+    if (!container) return;
+    const warnings = getAnalysisWarningElements();
+    const open = warnings.filter((warning) => !warning.hidden);
+    const hiddenCount = warnings.length - open.length;
+    container.hidden = open.length === 0;
+    warnings.forEach((warning) => {
+        const hideAll = warning.querySelector('.analysis-warning-hide-all');
+        if (hideAll) hideAll.hidden = !(open.length > 1 && warning === open[0]);
+    });
+    const restore = document.getElementById('analysisWarningsRestore');
+    if (restore) {
+        restore.hidden = hiddenCount === 0;
+        restore.textContent = `⚠ ${hiddenCount} hidden alert${hiddenCount === 1 ? '' : 's'}`;
+    }
+}
+
+function readStoredAnalysisWarningsHidden() {
+    try {
+        return localStorage.getItem(ANALYSIS_WARNINGS_HIDDEN_KEY) === '1';
+    } catch (e) {
+        return false;
+    }
+}
+
+function setAllAnalysisWarningsHidden(hidden) {
+    try {
+        localStorage.setItem(ANALYSIS_WARNINGS_HIDDEN_KEY, hidden ? '1' : '0');
+    } catch (e) {}
+    getAnalysisWarningElements().forEach((warning) => {
+        warning.hidden = hidden;
+    });
+    applyAnalysisWarningsVisibility();
+}
+
+function initAnalysisWarningsRestore() {
+    const restore = document.getElementById('analysisWarningsRestore');
+    if (restore) {
+        restore.addEventListener('click', () => setAllAnalysisWarningsHidden(false));
+    }
+    applyAnalysisWarningsVisibility();
+}
+
 function renderWarnings(warnings) {
     const container = document.getElementById('analysisWarnings');
     const warningList = Array.isArray(warnings) ? warnings : [];
     container.innerHTML = '';
+    const startHidden = readStoredAnalysisWarningsHidden();
 
     if (warningList.length === 0) {
-        container.hidden = true;
+        applyAnalysisWarningsVisibility();
         return;
     }
     warningList.forEach((warning) => {
         const warningElement = document.createElement('div');
         warningElement.className = 'analysis-warning';
+        warningElement.hidden = startHidden;
 
         const titleText = String(warning.title || 'Warning').trim();
         const messageText = String(warning.message || '').trim();
@@ -620,15 +678,29 @@ function renderWarnings(warnings) {
         closeButton.className = 'analysis-warning-close';
         closeButton.setAttribute('aria-label', 'Close warning');
         closeButton.textContent = 'x';
+        closeButton.title = 'hide this alert';
         closeButton.addEventListener('click', () => {
-            warningElement.remove();
-            if (container.children.length === 0) {
-                container.hidden = true;
-            }
+            warningElement.hidden = true;
+            applyAnalysisWarningsVisibility();
         });
 
+        // Shown only on the first open warning while two or more are open
+        // (applyAnalysisWarningsVisibility).
+        const hideAllButton = document.createElement('button');
+        hideAllButton.type = 'button';
+        hideAllButton.className = 'analysis-warning-hide-all';
+        hideAllButton.textContent = 'hide all';
+        hideAllButton.title = 'hide all alerts, also for the next logs';
+        hideAllButton.hidden = true;
+        hideAllButton.addEventListener('click', () => setAllAnalysisWarningsHidden(true));
+
+        const actionsElement = document.createElement('div');
+        actionsElement.className = 'analysis-warning-header-actions';
+        actionsElement.appendChild(hideAllButton);
+        actionsElement.appendChild(closeButton);
+
         headerElement.appendChild(titleElement);
-        headerElement.appendChild(closeButton);
+        headerElement.appendChild(actionsElement);
         warningElement.appendChild(headerElement);
 
         if (showMessage) {
@@ -660,7 +732,7 @@ function renderWarnings(warnings) {
         container.appendChild(warningElement);
     });
 
-    container.hidden = false;
+    applyAnalysisWarningsVisibility();
 }
 
 async function parseLogs() {

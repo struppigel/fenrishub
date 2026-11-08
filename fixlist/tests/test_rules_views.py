@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
-from ..models import ClassificationRule
+from ..models import ClassificationRule, RuleTag
 
 
 class RulesViewTests(TestCase):
@@ -461,6 +461,85 @@ class RulesViewTests(TestCase):
         response = self.client.get(reverse("rules") + "?filter=own&match=exact")
         self.assertContains(response, "EXACT-MT")
         self.assertNotContains(response, "SUB-MT")
+
+    def _tagged_rules(self):
+        miner = RuleTag.objects.create(name="TagFilterMiner")
+        adware = RuleTag.objects.create(name="TagFilterAdware")
+        both = ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="TAGGED-BOTH"
+        )
+        both.tags.add(miner, adware)
+        only_miner = ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="TAGGED-MINER"
+        )
+        only_miner.tags.add(miner)
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="TAGGED-NONE"
+        )
+        return miner, adware
+
+    def test_filter_by_one_tag(self):
+        miner, _ = self._tagged_rules()
+        response = self.client.get(reverse("rules"), {"filter": "own", "tags": miner.pk})
+        self.assertContains(response, "TAGGED-BOTH")
+        self.assertContains(response, "TAGGED-MINER")
+        self.assertNotContains(response, "TAGGED-NONE")
+
+    def test_filter_by_several_tags_needs_all_of_them(self):
+        miner, adware = self._tagged_rules()
+        response = self.client.get(
+            reverse("rules"), {"filter": "own", "tags": [miner.pk, adware.pk]}
+        )
+        self.assertContains(response, "TAGGED-BOTH")
+        self.assertNotContains(response, "TAGGED-MINER")
+        self.assertNotContains(response, "TAGGED-NONE")
+        self.assertEqual(
+            [tag["id"] for tag in response.context["selected_tags"]], [miner.pk, adware.pk]
+        )
+
+    def test_legacy_single_tag_param_still_filters(self):
+        _, adware = self._tagged_rules()
+        response = self.client.get(reverse("rules") + f"?filter=own&tag={adware.pk}")
+        self.assertContains(response, "TAGGED-BOTH")
+        self.assertNotContains(response, "TAGGED-MINER")
+        self.assertEqual([tag["id"] for tag in response.context["selected_tags"]], [adware.pk])
+
+    def test_filter_by_priority(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="PRIO-FIFTEEN", priority=15
+        )
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="PRIO-NINETEEN", priority=19
+        )
+        response = self.client.get(reverse("rules") + "?filter=own&priority=15")
+        self.assertContains(response, "PRIO-FIFTEEN")
+        self.assertNotContains(response, "PRIO-NINETEEN")
+        self.assertEqual(response.context["filter_priority"], "15")
+
+    def test_invalid_priority_filter_is_ignored(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="exact", source_text="PRIO-ANY", priority=15
+        )
+        for raw in ("abc", "99", "-1"):
+            with self.subTest(priority=raw):
+                response = self.client.get(reverse("rules"), {"filter": "own", "priority": raw})
+                self.assertContains(response, "PRIO-ANY")
+                self.assertEqual(response.context["filter_priority"], "")
+
+    def test_pagination_and_tabs_keep_tag_and_priority_filters(self):
+        tag = RuleTag.objects.create(name="TagFilterPaging")
+        for i in range(15):
+            rule = ClassificationRule.objects.create(
+                owner=self.user, status="B", match_type="exact",
+                source_text=f"TAGPAGE-{i:02d}", priority=15,
+            )
+            rule.tags.add(tag)
+        response = self.client.get(
+            reverse("rules"), {"filter": "own", "tags": tag.pk, "priority": 15}
+        )
+        self.assertContains(response, "page 1 of 2")
+        self.assertContains(response, f"?page=2&filter=own&amp;tags={tag.pk}&amp;priority=15")
+        self.assertContains(response, f"?filter=all&amp;tags={tag.pk}&amp;priority=15")
 
     def test_search_filters_by_source_text(self):
         ClassificationRule.objects.create(

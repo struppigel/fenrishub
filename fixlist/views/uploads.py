@@ -643,5 +643,6 @@ def uploaded_log_content_api(request, upload_id):
             'content': uploaded_log.content,
             'original_filename': uploaded_log.original_filename,
             'forum_username': uploaded_log.forum_username,
+            'log_type': uploaded_log.log_type,
         }
     )

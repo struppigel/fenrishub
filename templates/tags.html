@@ -164,7 +164,7 @@
                     <span class="tag-chip tag-row-name{{ tag|tag_category_class }}">{{ tag.name }}</span>
                     <span class="tag-row-meta">
                         {% if tag.builtin_code %}- <span title="also found in a log when the analyzer raises this warning">built-in: <code>{{ tag.builtin_code }}</code></span>{% endif %}
-                        - <a href="{% url 'rules' %}?filter=all&amp;tag={{ tag.pk }}">{{ tag.rule_count }} rule{{ tag.rule_count|pluralize }}</a>,
+                        - <a href="{% url 'rules' %}?filter=all&amp;tags={{ tag.pk }}">{{ tag.rule_count }} rule{{ tag.rule_count|pluralize }}</a>,
                         {{ tag.speech_count }} speech{{ tag.speech_count|pluralize:"es" }},
                         {{ tag.snippet_count }} snippet{{ tag.snippet_count|pluralize }}
                         {% if tag.pending_count %}, <a href="{% url 'rule_tag_edit' tag.pk %}" class="tag-pending" title="rules that meet the conditions but do not carry the tag yet">{{ tag.pending_count }} pending</a>{% endif %}

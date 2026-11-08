@@ -209,6 +209,8 @@
 
     .search-bar {
         display: flex;
+        flex-wrap: wrap;
+        align-items: center;
         gap: 4px;
         margin-bottom: 10px;
     }
@@ -219,7 +221,11 @@
         font-size: 12px;
     }
 
-    .search-bar button {
+    /* Only the bar's own buttons (search, clear): the tag picker's chip "x"
+       and dropdown options are buttons too, and this padding would make the
+       chips taller than the search button. */
+    .search-bar > button,
+    .search-bar > a > button {
         padding: 6px 10px;
         font-size: 12px;
     }
@@ -389,9 +395,9 @@
     <div class="divider"></div>
 
     <div class="filter-tabs">
-        <a href="?filter=own{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{% if filter_tag %}&tag={{ filter_tag.pk }}{% endif %}" {% if filter_mode == 'own' %}class="active"{% endif %}>own</a>
-        <a href="?filter=others{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{% if filter_tag %}&tag={{ filter_tag.pk }}{% endif %}" {% if filter_mode == 'others' %}class="active"{% endif %}>others</a>
-        <a href="?filter=all{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if search_mode == 'line' %}&search_mode=line{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{% if filter_tag %}&tag={{ filter_tag.pk }}{% endif %}" {% if filter_mode == 'all' %}class="active"{% endif %}>all</a>
+        <a href="?filter=own{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q|urlencode }}{% endif %}{% if search_mode != 'text' %}&search_mode={{ search_mode }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}" {% if filter_mode == 'own' %}class="active"{% endif %}>own</a>
+        <a href="?filter=others{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q|urlencode }}{% endif %}{% if search_mode != 'text' %}&search_mode={{ search_mode }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}" {% if filter_mode == 'others' %}class="active"{% endif %}>others</a>
+        <a href="?filter=all{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q|urlencode }}{% endif %}{% if search_mode != 'text' %}&search_mode={{ search_mode }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}" {% if filter_mode == 'all' %}class="active"{% endif %}>all</a>
         <span class="spacer"></span>
         <a href="{% url 'add_rule' %}">add rule</a>
     </div>
@@ -401,14 +407,17 @@
         {% if filter_status %}<input type="hidden" name="status" value="{{ filter_status }}">{% endif %}
         {% if filter_match %}<input type="hidden" name="match" value="{{ filter_match }}">{% endif %}
         {% if sort != 'recent' %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
-        {% if filter_tag %}<input type="hidden" name="tag" value="{{ filter_tag.pk }}">{% endif %}
+        {% if filter_priority %}<input type="hidden" name="priority" value="{{ filter_priority }}">{% endif %}
         <select name="search_mode" class="search-mode-select">
             <option value="text" {% if search_mode == 'text' %}selected{% endif %}>text search</option>
             <option value="line" {% if search_mode == 'line' %}selected{% endif %}>match by line</option>
+            <option value="id" {% if search_mode == 'id' %}selected{% endif %}>rule id</option>
         </select>
-        <input type="text" name="q" value="{{ search_q }}" placeholder="{% if search_mode == 'line' %}Paste a log line...{% else %}Search rules or a rule id...{% endif %}">
+        <input type="text" name="q" value="{{ search_q }}" placeholder="{% if search_mode == 'line' %}Paste a log line...{% elif search_mode == 'id' %}Rule id, e.g. 27617...{% else %}Search rules...{% endif %}">
+        {# Picked tags travel as repeated `tags` params; picking one submits the form. #}
+        {% include "partials/tag_filter_picker.html" %}
         <button type="submit">search</button>
-        {% if search_q %}<a href="?filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{% if filter_tag %}&tag={{ filter_tag.pk }}{% endif %}"><button type="button">clear</button></a>{% endif %}
+        {% if search_q %}<a href="?filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}"><button type="button">clear</button></a>{% endif %}
     </form>
 
     <div class="filter-dropdowns">
@@ -424,6 +433,12 @@
             <option value="{{ code }}" {% if filter_match == code %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
         </select>
+        <select onchange="applyFilter('priority', this.value)" title="only rules with this priority">
+            <option value="">all priorities</option>
+            {% for value, label in priority_choices %}
+            <option value="{{ value }}" {% if filter_priority == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
         <select onchange="applyFilter('sort', this.value)">
             <option value="recent" {% if sort == 'recent' %}selected{% endif %}>recently edited</option>
             <option value="created" {% if sort == 'created' %}selected{% endif %}>recently created</option>
@@ -432,8 +447,8 @@
         </select>
     </div>
 
-    {% if filter_tag %}
-    <div class="info-box" style="margin-bottom: 8px;">showing rules tagged <span class="tag-chip{{ filter_tag|tag_category_class }}" title="{{ filter_tag.description }}">{{ filter_tag.name }}</span> - <a href="#" onclick="applyFilter('tag', ''); return false;">show all rules</a> &middot; <a href="{% url 'rule_tags' %}?edit={{ filter_tag.pk }}">edit tag</a></div>
+    {% if selected_tags|length == 1 %}
+    <div class="rule-count"><a href="{% url 'rule_tags' %}?edit={{ selected_tags.0.id }}">edit tag {{ selected_tags.0.name }}</a></div>
     {% endif %}
 
     <div class="rule-count">{{ page_obj.paginator.count }} rule{{ page_obj.paginator.count|pluralize }} found{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
@@ -459,7 +474,7 @@
                 {% endif %}
             </div>
             {% if rule.description %}<div class="rule-description">{{ rule.description }}</div>{% endif %}
-            {% if rule.tags.all %}<div class="rule-tags">{% for tag in rule.tags.all %}<a class="tag-chip{{ tag|tag_category_class }}" href="?filter=all&amp;tag={{ tag.pk }}" title="{{ tag.description }}">{{ tag.name }}</a> {% endfor %}</div>{% endif %}
+            {% if rule.tags.all %}<div class="rule-tags">{% for tag in rule.tags.all %}<a class="tag-chip{{ tag|tag_category_class }}" href="?filter=all&amp;tags={{ tag.pk }}" title="{{ tag.description }}">{{ tag.name }}</a> {% endfor %}</div>{% endif %}
         </div>
         {% endfor %}
     {% else %}
@@ -471,19 +486,19 @@
     {% if page_obj.paginator.num_pages > 1 %}
     <div class="pagination">
         {% if page_obj.has_previous %}
-        <a href="?page={{ page_obj.previous_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{% if filter_tag %}&tag={{ filter_tag.pk }}{% endif %}">prev</a>
+        <a href="?page={{ page_obj.previous_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q|urlencode }}{% endif %}{% if search_mode != 'text' %}&search_mode={{ search_mode }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}">prev</a>
         {% endif %}
         {% for num in page_obj.paginator.page_range %}
             {% if num == page_obj.number %}
             <span class="current-page">{{ num }}</span>
             {% elif num == 1 or num == page_obj.paginator.num_pages or num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
-            <a href="?page={{ num }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{% if filter_tag %}&tag={{ filter_tag.pk }}{% endif %}">{{ num }}</a>
+            <a href="?page={{ num }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q|urlencode }}{% endif %}{% if search_mode != 'text' %}&search_mode={{ search_mode }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}">{{ num }}</a>
             {% elif num == 2 or num == page_obj.paginator.num_pages|add:"-1" %}
             <span class="ellipsis">&hellip;</span>
             {% endif %}
         {% endfor %}
         {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{% if filter_tag %}&tag={{ filter_tag.pk }}{% endif %}">next</a>
+        <a href="?page={{ page_obj.next_page_number }}&filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q|urlencode }}{% endif %}{% if search_mode != 'text' %}&search_mode={{ search_mode }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}">next</a>
         {% endif %}
     </div>
     {% endif %}
@@ -632,7 +647,8 @@ function applyFilter(param, value) {
 
 document.querySelector('.search-mode-select').addEventListener('change', function () {
     const input = document.querySelector('.search-bar input[name="q"]');
-    input.placeholder = this.value === 'line' ? 'Paste a log line...' : 'Search rules or a rule id...';
+    const placeholders = { line: 'Paste a log line...', id: 'Rule id, e.g. 27617...' };
+    input.placeholder = placeholders[this.value] || 'Search rules...';
 });
 </script>
 {% endblock %}

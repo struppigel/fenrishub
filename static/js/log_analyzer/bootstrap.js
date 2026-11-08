@@ -63,6 +63,30 @@ function showCachedAnalysisLayout() {
     if (resetButton) resetButton.style.display = 'inline-flex';
 }
 
+// The logs dropdown lists the forum user's other logs first: those with the
+// same forum username as the loaded log move to the top, each group keeping
+// the server's order. With no log loaded the original order comes back.
+function sortUploadOptionsByForumUsername(selectElement, forumUsername) {
+    if (!selectElement) return;
+    const wanted = String(forumUsername || '').trim().toLowerCase();
+    const options = [...selectElement.options].filter((option) => option.value);
+    // The first call sees the server's order; options added later go last.
+    options.forEach((option, index) => {
+        if (option.dataset.order === undefined) {
+            option.dataset.order = String(selectElement.dataset.ordered ? 1e6 + index : index);
+        }
+    });
+    selectElement.dataset.ordered = '1';
+    const isSameUser = (option) => Boolean(wanted)
+        && String(option.dataset.forumUsername || '').trim().toLowerCase() === wanted;
+    const selectedValue = selectElement.value;
+    options
+        .sort((a, b) => (Number(isSameUser(b)) - Number(isSameUser(a)))
+            || (Number(a.dataset.order) - Number(b.dataset.order)))
+        .forEach((option) => selectElement.appendChild(option));
+    selectElement.value = selectedValue;
+}
+
 async function loadSelectedUploadForAnalyzer() {
     const selectElement = document.getElementById('uploadSourceSelect');
     const statusElement = document.getElementById('uploadLoadStatus');
@@ -75,6 +99,7 @@ async function loadSelectedUploadForAnalyzer() {
     if (!uploadId) {
         statusElement.textContent = '';
         setCurrentForumUsername('');
+        sortUploadOptionsByForumUsername(selectElement, '');
         const url = new URL(window.location);
         url.searchParams.delete('upload_id');
         window.history.replaceState(null, '', url);
@@ -116,26 +141,22 @@ async function loadSelectedUploadForAnalyzer() {
         (option) => option.value === uploadId,
     );
     if (placeholderOption) {
-        const filename = String(contentPayload.original_filename || '');
-        // Match the template's truncatechars:24 so long filenames don't
-        // stretch the select; the full name stays in the tooltip.
-        const shortFilename = filename.length > 24 ? `${filename.slice(0, 23)}…` : filename;
-        const fullParts = [
-            contentPayload.upload_id || uploadId,
-            filename,
-            contentPayload.forum_username,
-        ].filter((part) => part && String(part).trim().length > 0);
+        // Same shape as the template's options: the log type is listed, the
+        // filename only shows in the tooltip.
+        const nonEmpty = (part) => part && String(part).trim().length > 0;
         const shortParts = [
             contentPayload.upload_id || uploadId,
-            shortFilename,
+            contentPayload.log_type,
             contentPayload.forum_username,
-        ].filter((part) => part && String(part).trim().length > 0);
+        ].filter(nonEmpty);
         placeholderOption.textContent = shortParts.join(' | ');
-        placeholderOption.title = fullParts.join(' | ');
+        placeholderOption.title = [...shortParts, contentPayload.original_filename].filter(nonEmpty).join(' | ');
+        placeholderOption.dataset.forumUsername = contentPayload.forum_username || '';
     }
 
     // Speech placeholders resolve {USERNAME} against whichever log is loaded.
     setCurrentForumUsername(contentPayload.forum_username);
+    sortUploadOptionsByForumUsername(selectElement, contentPayload.forum_username);
 
     if (typeof resetToInput === 'function') {
         resetToInput();
@@ -524,7 +545,6 @@ function bindAnalyzerControls() {
     bindAnalyzerButton('wizardNextButton', () => advanceConflictWizard());
     bindAnalyzerButton('toggleLoadUploadButton', () => toggleUploadSourceRow());
     bindAnalyzerButton('copyFrstPathButton', () => copyFrstPathFromLog());
-    bindAnalyzerButton('addRemainingCleanButton', () => addRemainingAsClean());
 
     const uploadSourceSelect = document.getElementById('uploadSourceSelect');
     if (uploadSourceSelect) {
@@ -726,6 +746,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (typeof initRightPanelToggle === 'function') {
         initRightPanelToggle();
+    }
+    if (typeof initAnalysisWarningsRestore === 'function') {
+        initAnalysisWarningsRestore();
     }
     if (typeof initRightPanelState === 'function') {
         initRightPanelState();
