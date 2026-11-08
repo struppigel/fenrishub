@@ -111,13 +111,43 @@ class WriteAuthTests(ApiWriteBase):
         self.assertEqual((rule.source_text, rule.description), ('C:\\mine.exe', ''))
         self.assertFalse(ClassificationRule.objects.filter(source_text='changed').exists())
 
+    # Read-only endpoints whose input does not fit a URL: they also take a POST
+    # with a JSON body, from any token, and change nothing.
+    READ_POST_ENDPOINTS = {'api_v1_search', 'api_v1_rule_test', 'api_v1_rule_match'}
+
     def test_every_other_endpoint_is_get_only(self):
         for pattern in self._api_v1_patterns():
             self.assertIsNotNone(getattr(pattern.callback, 'api_write', None), f'{pattern.name} is not token-gated')
-            if not pattern.callback.api_write:
+            if not pattern.callback.api_write and pattern.name not in self.READ_POST_ENDPOINTS:
                 args = [1] * len(pattern.pattern.converters)
                 response = self.post(pattern.name, *args, raw=self.write_raw)
                 self.assertEqual(response.status_code, 405, pattern.name)
+
+    def test_read_post_endpoints_are_exactly_the_listed_ones(self):
+        read_post_names = {
+            pattern.name for pattern in self._api_v1_patterns()
+            if not pattern.callback.api_write and 'POST' in pattern.callback.api_methods
+        }
+        self.assertEqual(read_post_names, self.READ_POST_ENDPOINTS)
+
+    def test_read_post_endpoints_work_with_a_read_token_and_change_nothing(self):
+        rule = make_rule('C:\\mine.exe', owner=self.admin)
+        make_uploaded_log('amber-falcon', content='C:\\mine.exe\n', log_type='FRST')
+        bodies = {
+            'api_v1_search': {'q': 'mine.exe'},
+            'api_v1_rule_test': {'source_text': 'mine.exe', 'match_type': 'substring', 'status': 'P'},
+            'api_v1_rule_match': {'lines': ['C:\\mine.exe']},
+        }
+        for name in sorted(self.READ_POST_ENDPOINTS):
+            response = self.post(name, body=bodies[name], raw=self.helper_raw)
+            self.assertEqual(response.status_code, 200, name)
+        self.assertEqual(ClassificationRule.objects.count(), 1)
+        rule.refresh_from_db()
+        self.assertEqual((rule.status, rule.source_text), ('B', 'C:\\mine.exe'))
+
+    def test_post_only_read_endpoints_refuse_get(self):
+        for name in ('api_v1_rule_test', 'api_v1_rule_match'):
+            self.assertEqual(self.get(name).status_code, 405, name)
 
     def test_kill_switch_blocks_writes(self):
         enable_api(False)

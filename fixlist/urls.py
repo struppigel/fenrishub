@@ -55,6 +55,8 @@ from .views.llm_api import (
     api_fixlist_template,
     api_rule,
     api_rule_create,
+    api_rule_match,
+    api_rule_test,
     api_rule_update,
     api_rules,
     api_search,
@@ -196,6 +198,9 @@ urlpatterns = [
     path('api/v1/fixlist-template/', api_fixlist_template, name='api_v1_fixlist_template'),
     path('api/v1/rules/', api_rules, name='api_v1_rules'),
     path('api/v1/rules/create/', api_rule_create, name='api_v1_rule_create'),
+    # Read-only, but POST: their input (log lines, rule text) does not fit a URL.
+    path('api/v1/rules/test/', api_rule_test, name='api_v1_rule_test'),
+    path('api/v1/rules/match/', api_rule_match, name='api_v1_rule_match'),
     path('api/v1/rules/<int:rule_id>/', api_rule, name='api_v1_rule'),
     path('api/v1/rules/<int:rule_id>/update/', api_rule_update, name='api_v1_rule_update'),
     path('api/v1/tags/', api_tags, name='api_v1_tags'),

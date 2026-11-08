@@ -19,6 +19,7 @@ The per-minute counter lives in the default cache, which is per process, so it
 is a soft limit. The 24 h limits read ApiRequestLog and hold across workers.
 """
 
+import json
 import logging
 import time
 from datetime import timedelta
@@ -44,6 +45,11 @@ TOKEN_QUERY_PARAMS = ('token', 'access_token', 'api_key', 'key')
 LAST_USED_REFRESH_SECONDS = 60
 USER_AGENT_MAX_CHARS = 200
 TARGET_MAX_CHARS = 200
+# Sent on every response. Raised when the API gains parameters an older
+# deployment would silently ignore, so a newer MCP client can refuse to use
+# them against an older server instead of getting unfiltered results.
+API_VERSION = 2
+API_VERSION_HEADER = 'X-FenrisHub-Api-Version'
 
 
 def api_limits() -> dict:
@@ -66,6 +72,7 @@ def _minute_bucket() -> int:
 
 def _error(message, status, retry_after=None):
     response = PayloadValidator.error_response(message, status=status)
+    response[API_VERSION_HEADER] = str(API_VERSION)
     if retry_after is not None:
         response['Retry-After'] = str(max(1, int(retry_after)))
     return response
@@ -160,10 +167,21 @@ def _target_for(request, kwargs) -> str:
         value = (request.GET.get(key) or '').strip()
         if value:
             return value[:TARGET_MAX_CHARS]
+    if request.method == 'POST':
+        # Read endpoints taking a JSON body (search, rule tests) log their query too.
+        try:
+            body = json.loads(request.body.decode('utf-8') or '{}')
+        except (ValueError, UnicodeDecodeError):
+            body = None
+        if isinstance(body, dict):
+            for key in ('q', 'source_text'):
+                value = body.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()[:TARGET_MAX_CHARS]
     return ''
 
 
-def api_token_required(endpoint, *, cost=1, write=False):
+def api_token_required(endpoint, *, cost=1, write=False, methods=None):
     """Decorate an API view: kill switch, HTTPS, token auth, limits, logging.
 
     `endpoint` names the row in ApiRequestLog; `cost` is how many per-minute
@@ -171,10 +189,19 @@ def api_token_required(endpoint, *, cost=1, write=False):
 
     Views are read-only GET endpoints unless `write=True`: those take a POST
     with a JSON body and need a write token (`ApiToken.can_write`) whose user
-    is a superuser right now. They are CSRF-exempt, which is safe because the
-    API ignores the session entirely - the Authorization header is the only
-    identity, so a page in someone's browser cannot ride on their login.
+    is a superuser right now. A read-only view whose input does not fit a URL
+    (log lines, long regexes) may also take a POST with a JSON body:
+    `methods=('POST',)` or `('GET', 'POST')`; any token may call it. Views
+    taking a POST are CSRF-exempt, which is safe because the API ignores the
+    session entirely - the Authorization header is the only identity, so a
+    page in someone's browser cannot ride on their login.
     """
+    if write:
+        allowed_methods = ('POST',)
+    else:
+        allowed_methods = tuple(methods or ('GET',))
+        if not set(allowed_methods) <= {'GET', 'POST'}:
+            raise ValueError('Read-only API views take GET and/or POST only.')
 
     def decorator(view_func):
         @wraps(view_func)
@@ -185,10 +212,8 @@ def api_token_required(endpoint, *, cost=1, write=False):
                 return _error('The API is disabled on this server.', 503)
             if not settings.DEBUG and not request.is_secure():
                 return _error('HTTPS is required.', 400)
-            if write and request.method != 'POST':
-                return _error('Only POST is supported.', 405)
-            if not write and request.method != 'GET':
-                return _error('Only GET is supported.', 405)
+            if request.method not in allowed_methods:
+                return _error(f"Only {' or '.join(allowed_methods)} is supported.", 405)
             if any(param in request.GET for param in TOKEN_QUERY_PARAMS):
                 return _error('Send the token in the Authorization header, never in the URL.', 400)
 
@@ -231,6 +256,7 @@ def api_token_required(endpoint, *, cost=1, write=False):
 
             # Responses carry victims' log data; keep them out of every cache.
             response['Cache-Control'] = 'no-store'
+            response[API_VERSION_HEADER] = str(API_VERSION)
             response_bytes = len(response.content) if not response.streaming else 0
             _log_request(
                 request, token, endpoint, kwargs, response.status_code, response_bytes,
@@ -238,9 +264,11 @@ def api_token_required(endpoint, *, cost=1, write=False):
             )
             return response
 
-        # Read by the tests that check every /api/v1/ view is either GET-only or write-gated.
+        # Read by the tests that check every /api/v1/ view is either GET-only,
+        # write-gated or one of the listed read-only POST views.
         _wrapped.api_write = write
-        return csrf_exempt(_wrapped) if write else _wrapped
+        _wrapped.api_methods = allowed_methods
+        return csrf_exempt(_wrapped) if 'POST' in allowed_methods else _wrapped
 
     return decorator
 

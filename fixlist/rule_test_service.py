@@ -8,12 +8,14 @@ from . import script_matcher
 from .analyzer import (
     STATUS_LABELS,
     STATUS_PRECEDENCE,
+    _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY,
     _load_rule_buckets,
     find_substring_ranges,
     inspect_line_matches,
     parse_rule_line,
 )
 from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
+from .rule_sets import SHARED_RULE_SET_KEY
 
 
 def _merge_ranges(ranges: list) -> list:
@@ -192,6 +194,8 @@ def build_rule_test_results(
     lines: list,
     priority: int | None = None,
     exclude_rule_id=None,
+    rule_set_key: str = SHARED_RULE_SET_KEY,
+    buckets=None,
 ) -> dict:
     """Build per-line rule test results for the rules test API.
 
@@ -204,6 +208,11 @@ def build_rule_test_results(
     ``exclude_rule_id`` hides one saved rule from the "existing matches" side of the
     report. The rule editor passes the rule being edited so it is not listed as an
     existing match of itself, nor reported as shadowing its own pending edit.
+
+    ``rule_set_key`` picks the rules the existing verdicts come from; the token
+    API passes the caller's, so they agree with that caller's analyses, along
+    with the cached ``buckets`` of that rule set; without them the rules are
+    loaded fresh, as the browser preview has always done.
     """
     compiled_patterns = [
         _compile_pattern(pattern, status, match_type) for pattern in patterns
@@ -215,7 +224,8 @@ def build_rule_test_results(
         new_priority = max(PRIORITY_MIN, min(PRIORITY_MAX, int(priority)))
 
     # Load existing rule buckets once for inspect_line_matches.
-    buckets = _load_rule_buckets()
+    if buckets is None:
+        buckets = _load_rule_buckets(rule_set_key)
 
     results = []
     for raw_line in lines:
@@ -344,6 +354,7 @@ def scan_logs_for_rule_matches(
     *,
     max_lines: int,
     deadline: float,
+    count_all: bool = False,
 ) -> dict:
     """Find the distinct lines a rule matches across stored logs.
 
@@ -352,6 +363,11 @@ def scan_logs_for_rule_matches(
     to many machines is reviewed once; entries come back most widespread first.
     Scanning stops after ``max_lines`` distinct lines (``truncated``) or once
     ``time.monotonic()`` passes ``deadline`` (``timed_out``).
+
+    With ``count_all`` a full ``truncated`` sample does not stop the scan: it
+    goes on counting, so ``logs_matched``, ``line_hits`` (matching lines, repeats
+    within a log included) and ``distinct_lines`` cover every log scanned, while
+    ``matches`` keeps only the first ``max_lines`` distinct lines.
     """
     compiled_patterns = [
         _compile_pattern(pattern, status, match_type) for pattern in patterns
@@ -359,6 +375,9 @@ def scan_logs_for_rule_matches(
     strip = match_type in ('exact', 'parsed', 'filepath')
 
     found = {}
+    # Distinct lines past the sample, kept only to count them (count_all).
+    overflow = set()
+    line_hits = 0
     logs_scanned = 0
     logs_matched = 0
     truncated = False
@@ -380,7 +399,10 @@ def scan_logs_for_rule_matches(
             # Normalised exactly as build_rule_test_results does, so the lines
             # handed back to it produce the same verdicts the scan found.
             line = raw_line.strip() if strip else raw_line
-            if not line.strip() or line in matched_here:
+            if not line.strip():
+                continue
+            if line in matched_here:
+                line_hits += 1
                 continue
             if not any(_match_line(p, match_type, line)['matched'] for p in compiled_patterns):
                 continue
@@ -389,22 +411,30 @@ def scan_logs_for_rule_matches(
             if entry is None:
                 if len(found) >= max_lines:
                     truncated = True
-                    break
+                    if not count_all:
+                        break
+                    overflow.add(line)
+                    matched_here.add(line)
+                    line_hits += 1
+                    continue
                 entry = found[line] = {'line': line, 'logs': [], 'log_count': 0}
             matched_here.add(line)
+            line_hits += 1
             entry['log_count'] += 1
             if len(entry['logs']) < LOG_REFS_PER_LINE:
                 entry['logs'].append({'upload_id': upload_id, 'line_number': line_number})
 
         if matched_here:
             logs_matched += 1
-        if truncated or timed_out:
+        if (truncated and not count_all) or timed_out:
             break
 
     return {
         'matches': sorted(found.values(), key=lambda entry: -entry['log_count']),
         'logs_scanned': logs_scanned,
         'logs_matched': logs_matched,
+        'line_hits': line_hits,
+        'distinct_lines': len(found) + len(overflow),
         'truncated': truncated,
         'timed_out': timed_out,
     }
@@ -438,4 +468,193 @@ def scan_logs_for_wholelog_matches(patterns: list, match_type: str, logs, *, dea
         'logs_matched': len(matched_logs),
         'timed_out': timed_out,
         'script_error': script_error,
+    }
+
+
+def _effective_priority_of_match(match: dict) -> int:
+    """The priority a serialized existing match competes with (see analyzer._effective_match_priority)."""
+    if match.get('matcher') == 'filepath' and match.get('match_type') != ClassificationRule.MATCH_FILEPATH:
+        return _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY
+    return match.get('priority') or 0
+
+
+def _verdict_of(entries) -> str:
+    """The analyzer's verdict for ``(effective priority, status)`` matches: the top tier, by precedence."""
+    entries = list(entries)
+    if not entries:
+        return '?'
+    top = max(priority for priority, _status in entries)
+    statuses = {status for priority, status in entries if priority == top}
+    for status in STATUS_PRECEDENCE:
+        if status in statuses:
+            return status
+    return '?'
+
+
+def line_outcome(result: dict) -> str:
+    """How a candidate rule fares on one matched line of build_rule_test_results."""
+    if result.get('new_rule_shadowed'):
+        return 'shadowed'
+    if result.get('new_rule_outranked'):
+        return 'outranked'
+    if result.get('existing_priority') is None:
+        return 'new_verdict'
+    if result['new_rule_priority'] > result['existing_priority']:
+        return 'wins'
+    return 'ties'
+
+
+def summarize_rule_test(results: list, status: str) -> dict:
+    """Roll the per-line results of build_rule_test_results up for a dry run.
+
+    Over the matched lines: how the new rule fares on each (``outcome_counts``),
+    how verdicts would change (``verdict_changes``, ``"?->B": n``), and every
+    existing rule in the winning tier of those lines today (``existing_rules``).
+    For each such rule, ``redundant_lines`` counts the lines where removing it
+    would no longer change the verdict once the new rule exists - a rule
+    redundant on all its sample lines is a candidate to retire, though it may
+    still decide lines the new rule never matches (compare_rule_scans shows those).
+    """
+    outcome_counts = {'new_verdict': 0, 'wins': 0, 'ties': 0, 'outranked': 0, 'shadowed': 0}
+    verdict_changes = {}
+    unchanged = 0
+    rules = {}
+
+    for result in results:
+        if not result.get('matched'):
+            continue
+        existing = result.get('existing_status', '?')
+        combined = result.get('combined_status', '?')
+        outcome_counts[line_outcome(result)] += 1
+        if combined != existing:
+            key = f'{existing}->{combined}'
+            verdict_changes[key] = verdict_changes.get(key, 0) + 1
+        else:
+            unchanged += 1
+
+        effective = result.get('existing_matches') or []
+        shadowed = result.get('existing_shadowed') or []
+        tier_priority = result.get('existing_priority')
+        new_entry = (result['new_rule_priority'], status)
+        # Every competing match, with the priority it really competes at.
+        competing = (
+            [(match['id'], (tier_priority, match['status'])) for match in effective]
+            + [(match['id'], (_effective_priority_of_match(match), match['status'])) for match in shadowed]
+        )
+        verdict_with_all = _verdict_of([entry for _rule_id, entry in competing] + [new_entry])
+
+        for match in effective:
+            row = rules.get(match['id'])
+            if row is None:
+                row = rules[match['id']] = {
+                    'rule_id': match['id'],
+                    'status': match['status'],
+                    'match_type': match['match_type'],
+                    'priority': match['priority'],
+                    'owner': match.get('owner_username', ''),
+                    'source_text': match['source_text'],
+                    'description': match.get('description', ''),
+                    'lines': 0,
+                    'decided_lines': 0,
+                    'redundant_lines': 0,
+                }
+            row['lines'] += 1
+            if match['status'] == existing:
+                row['decided_lines'] += 1
+            without = [entry for rule_id, entry in competing if rule_id != match['id']] + [new_entry]
+            if _verdict_of(without) == verdict_with_all:
+                row['redundant_lines'] += 1
+
+    existing_rules = sorted(rules.values(), key=lambda row: (-row['lines'], row['rule_id']))
+    for row in existing_rules:
+        row['redundant_on_all_sample_lines'] = row['redundant_lines'] == row['lines']
+    return {
+        'outcome_counts': outcome_counts,
+        'verdict_changes': dict(sorted(verdict_changes.items(), key=lambda item: -item[1])),
+        'unchanged_lines': unchanged,
+        'existing_rules': existing_rules,
+    }
+
+
+def literal_prefilter(patterns: list, match_type: str):
+    """Literals of which every matching log must contain one, for a database prefilter, or None.
+
+    Only exact and substring rules have such a literal (see _may_contain_match).
+    """
+    if match_type == 'substring':
+        literals = [pattern for pattern in patterns if pattern]
+    elif match_type == 'exact':
+        literals = [pattern.strip() for pattern in patterns if pattern.strip()]
+    else:
+        return None
+    return literals or None
+
+
+def compare_rule_scans(new_rule: dict, old_rule: dict, logs, *, deadline: float, sample_lines: int) -> dict:
+    """Which distinct lines a candidate rule and an existing rule match, in one pass over `logs`.
+
+    Each rule is ``{'patterns', 'status', 'match_type'}``. Returns the counts of
+    distinct lines only the new rule matches, only the old one, or both, with a
+    sample of each one-sided kind (most widespread first): whether a new rule
+    covers everything an old per-case rule caught, and what else it catches.
+    """
+    sides = []
+    for rule in (new_rule, old_rule):
+        sides.append({
+            'compiled': [_compile_pattern(p, rule['status'], rule['match_type']) for p in rule['patterns']],
+            'match_type': rule['match_type'],
+            'strip': rule['match_type'] in ('exact', 'parsed', 'filepath'),
+        })
+
+    seen = {'both': set(), 'only_new': set(), 'only_old': set()}
+    samples = {'only_new': {}, 'only_old': {}}
+    logs_scanned = 0
+    timed_out = False
+
+    for upload_id, content in logs:
+        if time.monotonic() > deadline:
+            timed_out = True
+            break
+        logs_scanned += 1
+        may_match = [_may_contain_match(side['compiled'], side['match_type'], content) for side in sides]
+        if not any(may_match):
+            continue
+        tested_here = set()
+        for line_number, raw_line in enumerate(content.splitlines(), start=1):
+            if time.monotonic() > deadline:
+                timed_out = True
+                break
+            if not raw_line.strip() or raw_line in tested_here:
+                continue
+            tested_here.add(raw_line)
+            hits = []
+            for side, may in zip(sides, may_match):
+                line = raw_line.strip() if side['strip'] else raw_line
+                hits.append(may and any(
+                    _match_line(p, side['match_type'], line)['matched'] for p in side['compiled']
+                ))
+            if not any(hits):
+                continue
+            kind = 'both' if all(hits) else ('only_new' if hits[0] else 'only_old')
+            key = raw_line.strip()
+            seen[kind].add(key)
+            if kind in samples:
+                entry = samples[kind].get(key)
+                if entry is None and len(samples[kind]) < sample_lines:
+                    entry = samples[kind][key] = {'line': key, 'logs': [], 'log_count': 0}
+                if entry is not None:
+                    entry['log_count'] += 1
+                    if len(entry['logs']) < LOG_REFS_PER_LINE:
+                        entry['logs'].append({'upload_id': upload_id, 'line_number': line_number})
+        if timed_out:
+            break
+
+    return {
+        'both': len(seen['both']),
+        'only_new': len(seen['only_new']),
+        'only_old': len(seen['only_old']),
+        'only_new_sample': sorted(samples['only_new'].values(), key=lambda entry: -entry['log_count']),
+        'only_old_sample': sorted(samples['only_old'].values(), key=lambda entry: -entry['log_count']),
+        'logs_scanned': logs_scanned,
+        'timed_out': timed_out,
     }

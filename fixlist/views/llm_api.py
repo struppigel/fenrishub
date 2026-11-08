@@ -14,22 +14,59 @@ Fields holding text that came from the infected machine or its user (log lines,
 forum username, filename, symptom description) are prefixed `untrusted_`, so a
 model reading the JSON is told at every use that the text is data, not
 instructions.
+
+Version 2 of the API (see api_auth.API_VERSION) only added parameters, fields
+and endpoints: a request without the new parameters gets the same response as
+before. Search, the rule dry run and rule matching also take a POST with a JSON
+body, for input that does not fit a URL.
 """
 
 import re
+import time
 
 from django.db.models import Q
 from django.http import JsonResponse
 from django.urls import reverse
 
-from ..analyzer import evaluate_regex_pattern
+from .. import frst_extractors as ex
+from ..analyzer import _get_cached_rule_buckets, evaluate_regex_pattern, inspect_line_matches
+from ..api_line_search import (
+    COMPONENT_KEYS,
+    LINES_PER_LOG_MAX,
+    SEARCH_MAX_MATCHES,
+    LineSearch,
+    cached_matching_logs,
+    non_blank_line_numbers,
+    parse_components,
+    serialize_hit,
+)
+from ..api_params import (
+    ParamError,
+    apply_upload_scope,
+    flag_param,
+    int_param,
+    list_param,
+    optional_int_param,
+    scope_cache_part,
+    text_param,
+)
 from ..models import ClassificationRule, FixlistSnippet, InfectionCase, InfectionCaseLog, RuleTag, Speech, UploadedLog
 from ..rule_sets import SHARED_RULE_SET_KEY, resolve_user_rule_set_key
 from ..status_types import STATUS_LABELS, VALID_STATUSES
+from ..rule_test_service import (
+    build_rule_test_results,
+    compare_rule_scans,
+    line_outcome,
+    literal_prefilter,
+    scan_logs_for_rule_matches,
+    scan_logs_for_wholelog_matches,
+    summarize_rule_test,
+)
 from ..tagging import (
     TagConditions,
     apply_tag,
     attach_rule_tags,
+    attach_tags_to_matches,
     describe_conditions,
     logs_with_tags,
     matching_rule_ids,
@@ -38,13 +75,21 @@ from ..tagging import (
     serialize_tag,
     unmatched_tagged_rule_ids,
 )
+from ..upload_duplicates import duplicate_info_for, duplicate_metadata, non_canonical_pks
 from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
 from ..upload_utils import get_fresh_cached_analysis, get_or_compute_upload_analysis
 from .api_auth import api_token_required, charge_api_units, rate_limited_response
 from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE, effective_analyzer_fixlist_template
+from .guest import is_moderator
 from .infection_cases import _build_case_timeline
-from .log_search import _first_hit, _first_tagged_hit, _logs_in_id_order, search_matching_log_ids
-from .rules import _apply_rule_edit, _patterns_for, _rule_form_from_rule, create_rules
+from .log_search import _build_matcher, _logs_in_id_order
+from .rules import (
+    _apply_rule_edit,
+    _patterns_for,
+    _read_rule_test_payload,
+    _rule_form_from_rule,
+    create_rules,
+)
 from .speeches import _speech_validation_error, speeches_for_tags
 from .uploads import filter_uploads_by_text
 
@@ -61,6 +106,10 @@ LIBRARY_MAX_LIMIT = 100
 LINES_DEFAULT_LIMIT = 500
 LINES_MAX_LIMIT = 2000
 LINES_MAX_OFFSET = 200000
+# get_upload slices (start_line/max_lines/match).
+SLICE_MAX_LINES = 5000
+SLICE_MAX_CONTEXT = 5
+SLICE_PARAMS = ('start_line', 'max_lines', 'match', 'context')
 # A stale or missing cache means a full analyzer run; charge it like a search.
 ANALYSIS_RECOMPUTE_EXTRA_UNITS = 9
 # Filtering the upload list by tag reads every candidate's cached analysis.
@@ -92,14 +141,24 @@ def _iso(value):
     return value.isoformat() if value else None
 
 
-def _tag_ids_param(request):
-    """``(tag_ids, error_response)`` from the comma-separated `tags` param.
+def _params(request):
+    """``(params, error_response)``: the query string of a GET, the JSON object of a POST."""
+    if request.method == 'POST':
+        return _write_payload(request)
+    return request.GET, None
+
+
+def _tag_ids_param(params):
+    """``(tag_ids, error_response)`` from the `tags` param: comma-separated, or a JSON list.
 
     Each item is a tag id or a tag name (case-insensitive; names never hold a
     comma). An unknown one is an error naming it rather than being dropped, so
     a client learns of a typo instead of getting a wider search.
     """
-    items = [item.strip() for item in (request.GET.get('tags') or '').split(',') if item.strip()]
+    try:
+        items = list_param(params, 'tags')
+    except ParamError as exc:
+        return None, _error(str(exc))
     if len(items) > TAGS_PARAM_MAX_ITEMS:
         return None, _error(f'tags takes at most {TAGS_PARAM_MAX_ITEMS} tags.')
     tag_ids = []
@@ -147,7 +206,11 @@ def _own_case_ids_by_upload(user, upload_pks):
     return case_ids
 
 
-def _upload_metadata(uploaded_log, case_ids):
+def _live_upload_rows():
+    return UploadedLog.objects.filter(deleted_at__isnull=True)
+
+
+def _upload_metadata(uploaded_log, case_ids, duplicates=None):
     return {
         'upload_id': uploaded_log.upload_id,
         'untrusted_forum_username': uploaded_log.forum_username,
@@ -164,12 +227,17 @@ def _upload_metadata(uploaded_log, case_ids):
             for code, field in UploadedLog.ANALYSIS_STATUS_FIELD_MAP.items()
         },
         'own_case_ids': case_ids.get(uploaded_log.pk, []),
+        # Another upload of the same scan (see upload_duplicates): duplicate_of
+        # names the more complete copy, duplicates the copies of this one.
+        **duplicate_metadata((duplicates or {}).get(uploaded_log.pk)),
     }
 
 
 def _uploads_metadata(user, uploads):
+    uploads = list(uploads)
     case_ids = _own_case_ids_by_upload(user, [uploaded_log.pk for uploaded_log in uploads])
-    return [_upload_metadata(uploaded_log, case_ids) for uploaded_log in uploads]
+    duplicates = duplicate_info_for(uploads, _live_upload_rows())
+    return [_upload_metadata(uploaded_log, case_ids, duplicates) for uploaded_log in uploads]
 
 
 def _get_live_upload(upload_id, *, with_content):
@@ -183,13 +251,16 @@ def _get_live_upload(upload_id, *, with_content):
 
 @api_token_required('api_v1_uploads')
 def api_uploads(request):
-    """List uploads, newest first. Filters: q (id/poster/helper/filename), username, type,
-    tags (every one found in the upload's cached analysis under the caller's rule set)."""
+    """List uploads, newest first. Filters: q (id/poster/helper/filename), username,
+    type / exclude_type (comma-separated log types), created_after / created_before
+    (ISO dates, inclusive), tags (every one found in the upload's cached analysis
+    under the caller's rule set), dedupe (hide copies of a more complete upload of
+    the same scan, see upload_duplicates)."""
     limit = _int_param(request, 'limit', LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT)
     offset = _int_param(request, 'offset', 0, 0, LIST_MAX_OFFSET)
     if limit is None or offset is None:
         return _error('limit and offset must be integers.')
-    tag_ids, error = _tag_ids_param(request)
+    tag_ids, error = _tag_ids_param(request.GET)
     if error:
         return error
 
@@ -200,9 +271,11 @@ def api_uploads(request):
     username = (request.GET.get('username') or '').strip()
     if username:
         uploads = uploads.filter(forum_username__iexact=username)
-    log_type = (request.GET.get('type') or '').strip()
-    if log_type:
-        uploads = uploads.filter(log_type=log_type)
+    try:
+        uploads = apply_upload_scope(uploads, request.GET)
+        dedupe = flag_param(request.GET, 'dedupe')
+    except ParamError as exc:
+        return _error(str(exc))
     extra = {}
     if tag_ids:
         if not charge_api_units(request, TAG_FILTER_EXTRA_UNITS):
@@ -213,8 +286,18 @@ def api_uploads(request):
         uploads = uploads.filter(pk__in=tagged_pks)
         extra['tag_unanalyzed_count'] = unanalyzed_count
 
-    total = uploads.count()
-    page = list(uploads[offset:offset + limit])
+    if dedupe:
+        # Paged in Python: the hidden copies can be many, too many for an SQL IN.
+        hidden = non_canonical_pks(uploads)
+        ordered = [pk for pk in uploads.values_list('pk', flat=True) if pk not in hidden]
+        total = len(ordered)
+        page_pks = ordered[offset:offset + limit]
+        by_pk = {uploaded_log.pk: uploaded_log for uploaded_log in _live_uploads().filter(pk__in=page_pks)}
+        page = [by_pk[pk] for pk in page_pks if pk in by_pk]
+        extra['duplicates_hidden'] = len(hidden)
+    else:
+        total = uploads.count()
+        page = list(uploads[offset:offset + limit])
     return JsonResponse({
         'total': total,
         'offset': offset,
@@ -224,24 +307,75 @@ def api_uploads(request):
     })
 
 
+def _upload_slice(content, params):
+    """The `untrusted_lines` slice get_upload returns when a slice parameter is given, else None.
+
+    `start_line` and `max_lines` pick a range of lines (numbered as in the log
+    text, blank lines included); `match` (substring, or regex with `regex`,
+    case-insensitive unless `case_sensitive`) keeps only matching lines from
+    there on, each with `context` lines around it. `next_line` continues.
+    """
+    if not any(params.get(name) not in (None, '') for name in SLICE_PARAMS):
+        return None
+    start_line = int_param(params, 'start_line', 1, 1, LINES_MAX_OFFSET)
+    max_lines = int_param(params, 'max_lines', LINES_DEFAULT_LIMIT, 1, SLICE_MAX_LINES)
+    match = text_param(params, 'match', max_chars=QUERY_MAX_CHARS)
+    context = int_param(params, 'context', 0, 0, SLICE_MAX_CONTEXT)
+    use_regex = flag_param(params, 'regex')
+    case_sensitive = flag_param(params, 'case_sensitive')
+
+    lines = [line.rstrip('\r') for line in (content or '').splitlines()]
+    payload = {'line_count': len(lines)}
+    if match:
+        matcher, error = _build_matcher(match, use_regex, case_sensitive)
+        if error:
+            raise ParamError(f'match: {error}')
+        wanted = set()
+        match_count = 0
+        for number in range(start_line, len(lines) + 1):
+            if matcher(lines[number - 1]) is None:
+                continue
+            match_count += 1
+            low = max(start_line, number - context)
+            high = min(len(lines), number + context)
+            wanted.update(range(low, high + 1))
+        numbers = sorted(wanted)
+        payload['matching_line_count'] = match_count
+    else:
+        numbers = list(range(start_line, len(lines) + 1))
+    selected = numbers[:max_lines]
+    payload['next_line'] = numbers[max_lines] if len(numbers) > max_lines else None
+    payload['untrusted_lines'] = [{'n': number, 'text': lines[number - 1]} for number in selected]
+    return payload
+
+
 @api_token_required('api_v1_upload')
 def api_upload(request, upload_id):
-    """One upload's metadata and full log text."""
+    """One upload's metadata and its log text: all of it in untrusted_content, or with
+    start_line / max_lines / match (+ regex, case_sensitive, context) only those lines,
+    as untrusted_lines."""
     uploaded_log = _get_live_upload(upload_id, with_content=True)
     if uploaded_log is None:
         return _not_found()
+    try:
+        sliced = _upload_slice(uploaded_log.content, request.GET)
+    except ParamError as exc:
+        return _error(str(exc))
     payload = _uploads_metadata(request.user, [uploaded_log])[0]
-    payload['untrusted_content'] = uploaded_log.content
+    if sliced is None:
+        payload['untrusted_content'] = uploaded_log.content
+    else:
+        payload.update(sliced)
     return JsonResponse(payload)
 
 
-def _non_blank_line_numbers(content):
-    """1-based numbers of the lines the analyzer looks at (it skips blank ones)."""
-    return [
-        number
-        for number, raw_line in enumerate((content or '').splitlines(), start=1)
-        if raw_line.strip()
-    ]
+_non_blank_line_numbers = non_blank_line_numbers
+
+# The keys of a line in get_analysis (_compact_line); `fields` picks among them.
+LINE_FIELDS = (
+    'n', 'text', 'status', 'status_label', 'status_codes', 'entry_type', 'matcher', 'reasons',
+    'components', 'dates', 'fixlist_replacement', 'rule_ids', 'tag_ids', 'tags',
+)
 
 
 def _compact_line(number, entry, tag_names):
@@ -300,7 +434,10 @@ def api_upload_analysis(request, upload_id):
     """Per-line verdicts for one upload under the caller's rule set.
 
     `status` filters by verdict letter (comma-separated, e.g. B,P,?); `tags`
-    keeps the lines carrying any of the given tags (names or ids).
+    keeps the lines carrying any of the given tags (names or ids). `fields`
+    (comma-separated, see LINE_FIELDS) keeps only those keys of each line, and
+    `summary=0` leaves out the summary, warnings, tags found and status legend,
+    for reading many logs or paging through one.
     """
     limit = _int_param(request, 'limit', LINES_DEFAULT_LIMIT, 1, LINES_MAX_LIMIT)
     offset = _int_param(request, 'offset', 0, 0, LINES_MAX_OFFSET)
@@ -314,9 +451,17 @@ def api_upload_analysis(request, upload_id):
             f"Unknown status code(s): {', '.join(sorted(invalid))}. "
             f"Valid: {' '.join(sorted(VALID_STATUSES))}."
         )
-    tag_ids, error = _tag_ids_param(request)
+    tag_ids, error = _tag_ids_param(request.GET)
     if error:
         return error
+    try:
+        fields = list_param(request.GET, 'fields')
+        with_summary = flag_param(request.GET, 'summary', default=True)
+    except ParamError as exc:
+        return _error(str(exc))
+    unknown_fields = [field for field in fields if field not in LINE_FIELDS]
+    if unknown_fields:
+        return _error(f"Unknown field(s): {', '.join(unknown_fields)}. Valid: {', '.join(LINE_FIELDS)}.")
 
     uploaded_log = _get_live_upload(upload_id, with_content=True)
     if uploaded_log is None:
@@ -334,63 +479,144 @@ def api_upload_analysis(request, upload_id):
         if (not statuses or entry.get('dominant_status') in statuses)
         and (not wanted_tags or wanted_tags.intersection(entry.get('tag_ids', [])))
     ]
+    page = lines[offset:offset + limit]
+    if fields:
+        page = [{key: line[key] for key in fields} for line in page]
 
     payload = _uploads_metadata(request.user, [uploaded_log])[0]
+    payload['rule_set'] = 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private'
+    if with_summary:
+        payload.update({
+            'status_legend': STATUS_LABELS,
+            'summary': analysis.get('summary', {}),
+            'warnings': analysis.get('warnings', []),
+            'rule_tags': analysis.get('rule_tags', []),
+        })
     payload.update({
-        'rule_set': 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private',
-        'status_legend': STATUS_LABELS,
-        'summary': analysis.get('summary', {}),
-        'warnings': analysis.get('warnings', []),
-        'rule_tags': analysis.get('rule_tags', []),
         'matching_line_count': len(lines),
         'offset': offset,
         'limit': limit,
-        'untrusted_lines': lines[offset:offset + limit],
+        'untrusted_lines': page,
     })
     return JsonResponse(payload)
 
 
-@api_token_required('api_v1_search', cost=10)
+SEARCH_GET_QUERY_MAX_CHARS = QUERY_MAX_CHARS
+SEARCH_POST_QUERY_MAX_CHARS = 2000
+COUNT_ALL_EXTRA_UNITS = 10
+
+
+@api_token_required('api_v1_search', cost=10, methods=('GET', 'POST'))
 def api_search(request):
-    """Search log contents (substring, or re2-safe regex with regex=1) and/or by
-    tags (every one found in the log's cached analysis under the caller's rule set)."""
-    query = (request.GET.get('q') or '').strip()
-    tag_ids, error = _tag_ids_param(request)
+    """Search log contents line by line, newest logs first.
+
+    Lines are chosen by `q` (substring, or re2-safe regex with regex=1;
+    case-insensitive unless case_sensitive=1), by `components` (parsed FRST
+    entry fields, see api_line_search.ComponentFilter), or both; `tags` keeps
+    logs containing every given tag (and alone picks the lines carrying one).
+    `statuses` keeps only lines with those verdicts in the log's cached
+    analysis; `with_verdicts` adds each hit's verdict. `lines_per_log` hits per
+    log come back with `hit_count`, the log's total; `first_hit` is the first.
+    Paged with offset/limit; `count_all` counts every matching log and line.
+    Scope: type / exclude_type, created_after / created_before, dedupe. GET as
+    before, or POST with a JSON body for queries up to 2000 characters.
+    """
+    params, error = _params(request)
     if error:
         return error
-    if not query and not tag_ids:
-        return _error('q or tags is required.')
-    if len(query) > QUERY_MAX_CHARS:
-        return _error(f'q must be at most {QUERY_MAX_CHARS} characters.')
-    limit = _int_param(request, 'limit', LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT)
-    if limit is None:
-        return _error('limit must be an integer.')
-    use_regex = request.GET.get('regex') == '1'
-    log_type = (request.GET.get('type') or '').strip()
-    rule_set_key = resolve_user_rule_set_key(request.user)
-
-    log_ids, truncated, search_error, matcher, tag_unanalyzed_count = search_matching_log_ids(
-        query, use_regex, limit, False, log_type, tag_ids, rule_set_key,
-    )
-    if search_error:
-        return _error(search_error)
-
-    logs = _logs_in_id_order(log_ids, with_content=True)
-    case_ids = _own_case_ids_by_upload(request.user, [uploaded_log.pk for uploaded_log in logs])
-    matches = []
-    for uploaded_log in logs:
-        entry = _upload_metadata(uploaded_log, case_ids)
-        if matcher:
-            hit = _first_hit(uploaded_log.content, matcher)
-        else:
-            hit = _first_tagged_hit(uploaded_log, tag_ids, rule_set_key)
-        entry['first_hit'] = (
-            {'line_number': hit[0], 'untrusted_text': hit[1] + hit[2] + hit[3]} if hit else None
+    tag_ids, error = _tag_ids_param(params)
+    if error:
+        return error
+    try:
+        query = text_param(params, 'q')
+        max_chars = SEARCH_POST_QUERY_MAX_CHARS if request.method == 'POST' else SEARCH_GET_QUERY_MAX_CHARS
+        if len(query) > max_chars:
+            return _error(f'q must be at most {max_chars} characters.')
+        components, message = parse_components(params.get('components'))
+        if message:
+            return _error(message)
+        if not query and not tag_ids and not components:
+            return _error('q or tags is required (or components).')
+        limit = int_param(params, 'limit', LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT)
+        offset = int_param(params, 'offset', 0, 0, SEARCH_MAX_MATCHES)
+        use_regex = flag_param(params, 'regex')
+        case_sensitive = flag_param(params, 'case_sensitive')
+        lines_per_log = int_param(params, 'lines_per_log', 1, 1, LINES_PER_LOG_MAX)
+        statuses = list_param(params, 'statuses', max_items=len(VALID_STATUSES))
+        with_verdicts = flag_param(params, 'with_verdicts') or bool(statuses)
+        count_all = flag_param(params, 'count_all')
+        dedupe = flag_param(params, 'dedupe')
+        scoped = apply_upload_scope(_live_upload_rows(), params)
+        scope_part = scope_cache_part(params)
+    except ParamError as exc:
+        return _error(str(exc))
+    invalid = set(statuses) - VALID_STATUSES
+    if invalid:
+        return _error(
+            f"Unknown status code(s): {', '.join(sorted(invalid))}. "
+            f"Valid: {' '.join(sorted(VALID_STATUSES))}."
         )
+
+    rule_set_key = resolve_user_rule_set_key(request.user)
+    search = LineSearch(
+        query=query, use_regex=use_regex, case_sensitive=case_sensitive, components=components,
+        statuses=statuses, tag_ids=tag_ids, rule_set_key=rule_set_key,
+    )
+    if search.error:
+        return _error(search.error)
+    if count_all and not charge_api_units(request, COUNT_ALL_EXTRA_UNITS):
+        return rate_limited_response(60)
+
+    def build_scope():
+        narrowed = scoped
+        extra = {}
+        if tag_ids:
+            tagged_pks, extra['tag_unanalyzed_count'] = logs_with_tags(tag_ids, rule_set_key, narrowed)
+            narrowed = narrowed.filter(pk__in=tagged_pks)
+        hidden = non_canonical_pks(narrowed) if dedupe else set()
+        extra['duplicates_hidden'] = len(hidden)
+        return narrowed, hidden, extra
+
+    found = cached_matching_logs(
+        search, build_scope, scope_part=scope_part, dedupe=dedupe,
+        needed=offset + limit + 1, count_all=count_all,
+    )
+    pks = found['pks']
+    logs = _logs_in_id_order(pks[offset:offset + limit], with_content=True)
+    matches = []
+    for uploaded_log, entry in zip(logs, _uploads_metadata(request.user, logs)):
+        result = search.evaluate(
+            uploaded_log.pk, uploaded_log.content, uploaded_log.content_hash,
+            max_hits=lines_per_log, with_verdicts=with_verdicts,
+        )
+        hits = [serialize_hit(hit, with_verdicts) for hit in (result or {}).get('hits', [])]
+        entry['first_hit'] = (
+            {'line_number': hits[0]['line_number'], 'untrusted_text': hits[0]['untrusted_text']} if hits else None
+        )
+        entry['hit_count'] = result['hit_count'] if result else 0
+        entry['hits'] = hits
+        if with_verdicts:
+            entry['verdicts_from'] = result['verdicts_from'] if result else None
         matches.append(entry)
-    payload = {'truncated': truncated, 'limit': limit, 'matches': matches}
+
+    has_more = len(pks) > offset + limit
+    payload = {
+        'truncated': has_more or found['timed_out'],
+        'offset': offset,
+        'limit': limit,
+        'next_offset': offset + limit if has_more else None,
+        'timed_out': found['timed_out'],
+        'matches': matches,
+    }
     if tag_ids:
-        payload['tag_unanalyzed_count'] = tag_unanalyzed_count
+        payload['tag_unanalyzed_count'] = found.get('tag_unanalyzed_count', 0)
+    if statuses:
+        # Logs whose text matched but that have no cached analysis to read verdicts from.
+        payload['unanalyzed_count'] = found['unanalyzed_count']
+    if dedupe:
+        payload['duplicates_hidden'] = found.get('duplicates_hidden', 0)
+    if count_all:
+        payload['totals'] = found['totals']
     return JsonResponse(payload)
 
 
@@ -645,11 +871,11 @@ def api_user(request, forum_username):
     })
 
 
-def _timeline_entry(item, user, case_ids):
+def _timeline_entry(item, user, case_ids, duplicates=None):
     item_type = item['item_type']
     entry = {'type': item_type, 'created_at': _iso(item['created_at'])}
     if item_type == 'log':
-        entry['upload'] = _upload_metadata(item['uploaded_log'], case_ids)
+        entry['upload'] = _upload_metadata(item['uploaded_log'], case_ids, duplicates)
     elif item_type == 'fixlist':
         # Same text the share link serves to any logged-in helper. The owner's
         # internal note is never included.
@@ -682,14 +908,15 @@ def api_case(request, case_id):
         return _not_found()
 
     timeline = _build_case_timeline(infection_case)
-    upload_pks = [item['uploaded_log'].pk for item in timeline if item['item_type'] == 'log']
-    case_ids = _own_case_ids_by_upload(request.user, upload_pks)
+    case_uploads = [item['uploaded_log'] for item in timeline if item['item_type'] == 'log']
+    case_ids = _own_case_ids_by_upload(request.user, [uploaded_log.pk for uploaded_log in case_uploads])
+    duplicates = duplicate_info_for(case_uploads, _live_upload_rows())
 
     payload = _case_summary(infection_case, request.user)
     payload.update({
         'untrusted_symptom_description': infection_case.symptom_description,
         'reference_url': infection_case.reference_url,
-        'timeline': [_timeline_entry(item, request.user, case_ids) for item in timeline],
+        'timeline': [_timeline_entry(item, request.user, case_ids, duplicates) for item in timeline],
     })
     return JsonResponse(payload)
 
@@ -1180,3 +1407,303 @@ def api_rule_update(request, rule_id):
     if message:
         return _error(message)
     return JsonResponse({**_rule_detail(_visible_rules().get(pk=rule.pk)), 'warnings': warnings})
+
+
+# ---------------------------------------------------------------------------
+# Rule questions: what a candidate rule would do across the corpus (test_rule),
+# and which rules decide given lines today (match_rules). Read-only: nothing
+# is saved. They take a POST with a JSON body because their input (log lines,
+# multi-line rule text) does not fit a URL.
+# ---------------------------------------------------------------------------
+
+RULE_TEST_DEFAULT_TYPES = ('FRST', 'Addition', 'FRST&Addition')
+RULE_TEST_DEFAULT_MAX_LOGS = 500
+RULE_TEST_MAX_LOGS = 3000
+RULE_TEST_DEFAULT_SAMPLE = 50
+RULE_TEST_MAX_SAMPLE = 200
+RULE_TEST_TIME_BUDGET_S = 15.0
+RULE_COMPARE_TIME_BUDGET_S = 10.0
+RULE_COMPARE_EXTRA_UNITS = 10
+
+
+def _rule_test_corpus(scope_pks, hidden, literals):
+    """``(upload_id, content)`` of the logs in `scope_pks`, newest first, minus `hidden`.
+
+    `literals` (or None) prefilter in the database: a log must contain one of
+    them, case-insensitively - a superset of what a substring or exact rule
+    can match, so nothing the rule would hit is skipped.
+    """
+    logs = UploadedLog.objects.filter(pk__in=scope_pks)
+    if literals:
+        contains_one = Q()
+        for literal in literals:
+            contains_one |= Q(content__icontains=literal)
+        logs = logs.filter(contains_one)
+    rows = logs.order_by('-created_at', '-pk').values_list('pk', 'upload_id', 'content').iterator(chunk_size=10)
+    for pk, upload_id, content in rows:
+        if pk not in hidden:
+            yield upload_id, content
+
+
+def _untrusted_samples(entries):
+    return [
+        {'untrusted_line': entry['line'], 'log_count': entry['log_count'], 'logs': entry['logs']}
+        for entry in entries
+    ]
+
+
+def _rule_test_sample_row(result, entry):
+    """One matched line of a dry run: where it occurs, its verdict today and with the new rule."""
+    existing = result.get('existing_status', '?')
+    row = {
+        'untrusted_line': result['line'],
+        'log_count': entry['log_count'],
+        'logs': entry['logs'],
+        'current_status': existing,
+        'current_rule_ids': [
+            match['id'] for match in result.get('existing_matches', []) if match['status'] == existing
+        ],
+        'current_priority': result.get('existing_priority'),
+        'new_status': result.get('combined_status', '?'),
+        'outcome': line_outcome(result),
+    }
+    if result.get('parsed'):
+        row['parsed'] = result['parsed']
+    if result.get('script_error'):
+        row['script_error'] = result['script_error']
+    return row
+
+
+@api_token_required('api_v1_rule_test', cost=10, methods=('POST',))
+def api_rule_test(request):
+    """Dry run of a candidate rule against stored logs; nothing is saved.
+
+    Body: the rule (source_text, match_type, status, priority?, whole_log?) as
+    on the add-rule page, plus the scope (type / exclude_type, created_after /
+    created_before, dedupe; FRST, Addition and FRST&Addition logs by default),
+    max_logs (newest logs in scope to scan), sample_lines and compare_rule_id.
+
+    Returns how many logs and lines the rule matches (counted past the sample),
+    a sample of the distinct lines with their verdict today and with the rule,
+    and a summary: outcome counts, verdict changes, and the existing rules
+    deciding those lines with how many of them each would become redundant
+    on. compare_rule_id also scans with that saved rule and counts the lines
+    only one of the two matches; it is left out of the verdicts, as if the
+    new rule replaced it. Verdicts use the caller's rule set.
+    """
+    payload, rule, error_response = _read_rule_test_payload(request)
+    if error_response:
+        return error_response
+    try:
+        max_logs = int_param(payload, 'max_logs', RULE_TEST_DEFAULT_MAX_LOGS, 1, RULE_TEST_MAX_LOGS)
+        sample_lines = int_param(payload, 'sample_lines', RULE_TEST_DEFAULT_SAMPLE, 1, RULE_TEST_MAX_SAMPLE)
+        dedupe = flag_param(payload, 'dedupe')
+        compare_rule_id = optional_int_param(payload, 'compare_rule_id')
+        scoped = apply_upload_scope(_live_upload_rows(), payload, default_types=RULE_TEST_DEFAULT_TYPES)
+    except ParamError as exc:
+        return _error(str(exc))
+
+    patterns = rule['patterns']
+    status = rule['status']
+    match_type = rule['match_type']
+    if match_type == ClassificationRule.MATCH_REGEX:
+        for pattern in patterns:
+            evaluation = evaluate_regex_pattern(pattern)
+            if not evaluation['stdlib_ok']:
+                return _error(f"Invalid regex {pattern!r}: {evaluation['stdlib_error']}")
+            if evaluation['is_slow']:
+                return _error(
+                    f'This regex is too slow to run against stored logs '
+                    f"({evaluation['worst_ms']:.0f} ms on a {evaluation['worst_input']} input)."
+                )
+
+    compare_rule = None
+    if compare_rule_id is not None:
+        compare_rule = ClassificationRule.objects.filter(pk=compare_rule_id).first()
+        if compare_rule is None:
+            return _error(f'compare_rule_id: no rule {compare_rule_id}.')
+        if rule['whole_log'] or compare_rule.whole_log:
+            return _error('compare_rule_id compares line rules; whole-log alert rules cannot be compared.')
+        if compare_rule.match_type == ClassificationRule.MATCH_SCRIPT and not is_moderator(request.user):
+            return _error('Script rules can only be tested by moderators.', 403)
+        if not charge_api_units(request, RULE_COMPARE_EXTRA_UNITS):
+            return rate_limited_response(60)
+
+    hidden = non_canonical_pks(scoped) if dedupe else set()
+    scope_pks = list(scoped.order_by('-created_at', '-pk').values_list('pk', flat=True)[:max_logs])
+    logs_in_scope = len([pk for pk in scope_pks if pk not in hidden])
+    rule_set_key = resolve_user_rule_set_key(request.user)
+    deadline = time.monotonic() + RULE_TEST_TIME_BUDGET_S
+
+    response = {
+        'rule': {
+            'match_type': match_type,
+            'status': status,
+            'patterns': len(patterns),
+            'priority': (
+                rule['priority'] if rule['priority'] is not None
+                else ClassificationRule.default_priority_for(match_type)
+            ),
+            'whole_log': rule['whole_log'],
+        },
+        'rule_set': 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private',
+        'logs_in_scope': logs_in_scope,
+        'max_logs': max_logs,
+    }
+    if dedupe:
+        response['duplicates_hidden'] = len(hidden)
+
+    try:
+        if rule['whole_log']:
+            scan = scan_logs_for_wholelog_matches(
+                patterns, match_type, _rule_test_corpus(scope_pks, hidden, None), deadline=deadline,
+            )
+            response.update(scan)
+            response['complete'] = not scan['timed_out']
+            return JsonResponse(response)
+
+        literals = literal_prefilter(patterns, match_type)
+        scan = scan_logs_for_rule_matches(
+            patterns, status, match_type, _rule_test_corpus(scope_pks, hidden, literals),
+            max_lines=sample_lines, deadline=deadline, count_all=True,
+        )
+        matches = scan.pop('matches')
+        built = build_rule_test_results(
+            patterns=patterns,
+            status=status,
+            match_type=match_type,
+            lines=[entry['line'] for entry in matches],
+            priority=rule['priority'],
+            exclude_rule_id=compare_rule_id,
+            rule_set_key=rule_set_key,
+            buckets=_get_cached_rule_buckets(rule_set_key),
+        )
+        results = built['results']
+        response.update({
+            'prefiltered': bool(literals),
+            'logs_scanned': scan['logs_scanned'],
+            'logs_matched': scan['logs_matched'],
+            'line_hits': scan['line_hits'],
+            'distinct_lines': scan['distinct_lines'],
+            'sample_truncated': scan['truncated'],
+            'timed_out': scan['timed_out'],
+            'complete': not scan['timed_out'],
+            'summary': summarize_rule_test(results, status),
+            'untrusted_sample': [_rule_test_sample_row(result, entry) for result, entry in zip(results, matches)],
+        })
+
+        if compare_rule is not None:
+            old_patterns = _patterns_for(compare_rule.match_type, compare_rule.source_text)
+            old_literals = literal_prefilter(old_patterns, compare_rule.match_type)
+            both_literals = literals + old_literals if literals and old_literals else None
+            compared = compare_rule_scans(
+                {'patterns': patterns, 'status': status, 'match_type': match_type},
+                {'patterns': old_patterns, 'status': compare_rule.status, 'match_type': compare_rule.match_type},
+                _rule_test_corpus(scope_pks, hidden, both_literals),
+                deadline=time.monotonic() + RULE_COMPARE_TIME_BUDGET_S,
+                sample_lines=sample_lines,
+            )
+            response['compare'] = {
+                'rule': _rule_row(compare_rule),
+                'both': compared['both'],
+                'only_new': compared['only_new'],
+                'only_old': compared['only_old'],
+                'untrusted_only_new_sample': _untrusted_samples(compared['only_new_sample']),
+                'untrusted_only_old_sample': _untrusted_samples(compared['only_old_sample']),
+                'logs_scanned': compared['logs_scanned'],
+                'complete': not compared['timed_out'],
+            }
+    except ValueError as exc:
+        return _error(str(exc))
+    return JsonResponse(response)
+
+
+MATCH_LINES_MAX = 200
+MATCH_LINE_MAX_CHARS = 4000
+MATCH_LINES_PER_UNIT = 50
+
+
+def _match_row(match):
+    return {
+        'rule_id': match['id'],
+        'status': match['status'],
+        'match_type': match['match_type'],
+        'priority': match['priority'],
+        'matcher': match['matcher'],
+        'owner': match.get('owner_username', ''),
+        'source_text': match['source_text'],
+        'description': match['description'],
+        'tags': [tag['name'] for tag in match.get('tags', [])],
+    }
+
+
+def _parsed_entry_payload(line):
+    entry = ex.get_frst_entry(line)
+    if entry is None:
+        return None
+    return {
+        'entry_type': entry.entry_type,
+        **{key: getattr(entry, key) for key in COMPONENT_KEYS if key != 'entry_type' and getattr(entry, key, '')},
+    }
+
+
+@api_token_required('api_v1_rule_match', methods=('POST',))
+def api_rule_match(request):
+    """Which rules fire on each given log line, under the caller's rule set.
+
+    Body: {lines: [...], include_shadowed?}. For each line: its verdict, the
+    winning priority tier (`winning`, each rule with `decides` when its status
+    is the verdict) and the lower tiers it shadows (`shadowed`), plus the
+    line's parsed FRST entry. Whole-log alert rules and disabled rules never
+    match a line, so they are not listed.
+    """
+    payload, error = _write_payload(request)
+    if error:
+        return error
+    lines = payload.get('lines')
+    if (
+        not isinstance(lines, list) or not lines or len(lines) > MATCH_LINES_MAX
+        or any(not isinstance(line, str) or len(line) > MATCH_LINE_MAX_CHARS for line in lines)
+    ):
+        return _error(
+            f'Field "lines" must be a list of 1 to {MATCH_LINES_MAX} strings '
+            f'of at most {MATCH_LINE_MAX_CHARS} characters.'
+        )
+    try:
+        include_shadowed = flag_param(payload, 'include_shadowed', default=True)
+    except ParamError as exc:
+        return _error(str(exc))
+    extra_units = (len(lines) - 1) // MATCH_LINES_PER_UNIT
+    if extra_units and not charge_api_units(request, extra_units):
+        return rate_limited_response(60)
+
+    rule_set_key = resolve_user_rule_set_key(request.user)
+    buckets = _get_cached_rule_buckets(rule_set_key)
+    results = []
+    for line in lines:
+        inspection = inspect_line_matches(line, buckets=buckets)
+        attach_tags_to_matches(inspection['matches'], inspection.get('shadowed_matches'))
+        verdict = inspection['dominant_status']
+        winning = []
+        for match in inspection['matches']:
+            row = _match_row(match)
+            row['decides'] = match['status'] == verdict
+            winning.append(row)
+        result = {
+            'untrusted_line': inspection['line'],
+            'status': verdict,
+            'status_codes': inspection['status_codes'],
+            'effective_priority': inspection.get('effective_priority'),
+            'effective_matcher': inspection.get('effective_matcher'),
+            'winning': winning,
+            'entry': _parsed_entry_payload(inspection['line']) if inspection['line'] else None,
+        }
+        if include_shadowed:
+            result['shadowed'] = [_match_row(match) for match in inspection.get('shadowed_matches', [])]
+        results.append(result)
+
+    return JsonResponse({
+        'rule_set': 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private',
+        'status_legend': STATUS_LABELS,
+        'results': results,
+    })
