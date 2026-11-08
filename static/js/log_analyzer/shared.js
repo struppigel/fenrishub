@@ -704,7 +704,7 @@ function updateLegendCounts() {
     const counts = Object.create(null);
     analyzedLines.forEach((line) => {
         // css_class is presentational (the line text's colour, e.g. 'status-unknown'
-        // when only a substring or path is coloured). The verdict is dominant_status —
+        // when only a substring, regex match or path is coloured). The verdict is dominant_status —
         // count by that so the legend agrees with the uploads count, the matched
         // summary, and the bulk buttons.
         const cls = STATUS_CLASS_MAP[line.dominant_status] || 'status-unknown';
@@ -769,7 +769,7 @@ function attachLineKeys(lines) {
 }
 
 // True when the line's verdict is not shown as a whole-line colour: the deciding
-// rules colour only a substring or the file path (or nothing, for a filepath
+// rules colour only a substring, a regex match or the file path (or nothing, for a filepath
 // fallback). No full-line rule for that verdict exists yet, so picking the same
 // status still has something to save.
 function verdictIsPartiallyColored(entry) {

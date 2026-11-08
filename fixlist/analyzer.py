@@ -1012,6 +1012,9 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
         "__parsed_filepath_exclusions": parsed_filepath_exclusions,
         "__regex_set": None,
         "__regex_set_rules": [],
+        # rule pk -> compiled pattern (or None), for locating a regex rule's match
+        # when painting. Filled lazily by _regex_match_ranges, see there.
+        "__regex_by_rule_id": {},
         "__wholelog_regex": [],
         "__wholelog_script": [],
     }
@@ -1216,6 +1219,7 @@ def _build_regex_matchers(buckets, regex_rules):
         return
 
     fallback_bucket = buckets[ClassificationRule.MATCH_REGEX]
+    patterns_by_rule_id = buckets.setdefault("__regex_by_rule_id", {})
 
     def _add_to_fallback(rule):
         try:
@@ -1223,6 +1227,8 @@ def _build_regex_matchers(buckets, regex_rules):
         except re.error:
             return
         fallback_bucket.append((rule, compiled))
+        # Painting locates the match with the same engine that found it.
+        patterns_by_rule_id[rule.pk] = compiled
 
     if _re2 is None:
         for rule in regex_rules:
@@ -1414,10 +1420,49 @@ def find_substring_ranges(line: str, needle: str) -> list[list[int]]:
     return ranges
 
 
+_REGEX_NOT_COMPILED = object()
+
+
+def _regex_match_ranges(line: str, rule, regex_patterns) -> list[list[int]]:
+    """Every non-empty match of a regex rule in `line`, as [start, end).
+
+    The re2 Set that finds regex matches only says which rules matched, not
+    where, so the rule's own pattern searches again -- only on lines it already
+    matched, and only while its paint can still show. Set rules get their own re2
+    pattern on first use and keep it in `regex_patterns` (the bucket cache);
+    rules re2 rejected are there already, compiled by stdlib re. Two threads
+    racing on one rule just compile it twice. Empty matches (`^`, `\\b`,
+    lookarounds) mark nothing, so a rule with only those returns [].
+    """
+    if regex_patterns is None:
+        return []
+    compiled = regex_patterns.get(rule.pk, _REGEX_NOT_COMPILED)
+    if compiled is _REGEX_NOT_COMPILED:
+        compiled = None
+        if _re2 is not None:
+            try:
+                compiled = _re2.compile(rule.source_text)
+            except Exception:
+                compiled = None
+        if compiled is None:
+            try:
+                compiled = re.compile(rule.source_text)
+            except re.error:
+                compiled = None
+        regex_patterns[rule.pk] = compiled
+    if compiled is None:
+        return []
+    try:
+        return [[m.start(), m.end()] for m in compiled.finditer(line) if m.end() > m.start()]
+    except Exception:
+        return []
+
+
 # How a matching rule colours its line in the analyzer.
 _PAINT_LINE = "line"  # the whole line
 _PAINT_TEXT = "text"  # every occurrence of the rule's substring
 _PAINT_PATH = "path"  # the line's file path
+_PAINT_REGEX = "regex"  # every match of the rule's regex
 
 _PATH_NOT_LOCATED = object()
 
@@ -1431,6 +1476,8 @@ def _paint_kind(rule, matcher: str) -> str:
         return _PAINT_LINE
     if matcher == "substring" and rule.match_type == ClassificationRule.MATCH_SUBSTRING:
         return _PAINT_TEXT
+    if matcher == "regex" and rule.match_type == ClassificationRule.MATCH_REGEX:
+        return _PAINT_REGEX
     if matcher == "filepath":
         return _PAINT_PATH
     return _PAINT_LINE
@@ -1480,7 +1527,7 @@ def _add_covered(covered: list, start: int, end: int) -> list:
     return merged
 
 
-def _resolve_line_paint(line: str, matches_top_down) -> tuple[dict | None, list[dict]]:
+def _resolve_line_paint(line: str, matches_top_down, regex_patterns=None) -> tuple[dict | None, list[dict]]:
     """How the analyzer colours a line: every matching rule paints it, lowest
     priority first, so the highest priority ends up on top.
 
@@ -1496,6 +1543,10 @@ def _resolve_line_paint(line: str, matches_top_down) -> tuple[dict | None, list[
     whole-line paint shows) and the visible partial paints on top of it as sorted,
     non-overlapping {start, end, status, priority} spans. The priorities let the
     analyzer page place a pending rule's paint correctly.
+
+    `regex_patterns` is the buckets' "__regex_by_rule_id" cache, which locates
+    regex matches (see _regex_match_ranges); without it regex rules paint the
+    whole line.
     """
     line_length = len(line)
     covered = []
@@ -1508,6 +1559,12 @@ def _resolve_line_paint(line: str, matches_top_down) -> tuple[dict | None, list[
         priority = _effective_match_priority(rule, matcher)
         if kind == _PAINT_TEXT:
             ranges = find_substring_ranges(line, rule.source_text)
+        elif kind == _PAINT_REGEX:
+            ranges = _regex_match_ranges(line, rule, regex_patterns)
+            if not ranges:
+                # Only empty matches (or no pattern): nothing to point at, so
+                # the rule colours its line as before.
+                kind = _PAINT_LINE
         elif kind == _PAINT_PATH:
             if path_range is _PATH_NOT_LOCATED:
                 path_range = _locate_line_path(line)
@@ -1592,7 +1649,9 @@ def _analyze_single_line(line: str, buckets):
     # The colouring comes from every match. Both lists are sorted strongest first
     # and every effective match outranks every shadowed one, so together they are
     # already in top-down paint order.
-    paint_base, highlights = _resolve_line_paint(line, effective_matches + shadowed_matches)
+    paint_base, highlights = _resolve_line_paint(
+        line, effective_matches + shadowed_matches, buckets.get("__regex_by_rule_id"),
+    )
 
     # Only the rules that decide the verdict carry their tags into the
     # analysis: a P rule beside the B rule that decides the line adds none.

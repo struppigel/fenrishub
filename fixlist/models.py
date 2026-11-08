@@ -461,7 +461,7 @@ class ClassificationRule(models.Model):
 
     # Match types that colour only the text they matched unless `color_whole_line`
     # is set; every other match type always colours the whole analyzer line.
-    COLOR_WHOLE_LINE_MATCH_TYPES = frozenset({MATCH_SUBSTRING, MATCH_FILEPATH})
+    COLOR_WHOLE_LINE_MATCH_TYPES = frozenset({MATCH_SUBSTRING, MATCH_FILEPATH, MATCH_REGEX})
 
     MATCH_TYPE_CHOICES = [
         (MATCH_EXACT, 'Exact line'),
@@ -490,7 +490,7 @@ class ClassificationRule(models.Model):
     )
     color_whole_line = models.BooleanField(
         default=False,
-        help_text='Substring and file path rules only: colour the whole analyzer line instead of just the matched text.',
+        help_text='Substring, file path and regex rules only: colour the whole analyzer line instead of just the matched text.',
     )
     tags = models.ManyToManyField('RuleTag', blank=True, related_name='rules')
 
@@ -534,6 +534,11 @@ class ClassificationRule(models.Model):
     @property
     def status_css_class(self):
         return self.STATUS_CSS_CLASS_MAP.get(self.status, 'status-unknown')
+
+    @property
+    def shows_whole_line_badge(self) -> bool:
+        """The rule opted into whole-line colour where it could colour just its match."""
+        return self.color_whole_line and self.match_type in self.COLOR_WHOLE_LINE_MATCH_TYPES
 
     @classmethod
     def default_priority_for(cls, match_type: str) -> int:

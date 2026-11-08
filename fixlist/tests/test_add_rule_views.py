@@ -472,12 +472,21 @@ class EditRuleViewTests(TestCase):
         self.assertTrue(self.rule.color_whole_line)
 
     def test_edit_drops_color_whole_line_for_other_match_types(self):
+        # Exact rules always colour the whole line, so the flag means nothing there.
+        self.client.post(self._url(), self._post_body(
+            match_type=ClassificationRule.MATCH_EXACT, color_whole_line="on",
+        ))
+        self.rule.refresh_from_db()
+        self.assertEqual(self.rule.match_type, ClassificationRule.MATCH_EXACT)
+        self.assertFalse(self.rule.color_whole_line)
+
+    def test_edit_keeps_color_whole_line_for_regex(self):
         self.client.post(self._url(), self._post_body(
             match_type=ClassificationRule.MATCH_REGEX, color_whole_line="on",
         ))
         self.rule.refresh_from_db()
         self.assertEqual(self.rule.match_type, ClassificationRule.MATCH_REGEX)
-        self.assertFalse(self.rule.color_whole_line)
+        self.assertTrue(self.rule.color_whole_line)
 
     def test_edit_page_prechecks_color_whole_line(self):
         self.rule.match_type = ClassificationRule.MATCH_SUBSTRING

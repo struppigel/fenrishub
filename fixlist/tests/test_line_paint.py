@@ -1,5 +1,5 @@
 """How the analyzer colours a line: every matching rule paints it, lowest priority
-first, so the highest priority ends up on top. Substring and file path rules
+first, so the highest priority ends up on top. Substring, file path and regex rules
 paint only what they matched unless they opt into `color_whole_line`; every other
 rule paints the whole line. The verdict (dominant_status) is unaffected -- it
 still comes from the winning priority tier alone."""
@@ -128,7 +128,8 @@ class LinePaintTests(LogAnalyzerApiBaseTestCase):
     # -- layering --
 
     def test_partial_match_paints_over_a_lower_whole_line_rule(self):
-        self._rule("some", status=W, match_type=ClassificationRule.MATCH_REGEX, priority=3)
+        self._rule("some", status=W, match_type=ClassificationRule.MATCH_REGEX, priority=3,
+                   color_whole_line=True)
         self._rule("evil.exe")
 
         result = self._analyze_line("some evil.exe line")
@@ -261,7 +262,8 @@ class LinePaintTests(LogAnalyzerApiBaseTestCase):
 
     def test_fallback_paints_its_path_over_a_priority_zero_rule(self):
         self._parsed_rule_for_service_line()
-        self._rule("ProtoVPN", status=W, match_type=ClassificationRule.MATCH_REGEX, priority=0)
+        self._rule("ProtoVPN", status=W, match_type=ClassificationRule.MATCH_REGEX, priority=0,
+                   color_whole_line=True)
 
         result = self._analyze_line(PATH_LINE)
 
@@ -295,6 +297,99 @@ class LinePaintTests(LogAnalyzerApiBaseTestCase):
             (token_start, token_start + len("ProtoVPNService"), B, 7),
             (token_start + len("ProtoVPNService"), len(PATH_LINE), C, 1),
         ])
+
+    # -- regex rules --
+
+    def _regex(self, source_text, status=B, **overrides):
+        return self._rule(source_text, status=status, match_type=ClassificationRule.MATCH_REGEX, **overrides)
+
+    def test_regex_rule_colours_only_the_match(self):
+        self._regex(r"evil\d+\.exe")
+        line = "loads evil42.exe now"
+
+        result = self._analyze_line(line)
+
+        start = line.index("evil42.exe")
+        self.assertEqual(result["dominant_status"], B)
+        self.assertIsNone(result["paint_base"])
+        self.assertEqual(result["css_class"], "status-unknown")
+        self.assertEqual(self._spans(result), [(start, start + len("evil42.exe"), B, 3)])
+
+    def test_every_regex_match_is_coloured(self):
+        self._regex(r"ba+d")
+
+        result = self._analyze_line("bad and more baaad")
+
+        self.assertEqual(self._spans(result), [(0, 3, B, 3), (13, 18, B, 3)])
+
+    def test_regex_color_whole_line_colours_the_whole_line(self):
+        self._regex(r"evil", color_whole_line=True)
+
+        result = self._analyze_line("some evil line")
+
+        self.assertEqual(result["paint_base"], {"status": B, "priority": 3})
+        self.assertEqual(result["highlights"], [])
+
+    def test_regex_with_only_empty_matches_colours_the_whole_line(self):
+        # `^` matches, but at no text -- there is nothing to point at.
+        self._regex(r"^")
+
+        result = self._analyze_line("some line")
+
+        self.assertEqual(result["paint_base"], {"status": B, "priority": 3})
+        self.assertEqual(result["highlights"], [])
+
+    def test_regex_rejected_by_re2_colours_its_match(self):
+        # Lookahead: re2 refuses it, so stdlib re matches and locates it.
+        self._regex(r"evil(?=\.exe)")
+        line = "run evil.exe"
+
+        result = self._analyze_line(line)
+
+        start = line.index("evil")
+        self.assertEqual(self._spans(result), [(start, start + 4, B, 3)])
+
+    def test_regex_spans_count_characters_not_bytes(self):
+        self._regex(r"evil\d")
+        line = "äöü € 😀 evil1"
+
+        result = self._analyze_line(line)
+
+        start = line.index("evil1")
+        self.assertEqual(self._spans(result), [(start, start + 5, B, 3)])
+
+    def test_regex_partial_match_paints_over_a_lower_whole_line_rule(self):
+        self._rule("some", status=W, color_whole_line=True, priority=1)
+        self._regex(r"evil\.exe")
+
+        result = self._analyze_line("some evil.exe line")
+
+        self.assertEqual(result["paint_base"], {"status": W, "priority": 1})
+        self.assertEqual(self._spans(result), [(5, 13, B, 3)])
+
+    def test_regex_pattern_is_compiled_once_and_reused(self):
+        from .. import analyzer
+
+        rule = self._regex(r"evil\d")
+        buckets = analyzer._get_cached_rule_buckets()
+        patterns = buckets["__regex_by_rule_id"]
+        patterns.pop(rule.pk, None)
+
+        analyzer.analyze_log_text("evil1\nevil2")
+        compiled = patterns.get(rule.pk)
+
+        self.assertIsNotNone(compiled)
+        analyzer.analyze_log_text("evil3")
+        self.assertIs(patterns.get(rule.pk), compiled)
+
+    def test_regex_that_matches_no_line_is_never_compiled_for_paint(self):
+        from .. import analyzer
+
+        rule = self._regex(r"neverhere\d")
+        analyzer.analyze_log_text("some line")
+
+        if analyzer._re2 is not None:
+            self.assertNotIn(rule.pk, analyzer._get_cached_rule_buckets()["__regex_by_rule_id"])
 
     # -- unmatched --
 

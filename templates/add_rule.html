@@ -1042,11 +1042,13 @@
         }
     }
 
-    /* Only substring and file path rules colour just their match; every other
-     * type already colours the whole line, so the choice is offered for those two. */
-    const COLOR_WHOLE_LINE_MATCH_TYPES = ['substring', 'filepath'];
+    /* Only substring, file path and regex rules colour just their match; every
+     * other type already colours the whole line, so the choice is offered for
+     * those. Whole-log rules colour no lines at all, so not for them either. */
+    const COLOR_WHOLE_LINE_MATCH_TYPES = ['substring', 'filepath', 'regex'];
     function syncColorWholeLineMode() {
-        const offered = COLOR_WHOLE_LINE_MATCH_TYPES.includes(document.getElementById('ruleMatchType').value);
+        const offered = COLOR_WHOLE_LINE_MATCH_TYPES.includes(document.getElementById('ruleMatchType').value) &&
+            !isWholeLogActive();
         document.getElementById('ruleColorWholeLineGroup').style.display = offered ? '' : 'none';
         if (!offered) {
             document.getElementById('ruleColorWholeLine').checked = false;
@@ -1132,11 +1134,13 @@
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
     document.getElementById('ruleStatus').addEventListener('change', function () {
         syncWholeLogMode();
+        syncColorWholeLineMode();
         scheduleRuleUpdate();
     });
     document.getElementById('ruleWholeLog').addEventListener('change', function () {
         syncSourceTextMode();
         syncWholeLogMode();
+        syncColorWholeLineMode();
         scheduleRuleUpdate();
     });
     document.getElementById('rulePriority').addEventListener('change', function () {

@@ -406,7 +406,7 @@
             <option value="text" {% if search_mode == 'text' %}selected{% endif %}>text search</option>
             <option value="line" {% if search_mode == 'line' %}selected{% endif %}>match by line</option>
         </select>
-        <input type="text" name="q" value="{{ search_q }}" placeholder="{% if search_mode == 'line' %}Paste a log line...{% else %}Search rules...{% endif %}">
+        <input type="text" name="q" value="{{ search_q }}" placeholder="{% if search_mode == 'line' %}Paste a log line...{% else %}Search rules or a rule id...{% endif %}">
         <button type="submit">search</button>
         {% if search_q %}<a href="?filter={{ filter_mode }}{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{% if filter_tag %}&tag={{ filter_tag.pk }}{% endif %}"><button type="button">clear</button></a>{% endif %}
     </form>
@@ -445,10 +445,11 @@
                 <span class="rule-status-badge {{ rule.status_css_class }}">{{ rule.status }}</span>
                 <span class="rule-match-type">{{ rule.get_match_type_display }}</span>
                 {% if rule.whole_log %}<span class="rule-match-type" title="evaluated once against the whole log">whole log</span>{% endif %}
-                {% if rule.color_whole_line and rule.match_type == 'substring' or rule.color_whole_line and rule.match_type == 'filepath' %}<span class="rule-match-type" title="colors the whole analyzer line">whole line</span>{% endif %}
+                {% if rule.shows_whole_line_badge %}<span class="rule-match-type" title="colors the whole analyzer line">whole line</span>{% endif %}
                 <span class="rule-priority" title="priority">p{{ rule.priority }}</span>
+                <span class="rule-priority" title="rule id">#{{ rule.pk }}</span>
                 <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
-                {% if filter_mode != 'own' %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
+                {% if filter_mode != 'own' or rule.owner_id != request.user.id %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
                 {% if rule.owner_id == request.user.id or request.user.is_superuser %}
                 <div class="rule-actions">
                     <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
@@ -544,11 +545,13 @@ function syncEditWholeLogMode() {
     }
 }
 
-/* Only substring and file path rules colour just their match; every other
- * type already colours the whole line, so the choice is offered for those two. */
-const COLOR_WHOLE_LINE_MATCH_TYPES = ['substring', 'filepath'];
+/* Only substring, file path and regex rules colour just their match; every
+ * other type already colours the whole line, so the choice is offered for
+ * those. Whole-log rules colour no lines at all, so not for them either. */
+const COLOR_WHOLE_LINE_MATCH_TYPES = ['substring', 'filepath', 'regex'];
 function syncEditColorWholeLineMode() {
-    const offered = COLOR_WHOLE_LINE_MATCH_TYPES.includes(document.getElementById('editMatchType').value);
+    const offered = COLOR_WHOLE_LINE_MATCH_TYPES.includes(document.getElementById('editMatchType').value) &&
+        !document.getElementById('editWholeLog').checked;
     document.getElementById('editColorWholeLineGroup').style.display = offered ? '' : 'none';
     if (!offered) {
         document.getElementById('editColorWholeLine').checked = false;
@@ -594,10 +597,14 @@ document.getElementById('editMatchType').addEventListener('change', function () 
 
 document.getElementById('editSourceText').addEventListener('input', syncEditCaseInsensitiveWarning);
 
-document.getElementById('editStatus').addEventListener('change', syncEditWholeLogMode);
+document.getElementById('editStatus').addEventListener('change', function () {
+    syncEditWholeLogMode();
+    syncEditColorWholeLineMode();
+});
 document.getElementById('editWholeLog').addEventListener('change', function () {
     syncEditSourceTextMode();
     syncEditWholeLogMode();
+    syncEditColorWholeLineMode();
 });
 
 document.getElementById('editPriority').addEventListener('change', function () {
@@ -625,7 +632,7 @@ function applyFilter(param, value) {
 
 document.querySelector('.search-mode-select').addEventListener('change', function () {
     const input = document.querySelector('.search-bar input[name="q"]');
-    input.placeholder = this.value === 'line' ? 'Paste a log line...' : 'Search rules...';
+    input.placeholder = this.value === 'line' ? 'Paste a log line...' : 'Search rules or a rule id...';
 });
 </script>
 {% endblock %}

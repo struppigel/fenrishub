@@ -269,6 +269,14 @@ def _assign_parsed_metadata(rule, form: dict) -> None:
             setattr(rule, field, parsed.get(field))
 
 
+def _rule_id_from_query(query: str) -> int | None:
+    """The rule id a search names ("27617" or "#27617"), or None."""
+    digits = query.strip().removeprefix('#').strip()
+    if not digits.isdigit() or not digits.isascii():
+        return None
+    return int(digits)
+
+
 def _rule_for_editor_or_404(request, pk):
     """The rule `request.user` may edit: their own, or any rule for a superuser.
     The rule keeps its owner either way."""
@@ -527,12 +535,19 @@ def rules_view(request):
     }
 
     if filter_mode == 'all':
-        rules = ClassificationRule.objects.all().select_related('owner')
+        owner_q = Q()
     elif filter_mode == 'others':
-        rules = ClassificationRule.objects.exclude(owner=request.user).select_related('owner')
+        owner_q = ~Q(owner=request.user)
     else:
         filter_mode = 'own'
-        rules = ClassificationRule.objects.filter(owner=request.user)
+        owner_q = Q(owner=request.user)
+    rules = ClassificationRule.objects.select_related('owner')
+    # A text search that is a rule id ("27617" or "#27617") also finds that rule
+    # whoever owns it -- ids come up in the MCP API and analyzer tooltips, and the
+    # own/others tab should not hide the one rule asked for.
+    search_rule_id = _rule_id_from_query(search_q) if search_mode != 'line' else None
+    if not (search_q and search_rule_id is not None):
+        rules = rules.filter(owner_q)
 
     filter_tag = None
     raw_tag = request.GET.get('tag', '').strip()
@@ -559,9 +574,14 @@ def rules_view(request):
                 Case(*[When(id=rid, then=pos) for pos, rid in enumerate(ordered_ids)])
             )
         else:
-            rules = rules.filter(
-                Q(source_text__icontains=search_q) | Q(description__icontains=search_q)
-            )
+            text_q = Q(source_text__icontains=search_q) | Q(description__icontains=search_q)
+            if search_rule_id is not None:
+                rules = rules.filter((owner_q & text_q) | Q(pk=search_rule_id)).order_by(
+                    Case(When(pk=search_rule_id, then=0), default=1),
+                    *ClassificationRule._meta.ordering,
+                )
+            else:
+                rules = rules.filter(owner_q & text_q)
     else:
         sort_value = SORT_OPTIONS.get(sort, '-updated_at')
         if isinstance(sort_value, tuple):

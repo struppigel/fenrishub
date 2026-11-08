@@ -178,7 +178,21 @@ class RulesViewTests(TestCase):
         )
         self.assertTrue(ClassificationRule.objects.get(source_text=r"C:\Windows\evil.exe").color_whole_line)
 
-    def test_create_regex_rule_drops_color_whole_line(self):
+    def test_create_exact_rule_drops_color_whole_line(self):
+        # Exact rules always colour the whole line, so the flag means nothing there.
+        self.client.post(
+            reverse("rules"),
+            {
+                "action": "create",
+                "status": ClassificationRule.STATUS_MALWARE,
+                "match_type": ClassificationRule.MATCH_EXACT,
+                "source_text": "evil",
+                "color_whole_line": "on",
+            },
+        )
+        self.assertFalse(ClassificationRule.objects.get(source_text="evil").color_whole_line)
+
+    def test_create_regex_rule_keeps_color_whole_line(self):
         self.client.post(
             reverse("rules"),
             {
@@ -189,7 +203,19 @@ class RulesViewTests(TestCase):
                 "color_whole_line": "on",
             },
         )
-        self.assertFalse(ClassificationRule.objects.get(source_text="evil").color_whole_line)
+        self.assertTrue(ClassificationRule.objects.get(source_text="evil").color_whole_line)
+
+    def test_list_marks_whole_line_regex_rule(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type=ClassificationRule.MATCH_REGEX,
+            source_text="WHOLE-LINE-REGEX", color_whole_line=True,
+        )
+        ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type=ClassificationRule.MATCH_EXACT,
+            source_text="EXACT-WITH-STRAY-FLAG", color_whole_line=True,
+        )
+        response = self.client.get(reverse("rules"))
+        self.assertContains(response, 'title="colors the whole analyzer line">whole line</span>', count=1)
 
     def test_quick_edit_sets_and_clears_color_whole_line(self):
         rule = ClassificationRule.objects.create(

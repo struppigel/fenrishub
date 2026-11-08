@@ -98,6 +98,50 @@ class RegularUserRuleListTests(TestCase):
         self.assertNotContains(response, f'name="pk" value="{rule.pk}"')
 
 
+class RuleIdSearchTests(TestCase):
+    def setUp(self):
+        self.user = make_user("alice")
+        self.other = make_user("bob")
+        self.client.login(username="alice", password="password123")
+
+    def _ids(self, **params):
+        response = self.client.get(reverse("rules"), params)
+        self.assertEqual(response.status_code, 200)
+        return [rule.pk for rule in response.context["page_obj"]]
+
+    def test_id_finds_another_users_rule_from_the_own_tab(self):
+        rule = make_rule("BOB-RULE", owner=self.other)
+        self.assertEqual(self._ids(q=str(rule.pk)), [rule.pk])
+
+    def test_hash_prefixed_id_works(self):
+        rule = make_rule("BOB-RULE", owner=self.other)
+        self.assertEqual(self._ids(q=f"#{rule.pk}"), [rule.pk])
+
+    def test_id_match_comes_first_and_text_matches_still_show(self):
+        rule = make_rule("BOB-RULE", owner=self.other)
+        text_hit = make_rule(f"C:\\path{rule.pk}\\x.exe", owner=self.user)
+        self.assertEqual(self._ids(q=str(rule.pk)), [rule.pk, text_hit.pk])
+
+    def test_text_matches_keep_the_owner_filter(self):
+        rule = make_rule("BOB-RULE", owner=self.other)
+        make_rule(f"C:\\path{rule.pk}\\x.exe", owner=self.other)
+        self.assertEqual(self._ids(q=str(rule.pk)), [rule.pk])
+
+    def test_list_shows_rule_id_and_foreign_owner(self):
+        rule = make_rule("BOB-RULE", owner=self.other)
+        response = self.client.get(reverse("rules"), {"q": str(rule.pk)})
+        self.assertContains(response, f'title="rule id">#{rule.pk}</span>')
+        self.assertContains(response, '<span class="rule-owner">bob</span>', html=True)
+
+    def test_unknown_id_finds_nothing(self):
+        make_rule("BOB-RULE", owner=self.other)
+        self.assertEqual(self._ids(q="999999"), [])
+
+    def test_line_search_does_not_treat_numbers_as_ids(self):
+        rule = make_rule("BOB-RULE", owner=self.other)
+        self.assertNotIn(rule.pk, self._ids(q=str(rule.pk), search_mode="line"))
+
+
 class RuleEditorWarningWiringTests(TestCase):
     """The confirm dialogs are browser-only; these check the pages ship them."""
 

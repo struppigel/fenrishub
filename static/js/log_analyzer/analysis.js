@@ -834,7 +834,7 @@ async function saveStatusSelection(index, newStatus) {
     }
     const currentStatus = entry.dominant_status || '?';
     const baseStatus = entry._baseDominantStatus || currentStatus;
-    // On a partially coloured line (substring, file path or filepath fallback
+    // On a partially coloured line (substring, regex, file path or filepath fallback
     // decides the verdict) the badge shows the verdict but no full-line rule for
     // it exists yet. Clicking even the same status must register an override so
     // the workflow can persist a full exact/parsed rule for this line; clicking
@@ -1471,7 +1471,8 @@ function buildInnerHighlightNode(span) {
 }
 
 // The parts of a line coloured on their own, on top of the line's own colour
-// (css_class): matched substrings, file paths, and pending rules' tokens. Clamped
+// (css_class): matched substrings and regex matches, file paths, and pending
+// rules' tokens. Clamped
 // to the line, sorted, and trimmed so no two overlap.
 function collectPartialHighlights(entry) {
     if (!entry || !Array.isArray(entry.highlights)) {
@@ -1770,7 +1771,7 @@ function renderLogLines() {
         const cssClass = entry.css_class || 'status-unknown';
         const status = entry.dominant_status || '?';
         // Badge always reflects the verdict's colour even when the line itself is
-        // coloured differently (e.g. only a matched substring or path is coloured,
+        // coloured differently (e.g. only a matched substring, regex match or path is coloured,
         // or a lower-priority rule colours the line).
         const badgeClass = STATUS_CLASS_MAP[status] || 'status-unknown';
 
