@@ -131,7 +131,7 @@
 
 <form id="mergeUploadsForm" method="post" action="{% url submit_url_name %}">
     {% csrf_token %}
-    {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+    {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
     {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
     {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
     {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
@@ -161,7 +161,7 @@
         <option value="{{ type_name }}" {% if type_name == log_type_filter %}selected{% endif %}>{{ type_name }}</option>
         {% endfor %}
     </select>
-    {% if search_query or username_filter or log_type_filter or channel != 'mine' %}
+    {% if search_query or username_filter or log_type_filter or channel != default_channel %}
     <a href="{% url submit_url_name %}" class="search-filter-clear">clear</a>
     {% endif %}
     {% if not is_trash %}
@@ -271,7 +271,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="restore">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
@@ -283,7 +283,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete_permanent">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
@@ -298,7 +298,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="assign_to_me">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
@@ -310,7 +310,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="unassign_to_general">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
@@ -322,7 +322,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="copy_to_me">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
@@ -339,7 +339,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != 'mine' %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
                 {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
                 {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
                 {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}

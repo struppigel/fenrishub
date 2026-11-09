@@ -104,6 +104,23 @@ class HighlightResult:
     def has_sections(self):
         return any(section.header is not None for section in self.sections)
 
+    @property
+    def has_status(self):
+        """True when FRST rule statuses were applied (the gutter shows letters)."""
+        return any(line.status for line in iter_lines(self))
+
+    @property
+    def gutter_ch(self):
+        """Width of the line-number gutter in `ch`: the longest line number,
+        plus room for the status letter when there are statuses."""
+        last = 0
+        for section in self.sections:
+            if section.lines:
+                last = max(last, section.lines[-1].no)
+            elif section.header is not None:
+                last = max(last, section.header.no)
+        return len(str(last or 1)) + (2 if self.has_status else 0)
+
 
 class _Builder:
     """Collects lines into sections and summary items."""

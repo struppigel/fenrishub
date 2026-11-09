@@ -153,12 +153,24 @@ def get_updatable_uploads(user):
     )
 
 
+def default_upload_channel(user):
+    """The uploads / trash channel shown when none is chosen: 'all' when the
+    user's profile asks for it, otherwise 'mine'."""
+    from ..models import UserProfile
+
+    try:
+        profile = user.fenris_profile
+    except (UserProfile.DoesNotExist, AttributeError):
+        return 'mine'
+    return 'all' if profile.uploads_all_channels_default else 'mine'
+
+
 def redirect_preserving_filters(request, target_url_name):
     """Redirect to a listing view, preserving search/filter query params from POST or GET.
 
     Preserves `q`, `u`, `type`, and `page` as-is. Carries the uploads `channel` filter when it
-    is non-default (anything other than `mine`); fixlist forms never submit `channel` or
-    `type`, so they're harmless there.
+    differs from the user's default channel (see `default_upload_channel`); fixlist forms
+    never submit `channel` or `type`, so they're harmless there.
     """
     params = {}
     for key in ('q', 'u', 'type'):
@@ -167,7 +179,7 @@ def redirect_preserving_filters(request, target_url_name):
             params[key] = value
 
     channel = (request.POST.get('channel') or request.GET.get('channel') or '').strip()
-    if channel and channel != 'mine':
+    if channel and channel != default_upload_channel(request.user):
         params['channel'] = channel
 
     page = (request.POST.get('page') or request.GET.get('page') or '').strip()

@@ -68,6 +68,11 @@
                 <input type="checkbox" name="word_wrap" {% if profile_word_wrap %}checked{% endif %}>
                 <span>word wrap logs and fixlists</span>
             </label>
+            <div class="field-help">When on, the uploads and trash lists open on all channels instead of your own channel.</div>
+            <label class="checkbox-label">
+                <input type="checkbox" name="uploads_all_channels_default" {% if profile_uploads_all_channels_default %}checked{% endif %}>
+                <span>show all channels by default</span>
+            </label>
         </div>
 
         <div class="form-group">
@@ -96,6 +101,7 @@ function resetToDefaults() {
     document.getElementById('frst_fix_message').value = defaultFrstFixMessage;
     document.getElementById('analyzer_fixlist_template').value = defaultAnalyzerFixlistTemplate;
     document.querySelector('input[name="word_wrap"]').checked = false;
+    document.querySelector('input[name="uploads_all_channels_default"]').checked = false;
 }
 </script>
 {% endblock %}

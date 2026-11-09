@@ -88,6 +88,7 @@ def profile_view(request):
         # speeches page lists. Empty means the default, as it always did.
         ensure_fix_message_speech(request.user, request.POST.get('frst_fix_message', ''))
         profile.word_wrap = 'word_wrap' in request.POST
+        profile.uploads_all_channels_default = 'uploads_all_channels_default' in request.POST
         profile.analyzer_fixlist_template = request.POST.get('analyzer_fixlist_template', '')
         old_rule_set_mode = profile.rule_set_mode
         new_rule_set_mode = request.POST.get('rule_set_mode', UserProfile.RULE_SET_MODE_SHARED)
@@ -95,7 +96,7 @@ def profile_view(request):
             new_rule_set_mode = UserProfile.RULE_SET_MODE_SHARED
         profile.rule_set_mode = new_rule_set_mode
         profile.save(update_fields=[
-            'word_wrap', 'analyzer_fixlist_template', 'rule_set_mode',
+            'word_wrap', 'uploads_all_channels_default', 'analyzer_fixlist_template', 'rule_set_mode',
         ])
         if old_rule_set_mode != new_rule_set_mode:
             on_user_rule_set_mode_changed(request.user, old_rule_set_mode, new_rule_set_mode)
@@ -114,6 +115,7 @@ def profile_view(request):
             'analyzer_fixlist_template': effective_analyzer_fixlist_template,
             'default_analyzer_fixlist_template': DEFAULT_ANALYZER_FIXLIST_TEMPLATE,
             'profile_word_wrap': profile.word_wrap,
+            'profile_uploads_all_channels_default': profile.uploads_all_channels_default,
             'profile_rule_set_mode': profile.rule_set_mode,
             'rule_set_mode_choices': UserProfile.RULE_SET_MODE_CHOICES,
         },

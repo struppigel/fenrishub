@@ -872,6 +872,16 @@ class RenderHighlightedHtmlTests(SimpleTestCase):
         self.assertIn('https://evil.example/payload.exe', html)
         self.assertEqual('\n'.join(line.text for line in iter_lines(result)), content)
 
+    def test_gutter_is_only_as_wide_as_the_longest_line_number(self):
+        eset = highlight_log('ESET', ESET)
+        self.assertEqual(eset.gutter_ch, len(str(len(ESET.split('\n')))))
+        self.assertFalse(eset.has_status)
+        frst = highlight_log('FRST', FRST)
+        apply_analysis_statuses(frst, FRST, _frst_payload(FRST))
+        self.assertTrue(frst.has_status)
+        # Room for the status letter on top of the line number digits.
+        self.assertEqual(frst.gutter_ch, len(str(len(FRST.split('\n')))) + 2)
+
     def test_render_none_is_empty(self):
         self.assertEqual(render_highlighted_html(None), '')
 
@@ -919,6 +929,29 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'class="hl-copy-hint"')
         self.assertContains(response, "closest('.hl-path, .hl-reg, .hl-guid, .hl-hash')")
         self.assertContains(response, 'id="toggleSectionsButton"')
+
+    def test_summary_and_metadata_are_tabs_of_one_panel(self):
+        upload = UploadedLog.objects.create(
+            upload_id='tabbed-scanner', forum_username='forum_user', original_filename='mbam.txt',
+            content=MALWAREBYTES, log_type='Malwarebytes', detected_encoding='utf-16-le',
+        )
+        response = self._get(upload)
+        self.assertContains(response, 'data-info-tab="summary" role="tab" aria-selected="true"')
+        self.assertContains(response, 'data-info-tab="metadata" role="tab" aria-selected="false"')
+        # The metadata is still on the page (hidden until its tab is chosen).
+        self.assertContains(response, 'id="logMetadata" data-info-pane="metadata" role="tabpanel" '
+                                       'aria-labelledby="infoTabMetadata" hidden')
+        self.assertContains(response, 'utf-16-le')
+        self.assertContains(response, 'id="highlightSummary" data-info-pane="summary"')
+
+    def test_upload_without_summary_shows_metadata_without_tabs(self):
+        upload = UploadedLog.objects.create(
+            upload_id='untabbed-notes', forum_username='forum_user', original_filename='notes.txt',
+            content='some text nobody recognises', log_type='Unknown',
+        )
+        response = self._get(upload)
+        self.assertNotContains(response, 'role="tablist"')
+        self.assertContains(response, 'id="logMetadata" data-info-pane="metadata">')
 
     def test_log_without_sections_has_no_collapse_all_button(self):
         upload = UploadedLog.objects.create(

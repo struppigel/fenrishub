@@ -149,6 +149,8 @@ class UserProfile(models.Model):
         choices=RULE_SET_MODE_CHOICES,
         default=RULE_SET_MODE_SHARED,
     )
+    # Uploads / trash lists open on "all channels" instead of "my channel".
+    uploads_all_channels_default = models.BooleanField(default=False)
 
     def __str__(self):
         return f'Profile for {self.user.username}'

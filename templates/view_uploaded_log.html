@@ -86,9 +86,50 @@
     /* "maximize": hide metadata and summary, let the log fill the window. */
     .uploaded-log-page.log-maximized > h3,
     .uploaded-log-page.log-maximized > .divider,
-    .uploaded-log-page.log-maximized > .meta-grid,
-    .uploaded-log-page.log-maximized > .hl-summary {
+    .uploaded-log-page.log-maximized > .log-info-panel {
         display: none;
+    }
+
+    /* Summary and metadata share one panel as tabs (same look as the
+       fixlist / response tabs on the fixlist page). */
+    .log-info-tabs {
+        display: flex;
+        gap: 2px;
+    }
+
+    .log-info-tabs .panel-tab {
+        position: relative;
+        padding: 4px 14px;
+        margin-bottom: -1px;
+        background-color: transparent;
+        color: var(--la-text-muted);
+        border: 1px solid var(--la-border-muted);
+        border-bottom-color: transparent;
+    }
+
+    .log-info-tabs .panel-tab.tab-active {
+        z-index: 1;
+        background-color: var(--la-bg-2);
+        color: var(--la-text-primary);
+        border-color: var(--la-border);
+        border-bottom-color: var(--la-bg-2);
+        cursor: default;
+    }
+
+    .log-info-tabs .panel-tab.tab-active:hover {
+        text-decoration: none;
+    }
+
+    .log-info-panel.has-tabs .log-info-pane {
+        margin: 0 0 10px;
+        padding: 8px 10px;
+        background-color: var(--la-bg-2);
+        border: 1px solid var(--la-border);
+    }
+
+    /* .meta-grid sets display: grid, which would override [hidden]. */
+    .log-info-pane[hidden] {
+        display: none !important;
     }
 
     .uploaded-log-page.log-maximized .uploaded-content {
@@ -154,7 +195,31 @@
 <div class="divider"></div>
 
 <h3>upload {{ uploaded_log.upload_id }}</h3>
-<div class="meta-grid">
+{% with has_summary=highlight.has_summary %}
+<div class="log-info-panel{% if has_summary %} has-tabs{% endif %}" id="logInfoPanel">
+{% if has_summary %}
+<div class="panel-tabs log-info-tabs" role="tablist" aria-label="summary or metadata">
+    <button type="button" class="panel-tab tab-active" id="infoTabSummary" data-info-tab="summary" role="tab" aria-selected="true" aria-controls="highlightSummary">summary</button>
+    <button type="button" class="panel-tab" id="infoTabMetadata" data-info-tab="metadata" role="tab" aria-selected="false" aria-controls="logMetadata">metadata</button>
+</div>
+<div class="hl-summary log-info-pane" id="highlightSummary" data-info-pane="summary" role="tabpanel" aria-labelledby="infoTabSummary">
+    <div class="hl-summary-head">
+        {% if highlight.summary_title %}<span class="hl-summary-title">{{ highlight.summary_title }}</span>{% endif %}
+        {% for stat in highlight.stats %}<span class="hl-stat"><span class="hl-stat-label">{{ stat.label }}:</span> <span class="hl-sev-{{ stat.severity }}">{{ stat.value }}</span></span>{% endfor %}
+    </div>
+    {% if highlight.summary %}
+    <ul class="hl-summary-list">
+        {% for item in highlight.summary_shown %}
+        <li><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}"><span class="hl-jump-line">L{{ item.line_no }}</span> <span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}</a></li>
+        {% endfor %}
+    </ul>
+    {% if highlight.summary_hidden_count %}<div class="hl-summary-more">and {{ highlight.summary_hidden_count }} more</div>{% endif %}
+    {% elif highlighted_html %}
+    <div class="hl-summary-empty">nothing found</div>
+    {% endif %}
+</div>
+{% endif %}
+<div class="meta-grid log-info-pane" id="logMetadata" data-info-pane="metadata"{% if has_summary %} role="tabpanel" aria-labelledby="infoTabMetadata" hidden{% endif %}>
     <div class="meta-key">id</div>
     <div>{{ uploaded_log.upload_id }}</div>
     <div class="meta-key">filename</div>
@@ -214,25 +279,8 @@
     <div style="color: var(--la-error-text);">{{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}</div>
     {% endif %}
 </div>
-
-{% if highlight and highlight.has_summary %}
-<div class="hl-summary" id="highlightSummary">
-    <div class="hl-summary-head">
-        {% if highlight.summary_title %}<span class="hl-summary-title">{{ highlight.summary_title }}</span>{% endif %}
-        {% for stat in highlight.stats %}<span class="hl-stat"><span class="hl-stat-label">{{ stat.label }}:</span> <span class="hl-sev-{{ stat.severity }}">{{ stat.value }}</span></span>{% endfor %}
-    </div>
-    {% if highlight.summary %}
-    <ul class="hl-summary-list">
-        {% for item in highlight.summary_shown %}
-        <li><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}"><span class="hl-jump-line">L{{ item.line_no }}</span> <span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}</a></li>
-        {% endfor %}
-    </ul>
-    {% if highlight.summary_hidden_count %}<div class="hl-summary-more">and {{ highlight.summary_hidden_count }} more</div>{% endif %}
-    {% elif highlighted_html %}
-    <div class="hl-summary-empty">nothing found</div>
-    {% endif %}
 </div>
-{% endif %}
+{% endwith %}
 
 <div class="form-group">
     <div class="log-view-toolbar">
@@ -246,7 +294,7 @@
               onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleLogMaximized(); }"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8.5 8 4l5 4.5M3 13 8 8.5l5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
     </div>
     {% if highlighted_html %}
-    <div id="uploadedContent" class="uploaded-content hl-log" tabindex="0">{{ highlighted_html }}</div>
+    <div id="uploadedContent" class="uploaded-content hl-log{% if highlight.has_status %} hl-has-status{% endif %}" style="--hl-gutter: {{ highlight.gutter_ch }}ch" tabindex="0">{{ highlighted_html }}</div>
     {% else %}
     <div id="uploadedContent" class="uploaded-content" tabindex="0">{% for chunk in uploaded_log.content|chunk_log:100 %}<div class="log-chunk">{{ chunk }}</div>{% endfor %}</div>
     {% endif %}
@@ -297,6 +345,35 @@ function toggleLogMaximized(force) {
         const page = document.querySelector('.uploaded-log-page');
         if (page && page.classList.contains('log-maximized')) toggleLogMaximized(false);
     });
+})();
+
+// Summary / metadata tabs. The chosen tab is remembered per browser;
+// storage may be unavailable, so every access is guarded.
+(function () {
+    const panel = document.getElementById('logInfoPanel');
+    if (!panel) return;
+    const tabs = [...panel.querySelectorAll('[data-info-tab]')];
+    if (!tabs.length) return;
+    const STORAGE_KEY = 'uploadedLogInfoTab';
+
+    function selectTab(name, remember) {
+        tabs.forEach((tab) => {
+            const active = tab.dataset.infoTab === name;
+            tab.classList.toggle('tab-active', active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        panel.querySelectorAll('[data-info-pane]').forEach((pane) => {
+            pane.hidden = pane.dataset.infoPane !== name;
+        });
+        if (remember) {
+            try { localStorage.setItem(STORAGE_KEY, name); } catch (e) {}
+        }
+    }
+
+    let saved = null;
+    try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
+    if (saved && tabs.some((tab) => tab.dataset.infoTab === saved)) selectTab(saved, false);
+    tabs.forEach((tab) => tab.addEventListener('click', () => selectTab(tab.dataset.infoTab, true)));
 })();
 
 // One click collapses every section of the highlighted log, the next one

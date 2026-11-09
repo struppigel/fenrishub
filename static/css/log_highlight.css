@@ -4,29 +4,26 @@
 
 /* Each log line is its own block; the line number (and, for FRST types, the
    rule status letter) is pseudo-content, so it is never part of textContent
-   or a copied selection. Lines without a status pad the letter's place so
-   the numbers stay aligned. */
+   or a copied selection. The gutter is only as wide as the longest line
+   number (--hl-gutter, set per log by the template); logs with statuses
+   reserve the letter's place on every line so the numbers stay aligned. */
 .uploaded-content .hl-line {
     display: block;
-    padding-left: 7em;
-    text-indent: -7em;
+    padding-left: calc(var(--hl-gutter, 4ch) + 1.5ch);
+    text-indent: calc(-1 * (var(--hl-gutter, 4ch) + 1.5ch));
     min-height: 1.25em;
 }
 
 .uploaded-content .hl-line::before {
-    content: attr(data-n) '\00a0\00a0';
+    content: attr(data-n);
     display: inline-block;
-    width: 6em;
-    margin-right: 1em;
+    width: var(--hl-gutter, 4ch);
+    margin-right: 1.5ch;
     text-align: right;
     text-indent: 0;
     color: var(--la-text-disabled);
     user-select: none;
     -webkit-user-select: none;
-}
-
-.uploaded-content.hl-log {
-    padding-left: 0;
 }
 
 /* Sections: <details open> with the header line as <summary>. */
@@ -130,8 +127,12 @@
 /* FRST types: a line classified by the rules takes its status colour (over
    the syntax token colours, like in the analyzer) and shows the status
    letter next to its line number. Unknown (?) lines keep the syntax colours. */
-.uploaded-content .hl-line[data-st]::before {
-    content: attr(data-n) ' ' attr(data-st);
+.uploaded-content.hl-has-status .hl-line::before {
+    content: attr(data-n) '\00a0\00a0';
+}
+
+.uploaded-content.hl-has-status .hl-line[data-st]::before {
+    content: attr(data-n) '\00a0' attr(data-st);
 }
 
 .uploaded-content .hl-st-b, .uploaded-content .hl-st-b * { color: var(--la-status-b); }

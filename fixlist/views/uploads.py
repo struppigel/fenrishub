@@ -41,7 +41,7 @@ from .upload_actions import (
 from .utils import (
     _anonymous_upload_limit, _consume_anonymous_upload_slot, _resolve_upload_recipient_username,
     get_action_scoped_uploads, get_updatable_uploads, get_client_ip, _purge_old_trash,
-    redirect_preserving_filters,
+    redirect_preserving_filters, default_upload_channel,
 )
 
 
@@ -305,13 +305,18 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         .order_by('recipient_user__username')
     )
 
-    channel = request.GET.get('channel', '').strip()
+    # No channel chosen: the profile decides ('mine' unless "all channels by default").
+    default_channel = default_upload_channel(request.user)
+    channel = request.GET.get('channel', '').strip() or default_channel
     if channel.lower() == 'all':
         channel = 'all'
         list_visible_uploads = UploadedLog.objects.all()
     elif channel.lower() == 'unassigned':
         channel = 'unassigned'
         list_visible_uploads = UploadedLog.objects.filter(recipient_user__isnull=True)
+    elif channel.lower() == 'mine':
+        channel = 'mine'
+        list_visible_uploads = UploadedLog.objects.filter(recipient_user=request.user)
     elif channel in channel_users:
         list_visible_uploads = UploadedLog.objects.filter(recipient_user__username=channel)
     else:
@@ -349,7 +354,7 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     pagination_params = {}
     if username_filter:
         pagination_params['u'] = username_filter
-    if channel != 'mine':
+    if channel != default_channel:
         pagination_params['channel'] = channel
     if log_type_filter:
         pagination_params['type'] = log_type_filter
@@ -369,6 +374,7 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         'username_filter': username_filter,
         'all_usernames': all_usernames,
         'channel': channel,
+        'default_channel': default_channel,
         'channel_users': channel_users,
         'log_type_filter': log_type_filter,
         'all_log_types': all_log_types,
