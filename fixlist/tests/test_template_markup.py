@@ -141,6 +141,26 @@ class TemplateMarkupTests(TestCase):
             with self.subTest(placeholder=placeholder):
                 self.assertIn(f"'{placeholder}'", content)
 
+    def test_analyzer_blank_line_spacers_are_hidden_by_filters(self):
+        """renderLogLines() puts the log's blank lines back as .log-blank-line
+        spacers; a legend or tag filter must hide them, or a filtered view
+        fills up with empty rows."""
+        project_root = Path(__file__).resolve().parent.parent.parent
+        css = (project_root / "static" / "css" / "log_analyzer.css").read_text(encoding="utf-8")
+        self.assertIn('.log-lines-container[class*="hide-status-"] > .log-blank-line', css)
+        self.assertIn('.tag-filter-active .log-blank-line', css)
+
+    def test_analyzer_scripts_contain_no_raw_line_separators(self):
+        """A raw U+2028/U+2029 inside a JS regex literal is a line break and
+        stops the whole script from parsing (it broke shared.js once); such
+        characters must be written as escapes or built with fromCharCode."""
+        js_dir = Path(__file__).resolve().parent.parent.parent / "static" / "js" / "log_analyzer"
+        for path in sorted(js_dir.glob("*.js")):
+            with self.subTest(script=path.name):
+                content = path.read_text(encoding="utf-8")
+                self.assertNotIn("\u2028", content)
+                self.assertNotIn("\u2029", content)
+
     def test_legend_filter_hides_lines_by_verdict_not_by_paint_class(self):
         """
         The legend counts lines by verdict (dominant_status), so its filter has to

@@ -386,6 +386,24 @@ body.panel-resizing * {
     border-bottom: none;
 }
 
+/* A blank line of the log, put back between analysed lines by renderLogLines.
+   Same height as a line, inert (no click, no hover effect). */
+.log-blank-line {
+    padding: 2px 8px;
+    font-size: 12px;
+    line-height: 1.35;
+    min-height: 1.35em;
+    border-bottom: 1px solid var(--la-border-muted);
+    cursor: default;
+    user-select: none;
+}
+
+/* While a filter narrows the view, spacers would only pile up. */
+.log-lines-container[class*="hide-status-"] > .log-blank-line,
+.tag-filter-active .log-blank-line {
+    display: none;
+}
+
 .analysis-summary {
     font-size: 12px;
     color: var(--la-text-neutral);

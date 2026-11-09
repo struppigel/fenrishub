@@ -1888,8 +1888,21 @@ function renderLogLines() {
     const container = document.getElementById('logLines');
     const savedScrollTop = container.scrollTop;
     container.innerHTML = '';
+    // Blank lines of the log, put back between entries as inert spacer rows
+    // (the analysis itself has none). They carry no index, so every
+    // index-based action below is unaffected.
+    const logInputElement = document.getElementById('logInput');
+    const blankGaps = typeof computeBlankLineGaps === 'function'
+        ? computeBlankLineGaps(logInputElement ? logInputElement.value : '', analyzedLines)
+        : null;
 
     analyzedLines.forEach((entry, index) => {
+        for (let blank = blankGaps ? blankGaps[index] : 0; blank > 0; blank -= 1) {
+            const spacer = document.createElement('div');
+            spacer.className = 'log-blank-line';
+            spacer.setAttribute('aria-hidden', 'true');
+            container.appendChild(spacer);
+        }
         const line = entry.line;
         const cssClass = entry.css_class || 'status-unknown';
         const status = entry.dominant_status || '?';

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<!--
+  Tests for the blank lines shown between analysed lines
+  (shared.js computeBlankLineGaps + analysis.js renderLogLines + the
+  .log-blank-line rules in log_analyzer.css).
+
+  The analysis payload has one entry per NON-blank line and no line numbers,
+  so the view rebuilds the blank lines from the raw log in #logInput. The
+  spacer rows must never disturb the index-based line handling.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>log analyzer blank line tests</title>
+<link rel="stylesheet" href="../../../css/log_analyzer.css">
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>log analyzer &ndash; blank line tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<textarea id="logInput" style="display: none"></textarea>
+<div id="logLines" class="log-lines-container"></div>
+
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+
+<script>
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+function entries(...texts) {
+    return texts.map((line) => ({ line, dominant_status: '?', css_class: 'status-unknown' }));
+}
+
+const container = document.getElementById('logLines');
+const logInput = document.getElementById('logInput');
+
+// Children of #logLines as a compact shape: '_' for a spacer, the text for a line.
+function shape() {
+    return [...container.children].map((el) => (
+        el.classList.contains('log-blank-line') ? '_' : el.querySelector('.line-text').textContent
+    )).join(' ');
+}
+
+// ---------------------------------------------------------------------------
+// computeBlankLineGaps
+// ---------------------------------------------------------------------------
+(function testGaps() {
+    const e = entries('a', 'b', 'c');
+    const gaps = computeBlankLineGaps('\n\na\n\nb\n\n\nc\n\n', e);
+    assert('gaps count blank lines between entries; leading and trailing ones are dropped',
+        JSON.stringify(gaps) === JSON.stringify([0, 1, 2]), JSON.stringify(gaps));
+
+    const crlf = computeBlankLineGaps('a\r\n\r\nb\r\nc', entries('a', 'b', 'c'));
+    assert('CRLF logs are split like Python splitlines',
+        JSON.stringify(crlf) === JSON.stringify([0, 1, 0]), JSON.stringify(crlf));
+
+    const spaces = computeBlankLineGaps('  a  \n   \n\tb', entries('a', 'b'));
+    assert('whitespace-only lines count as blank and entries compare stripped',
+        JSON.stringify(spaces) === JSON.stringify([0, 1]), JSON.stringify(spaces));
+
+    assert('a text mismatch returns null',
+        computeBlankLineGaps('a\n\nx', entries('a', 'b')) === null);
+    assert('more raw lines than entries returns null',
+        computeBlankLineGaps('a\nb\nc', entries('a', 'b')) === null);
+    assert('fewer raw lines than entries returns null',
+        computeBlankLineGaps('a', entries('a', 'b')) === null);
+    assert('empty raw text returns null', computeBlankLineGaps('', entries('a')) === null);
+})();
+
+// ---------------------------------------------------------------------------
+// renderLogLines
+// ---------------------------------------------------------------------------
+(function testRenderInsertsSpacers() {
+    logInput.value = 'Scan result\n\n=== Processes ===\n\nproc one\nproc two\n\n\n=== End ===\n';
+    analyzedLines = entries('Scan result', '=== Processes ===', 'proc one', 'proc two', '=== End ===');
+    renderLogLines();
+    assert('spacers sit where the log has blank lines',
+        shape() === 'Scan result _ === Processes === _ proc one proc two _ _ === End ===', shape());
+    const lines = [...container.querySelectorAll('.log-line')];
+    assert('one .log-line per analysed entry', lines.length === analyzedLines.length, String(lines.length));
+    const indexes = lines.map((el) => el.querySelector('.status-badge').dataset.lineIndex).join(',');
+    assert('line indexes stay 0..n-1', indexes === '0,1,2,3,4', indexes);
+    const spacer = container.querySelector('.log-blank-line');
+    assert('spacers are inert (no badge, no index, aria-hidden)',
+        spacer && !spacer.querySelector('button') && !spacer.dataset.lineIndex
+            && spacer.getAttribute('aria-hidden') === 'true');
+})();
+
+(function testNoSpacersWhenTextDiffers() {
+    logInput.value = 'edited text\n\nsomething else';
+    renderLogLines();
+    assert('no spacers when #logInput no longer matches the analysis',
+        container.querySelectorAll('.log-blank-line').length === 0, shape());
+})();
+
+(function testFiltersHideSpacers() {
+    logInput.value = 'a\n\nb';
+    analyzedLines = entries('a', 'b');
+    renderLogLines();
+    const spacer = container.querySelector('.log-blank-line');
+    assert('spacer visible without a filter', spacer && getComputedStyle(spacer).display !== 'none');
+    container.classList.add('hide-status-c');
+    assert('spacer hidden while a legend filter is active', getComputedStyle(spacer).display === 'none');
+    container.classList.remove('hide-status-c');
+    container.classList.add('tag-filter-active');
+    assert('spacer hidden while the tag filter is active', getComputedStyle(spacer).display === 'none');
+    container.classList.remove('tag-filter-active');
+})();
+
+const summary = document.getElementById('summary');
+summary.textContent = passed + ' passed, ' + failed + ' failed';
+summary.style.color = failed === 0 ? '#6f9' : '#f66';
+</script>
+</body>
+</html>

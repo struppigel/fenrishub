@@ -878,6 +878,48 @@ function getPendingStatusChangesPayload() {
         });
 }
 
+// Python's str.splitlines() boundaries -- the analyzer splits the log with it.
+const SPLITLINES_BOUNDARY = new RegExp(
+    '\\r\\n|[\\n\\r\\x0b\\x0c\\x1c\\x1d\\x1e\\x85' + String.fromCharCode(0x2028, 0x2029) + ']'
+);
+let blankLineGapMemo = null;
+
+// The analyzer drops blank lines, so its entries carry no line positions.
+// Rebuild them from the raw log: gaps[k] is the number of blank lines just
+// before entry k (none before the first entry, trailing ones are dropped).
+// Each non-blank raw line must match its entry's text; on any mismatch
+// (e.g. the textarea no longer holds the analysed text) this returns null
+// and the view shows no blank lines, exactly as before.
+function computeBlankLineGaps(rawText, entries) {
+    if (!rawText || !Array.isArray(entries) || !entries.length) {
+        return null;
+    }
+    if (blankLineGapMemo && blankLineGapMemo.text === rawText && blankLineGapMemo.entries === entries) {
+        return blankLineGapMemo.gaps;
+    }
+    const gaps = new Array(entries.length).fill(0);
+    let index = 0;
+    let gap = 0;
+    let ok = true;
+    for (const piece of rawText.split(SPLITLINES_BOUNDARY)) {
+        const text = piece.trim();
+        if (!text) {
+            gap += 1;
+            continue;
+        }
+        if (index >= entries.length || !entries[index] || entries[index].line !== text) {
+            ok = false;
+            break;
+        }
+        gaps[index] = index === 0 ? 0 : gap;
+        gap = 0;
+        index += 1;
+    }
+    const result = ok && index === entries.length ? gaps : null;
+    blankLineGapMemo = { text: rawText, entries, gaps: result };
+    return result;
+}
+
 function applyAnalysisPayload(payload, options = {}) {
     const nextLines = Array.isArray(payload.lines) ? payload.lines : [];
     const shouldResetCopied = Boolean(options.resetCopied);
