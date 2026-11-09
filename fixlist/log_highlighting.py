@@ -101,6 +101,12 @@ class HighlightResult:
         return bool(self.summary or self.stats)
 
     @property
+    def summary_line_ch(self):
+        """Width in `ch` of the summary's "L<n>" labels: as wide as the longest."""
+        shown = self.summary_shown
+        return 1 + len(str(max((item.line_no for item in shown), default=1)))
+
+    @property
     def has_sections(self):
         return any(section.header is not None for section in self.sections)
 

@@ -208,7 +208,7 @@
         {% for stat in highlight.stats %}<span class="hl-stat"><span class="hl-stat-label">{{ stat.label }}:</span> <span class="hl-sev-{{ stat.severity }}">{{ stat.value }}</span></span>{% endfor %}
     </div>
     {% if highlight.summary %}
-    <ul class="hl-summary-list">
+    <ul class="hl-summary-list" style="--hl-summary-line: {{ highlight.summary_line_ch }}ch">
         {% for item in highlight.summary_shown %}
         <li><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}"><span class="hl-jump-line">L{{ item.line_no }}</span> <span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}</a></li>
         {% endfor %}

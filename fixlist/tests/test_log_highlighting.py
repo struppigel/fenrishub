@@ -4,7 +4,7 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from ..log_highlighting import (
-    HIGHLIGHTERS, Stat, _inline, apply_analysis_statuses, compute_tool_stats, highlight_log, iter_lines,
+    HIGHLIGHTERS, HighlightResult, Stat, _inline, apply_analysis_statuses, compute_tool_stats, highlight_log, iter_lines,
     render_highlighted_html, threat_severity,
 )
 from ..templatetags.rule_tags import stat_class
@@ -881,6 +881,12 @@ class RenderHighlightedHtmlTests(SimpleTestCase):
         self.assertTrue(frst.has_status)
         # Room for the status letter on top of the line number digits.
         self.assertEqual(frst.gutter_ch, len(str(len(FRST.split('\n')))) + 2)
+
+    def test_summary_line_labels_are_only_as_wide_as_the_longest(self):
+        result = highlight_log('ESET', ESET)
+        # Detections on lines 7, 9 and 11: "L11" is 3 characters.
+        self.assertEqual(result.summary_line_ch, 3)
+        self.assertEqual(HighlightResult([], []).summary_line_ch, 2)
 
     def test_render_none_is_empty(self):
         self.assertEqual(render_highlighted_html(None), '')

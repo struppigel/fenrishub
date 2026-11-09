@@ -203,9 +203,11 @@
     text-decoration: underline;
 }
 
+/* Only as wide as the longest "L<n>" label in this summary (set by the
+   template), so short line numbers don't leave a gap before the entry. */
 .hl-summary-list .hl-jump-line {
     display: inline-block;
-    min-width: 4.5em;
+    min-width: var(--hl-summary-line, 5ch);
     color: var(--la-text-disabled);
 }
 
