@@ -83,12 +83,22 @@ def _snippet_form_from_post(request) -> dict:
     }
 
 
+SNIPPET_FIELD_MAX_LENGTH = 255
+
+
 def _validate_snippet_form(user, form: dict, exclude_pk=None):
-    """Return an error message for the submitted snippet form, or None if valid."""
+    """Return an error message for the submitted snippet form, or None if valid.
+
+    Shared by the snippet editor and the token API's snippet writes.
+    """
     if not form['name']:
         return 'Snippet name is required.'
     if not form['content']:
         return 'Snippet content is required.'
+    if len(form['name']) > SNIPPET_FIELD_MAX_LENGTH:
+        return f'Snippet name must be at most {SNIPPET_FIELD_MAX_LENGTH} characters.'
+    if len(form['category']) > SNIPPET_FIELD_MAX_LENGTH:
+        return f'Snippet category must be at most {SNIPPET_FIELD_MAX_LENGTH} characters.'
     duplicates = FixlistSnippet.objects.filter(owner=user, name=form['name'])
     if exclude_pk is not None:
         duplicates = duplicates.exclude(pk=exclude_pk)

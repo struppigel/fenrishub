@@ -1,8 +1,8 @@
 """
 Token API (/api/v1/) for LLM clients.
 
-Mostly read-only: the write endpoints (rule tags, speeches and classification
-rules) need a superuser's write token, see api_auth. Serves what a logged-in
+Mostly read-only: the write endpoints (rule tags, speeches, fixlist snippets and
+classification rules) need a superuser's write token, see api_auth. Serves what a logged-in
 helper can already read in the browser: every
 non-trashed upload, its verdicts under the caller's own rule set, content
 search, infection cases by id, the fixlist snippets and speeches the caller
@@ -90,6 +90,7 @@ from .rules import (
     _rule_form_from_rule,
     create_rules,
 )
+from .snippets import _validate_snippet_form
 from .speeches import _speech_validation_error, speeches_for_tags
 from .uploads import filter_uploads_by_text
 
@@ -1197,8 +1198,8 @@ def api_tag_apply(request, tag_id):
     return JsonResponse({'dry_run': False, 'tag_id': tag.pk, 'mode': mode, 'added': added, 'removed': removed})
 
 
-def _speech_fields(payload, speech=None):
-    """(fields dict, error) from a speech write body; absent fields keep their values."""
+def _library_fields(payload, model, item=None):
+    """(fields dict, error) from a speech or snippet write body; absent fields keep their values."""
     for field in ('name', 'content', 'category'):
         if field in payload and not isinstance(payload[field], str):
             return None, f'Field "{field}" must be a string.'
@@ -1210,17 +1211,21 @@ def _speech_fields(payload, speech=None):
     ):
         return None, 'Field "trigger_tag_ids" must be a list of integers.'
     return {
-        'name': payload.get('name', speech.name if speech else '').strip(),
-        'content': payload.get('content', speech.content if speech else '').strip(),
-        'category': payload.get('category', speech.category if speech else '').strip() or Speech.DEFAULT_CATEGORY,
-        'is_shared': payload.get('is_shared', speech.is_shared if speech else False),
+        'name': payload.get('name', item.name if item else '').strip(),
+        'content': payload.get('content', item.content if item else '').strip(),
+        'category': payload.get('category', item.category if item else '').strip() or model.DEFAULT_CATEGORY,
+        'is_shared': payload.get('is_shared', item.is_shared if item else False),
         'tag_ids': None if tag_ids is None else parse_tag_ids(tag_ids),
     }, None
 
 
+def _own_library_item_payload(request, model, item, id_key):
+    item = model.objects.select_related('owner').prefetch_related('trigger_tags').get(pk=item.pk)
+    return _library_item_payload(item, request.user, id_key)
+
+
 def _own_speech_payload(request, speech):
-    speech = Speech.objects.select_related('owner').prefetch_related('trigger_tags').get(pk=speech.pk)
-    return _library_item_payload(speech, request.user, 'speech_id')
+    return _own_library_item_payload(request, Speech, speech, 'speech_id')
 
 
 @api_token_required('api_v1_speech_create', write=True)
@@ -1229,7 +1234,7 @@ def api_speech_create(request):
     payload, error = _write_payload(request)
     if error:
         return error
-    fields, message = _speech_fields(payload)
+    fields, message = _library_fields(payload, Speech)
     if not message:
         message = _speech_validation_error(request.user, fields['name'], fields['content'], fields['category'])
     if message:
@@ -1257,7 +1262,7 @@ def api_speech_update(request, speech_id):
     payload, error = _write_payload(request)
     if error:
         return error
-    fields, message = _speech_fields(payload, speech)
+    fields, message = _library_fields(payload, Speech, speech)
     if not message:
         message = _speech_validation_error(
             request.user, fields['name'], fields['content'], fields['category'], exclude_pk=speech.pk,
@@ -1272,6 +1277,58 @@ def api_speech_update(request, speech_id):
     if fields['tag_ids'] is not None:
         speech.trigger_tags.set(fields['tag_ids'])
     return JsonResponse(_own_speech_payload(request, speech))
+
+
+def _snippet_validation_error(user, fields, exclude_pk=None):
+    """The snippet editor's checks, on a parsed write body."""
+    form = {key: fields[key] for key in ('name', 'content', 'category')}
+    return _validate_snippet_form(user, form, exclude_pk=exclude_pk)
+
+
+@api_token_required('api_v1_snippet_create', write=True)
+def api_snippet_create(request):
+    """Create a fixlist snippet owned by the caller. Body: {name, content, category?, is_shared?, trigger_tag_ids?}."""
+    payload, error = _write_payload(request)
+    if error:
+        return error
+    fields, message = _library_fields(payload, FixlistSnippet)
+    if not message:
+        message = _snippet_validation_error(request.user, fields)
+    if message:
+        return _error(message)
+    snippet = FixlistSnippet.objects.create(
+        owner=request.user, name=fields['name'], content=fields['content'],
+        category=fields['category'], is_shared=fields['is_shared'],
+    )
+    # As on the add-snippet page: a new snippet is selected for the analyzer.
+    snippet.analyzer_users.add(request.user)
+    if fields['tag_ids'] is not None:
+        snippet.trigger_tags.set(fields['tag_ids'])
+    return JsonResponse(_own_library_item_payload(request, FixlistSnippet, snippet, 'snippet_id'), status=201)
+
+
+@api_token_required('api_v1_snippet_update', write=True)
+def api_snippet_update(request, snippet_id):
+    """Change one of the caller's own fixlist snippets; fields left out keep their values."""
+    snippet = FixlistSnippet.objects.filter(pk=snippet_id, owner=request.user).first()
+    if snippet is None:
+        return _not_found()
+    payload, error = _write_payload(request)
+    if error:
+        return error
+    fields, message = _library_fields(payload, FixlistSnippet, snippet)
+    if not message:
+        message = _snippet_validation_error(request.user, fields, exclude_pk=snippet.pk)
+    if message:
+        return _error(message)
+    snippet.name = fields['name']
+    snippet.content = fields['content']
+    snippet.category = fields['category']
+    snippet.is_shared = fields['is_shared']
+    snippet.save(update_fields=['name', 'content', 'category', 'is_shared', 'updated_at'])
+    if fields['tag_ids'] is not None:
+        snippet.trigger_tags.set(fields['tag_ids'])
+    return JsonResponse(_own_library_item_payload(request, FixlistSnippet, snippet, 'snippet_id'))
 
 
 RULE_STRING_FIELDS = ('status', 'match_type', 'source_text', 'description')

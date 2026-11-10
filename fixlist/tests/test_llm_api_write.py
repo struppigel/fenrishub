@@ -1,4 +1,4 @@
-"""Rule tags, speeches and classification rules through the token API.
+"""Rule tags, speeches, fixlist snippets and classification rules through the token API.
 
 Reading tags is open to every token. Writing needs a superuser's write token,
 re-checked on every request. Everything is additive: existing endpoints keep
@@ -82,6 +82,7 @@ class WriteAuthTests(ApiWriteBase):
         self.assertEqual(write_names, {
             'api_v1_tag_create', 'api_v1_tag_update', 'api_v1_tag_apply',
             'api_v1_speech_create', 'api_v1_speech_update',
+            'api_v1_snippet_create', 'api_v1_snippet_update',
             'api_v1_rule_create', 'api_v1_rule_update',
         })
         tag = RuleTag.objects.create(name='renloader')
@@ -90,7 +91,7 @@ class WriteAuthTests(ApiWriteBase):
         rule = make_rule('C:\\mine.exe', owner=self.admin)
         args = {
             'api_v1_tag_update': [tag.pk], 'api_v1_tag_apply': [tag.pk], 'api_v1_speech_update': [speech.pk],
-            'api_v1_rule_update': [rule.pk],
+            'api_v1_rule_update': [rule.pk], 'api_v1_snippet_update': [snippet.pk],
         }
         body = {'name': 'changed', 'content': 'changed', 'mode': 'add_rules', 'rule_ids': [], 'confirm': True,
                 'snippet_ids': [snippet.pk], 'speech_ids': [speech.pk],
@@ -107,6 +108,9 @@ class WriteAuthTests(ApiWriteBase):
         self.assertFalse(tag.snippets.exists() or tag.speeches.exists())
         self.assertFalse(RuleTag.objects.filter(name='changed').exists())
         self.assertFalse(Speech.objects.filter(name='changed').exists())
+        snippet.refresh_from_db()
+        self.assertEqual((snippet.name, snippet.content), ('fix', 'x'))
+        self.assertFalse(FixlistSnippet.objects.filter(name='changed').exists())
         rule.refresh_from_db()
         self.assertEqual((rule.source_text, rule.description), ('C:\\mine.exe', ''))
         self.assertFalse(ClassificationRule.objects.filter(source_text='changed').exists())
@@ -257,6 +261,69 @@ class SpeechWriteTests(ApiWriteBase):
         theirs = Speech.objects.create(owner=self.helper, name='theirs', content='x', is_shared=True)
         response = self.post('api_v1_speech_update', theirs.pk, body={'content': 'hijack'})
         self.assertEqual(response.status_code, 404)
+
+
+class SnippetWriteTests(ApiWriteBase):
+    def test_create_own_snippet_with_tags(self):
+        tag = RuleTag.objects.create(name='renloader')
+        response = self.post('api_v1_snippet_create', body={
+            'name': 'renloader fix', 'content': 'Folder: C:\\x\nEmptyTemp:', 'category': 'loaders',
+            'trigger_tag_ids': [tag.pk],
+        })
+        self.assertEqual(response.status_code, 201, response.content)
+        snippet = FixlistSnippet.objects.get(owner=self.admin, name='renloader fix')
+        self.assertEqual((snippet.content, snippet.category, snippet.is_shared), ('Folder: C:\\x\nEmptyTemp:', 'loaders', False))
+        self.assertEqual(list(snippet.trigger_tags.all()), [tag])
+        self.assertTrue(snippet.analyzer_users.filter(pk=self.admin.pk).exists())
+        body = response.json()
+        self.assertEqual(body['snippet_id'], snippet.pk)
+        self.assertEqual(body['trigger_tags'], [{'tag_id': tag.pk, 'name': 'renloader'}])
+
+    def test_create_defaults_the_category(self):
+        response = self.post('api_v1_snippet_create', body={'name': 'plain', 'content': 'EmptyTemp:'})
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(FixlistSnippet.objects.get(name='plain').category, FixlistSnippet.DEFAULT_CATEGORY)
+
+    def test_partial_update_keeps_other_fields_and_tags(self):
+        tag = RuleTag.objects.create(name='renloader')
+        snippet = FixlistSnippet.objects.create(
+            owner=self.admin, name='fix', content='old', category='loaders', is_shared=True,
+        )
+        snippet.trigger_tags.add(tag)
+
+        response = self.post('api_v1_snippet_update', snippet.pk, body={'content': 'new'})
+        self.assertEqual(response.status_code, 200, response.content)
+        snippet.refresh_from_db()
+        self.assertEqual(
+            (snippet.name, snippet.content, snippet.category, snippet.is_shared),
+            ('fix', 'new', 'loaders', True),
+        )
+        self.assertEqual(list(snippet.trigger_tags.all()), [tag])
+
+        self.post('api_v1_snippet_update', snippet.pk, body={'trigger_tag_ids': []})
+        self.assertFalse(snippet.trigger_tags.exists())
+
+    def test_other_users_snippet_is_not_found(self):
+        theirs = FixlistSnippet.objects.create(owner=self.helper, name='theirs', content='x', is_shared=True)
+        response = self.post('api_v1_snippet_update', theirs.pk, body={'content': 'hijack'})
+        self.assertEqual(response.status_code, 404)
+        theirs.refresh_from_db()
+        self.assertEqual(theirs.content, 'x')
+
+    def test_validation_matches_the_snippet_editor(self):
+        FixlistSnippet.objects.create(owner=self.admin, name='taken', content='x')
+        other = FixlistSnippet.objects.create(owner=self.admin, name='other', content='x')
+        bad_bodies = [
+            {'name': 'taken', 'content': 'y'},
+            {'name': 'empty', 'content': '   '},
+            {'name': 'x' * 256, 'content': 'y'},
+            {'name': 5, 'content': 'y'},
+            {'name': 'tags', 'content': 'y', 'trigger_tag_ids': ['1']},
+        ]
+        for body in bad_bodies:
+            self.assertEqual(self.post('api_v1_snippet_create', body=body).status_code, 400, body)
+        self.assertEqual(self.post('api_v1_snippet_update', other.pk, body={'name': 'taken'}).status_code, 400)
+        self.assertEqual(FixlistSnippet.objects.filter(owner=self.admin).count(), 2)
 
 
 class TagReadTests(ApiWriteBase):

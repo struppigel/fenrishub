@@ -61,6 +61,8 @@ from .views.llm_api import (
     api_rules,
     api_search,
     api_snippet,
+    api_snippet_create,
+    api_snippet_update,
     api_snippets,
     api_speech,
     api_speech_create,
@@ -210,6 +212,8 @@ urlpatterns = [
     path('api/v1/tags/<int:tag_id>/apply/', api_tag_apply, name='api_v1_tag_apply'),
     path('api/v1/speeches/create/', api_speech_create, name='api_v1_speech_create'),
     path('api/v1/speeches/<int:speech_id>/update/', api_speech_update, name='api_v1_speech_update'),
+    path('api/v1/snippets/create/', api_snippet_create, name='api_v1_snippet_create'),
+    path('api/v1/snippets/<int:snippet_id>/update/', api_snippet_update, name='api_v1_snippet_update'),
     path('stats/', statistics_view, name='statistics'),
     path('logout/', logout_view, name='logout'),
 ]

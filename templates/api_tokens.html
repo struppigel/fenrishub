@@ -221,8 +221,8 @@
         </div>
         {% if request.user.is_superuser %}
         <div>
-            <label title="lets the MCP server create and change rule tags, speeches and rules; keep a separate token for everyday reading">
-                <input type="checkbox" name="can_write"> allow writing tags, speeches and rules
+            <label title="lets the MCP server create and change rule tags, speeches, snippets and rules; keep a separate token for everyday reading">
+                <input type="checkbox" name="can_write"> allow writing tags, speeches, snippets and rules
             </label>
         </div>
         {% endif %}
@@ -239,7 +239,7 @@
             <tbody>
                 {% for token in tokens %}
                     <tr class="{% if not token.is_active %}inactive{% endif %}">
-                        <td>{{ token.name }}{% if token.can_write %} <strong title="can create and change rule tags, speeches and rules">(write)</strong>{% endif %}</td>
+                        <td>{{ token.name }}{% if token.can_write %} <strong title="can create and change rule tags, speeches, snippets and rules">(write)</strong>{% endif %}</td>
                         <td><code>{{ token.prefix }}…</code></td>
                         <td>{{ token.created_at|date:"Y-m-d H:i" }}</td>
                         <td>{{ token.expires_at|date:"Y-m-d" }}</td>
