@@ -177,6 +177,60 @@ Found\t2
 Scanning memory...
 Scan end:\t10/30/2026 5:27:09 PM"""
 
+TROJAN_KILLER = """Gridinsoft Trojan Killer Portable v.2.3.57
+Report file date: 11/10/2026 7:07:48 PM
+Last update:      11/10/2026 7:06:12 PM
+
+Scanning for 231933632 virus strains and unwanted programs.
+
+Licensed:         UNREGISTERED
+Windows version:  Windows 10 Pro x64 (version 6.3)
+Username:         User
+
+Starting the file scan:
+
+Full Scan started
+Scanning process...
+----- c:\\windows\\system32\\sppextcomobjhook.dll ---- General PartOfThreat
+\tHack.PL.AutoKMS.an
+
+
+----- c:\\windows\\system32\\config\\systemprofile\\appdata\\roaming\\ip_royal_paws\\device_id ---- General PartOfThreat
+\tSusp.FPL.TMPR.dd
+\tMD5: 48E670FD8CD96A4AC2715C5A2D9B9D01:26
+
+
+----- c:\\windows\\system32\\tasks_migrated\\microsoft\\windows\\synccenter\\syncx sdk ---- General PartOfThreat
+\tTrojan.PL.Agent.dd
+\tMD5: 41FCD503F9FBCF7D317C6E548EBC70AC:3850
+
+
+----- C:\\Program Files\\AutoClicker\\AutoClicker.exe ---- General Threat
+\tTrojan.Win32.Downloader.cl
+\tName: AutoClick
+\tSignature verification: True
+\tCertificates: FS.SnintnaDone Network Commerce Co., Ltd.
+\t.NET MVID: {365668FB-062D-4E50-93A2-CCD661698767}
+\tMD5: 1FC1854F81E865EBD44DE80A721101CD:222512
+\tPE: x86
+\tSEC:
+\t\t.text:60000020:5FB2B0113160191C180840A0EB6E43E9:138240
+\t\t.rsrc:40000040:1EEA2F32C63A3BF2DC7700196B5FB43D:72704
+
+
+----- C:\\Program Files\\Microsoft\\Servicing\\appsalt.dll ---- General Threat
+\tPUP.Win64.Beellet.dd!c
+\tCompany: AppSalt
+\tSignature verification: False
+\tMD5: 6B81344F9DE5E0F9B50D18B091E4403E:7754904
+
+
+Scan completed
+
+Scan result:         5 detected items
+SCAN_COM_MS
+Files were scanned:  676821"""
+
 FIXLOG = """Fix result of Farbar Recovery Scan Tool (x64) Version: 01-11-2026
 Ran by USER (05-11-2026 14:29:00) Run:1
 Boot Mode: Normal
@@ -342,6 +396,7 @@ FIXTURES = {
     'HitmanPro': [HITMANPRO],
     'AdwCleaner': [ADWCLEANER_SCAN, ADWCLEANER_CLEAN],
     'Emsisoft': [EMSISOFT],
+    'Trojan Killer': [TROJAN_KILLER],
     'Fixlog': [FIXLOG],
     'Shortcut': [SHORTCUT],
 }
@@ -364,7 +419,14 @@ def _lines(result):
 
 
 def _classes(line):
-    return {cls: text for cls, text in line.tokens if cls}
+    """{class: text} for a line's tokens. A token with several classes (e.g.
+    'hl-threat hl-sev-b') is also listed under each single class, unless a
+    token with exactly that class string is already there."""
+    out = {cls: text for cls, text in line.tokens if cls}
+    for cls, text in line.tokens:
+        for single in cls.split():
+            out.setdefault(single, text)
+    return out
 
 
 def _headers(result):
@@ -431,6 +493,10 @@ class ThreatSeverityTests(SimpleTestCase):
             'Win64/HackTool.Crack.FG potentially unsafe application': 'g',
             'a variant of Win64/Packed.Themida.Q suspicious application': 'g',
             'Generic.Malware/Suspicious': 'g',
+            'Susp.FPL.TMPR.dd': 'g',
+            'Hack.PL.AutoKMS.an': 'g',
+            'PUP.Win64.Beellet.dd!c': 'p',
+            'Trojan.PL.Agent.dd': 'b',
             'SomethingNew': 'b',
         }
         for name, expected in cases.items():
@@ -551,6 +617,70 @@ class PerToolHighlightTests(SimpleTestCase):
              (_no(FIXLOG, 'Exception calling'), 'b', 'PowerShell error')],
         )
 
+    def test_trojan_killer_detections_sections_and_details(self):
+        result = highlight_log('Trojan Killer', TROJAN_KILLER)
+        self.assertEqual(result.summary_title, 'Trojan Killer detections')
+        # Every "----- <path> ---- General ..." block is a collapsible section.
+        self.assertEqual(len([h for h in _headers(result) if h.startswith('----- ')]), 5)
+        autoclicker = _no(TROJAN_KILLER, 'AutoClicker.exe ----')
+        self.assertEqual(
+            [(i.line_no, i.severity, i.name) for i in result.summary],
+            [(_no(TROJAN_KILLER, 'sppextcomobjhook.dll'), 'g', 'Hack.PL.AutoKMS.an'),
+             (_no(TROJAN_KILLER, 'device_id'), 'g', 'Susp.FPL.TMPR.dd'),
+             (_no(TROJAN_KILLER, 'syncx sdk'), 'b', 'Trojan.PL.Agent.dd'),
+             (autoclicker, 'b', 'Trojan.Win32.Downloader.cl'),
+             (_no(TROJAN_KILLER, 'appsalt.dll'), 'p', 'PUP.Win64.Beellet.dd!c')],
+        )
+        self.assertEqual(result.summary[3].target, 'C:\\Program Files\\AutoClicker\\AutoClicker.exe')
+        header = _line(result, TROJAN_KILLER, 'AutoClicker.exe ----')
+        self.assertEqual(header.tokens[:2], [('hl-dim', '----- '),
+                                             ('hl-path', 'C:\\Program Files\\AutoClicker\\AutoClicker.exe')])
+        self.assertEqual(_classes(_line(result, TROJAN_KILLER, 'Downloader.cl'))['hl-sev-b'],
+                         'Trojan.Win32.Downloader.cl')
+        self.assertEqual(_classes(_line(result, TROJAN_KILLER, 'verification: True'))['hl-sev-c'], 'True')
+        self.assertEqual(_classes(_line(result, TROJAN_KILLER, 'verification: False'))['hl-sev-w'], 'False')
+        self.assertEqual(_classes(_line(result, TROJAN_KILLER, 'Company:'))['hl-company'], ' AppSalt')
+        self.assertEqual(_classes(_line(result, TROJAN_KILLER, '.NET MVID'))['hl-guid'],
+                         '{365668FB-062D-4E50-93A2-CCD661698767}')
+        self.assertEqual(_classes(_line(result, TROJAN_KILLER, ':222512'))['hl-hash'],
+                         '1FC1854F81E865EBD44DE80A721101CD')
+        # PE section MD5s are marked apart from file hashes (VirusTotal looks
+        # them up with a sectionmd5 search); the rest of the line is dimmed.
+        section = _line(result, TROJAN_KILLER, '.text:')
+        self.assertEqual(section.tokens[:3], [('hl-dim', '\t\t.text:60000020:'),
+                                              ('hl-hash hl-section-md5', '5FB2B0113160191C180840A0EB6E43E9'),
+                                              ('hl-dim', ':138240')])
+        self.assertNotIn('hl-section-md5', _classes(_line(result, TROJAN_KILLER, ':222512')))
+        self.assertEqual(_classes(_line(result, TROJAN_KILLER, 'Scan result:'))['hl-sev-b'], '5')
+        self.assertEqual([(s.label, s.value, s.severity) for s in result.stats], [('Detected', '5', 'b')])
+        # The footer is not part of the last detection's section.
+        last_detection = next(s for s in result.sections
+                              if s.header is not None and 'appsalt.dll' in s.header.text)
+        self.assertNotIn(_no(TROJAN_KILLER, 'Scan completed'), [line.no for line in last_detection.lines])
+        self.assertEqual(result.sections[-1].header, None)
+        self.assertEqual(result.sections[-1].lines[0].no, _no(TROJAN_KILLER, 'Scan completed'))
+
+    def test_detection_names_are_marked_as_threats(self):
+        """Every detection-log highlighter tags the detection name with
+        hl-threat (the page offers to copy or google it); statuses such as
+        AdwCleaner's "Deleted" are not detection names."""
+        cases = [
+            ('ESET', ESET, 'a variant of Android/Agent.FNM trojan'),
+            ('Malwarebytes', MALWAREBYTES, 'Trojan.PavinLoader.E'),
+            ('HitmanPro', HITMANPRO, 'Mal/Generic-S'),
+            ('Emsisoft', EMSISOFT, 'Trojan.GenericKD.36942578'),
+            ('AdwCleaner', ADWCLEANER_SCAN, 'PUP.Optional.Legacy'),
+            ('Trojan Killer', TROJAN_KILLER, 'Trojan.Win32.Downloader.cl'),
+        ]
+        for log_type, content, name in cases:
+            with self.subTest(log_type=log_type):
+                threats = [text.strip() for line in iter_lines(highlight_log(log_type, content))
+                           for cls, text in line.tokens if 'hl-threat' in cls.split()]
+                self.assertIn(name, threats)
+        clean = highlight_log('AdwCleaner', ADWCLEANER_CLEAN)
+        self.assertFalse([text for line in iter_lines(clean) for cls, text in line.tokens
+                          if 'hl-threat' in cls.split() and text in ('Deleted', 'Not Deleted')])
+
     def test_kprm_sections_counts_and_items(self):
         result = highlight_log('KpRm', KPRM)
         self.assertEqual(_headers(result), ['Summary', 'ESET Online Scanner', 'FRST'])
@@ -620,6 +750,10 @@ class PerToolHighlightTests(SimpleTestCase):
             [(i.line_no, i.severity) for i in result.summary],
             [(_no(FRST, 'postgres.exe'), 'p'), (_no(FRST, 'evil.exe'), 'b'), (_no(FRST, 'EnableSmartScreen'), 'w')],
         )
+        # The verdict letter is its own field (rendered before the name), not
+        # the trailing action, and the name is the whole stripped line.
+        self.assertEqual([(i.status, i.action) for i in result.summary], [('P', ''), ('B', ''), ('!', '')])
+        self.assertEqual(result.summary[1].name, _line(result, FRST, 'evil.exe').text.strip())
         evil = _line(result, FRST, 'evil.exe')
         self.assertEqual((evil.status, evil.paint), ('B', 'b'))
         self.assertEqual(_line(result, FRST, 'Creative Cloud.exe').status, 'C')
@@ -628,6 +762,22 @@ class PerToolHighlightTests(SimpleTestCase):
         no = _no(FRST, 'evil.exe')
         self.assertIn(f'<span class="hl-line hl-st-b" id="L{no}" data-n="{no}" data-st="B">', html)
         self.assertEqual('\n'.join(line.text for line in iter_lines(result)), FRST)
+
+    def test_frst_summary_keeps_long_lines_whole(self):
+        long_line = ('Task: {D949367D-46DA-43F0-961D-B572535EFDB1} - System32\\Tasks\\Updater => '
+                     'C:\\WINDOWS\\system32\\conhost.exe [1003520 2026-09-29] (Microsoft Windows -> '
+                     'Microsoft Corporation) -> --headless C:\\Windows\\System32\\rundll32.exe '
+                     + 'C:\\ProgramData\\' + 'x' * 150 + '\\payload.dll,Start')
+        self.assertGreater(len(long_line), 200)
+        content = f'Scan result of Farbar Recovery Scan Tool\n{long_line}'
+        result = highlight_log('FRST', content)
+        payload = {'lines': [
+            {'line': 'Scan result of Farbar Recovery Scan Tool', 'dominant_status': '?'},
+            {'line': long_line, 'dominant_status': 'B', 'css_class': 'status-b'},
+        ]}
+        self.assertTrue(apply_analysis_statuses(result, content, payload))
+        [item] = result.summary
+        self.assertEqual((item.line_no, item.status, item.name), (2, 'B', long_line))
 
     def test_frst_stale_or_mismatched_analysis_is_not_applied(self):
         result = highlight_log('FRST', FRST)
@@ -688,6 +838,14 @@ class PerToolHighlightTests(SimpleTestCase):
         self.assertEqual(first_path('(C:\\Program Files (x86)\\Adobe\\ADS\\Adobe Desktop Service.exe ->) '),
                          'C:\\Program Files (x86)\\Adobe\\ADS\\Adobe Desktop Service.exe')
         self.assertEqual(first_path('C:\\x\\y.exe <==== ATTENTION'), 'C:\\x\\y.exe')
+        # A "(1)" copy suffix before the extension is part of the file name ...
+        self.assertEqual(first_path('C:\\Users\\A B\\Downloads\\Lec 7-8 (1).pptx'),
+                         'C:\\Users\\A B\\Downloads\\Lec 7-8 (1).pptx')
+        self.assertEqual(first_path('C:\\Users\\A\\Desktop\\ - BlueStacks App Player 1 (2).lnk [1315]'),
+                         'C:\\Users\\A\\Desktop\\ - BlueStacks App Player 1 (2).lnk')
+        # ... while a company group after the path still is not.
+        self.assertEqual(first_path('C:\\x\\y.exe (Microsoft Corporation) [File not signed]'), 'C:\\x\\y.exe')
+        self.assertEqual(first_path('C:\\x\\y.exe (Intel(R) Software) -> x'), 'C:\\x\\y.exe')
         # A semicolon inside a name stays.
         self.assertEqual(first_path('C:\\a;b\\c.txt'), 'C:\\a;b\\c.txt')
 
@@ -721,6 +879,8 @@ class ToolStatsChipTests(SimpleTestCase):
         self.assertEqual(compute_tool_stats('Malwarebytes', MALWAREBYTES),
                          [['B', 1, 'b'], ['P', 1, 'p'], ['G', 0, 'j']])
         self.assertEqual(compute_tool_stats('Emsisoft', EMSISOFT), [['B', 1, 'b'], ['P', 1, 'p'], ['G', 0, 'j']])
+        self.assertEqual(compute_tool_stats('Trojan Killer', TROJAN_KILLER),
+                         [['B', 2, 'b'], ['P', 1, 'p'], ['G', 2, 'g']])
         self.assertEqual(compute_tool_stats('HitmanPro', HITMANPRO),
                          [['B', 1, 'b'], ['P', 0, 'j'], ['G', 0, 'j'], ['traces', 1, 'j']])
         self.assertEqual(compute_tool_stats('AdwCleaner', ADWCLEANER_SCAN),
@@ -910,6 +1070,33 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         line_no = _no(MALWAREBYTES, 'Trojan.PavinLoader.E,')
         self.assertContains(response, f'href="#L{line_no}" class="hl-jump" data-line="{line_no}"')
         self.assertContains(response, 'css/log_highlight.css')
+        # MD5 / SHA-1 / SHA-256 tokens get a copy / VirusTotal menu.
+        self.assertContains(response, '<span class="hl-hash">DB731DE38A5471A744FB09C633CD557F</span>')
+        self.assertContains(response, "const HASH_KINDS = { 32: 'MD5', 40: 'SHA-1', 64: 'SHA-256' };")
+        self.assertContains(response, "'https://www.virustotal.com/gui/file/' + hash.toLowerCase()")
+        self.assertContains(response, "encodeURIComponent('sectionmd5:' + hash.toLowerCase()) + '&section=IoCs&type=files'")
+        # Detection names get a copy / Google menu.
+        self.assertContains(response, '<span class="hl-threat hl-sev-b">Trojan.PavinLoader.E</span>')
+        self.assertContains(response, "if (token.matches('.hl-threat')) return openThreatMenu(token);")
+        # File paths get a copy (path / name / parent folder) / Google menu.
+        self.assertContains(response, "if (folder) items.push({ key: 'copy folder', value: folder,")
+        self.assertContains(response, "return 'https://www.google.com/search?q=' + encodeURIComponent(value);")
+        self.assertContains(response, "if (token.matches('.hl-path')) return openPathMenu(token);")
+
+    def test_trojan_killer_section_md5_renders_with_its_own_class(self):
+        # The view re-detects the type; Trojan Killer's rule is user-added, not seeded.
+        from ..models import LogTypeDetectionRule
+        LogTypeDetectionRule.objects.create(
+            name='Gridinsoft Trojan Killer', log_type='Trojan Killer', pattern='Gridinsoft Trojan Killer',
+            scope=LogTypeDetectionRule.SCOPE_START, priority=50,
+        )
+        upload = UploadedLog.objects.create(
+            upload_id='section-killer', forum_username='forum_user', original_filename='tk.txt',
+            content=TROJAN_KILLER, log_type='Trojan Killer',
+        )
+        response = self._get(upload)
+        self.assertContains(response, '<span class="hl-hash hl-section-md5">5FB2B0113160191C180840A0EB6E43E9</span>')
+        self.assertContains(response, '<span class="hl-hash">1FC1854F81E865EBD44DE80A721101CD</span>')
 
     def test_mau_upload_is_highlighted_when_detected(self):
         LogTypeDetectionRule.objects.create(
@@ -999,6 +1186,17 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         no = _no(FRST, 'evil.exe')
         self.assertContains(response, f'data-n="{no}" data-st="B"')
         self.assertContains(response, f'href="#L{no}" class="hl-jump" data-line="{no}"')
+        # Verdict right after the line label, before the line text.
+        self.assertContains(
+            response,
+            f'<span class="hl-jump-line">L{no}</span> <span class="hl-jump-status hl-sev-b">B</span> '
+            f'<span class="hl-jump-name hl-sev-b">',
+        )
+        # Copy icon + menu, styled by the stylesheet shared with the analyzer.
+        self.assertContains(response, 'css/line_copy_menu.css')
+        # Copy and search icons at the line end, like the analyzer's.
+        self.assertContains(response, "makeButton('hl-line-copy-trigger', '\\u2398', 'copy line or component')")
+        self.assertContains(response, "makeButton('hl-line-search-trigger', '\\u2315', 'search component on google')")
         self.assertContains(response, '<span class="hl-summary-title">shared rules</span>')
         self.assertContains(response, '<span class="hl-stat-label">B:</span> <span class="hl-sev-b">1</span>')
         self.assertContains(response, '<span class="hl-stat-label">G:</span> <span class="hl-sev-j">0</span>')

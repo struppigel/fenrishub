@@ -1,7 +1,7 @@
 """Tool-aware syntax highlighting for non-FRST logs on the uploaded-log page.
 
 `highlight_log(log_type, content)` turns a log of one of the `HIGHLIGHTERS`
-types (MAU, ESET, Malwarebytes, HitmanPro, Emsisoft, AdwCleaner, Fixlog,
+types (MAU, ESET, Malwarebytes, HitmanPro, Emsisoft, Trojan Killer, AdwCleaner, Fixlog,
 Shortcut, KpRm, SecurityCheck, FRST Search) into sections of tokenised lines
 plus a summary of detections (or failures) for the box at the top of the page.
 `render_highlighted_html()` turns that into HTML, and `compute_tool_stats()`
@@ -66,6 +66,8 @@ class SummaryItem:
     name: str
     target: str = ''
     action: str = ''
+    # FRST types only: the rule status letter, shown before the name.
+    status: str = ''
 
 
 @dataclass
@@ -175,9 +177,10 @@ _INLINE_RE = re.compile(
 #   covers FRST "x.exe ->)", Defender archive members "a.ipa->Payload/..." and
 #   "<==== ATTENTION";
 # - "; " / ";" at the end: Defender separates resources with "; ";
-# - a " (...)" group only when it isn't followed by "\": "Program Files (x86)\..."
-#   and "New folder (2)\..." are part of the path, "C:\x.exe (Company)" is not.
-_PATH_STOP_RE = re.compile(r' ?->| ?=>| <|\t|"|, |;(?=\s|$)| \((?!x86\))(?![^()\\]*\)\\)| \[|$')
+# - a " (...)" group only when it isn't followed by "\" or a file extension:
+#   "Program Files (x86)\...", "New folder (2)\..." and "Lec 7-8 (1).pptx" are
+#   part of the path, "C:\x.exe (Company)" is not.
+_PATH_STOP_RE = re.compile(r' ?->| ?=>| <|\t|"|, |;(?=\s|$)| \((?!x86\))(?![^()\\]*\)(?:\\|\.\w))| \[|$')
 
 _CLASS_FOR_KIND = {'url': 'hl-url', 'guid': 'hl-guid', 'hash': 'hl-hash'}
 
@@ -286,13 +289,20 @@ def _action_severity(action):
     return 'w'
 
 
+# Detection names: coloured by severity, and the uploaded-log page offers to
+# copy or google them (.hl-threat).
+_THREAT = 'hl-threat hl-sev-'
+
+
 def threat_severity(name):
     """Map a detection name to a status letter: b (malware), p (PUP), g (gray)."""
     lower = (name or '').lower()
     if 'potentially unwanted' in lower:
         return 'p'
     if ('potentially unsafe' in lower or 'suspicious' in lower or lower.startswith('pum.')
-            or 'hacktool' in lower or 'riskware' in lower):
+            or 'hacktool' in lower or 'riskware' in lower
+            # Trojan Killer: "Susp.FPL.TMPR.dd", "Hack.PL.AutoKMS.an"
+            or lower.startswith(('susp.', 'hack.'))):
         return 'g'
     if (lower.startswith(('pup.', 'adware', 'application.')) or '.application.' in lower
             or 'adware' in lower):
@@ -324,7 +334,7 @@ def _highlight_eset(lines):
             path, threat = parts[0], parts[1]
             action = '\t'.join(parts[2:])
             sev = threat_severity(threat)
-            tokens = _target(path) + [('', '\t'), ('hl-sev-' + sev, threat)]
+            tokens = _target(path) + [('', '\t'), (_THREAT + sev, threat)]
             if len(parts) > 2:
                 acls = ('hl-sev-' + _action_severity(action)) if action.strip() else ''
                 tokens += [('', '\t'), (acls, action)]
@@ -374,7 +384,7 @@ def _highlight_malwarebytes(lines):
         if m:
             name, target, action, rest = m.group('name', 'target', 'action', 'rest')
             sev = threat_severity(name)
-            tokens = ([('hl-sev-' + sev, name), ('hl-dim', ', ')] + _target(target)
+            tokens = ([(_THREAT + sev, name), ('hl-dim', ', ')] + _target(target)
                       + [('hl-dim', ', '), ('hl-sev-' + _action_severity(action), action)]
                       + _inline(', ' + rest, 'hl-dim'))
             b.add(_mk(no, tokens, cr))
@@ -471,7 +481,7 @@ def _highlight_hitmanpro(lines):
             tokens = [('', lead)]
             if marker:
                 tokens.append(('hl-accent', marker))
-                tokens += [('hl-key', key + sep), ('hl-sev-' + (section_sev or 'b'), value)]
+                tokens += [('hl-key', key + sep), (_THREAT + (section_sev or 'b'), value)]
                 if current_item is not None:
                     current_item.name = value.strip()
                     current_item.action = key.strip()
@@ -558,7 +568,9 @@ def _highlight_adwcleaner(lines):
                 sev = 'w'
             else:
                 sev = threat_severity(name)
-            b.add(_mk(no, [('hl-sev-' + sev, name), ('', gap)] + _target(target), cr))
+            # Only real detection names, not the clean-mode Deleted / Not Deleted status.
+            name_cls = ('hl-sev-' + sev) if name in ('Deleted', 'Not Deleted') else (_THREAT + sev)
+            b.add(_mk(no, [(name_cls, name), ('', gap)] + _target(target), cr))
             # Scan mode lists every detection; clean mode only what failed.
             if not clean_mode or sev == 'w':
                 b.item(no, sev, name, target.strip())
@@ -588,7 +600,7 @@ def _highlight_emsisoft(lines):
             if m and ('\\' in left or ':' in left.rstrip(':')):
                 label, name = m.group(1, 2)
                 sev = threat_severity(name)
-                tokens = _target(left) + [('', '\t'), ('hl-dim', label + ' '), ('hl-sev-' + sev, name),
+                tokens = _target(left) + [('', '\t'), ('hl-dim', label + ' '), (_THREAT + sev, name),
                                           ('hl-dim', right[m.end(2):])]
                 b.add(_mk(no, tokens, cr))
                 b.item(no, sev, name, left.strip())
@@ -608,6 +620,88 @@ def _highlight_emsisoft(lines):
             b.add(_mk(no, [('hl-subheader', body)], cr))
             continue
         kv = _kv_colon(body)
+        b.add(_mk(no, kv if kv else _inline(body), cr))
+    return b.result()
+
+
+# ---------------------------------------------------------------------------
+# Gridinsoft Trojan Killer
+# ---------------------------------------------------------------------------
+
+# "----- C:\path\file.exe ---- General Threat" (or "General PartOfThreat")
+# opens a detection; the next indented line is the detection name, then
+# "\tKey: value" details and "\t\t.section:flags:md5:size" PE sections.
+_TK_DETECTION_RE = re.compile(r'^(-{3,} )(.+?)( -{3,} )(.*)$')
+_TK_RESULT_RE = re.compile(r'^(Scan result:)(\s+)(\d+)(.*)$')
+_TK_STATUS_RE = re.compile(r'^(Starting the file scan:|Full Scan started|Quick Scan started|Custom Scan started'
+                           r'|Scanning process\.\.\.|Scan completed|Scanning for \d+ .*|[A-Z][A-Z_]+)\s*$')
+_TK_SIGNATURE_RE = re.compile(r'^(\s*)(Signature verification:)(\s*)(\S+)(\s*)$')
+_TK_COMPANY_KEYS = ('Company:', 'Certificates:')
+# "\t\t.text:60000020:5FB2B0113160191C180840A0EB6E43E9:138240" (name:flags:md5:size)
+_TK_SECTION_RE = re.compile(r'^\t\t[^\s:]*:[0-9A-Fa-f]{8}:([0-9A-Fa-f]{32}):\d+\s*$')
+
+
+def _highlight_trojan_killer(lines):
+    b = _Builder('Trojan Killer detections')
+    expect_name = None  # (header line no, target) right after a detection header
+    for i, raw in enumerate(lines):
+        no = i + 1
+        body, cr = _split_cr(raw)
+        if i == 0 and 'Trojan Killer' in body:
+            b.add(_mk(no, [('hl-title', body)], cr))
+            continue
+        m = _TK_DETECTION_RE.match(body)
+        if m:
+            dashes, target, sep, kind = m.groups()
+            tokens = [('hl-dim', dashes)] + _target(target) + [('hl-dim', sep + body[m.start(4):])]
+            b.header(_mk(no, tokens, cr))
+            expect_name = (no, target.strip())
+            continue
+        if not body.strip():
+            b.add(_mk(no, [('', body)], cr))
+            continue
+        if expect_name is not None:
+            header_no, target = expect_name
+            expect_name = None
+            name = body.strip()
+            if body.startswith('\t') and not body.startswith('\t\t') and ': ' not in name:
+                sev = threat_severity(name)
+                lead = body[:len(body) - len(body.lstrip())]
+                b.add(_mk(no, [('', lead), (_THREAT + sev, body[len(lead):])], cr))
+                b.item(header_no, sev, name, target)
+                continue
+        m = _TK_SECTION_RE.match(body)
+        if m:
+            # PE section line: its MD5 is a section hash (VirusTotal looks those
+            # up with a "sectionmd5:" search, not as a file).
+            b.add(_mk(no, [('hl-dim', body[:m.start(1)]), ('hl-hash hl-section-md5', m.group(1)),
+                           ('hl-dim', body[m.end(1):])], cr))
+            continue
+        if body.startswith('\t\t'):
+            b.add(_mk(no, _inline(body, 'hl-dim'), cr))
+            continue
+        m = _TK_RESULT_RE.match(body)
+        if m:
+            key, gap, count, rest = m.groups()
+            sev = _count_sev(count)
+            if b.sections[-1].header is not None:
+                b.end_section()
+            b.stats.append(Stat('Detected', count, sev))
+            b.add(_mk(no, [('hl-key', key), ('', gap), ('hl-sev-' + sev, count), ('', rest)], cr))
+            continue
+        if _TK_STATUS_RE.match(body):
+            # The footer is not part of the last detection.
+            if body.startswith('Scan completed') and b.sections[-1].header is not None:
+                b.end_section()
+            b.add(_mk(no, [('hl-dim', body)], cr))
+            continue
+        m = _TK_SIGNATURE_RE.match(body)
+        if m:
+            lead, key, gap, value, trail = m.groups()
+            sev = 'hl-sev-w' if value.lower() == 'false' else 'hl-sev-c' if value.lower() == 'true' else ''
+            b.add(_mk(no, [('', lead), ('hl-key', key), ('', gap), (sev, value), ('', trail)], cr))
+            continue
+        kv = _kv_colon(body, 'hl-company' if body.strip().startswith(_TK_COMPANY_KEYS) else '')
         b.add(_mk(no, kv if kv else _inline(body), cr))
     return b.result()
 
@@ -1280,7 +1374,7 @@ def apply_analysis_statuses(result, content, payload):
         line.paint = paint
         severity = _STATUS_SUMMARY_SEVERITY.get(status)
         if severity:
-            items.append(SummaryItem(no, severity, text[:200], '', status))
+            items.append(SummaryItem(no, severity, text, status=status))
     result.summary = items + result.summary
     result.summary.sort(key=lambda item: item.line_no)
     return True
@@ -1302,6 +1396,7 @@ HIGHLIGHTERS = {
     'Malwarebytes': _highlight_malwarebytes,
     'HitmanPro': _highlight_hitmanpro,
     'Emsisoft': _highlight_emsisoft,
+    'Trojan Killer': _highlight_trojan_killer,
     'AdwCleaner': _highlight_adwcleaner,
     'Fixlog': _highlight_fixlog,
     'Shortcut': _highlight_shortcut,
@@ -1393,7 +1488,7 @@ def render_highlighted_html(result):
 # UploadedLog.tool_stats, so the uploads / cases lists never parse logs.
 # ---------------------------------------------------------------------------
 
-DETECTION_CHIP_TYPES = {'ESET', 'Malwarebytes', 'HitmanPro', 'Emsisoft', 'AdwCleaner'}
+DETECTION_CHIP_TYPES = {'ESET', 'Malwarebytes', 'HitmanPro', 'Emsisoft', 'AdwCleaner', 'Trojan Killer'}
 # These keep their analyzer-based count_* fields (and chips) instead.
 FRST_TYPES = {'FRST', 'Addition', 'FRST&Addition'}
 

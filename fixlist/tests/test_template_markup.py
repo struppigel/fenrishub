@@ -150,6 +150,15 @@ class TemplateMarkupTests(TestCase):
         self.assertIn('.log-lines-container[class*="hide-status-"] > .log-blank-line', css)
         self.assertIn('.tag-filter-active .log-blank-line', css)
 
+    def test_analyzer_loads_the_shared_line_copy_menu_styles(self):
+        """The copy / search menus' styles live in line_copy_menu.css, shared
+        with the uploaded-log page; without it the analyzer's menus lose their
+        box and position."""
+        project_root = Path(__file__).resolve().parent.parent.parent
+        css = (project_root / "static" / "css" / "line_copy_menu.css").read_text(encoding="utf-8")
+        self.assertIn(".line-copy-menu {", css)
+        self.assertIn("css/line_copy_menu.css", self._read_template("log_analyzer.html"))
+
     def test_analyzer_scripts_contain_no_raw_line_separators(self):
         """A raw U+2028/U+2029 inside a JS regex literal is a line break and
         stops the whole script from parsing (it broke shared.js once); such

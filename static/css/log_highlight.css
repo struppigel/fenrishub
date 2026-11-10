@@ -84,11 +84,21 @@
 
 /* Click-to-copy paths and registry keys (see view_uploaded_log.html). The
    only hover effect is an underline; .hl-copied briefly confirms a copy. */
-.uploaded-content .hl-path,
 .uploaded-content .hl-reg,
-.uploaded-content .hl-guid,
-.uploaded-content .hl-hash {
+.uploaded-content .hl-guid {
     cursor: copy;
+}
+
+/* Paths, hashes and detection names open a copy / Google / VirusTotal menu
+   instead of copying straight away. */
+.uploaded-content .hl-path,
+.uploaded-content .hl-hash,
+.uploaded-content .hl-threat {
+    cursor: pointer;
+}
+
+.uploaded-content .hl-threat:hover {
+    text-decoration: underline;
 }
 
 .uploaded-content .hl-path:hover,
@@ -96,6 +106,48 @@
 .uploaded-content .hl-guid:hover,
 .uploaded-content .hl-hash:hover {
     text-decoration: underline;
+}
+
+/* Copy icon at the end of the hovered line, as in the log analyzer. One shared
+   button is moved from line to line (see view_uploaded_log.html) instead of a
+   button per line, so line text (copy / download) stays the raw log. Lines keep
+   room on the right so the icon never covers text. */
+.uploaded-content.hl-log {
+    position: relative;
+}
+
+.uploaded-content.hl-log .hl-line {
+    padding-right: 5ch;
+}
+
+.uploaded-content .hl-line-actions {
+    position: absolute;
+    z-index: 2;
+    display: inline-flex;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.uploaded-content .hl-line-actions[hidden] {
+    display: none;
+}
+
+.uploaded-content .hl-line-copy-trigger,
+.uploaded-content .hl-line-search-trigger {
+    min-width: 0;
+    margin: 0;
+    padding: 0 3px;
+    line-height: 1.25em;
+    font-weight: 700;
+    color: var(--la-text-neutral);
+    background-color: transparent;
+    border: 1px solid transparent;
+}
+
+.uploaded-content .hl-line-copy-trigger:focus-visible,
+.uploaded-content .hl-line-search-trigger:focus-visible {
+    outline: 1px solid var(--la-focus);
+    outline-offset: 1px;
 }
 
 .hl-copy-hint .hl-toggle-sections {
@@ -209,6 +261,13 @@
     display: inline-block;
     min-width: var(--hl-summary-line, 5ch);
     color: var(--la-text-disabled);
+}
+
+/* FRST rule verdict (B / P / !) right after the line label, like the gutter. */
+.hl-summary-list .hl-jump-status {
+    display: inline-block;
+    min-width: 1ch;
+    font-weight: 600;
 }
 
 .hl-summary-list .hl-jump-name {

@@ -159,7 +159,8 @@
         transform: rotate(180deg);
     }
 </style>
-{% if highlight %}<link rel="stylesheet" href="{% static 'css/log_highlight.css' %}">{% endif %}
+{% if highlight %}<link rel="stylesheet" href="{% static 'css/log_highlight.css' %}">
+<link rel="stylesheet" href="{% static 'css/line_copy_menu.css' %}">{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -210,7 +211,7 @@
     {% if highlight.summary %}
     <ul class="hl-summary-list" style="--hl-summary-line: {{ highlight.summary_line_ch }}ch">
         {% for item in highlight.summary_shown %}
-        <li><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}"><span class="hl-jump-line">L{{ item.line_no }}</span> <span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}</a></li>
+        <li><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}" title="{{ item.name }}"><span class="hl-jump-line">L{{ item.line_no }}</span> {% if item.status %}<span class="hl-jump-status hl-sev-{{ item.severity }}">{{ item.status }}</span> {% endif %}<span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}</a></li>
         {% endfor %}
     </ul>
     {% if highlight.summary_hidden_count %}<div class="hl-summary-more">and {{ highlight.summary_hidden_count }} more</div>{% endif %}
@@ -286,7 +287,6 @@
     <div class="log-view-toolbar">
         {% if highlighted_html %}<div class="hl-copy-hint">
             {% if highlight.has_sections %}<button type="button" id="toggleSectionsButton" class="hl-toggle-sections" onclick="toggleAllSections(this)">collapse all</button>{% endif %}
-            click a path, registry key, GUID or hash to copy it, Alt+click copies only the file name
         </div>{% else %}<div></div>{% endif %}
         <span id="maximizeLogToggle" class="log-maximize-toggle" role="button" tabindex="0"
               aria-label="maximize log view" title="maximize log view (Esc restores)"
@@ -387,9 +387,10 @@ function toggleAllSections(button) {
     button.textContent = anyOpen ? 'expand all' : 'collapse all';
 }
 
-// Click a path / registry key / GUID / hash token to copy it; Alt+click on a
-// path copies only its last component (file name). A drag-selection is left
-// alone so normal text selection keeps working.
+// Click a registry key / GUID token to copy it; Alt+click on a path or key
+// copies only its last component (file name). A hash or path opens its menu
+// instead (openTokenMenu). A drag-selection is left alone so normal text
+// selection keeps working.
 function lastPathComponent(text) {
     const trimmed = text.replace(/[\\\/]+$/, '');
     const parts = trimmed.split(/[\\\/]/);
@@ -405,6 +406,14 @@ function lastPathComponent(text) {
         const selection = window.getSelection();
         if (selection && !selection.isCollapsed) return;
         event.preventDefault();
+        // Hashes and paths open a menu (Alt+click on a path still copies its
+        // file name straight away); detection names have their own listener
+        // below. Stop the event so the document click handler doesn't close
+        // the menu right away.
+        if (token.matches('.hl-hash') || (token.matches('.hl-path') && !event.altKey)) {
+            if (openTokenMenu(token)) event.stopPropagation();
+            return;
+        }
         const full = token.textContent.trim();
         const isPath = token.matches('.hl-path, .hl-reg');
         const text = event.altKey && isPath ? lastPathComponent(full) : full;
@@ -415,6 +424,366 @@ function lastPathComponent(text) {
             token.classList.add('hl-copied');
             setTimeout(() => token.classList.remove('hl-copied'), 900);
         });
+    });
+})();
+
+// Items of the line copy / search menus, like the log analyzer's: the whole
+// line plus the paths (with file name and folder), registry keys, GUIDs,
+// hashes, URLs, companies and detection names highlighted in it. The icons
+// are one shared pair that follows the mouse, so the line markup (and the
+// text that copy / download read from it) stays untouched.
+const LINE_COPY_TOKENS = [
+    ['hl-threat', 'detection'],
+    ['hl-path', 'filepath'],
+    ['hl-reg', 'registry key'],
+    ['hl-guid', 'guid'],
+    ['hl-hash', 'hash'],
+    ['hl-url', 'url'],
+    ['hl-company', 'company'],
+];
+
+function lineCopyText(line) {
+    const clone = line.cloneNode(true);
+    clone.querySelectorAll('.hl-bbtag').forEach(tag => tag.remove());
+    return clone.textContent.replace(/\r$/, '');
+}
+
+function buildLineCopyItems(line) {
+    const items = [];
+    const seen = new Set();
+    const add = (key, value) => {
+        value = (value || '').trim();
+        if (!value || seen.has(value)) return;
+        seen.add(value);
+        items.push({ key, value });
+    };
+    add('whole line', lineCopyText(line));
+    const selector = LINE_COPY_TOKENS.map(([cls]) => '.' + cls).join(', ');
+    line.querySelectorAll(selector).forEach(token => {
+        const [cls, key] = LINE_COPY_TOKENS.find(([c]) => token.classList.contains(c));
+        let value = token.textContent.trim();
+        if (cls === 'hl-company') value = value.replace(/^\((.*)\)$/, '$1');
+        add(key, value);
+        if (cls === 'hl-path') {
+            add('filename', lastPathComponent(value));
+            add('folder', parentFolder(value));
+        }
+    });
+    return items;
+}
+
+async function copyTextToClipboard(value) {
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(value);
+            return true;
+        }
+    } catch (err) {
+        // fall through to the textarea fallback
+    }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (err) {
+        return false;
+    }
+}
+
+function flashCopied(element) {
+    element.classList.remove('hl-copied');
+    void element.offsetWidth;
+    element.classList.add('hl-copied');
+    setTimeout(() => element.classList.remove('hl-copied'), 900);
+}
+
+async function copyAndFlash(value, element) {
+    if (await copyTextToClipboard(value)) {
+        flashCopied(element);
+    } else {
+        alert('Failed to copy to clipboard.');
+    }
+}
+
+// One popup menu (styled like the analyzer's, line_copy_menu.css) shared by
+// the line copy icon and the hash tokens. Items are {key, value, run}.
+const TokenMenu = (function () {
+    let menu = null;
+    let anchor = null;
+    let onClose = null;
+
+    function close() {
+        if (!menu || menu.hidden) return;
+        menu.hidden = true;
+        menu.innerHTML = '';
+        if (anchor) anchor.setAttribute('aria-expanded', 'false');
+        const done = onClose;
+        anchor = null;
+        onClose = null;
+        if (done) done();
+    }
+
+    function open(anchorEl, headerText, items, closeCallback) {
+        close();
+        if (!menu) {
+            menu = document.createElement('div');
+            menu.className = 'line-copy-menu';
+            menu.setAttribute('role', 'menu');
+            menu.hidden = true;
+            menu.addEventListener('click', event => event.stopPropagation());
+            menu.addEventListener('contextmenu', event => event.stopPropagation());
+            document.body.appendChild(menu);
+            document.addEventListener('click', close);
+            document.addEventListener('contextmenu', close);
+            document.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') close();
+            });
+            window.addEventListener('resize', close);
+            document.addEventListener('scroll', close, true);
+        }
+        const header = document.createElement('div');
+        header.className = 'line-copy-menu-header';
+        header.textContent = headerText;
+        menu.appendChild(header);
+        items.forEach(({ key, value, run }) => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'line-copy-menu-item';
+            item.setAttribute('role', 'menuitem');
+            const label = document.createElement('span');
+            label.className = 'line-copy-menu-key';
+            label.textContent = key;
+            const preview = document.createElement('span');
+            preview.className = 'line-copy-menu-value';
+            preview.textContent = value;
+            item.append(label, preview);
+            item.addEventListener('click', function () {
+                close();
+                run();
+            });
+            menu.appendChild(item);
+        });
+        menu.hidden = false;
+        anchor = anchorEl;
+        onClose = closeCallback || null;
+        anchorEl.setAttribute('aria-expanded', 'true');
+
+        const rect = anchorEl.getBoundingClientRect();
+        const menuWidth = menu.offsetWidth || 240;
+        const menuHeight = menu.offsetHeight || 0;
+        let left = rect.right - menuWidth;
+        if (left < 8) left = Math.max(8, rect.left);
+        if (left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
+        let top = rect.bottom + 4;
+        if (top + menuHeight > window.innerHeight - 8) top = Math.max(8, rect.top - menuHeight - 4);
+        menu.style.left = `${left + window.scrollX}px`;
+        menu.style.top = `${top + window.scrollY}px`;
+    }
+
+    function isOpenFor(anchorEl) {
+        return !!menu && !menu.hidden && anchor === anchorEl;
+    }
+
+    return { open, close, isOpenFor };
+})();
+
+// MD5 / SHA-1 / SHA-256 tokens: click or right-click opens a menu to copy the
+// hash or look it up on VirusTotal. Only a plain hex hash of one of those
+// lengths ever goes into the URL. PE section MD5s (.hl-section-md5, from
+// Trojan Killer's "SEC:" lines) use VirusTotal's sectionmd5 search instead
+// of the file report.
+const HASH_KINDS = { 32: 'MD5', 40: 'SHA-1', 64: 'SHA-256' };
+
+function virusTotalHashUrl(hash, isSection) {
+    if (isSection) {
+        return 'https://www.virustotal.com/gui/search?query='
+            + encodeURIComponent('sectionmd5:' + hash.toLowerCase()) + '&section=IoCs&type=files';
+    }
+    return 'https://www.virustotal.com/gui/file/' + hash.toLowerCase();
+}
+
+function openHashMenu(token) {
+    const hash = token.textContent.trim();
+    const kind = HASH_KINDS[hash.length];
+    if (!kind || !/^[0-9A-Fa-f]+$/.test(hash)) return false;
+    if (TokenMenu.isOpenFor(token)) {
+        TokenMenu.close();
+        return true;
+    }
+    const isSection = kind === 'MD5' && token.classList.contains('hl-section-md5');
+    const vtUrl = virusTotalHashUrl(hash, isSection);
+    TokenMenu.open(token, isSection ? 'section MD5 hash' : kind + ' hash', [
+        { key: 'copy', value: hash, run: () => copyAndFlash(hash, token) },
+        { key: 'virustotal', value: vtUrl, run: () => window.open(vtUrl, '_blank', 'noopener,noreferrer') },
+    ]);
+    return true;
+}
+
+// Same URL as the analyzer's search menu.
+function googleSearchUrl(value) {
+    return 'https://www.google.com/search?q=' + encodeURIComponent(value);
+}
+
+function openGoogleSearch(value) {
+    window.open(googleSearchUrl(value), '_blank', 'noopener,noreferrer');
+}
+
+// "C:\a\b\file.bat" -> "C:\a\b"; a drive root keeps its backslash ("C:\").
+function parentFolder(path) {
+    const trimmed = path.replace(/[\\\/]+$/, '');
+    const cut = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'));
+    if (cut <= 0) return '';
+    const parent = trimmed.slice(0, cut);
+    return /^[A-Za-z]:$/.test(parent) ? parent + '\\' : parent;
+}
+
+function toggleMenuFor(token) {
+    if (!TokenMenu.isOpenFor(token)) return false;
+    TokenMenu.close();
+    return true;
+}
+
+// File path tokens: copy the path, its file name or its parent folder, or
+// google the path or the file name.
+function openPathMenu(token) {
+    const path = token.textContent.trim();
+    if (!path) return false;
+    if (toggleMenuFor(token)) return true;
+    const name = lastPathComponent(path);
+    const folder = parentFolder(path);
+    const items = [{ key: 'copy', value: path, run: () => copyAndFlash(path, token) }];
+    if (name && name !== path) items.push({ key: 'copy name', value: name, run: () => copyAndFlash(name, token) });
+    if (folder) items.push({ key: 'copy folder', value: folder, run: () => copyAndFlash(folder, token) });
+    items.push({ key: 'google', value: path, run: () => openGoogleSearch(path) });
+    if (name && name !== path) items.push({ key: 'google name', value: name, run: () => openGoogleSearch(name) });
+    TokenMenu.open(token, 'file path', items);
+    return true;
+}
+
+// Detection names (e.g. "Trojan.Win32.Downloader.cl"): copy or google them.
+function openThreatMenu(token) {
+    const name = token.textContent.trim();
+    if (!name) return false;
+    if (toggleMenuFor(token)) return true;
+    TokenMenu.open(token, 'detection name', [
+        { key: 'copy', value: name, run: () => copyAndFlash(name, token) },
+        { key: 'google', value: name, run: () => openGoogleSearch(name) },
+    ]);
+    return true;
+}
+
+function openTokenMenu(token) {
+    if (token.matches('.hl-hash')) return openHashMenu(token);
+    if (token.matches('.hl-threat')) return openThreatMenu(token);
+    if (token.matches('.hl-path')) return openPathMenu(token);
+    return false;
+}
+
+(function () {
+    const root = document.getElementById('uploadedContent');
+    if (!root || !root.classList.contains('hl-log')) return;
+    root.addEventListener('contextmenu', function (event) {
+        const token = event.target.closest('.hl-hash, .hl-threat, .hl-path');
+        if (!token || !root.contains(token)) return;
+        if (openTokenMenu(token)) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    });
+    // Left click on a detection name opens its menu too (paths and hashes
+    // are handled by the click-to-copy listener above).
+    root.addEventListener('click', function (event) {
+        const token = event.target.closest('.hl-threat');
+        if (!token || !root.contains(token)) return;
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed) return;
+        event.preventDefault();
+        if (openThreatMenu(token)) event.stopPropagation();
+    });
+})();
+
+// Copy (⎘) and search (⌕) icons at the end of the hovered line, as in the
+// log analyzer. Both list the same items (buildLineCopyItems): the copy menu
+// copies one, the search menu googles it.
+(function () {
+    const root = document.getElementById('uploadedContent');
+    if (!root || !root.classList.contains('hl-log')) return;
+
+    const actions = document.createElement('span');
+    actions.className = 'hl-line-actions';
+    actions.hidden = true;
+
+    function makeButton(className, symbol, label) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = className;
+        button.textContent = symbol;
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', 'false');
+        actions.appendChild(button);
+        return button;
+    }
+
+    const copyButton = makeButton('hl-line-copy-trigger', '\u2398', 'copy line or component');
+    const searchButton = makeButton('hl-line-search-trigger', '\u2315', 'search component on google');
+    root.appendChild(actions);
+
+    let currentLine = null;
+
+    function menuOpenHere() {
+        return TokenMenu.isOpenFor(copyButton) || TokenMenu.isOpenFor(searchButton);
+    }
+
+    function placeActions(line) {
+        currentLine = line;
+        actions.hidden = false;
+        const lineRect = line.getBoundingClientRect();
+        const rootRect = root.getBoundingClientRect();
+        actions.style.top = `${lineRect.top - rootRect.top - root.clientTop + root.scrollTop}px`;
+        actions.style.left = `${root.scrollLeft + root.clientWidth - actions.offsetWidth - 2}px`;
+    }
+
+    function hideUnlessHovered() {
+        if (!root.matches(':hover')) actions.hidden = true;
+    }
+
+    function openLineMenu(button, header, run) {
+        if (!currentLine) return;
+        if (toggleMenuFor(button)) return;
+        const line = currentLine;
+        const items = buildLineCopyItems(line).map(({ key, value }) => ({
+            key, value, run: () => run(value, line),
+        }));
+        TokenMenu.open(button, header, items, hideUnlessHovered);
+    }
+
+    root.addEventListener('mouseover', function (event) {
+        if (menuOpenHere()) return;
+        const line = event.target.closest('.hl-line');
+        if (line && root.contains(line) && line !== currentLine) placeActions(line);
+        else if (line === currentLine && actions.hidden) placeActions(line);
+    });
+    root.addEventListener('mouseleave', function () {
+        if (!menuOpenHere()) actions.hidden = true;
+    });
+    copyButton.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        openLineMenu(copyButton, 'copy to clipboard', copyAndFlash);
+    });
+    searchButton.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        openLineMenu(searchButton, 'search on google', value => openGoogleSearch(value));
     });
 })();
 

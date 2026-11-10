@@ -1090,66 +1090,6 @@ textarea.speech-capture-field {
     outline-offset: 1px;
 }
 
-.line-copy-menu {
-    position: absolute;
-    z-index: 200;
-    min-width: 200px;
-    max-width: 480px;
-    background: var(--la-bg-1);
-    border: 1px solid var(--la-border-strong);
-    padding: 2px 0;
-    font-family: monospace;
-    font-size: 12px;
-    box-shadow: var(--la-shadow);
-}
-
-.line-copy-menu-header {
-    padding: 4px 10px;
-    color: var(--la-text-muted);
-    border-bottom: 1px solid var(--la-border);
-    user-select: text;
-}
-
-.line-copy-menu-item {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    width: 100%;
-    padding: 4px 10px;
-    background: transparent;
-    border: none;
-    color: var(--la-text-muted);
-    font-family: inherit;
-    font-size: 12px;
-    text-align: left;
-    cursor: pointer;
-}
-
-.line-copy-menu-item:hover {
-    text-decoration: underline;
-}
-
-.line-copy-menu-item:focus-visible {
-    outline: 1px solid var(--la-focus);
-    outline-offset: -1px;
-}
-
-.line-copy-menu-key {
-    flex: 0 0 auto;
-    color: var(--la-text-primary);
-    text-transform: lowercase;
-    min-width: 70px;
-}
-
-.line-copy-menu-value {
-    flex: 1 1 auto;
-    min-width: 0;
-    color: var(--la-text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 /* Text coloured on its own, on top of the line's colour: matched substrings and
    file paths, and pending rules' tokens (see collectPartialHighlights). */
 .partial-highlight { color: inherit; }
