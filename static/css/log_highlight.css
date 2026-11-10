@@ -89,17 +89,21 @@
     cursor: copy;
 }
 
-/* Paths, hashes and detection names open a copy / Google / VirusTotal menu
-   instead of copying straight away. */
+/* Paths, hashes, detection names and entry point bytes open a copy / Google /
+   VirusTotal / CyberChef menu instead of copying straight away. */
 .uploaded-content .hl-path,
 .uploaded-content .hl-hash,
-.uploaded-content .hl-threat {
+.uploaded-content .hl-threat,
+.uploaded-content .hl-ep {
     cursor: pointer;
 }
 
-.uploaded-content .hl-threat:hover {
+.uploaded-content .hl-threat:hover,
+.uploaded-content .hl-ep:hover {
     text-decoration: underline;
 }
+
+.hl-ep { color: var(--la-parsed-clsid); }
 
 .uploaded-content .hl-path:hover,
 .uploaded-content .hl-reg:hover,

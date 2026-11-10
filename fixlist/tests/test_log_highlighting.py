@@ -213,6 +213,7 @@ Scanning process...
 \t.NET MVID: {365668FB-062D-4E50-93A2-CCD661698767}
 \tMD5: 1FC1854F81E865EBD44DE80A721101CD:222512
 \tPE: x86
+\tEP: FF250020400000
 \tSEC:
 \t\t.text:60000020:5FB2B0113160191C180840A0EB6E43E9:138240
 \t\t.rsrc:40000040:1EEA2F32C63A3BF2DC7700196B5FB43D:72704
@@ -223,6 +224,8 @@ Scanning process...
 \tCompany: AppSalt
 \tSignature verification: False
 \tMD5: 6B81344F9DE5E0F9B50D18B091E4403E:7754904
+\tPE: x64
+\tEP: 4883EC28C3
 
 
 Scan completed
@@ -651,6 +654,10 @@ class PerToolHighlightTests(SimpleTestCase):
                                               ('hl-hash hl-section-md5', '5FB2B0113160191C180840A0EB6E43E9'),
                                               ('hl-dim', ':138240')])
         self.assertNotIn('hl-section-md5', _classes(_line(result, TROJAN_KILLER, ':222512')))
+        # Entry point bytes carry the bitness of their detection's "PE:" line,
+        # so the page can disassemble them in CyberChef as 32- or 64-bit code.
+        self.assertIn(('hl-ep hl-ep-32', 'FF250020400000'), _line(result, TROJAN_KILLER, 'EP: FF25').tokens)
+        self.assertIn(('hl-ep hl-ep-64', '4883EC28C3'), _line(result, TROJAN_KILLER, 'EP: 4883').tokens)
         self.assertEqual(_classes(_line(result, TROJAN_KILLER, 'Scan result:'))['hl-sev-b'], '5')
         self.assertEqual([(s.label, s.value, s.severity) for s in result.stats], [('Detected', '5', 'b')])
         # The footer is not part of the last detection's section.
@@ -1097,6 +1104,13 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         response = self._get(upload)
         self.assertContains(response, '<span class="hl-hash hl-section-md5">5FB2B0113160191C180840A0EB6E43E9</span>')
         self.assertContains(response, '<span class="hl-hash">1FC1854F81E865EBD44DE80A721101CD</span>')
+        # EP bytes open a CyberChef disassembly (or copy) menu.
+        self.assertContains(response, '<span class="hl-ep hl-ep-64">4883EC28C3</span>')
+        self.assertContains(response, "if (token.matches('.hl-ep')) return openEntryPointMenu(token);")
+        self.assertContains(
+            response,
+            "const recipe = \"Disassemble_x86('\" + bits + \"','Full%20x86%20architecture','16','0',true,true)\";",
+        )
 
     def test_mau_upload_is_highlighted_when_detected(self):
         LogTypeDetectionRule.objects.create(
@@ -1196,7 +1210,11 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'css/line_copy_menu.css')
         # Copy and search icons at the line end, like the analyzer's.
         self.assertContains(response, "makeButton('hl-line-copy-trigger', '\\u2398', 'copy line or component')")
-        self.assertContains(response, "makeButton('hl-line-search-trigger', '\\u2315', 'search component on google')")
+        self.assertContains(
+            response, "makeButton('hl-line-search-trigger', '\\u2315', 'search component (Google, VirusTotal, CyberChef)')")
+        # The search menu adds VirusTotal for hashes and CyberChef for entry points.
+        self.assertContains(response, "if (hash) items.push({ key: 'virustotal', value, run: () => openUrl(hash.url) });")
+        self.assertContains(response, "items.push({ key: 'cyberchef', value: `disassemble as ${entryPoint.bits}-bit`,")
         self.assertContains(response, '<span class="hl-summary-title">shared rules</span>')
         self.assertContains(response, '<span class="hl-stat-label">B:</span> <span class="hl-sev-b">1</span>')
         self.assertContains(response, '<span class="hl-stat-label">G:</span> <span class="hl-sev-j">0</span>')

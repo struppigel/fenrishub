@@ -434,6 +434,7 @@ function lastPathComponent(text) {
 // text that copy / download read from it) stays untouched.
 const LINE_COPY_TOKENS = [
     ['hl-threat', 'detection'],
+    ['hl-ep', 'entry point'],
     ['hl-path', 'filepath'],
     ['hl-reg', 'registry key'],
     ['hl-guid', 'guid'],
@@ -451,11 +452,13 @@ function lineCopyText(line) {
 function buildLineCopyItems(line) {
     const items = [];
     const seen = new Set();
-    const add = (key, value) => {
+    // `token` is the element an item came from, so the search menu can add
+    // VirusTotal / CyberChef lookups for hashes and entry points.
+    const add = (key, value, token = null) => {
         value = (value || '').trim();
         if (!value || seen.has(value)) return;
         seen.add(value);
-        items.push({ key, value });
+        items.push({ key, value, token });
     };
     add('whole line', lineCopyText(line));
     const selector = LINE_COPY_TOKENS.map(([cls]) => '.' + cls).join(', ');
@@ -463,7 +466,7 @@ function buildLineCopyItems(line) {
         const [cls, key] = LINE_COPY_TOKENS.find(([c]) => token.classList.contains(c));
         let value = token.textContent.trim();
         if (cls === 'hl-company') value = value.replace(/^\((.*)\)$/, '$1');
-        add(key, value);
+        add(key, value, token);
         if (cls === 'hl-path') {
             add('filename', lastPathComponent(value));
             add('folder', parentFolder(value));
@@ -609,19 +612,32 @@ function virusTotalHashUrl(hash, isSection) {
     return 'https://www.virustotal.com/gui/file/' + hash.toLowerCase();
 }
 
-function openHashMenu(token) {
+// {hash, label, url} for a hash token, or null when its text is no MD5 /
+// SHA-1 / SHA-256.
+function hashLookup(token) {
+    if (!token || !token.classList.contains('hl-hash')) return null;
     const hash = token.textContent.trim();
     const kind = HASH_KINDS[hash.length];
-    if (!kind || !/^[0-9A-Fa-f]+$/.test(hash)) return false;
-    if (TokenMenu.isOpenFor(token)) {
-        TokenMenu.close();
-        return true;
-    }
+    if (!kind || !/^[0-9A-Fa-f]+$/.test(hash)) return null;
     const isSection = kind === 'MD5' && token.classList.contains('hl-section-md5');
-    const vtUrl = virusTotalHashUrl(hash, isSection);
-    TokenMenu.open(token, isSection ? 'section MD5 hash' : kind + ' hash', [
-        { key: 'copy', value: hash, run: () => copyAndFlash(hash, token) },
-        { key: 'virustotal', value: vtUrl, run: () => window.open(vtUrl, '_blank', 'noopener,noreferrer') },
+    return {
+        hash,
+        label: isSection ? 'section MD5 hash' : kind + ' hash',
+        url: virusTotalHashUrl(hash, isSection),
+    };
+}
+
+function openUrl(url) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function openHashMenu(token) {
+    const lookup = hashLookup(token);
+    if (!lookup) return false;
+    if (toggleMenuFor(token)) return true;
+    TokenMenu.open(token, lookup.label, [
+        { key: 'copy', value: lookup.hash, run: () => copyAndFlash(lookup.hash, token) },
+        { key: 'virustotal', value: lookup.url, run: () => openUrl(lookup.url) },
     ]);
     return true;
 }
@@ -679,9 +695,60 @@ function openThreatMenu(token) {
     return true;
 }
 
+// Entry point bytes (Trojan Killer "EP:" hex): disassemble them in CyberChef
+// as 32- or 64-bit code (hl-ep-32 / hl-ep-64, from the detection's "PE:"
+// line), or copy them. CyberChef takes the input as unpadded base64 of the
+// hex text.
+function cyberChefDisassembleUrl(hex, bits) {
+    const recipe = "Disassemble_x86('" + bits + "','Full%20x86%20architecture','16','0',true,true)";
+    const input = btoa(hex).replace(/=+$/, '');
+    return 'https://gchq.github.io/CyberChef/#recipe=' + recipe
+        + '&input=' + encodeURIComponent(input) + '&oeol=CRLF';
+}
+
+// {hex, bits, url} for an entry point token, or null when its text is no
+// whole-byte hex string.
+function entryPointLookup(token) {
+    if (!token || !token.classList.contains('hl-ep')) return null;
+    const hex = token.textContent.trim();
+    if (!hex || hex.length % 2 || !/^[0-9A-Fa-f]+$/.test(hex)) return null;
+    const bits = token.classList.contains('hl-ep-64') ? '64' : '32';
+    return { hex, bits, url: cyberChefDisassembleUrl(hex, bits) };
+}
+
+function openEntryPointMenu(token) {
+    const lookup = entryPointLookup(token);
+    if (!lookup) return false;
+    if (toggleMenuFor(token)) return true;
+    TokenMenu.open(token, `entry point (x${lookup.bits === '64' ? '64' : '86'})`, [
+        { key: 'cyberchef', value: `disassemble as ${lookup.bits}-bit`, run: () => openUrl(lookup.url) },
+        { key: 'copy', value: lookup.hex, run: () => copyAndFlash(lookup.hex, token) },
+    ]);
+    return true;
+}
+
+// The search (⌕) menu: a Google search for every line item, plus a
+// VirusTotal lookup for hashes and a CyberChef disassembly for entry points.
+function buildLineSearchItems(line) {
+    const items = [];
+    buildLineCopyItems(line).forEach(({ key, value, token }) => {
+        const entryPoint = entryPointLookup(token);
+        if (entryPoint) {
+            items.push({ key: 'cyberchef', value: `disassemble as ${entryPoint.bits}-bit`,
+                         run: () => openUrl(entryPoint.url) });
+            return;
+        }
+        items.push({ key, value, run: () => openGoogleSearch(value) });
+        const hash = hashLookup(token);
+        if (hash) items.push({ key: 'virustotal', value, run: () => openUrl(hash.url) });
+    });
+    return items;
+}
+
 function openTokenMenu(token) {
     if (token.matches('.hl-hash')) return openHashMenu(token);
     if (token.matches('.hl-threat')) return openThreatMenu(token);
+    if (token.matches('.hl-ep')) return openEntryPointMenu(token);
     if (token.matches('.hl-path')) return openPathMenu(token);
     return false;
 }
@@ -690,28 +757,29 @@ function openTokenMenu(token) {
     const root = document.getElementById('uploadedContent');
     if (!root || !root.classList.contains('hl-log')) return;
     root.addEventListener('contextmenu', function (event) {
-        const token = event.target.closest('.hl-hash, .hl-threat, .hl-path');
+        const token = event.target.closest('.hl-hash, .hl-threat, .hl-ep, .hl-path');
         if (!token || !root.contains(token)) return;
         if (openTokenMenu(token)) {
             event.preventDefault();
             event.stopPropagation();
         }
     });
-    // Left click on a detection name opens its menu too (paths and hashes
-    // are handled by the click-to-copy listener above).
+    // Left click on a detection name or entry point opens its menu too
+    // (paths and hashes are handled by the click-to-copy listener above).
     root.addEventListener('click', function (event) {
-        const token = event.target.closest('.hl-threat');
+        const token = event.target.closest('.hl-threat, .hl-ep');
         if (!token || !root.contains(token)) return;
         const selection = window.getSelection();
         if (selection && !selection.isCollapsed) return;
         event.preventDefault();
-        if (openThreatMenu(token)) event.stopPropagation();
+        if (openTokenMenu(token)) event.stopPropagation();
     });
 })();
 
 // Copy (⎘) and search (⌕) icons at the end of the hovered line, as in the
-// log analyzer. Both list the same items (buildLineCopyItems): the copy menu
-// copies one, the search menu googles it.
+// log analyzer. Both list the line's items (buildLineCopyItems): the copy
+// menu copies one, the search menu googles it and also offers VirusTotal for
+// hashes and CyberChef for entry points (buildLineSearchItems).
 (function () {
     const root = document.getElementById('uploadedContent');
     if (!root || !root.classList.contains('hl-log')) return;
@@ -734,7 +802,7 @@ function openTokenMenu(token) {
     }
 
     const copyButton = makeButton('hl-line-copy-trigger', '\u2398', 'copy line or component');
-    const searchButton = makeButton('hl-line-search-trigger', '\u2315', 'search component on google');
+    const searchButton = makeButton('hl-line-search-trigger', '\u2315', 'search component (Google, VirusTotal, CyberChef)');
     root.appendChild(actions);
 
     let currentLine = null;
@@ -756,14 +824,10 @@ function openTokenMenu(token) {
         if (!root.matches(':hover')) actions.hidden = true;
     }
 
-    function openLineMenu(button, header, run) {
+    function openLineMenu(button, header, buildItems) {
         if (!currentLine) return;
         if (toggleMenuFor(button)) return;
-        const line = currentLine;
-        const items = buildLineCopyItems(line).map(({ key, value }) => ({
-            key, value, run: () => run(value, line),
-        }));
-        TokenMenu.open(button, header, items, hideUnlessHovered);
+        TokenMenu.open(button, header, buildItems(currentLine), hideUnlessHovered);
     }
 
     root.addEventListener('mouseover', function (event) {
@@ -778,12 +842,14 @@ function openTokenMenu(token) {
     copyButton.addEventListener('click', function (event) {
         event.preventDefault();
         event.stopPropagation();
-        openLineMenu(copyButton, 'copy to clipboard', copyAndFlash);
+        openLineMenu(copyButton, 'copy to clipboard', line => buildLineCopyItems(line).map(({ key, value }) => ({
+            key, value, run: () => copyAndFlash(value, line),
+        })));
     });
     searchButton.addEventListener('click', function (event) {
         event.preventDefault();
         event.stopPropagation();
-        openLineMenu(searchButton, 'search on google', value => openGoogleSearch(value));
+        openLineMenu(searchButton, 'search', buildLineSearchItems);
     });
 })();
 

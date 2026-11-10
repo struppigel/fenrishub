@@ -639,11 +639,15 @@ _TK_SIGNATURE_RE = re.compile(r'^(\s*)(Signature verification:)(\s*)(\S+)(\s*)$'
 _TK_COMPANY_KEYS = ('Company:', 'Certificates:')
 # "\t\t.text:60000020:5FB2B0113160191C180840A0EB6E43E9:138240" (name:flags:md5:size)
 _TK_SECTION_RE = re.compile(r'^\t\t[^\s:]*:[0-9A-Fa-f]{8}:([0-9A-Fa-f]{32}):\d+\s*$')
+# "\tPE: x64" then "\tEP: 4883EC28..." (the entry point's first bytes, as hex).
+_TK_PE_RE = re.compile(r'^\s*PE:\s*(x86|x64)\s*$', re.I)
+_TK_EP_RE = re.compile(r'^(\s*)(EP:)(\s*)((?:[0-9A-Fa-f]{2})+)(\s*)$')
 
 
 def _highlight_trojan_killer(lines):
     b = _Builder('Trojan Killer detections')
     expect_name = None  # (header line no, target) right after a detection header
+    bits = '32'  # from the detection's "PE: x86 / x64" line, for its EP bytes
     for i, raw in enumerate(lines):
         no = i + 1
         body, cr = _split_cr(raw)
@@ -656,6 +660,7 @@ def _highlight_trojan_killer(lines):
             tokens = [('hl-dim', dashes)] + _target(target) + [('hl-dim', sep + body[m.start(4):])]
             b.header(_mk(no, tokens, cr))
             expect_name = (no, target.strip())
+            bits = '32'
             continue
         if not body.strip():
             b.add(_mk(no, [('', body)], cr))
@@ -694,6 +699,17 @@ def _highlight_trojan_killer(lines):
             if body.startswith('Scan completed') and b.sections[-1].header is not None:
                 b.end_section()
             b.add(_mk(no, [('hl-dim', body)], cr))
+            continue
+        m = _TK_PE_RE.match(body)
+        if m:
+            bits = '64' if m.group(1).lower() == 'x64' else '32'
+        m = _TK_EP_RE.match(body)
+        if m:
+            # Entry point bytes: the page offers to disassemble them in
+            # CyberChef, as 32- or 64-bit code (hl-ep-32 / hl-ep-64).
+            lead, key, gap, value, trail = m.groups()
+            b.add(_mk(no, [('', lead), ('hl-key', key), ('', gap), (f'hl-ep hl-ep-{bits}', value),
+                           ('', trail)], cr))
             continue
         m = _TK_SIGNATURE_RE.match(body)
         if m:
