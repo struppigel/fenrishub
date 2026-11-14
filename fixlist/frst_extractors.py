@@ -743,6 +743,33 @@ def defender_exclusion_snippet(line):
     return None
 
 
+def defender_exclusion_path(line):
+    r"""Return the excluded filesystem path of a Windows Defender exclusion
+    line, or None.
+
+    `...\\Exclusions\\Paths|C:\\ProgramData\\opra.exe` -> `C:\\ProgramData\\opra.exe`.
+    Paths and TemporaryPaths values are always paths (bar an empty or
+    `(Default)` value); a Processes value counts only when it is a full path
+    rather than a bare image name. Extensions and IpAddresses never are.
+    Taken literally from the line, like defender_exclusion_snippet, so the
+    line copy menu puts the real machine path on the clipboard.
+    """
+    if not line:
+        return None
+    match = _DEFENDER_EXCLUSION_RE.search(line.strip())
+    if not match:
+        return None
+    exclusion_type = match.group(2).strip().lower()
+    value = match.group(3).strip()
+    if not value or value.lower() == "(default)":
+        return None
+    if exclusion_type in ("paths", "temporarypaths"):
+        return value
+    if exclusion_type == "processes" and "\\" in value:
+        return value
+    return None
+
+
 def browser_extension_snippet(line):
     r"""Return the fixlist form of a browser extension line, or None if the line
     isn't one.

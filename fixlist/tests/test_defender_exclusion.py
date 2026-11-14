@@ -1,7 +1,7 @@
 from django.test import TestCase
 
 from ..analyzer import analyze_log_text, invalidate_rule_buckets_cache
-from ..frst_extractors import defender_exclusion_snippet
+from ..frst_extractors import defender_exclusion_path, defender_exclusion_snippet
 
 
 class DefenderExclusionSnippetTests(TestCase):
@@ -159,3 +159,52 @@ class DefenderExclusionAnalyzerFlagTests(TestCase):
         )
         result = self._line_result(line)
         self.assertIsNone(result["fixlist_replacement"])
+
+
+class DefenderExclusionPathTests(TestCase):
+    """`defender_exclusion_path` pulls the excluded path off the line, and the
+    analyzer exposes it as the `filepath` component for the line copy menu."""
+
+    KEY = r"HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions"
+
+    def setUp(self):
+        invalidate_rule_buckets_cache()
+
+    def test_paths_value_is_returned_literally(self):
+        line = rf"{self.KEY}\Paths|C:\Users\SamRo\AppData\Roaming\Current\Keywords.exe"
+        self.assertEqual(
+            defender_exclusion_path(line),
+            r"C:\Users\SamRo\AppData\Roaming\Current\Keywords.exe",
+        )
+
+    def test_path_with_spaces_and_trailing_marker(self):
+        line = rf"{self.KEY}\Paths|C:\Program Files\Black Tree Gaming Ltd\Vortex <==== ATTENTION"
+        self.assertEqual(
+            defender_exclusion_path(line), r"C:\Program Files\Black Tree Gaming Ltd\Vortex"
+        )
+
+    def test_temporarypaths_value(self):
+        self.assertEqual(defender_exclusion_path(rf"{self.KEY}\TemporaryPaths|C:\foo"), r"C:\foo")
+        self.assertIsNone(defender_exclusion_path(rf"{self.KEY}\TemporaryPaths|(Default)"))
+        self.assertIsNone(defender_exclusion_path(rf"{self.KEY}\TemporaryPaths|"))
+
+    def test_processes_only_when_a_full_path(self):
+        self.assertEqual(
+            defender_exclusion_path(rf"{self.KEY}\Processes|C:\Tools\evil.exe"), r"C:\Tools\evil.exe"
+        )
+        self.assertIsNone(defender_exclusion_path(rf"{self.KEY}\Processes|rundll32.exe"))
+
+    def test_non_path_types_return_none(self):
+        self.assertIsNone(defender_exclusion_path(rf"{self.KEY}\Extensions|exe"))
+        self.assertIsNone(defender_exclusion_path(rf"{self.KEY}\IpAddresses|10.0.0.5"))
+        self.assertIsNone(defender_exclusion_path(r"HKLM\...\Run: [TestApp] => C:\test.exe"))
+        self.assertIsNone(defender_exclusion_path(None))
+
+    def test_analyzer_exposes_path_as_filepath_component(self):
+        line = rf"{self.KEY}\Paths|C:\ProgramData\opra.exe"
+        components = analyze_log_text(line)["lines"][0]["components"]
+        self.assertEqual(components.get("filepath"), r"C:\ProgramData\opra.exe")
+
+    def test_analyzer_omits_filepath_for_extension_exclusion(self):
+        components = analyze_log_text(rf"{self.KEY}\Extensions|exe")["lines"][0]["components"]
+        self.assertNotIn("filepath", components)

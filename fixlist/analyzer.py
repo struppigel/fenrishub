@@ -1356,6 +1356,12 @@ def _build_line_result(
             uninstall_key = ex.installed_software_uninstall_key(line)
             if uninstall_key:
                 components["uninstall_key"], components["uninstall_key_path"] = uninstall_key
+    # No extractor parses Defender exclusion lines, but the excluded path is
+    # worth copying on its own.
+    if "filepath" not in components:
+        exclusion_path = ex.defender_exclusion_path(line)
+        if exclusion_path:
+            components["filepath"] = exclusion_path
     return {
         "line": line,
         "status_codes": status_codes,
