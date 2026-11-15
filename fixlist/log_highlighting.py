@@ -68,6 +68,11 @@ class SummaryItem:
     action: str = ''
     # FRST types only: the rule status letter, shown before the name.
     status: str = ''
+    # FRST types only: what related logs say about the line's file
+    # ("correlated: ...", case_correlations), and whether the entry is only
+    # listed because of that (the page script redraws those).
+    correlation: str = ''
+    correlation_added: bool = False
 
 
 @dataclass
@@ -521,14 +526,19 @@ _ADW_ENTRY_RE = re.compile(r'^(Not Deleted|\S+)( {2,})(\S.*)$')
 
 def _highlight_adwcleaner(lines):
     b = _Builder('AdwCleaner detections')
+    # One upload can hold several AdwCleaner logs (e.g. the clean log and the
+    # scan log before it): each part follows its own "# Mode:" line.
     clean_mode = False
+    saw_clean = saw_scan = False
     for i, raw in enumerate(lines):
         no = i + 1
         body, cr = _split_cr(raw)
         if body.startswith('#'):
-            if re.match(r'^# Mode:\s*Clean', body):
-                clean_mode = True
-                b.title = 'AdwCleaner failures'
+            mode = re.match(r'^# Mode:\s*(\S+)', body)
+            if mode:
+                clean_mode = mode.group(1).lower() == 'clean'
+                saw_clean = saw_clean or clean_mode
+                saw_scan = saw_scan or not clean_mode
             m = re.match(r'^(#\s*)(Detected|Failed|Cleaned):(\s*)(\d+)', body)
             if m:
                 prefix, key, space, value = m.groups()
@@ -576,6 +586,10 @@ def _highlight_adwcleaner(lines):
                 b.item(no, sev, name, target.strip())
             continue
         b.add(_mk(no, _inline(body), cr))
+    # Only clean logs: the summary lists what failed. With a scan log in the
+    # upload too it lists the detections (plus failed removals).
+    if saw_clean and not saw_scan:
+        b.title = 'AdwCleaner failures'
     return b.result()
 
 

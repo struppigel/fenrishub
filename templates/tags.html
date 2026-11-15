@@ -170,7 +170,7 @@
                         {% if tag.pending_count %}, <a href="{% url 'rule_tag_edit' tag.pk %}" class="tag-pending" title="rules that meet the conditions but do not carry the tag yet">{{ tag.pending_count }} pending</a>{% endif %}
                         {% if tag.unmatched_count %}, <a href="{% url 'rule_tag_edit' tag.pk %}" class="tag-pending" title="tagged rules that no longer meet the conditions">{{ tag.unmatched_count }} no longer matching</a>{% endif %}
                         {% if tag.auto_apply %}, applied automatically{% endif %}
-                        {% if tag.match_log_lines %}, <span title="also found on log lines that meet the conditions">matches log lines</span>{% endif %}
+                        {% if tag.match_log_lines %}, <span title="also found on log lines that meet the conditions">matches log lines</span>{% endif %}{% if tag.match_centralbox and tag.match_pattern %}, <span title="the regex also runs on the centralbox family and malware type of hashes in scanner logs and Fixlogs">matches centralbox</span>{% endif %}
                         {% if tag.updated_by %}, edited by {{ tag.updated_by.username }}{% endif %}
                     </span>
                 </span>

@@ -136,6 +136,7 @@
     display: none;
 }
 
+.uploaded-content .hl-line-info-trigger,
 .uploaded-content .hl-line-copy-trigger,
 .uploaded-content .hl-line-search-trigger {
     min-width: 0;
@@ -148,6 +149,7 @@
     border: 1px solid transparent;
 }
 
+.uploaded-content .hl-line-info-trigger:focus-visible,
 .uploaded-content .hl-line-copy-trigger:focus-visible,
 .uploaded-content .hl-line-search-trigger:focus-visible {
     outline: 1px solid var(--la-focus);
@@ -278,7 +280,8 @@
     font-weight: 600;
 }
 
-.hl-summary-list .hl-jump-target {
+.hl-summary-list .hl-jump-target,
+.hl-summary-list .hl-jump-cor {
     color: var(--la-text-neutral);
 }
 
@@ -293,4 +296,86 @@
 
 .hl-summary-empty {
     color: var(--la-text-disabled);
+}
+
+/* centralbox verdicts on SHA-256 tokens (fixlist/centralbox.py). The label is
+   drawn from data-cb-label with ::after, so it is never part of the line text
+   that copy, download and "view raw" read. inline-block keeps the token's
+   hover underline off the label; it would also inherit the line's negative
+   hanging-indent text-indent (see .hl-line) and shift its text back over the
+   hash, so that is reset. */
+.uploaded-content .hl-hash[data-cb]::after {
+    content: attr(data-cb-label);
+    display: inline-block;
+    text-indent: 0;
+    white-space: nowrap;
+    margin-left: 0.6ch;
+    padding: 0 0.5ch;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    font-size: 0.85em;
+    line-height: 1.3;
+}
+
+.uploaded-content .hl-hash[data-cb="malicious"]::after { color: var(--la-status-b); }
+.uploaded-content .hl-hash[data-cb="suspicious"]::after { color: var(--la-status-w); }
+.uploaded-content .hl-hash[data-cb="clean"]::after { color: var(--la-status-c); }
+.uploaded-content .hl-hash[data-cb="unknown"]::after,
+.uploaded-content .hl-hash[data-cb="pending"]::after {
+    color: var(--la-text-disabled);
+    border-style: dotted;
+}
+
+/* Summary box: "centralbox: <family or malware type>" / "centralbox: clean" per detection. */
+.hl-summary-list .hl-cb-flag {
+    padding: 0 0.5ch;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    font-size: 0.85em;
+}
+
+.hl-summary-list .hl-cb-flag[data-cb="malicious"] { color: var(--la-status-b); }
+.hl-summary-list .hl-cb-flag[data-cb="suspicious"] { color: var(--la-status-w); }
+.hl-summary-list .hl-cb-flag[data-cb="clean"] { color: var(--la-status-c); }
+
+
+/* Correlations (case_correlations.py): a marker per line whose file also
+   appears in related logs, in the column of the hover icons (built like them
+   in view_uploaded_log.html), coloured by the worst related finding (the
+   line-verdict precedence). Not clickable itself: the hover icons sit on top. */
+.uploaded-content .hl-cor-marker {
+    z-index: 1;
+    pointer-events: none;
+}
+
+.uploaded-content .hl-cor-marker[hidden] {
+    display: none;
+}
+
+/* Grey like the copy / search icons unless a related log has a finding. */
+.uploaded-content .hl-line-actions .hl-line-info-trigger { color: var(--la-text-neutral); }
+.uploaded-content .hl-line-actions[data-cor="b"] .hl-line-info-trigger { color: var(--la-status-b); }
+.uploaded-content .hl-line-actions[data-cor="p"] .hl-line-info-trigger { color: var(--la-status-p); }
+.uploaded-content .hl-line-actions[data-cor="c"] .hl-line-info-trigger { color: var(--la-status-c); }
+.uploaded-content .hl-line-actions[data-cor="a"] .hl-line-info-trigger { color: var(--la-status-a); }
+.uploaded-content .hl-line-actions[data-cor="w"] .hl-line-info-trigger { color: var(--la-status-w); }
+.uploaded-content .hl-line-actions[data-cor="g"] .hl-line-info-trigger { color: var(--la-status-g); }
+.uploaded-content .hl-line-actions[data-cor="s"] .hl-line-info-trigger { color: var(--la-status-s); }
+.uploaded-content .hl-line-actions[data-cor="i"] .hl-line-info-trigger { color: var(--la-status-i); }
+.uploaded-content .hl-line-actions[data-cor="j"] .hl-line-info-trigger { color: var(--la-status-j); }
+
+/* Room for the third hover button (info) when the log has correlations. */
+.uploaded-content.hl-log.hl-has-correlations .hl-line {
+    padding-right: 7ch;
+}
+
+.uploaded-content .hl-line-info-trigger {
+    /* Same box as the copy / search icons: measured in the page font, the
+       circled i's ink centre already lies between theirs, so no nudging.
+       Grey like them unless a related log has a finding (data-cor). */
+    color: var(--la-text-neutral);
+}
+
+.uploaded-content .hl-line-info-trigger[hidden] {
+    display: none;
 }

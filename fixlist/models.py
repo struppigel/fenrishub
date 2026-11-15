@@ -1,4 +1,4 @@
-from django.db import IntegrityError, models
+from django.db import IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
@@ -151,9 +151,27 @@ class UserProfile(models.Model):
     )
     # Uploads / trash lists open on "all channels" instead of "my channel".
     uploads_all_channels_default = models.BooleanField(default=False)
+    # The helper's own centralbox.dev API key, for fresh lookups (centralbox.py).
+    # Stored encrypted (secret_box.py); only the hint is ever shown.
+    CENTRALBOX_KEY_UNVERIFIED = 'unverified'
+    CENTRALBOX_KEY_OK = 'ok'
+    CENTRALBOX_KEY_REJECTED = 'rejected'
+    centralbox_key_encrypted = models.TextField(blank=True, default='')
+    centralbox_key_hint = models.CharField(max_length=32, blank=True, default='')
+    centralbox_key_status = models.CharField(max_length=16, blank=True, default='')
+    centralbox_key_checked_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f'Profile for {self.user.username}'
+
+    def centralbox_key(self):
+        """The decrypted key, or None (no key, or SECRET_KEY changed). Never log it."""
+        from .secret_box import decrypt
+
+        return decrypt(self.centralbox_key_encrypted)
+
+    def can_run_centralbox_lookups(self):
+        return bool(self.centralbox_key_encrypted) and self.centralbox_key_status != self.CENTRALBOX_KEY_REJECTED
 
 
 class AccessLog(models.Model):
@@ -182,6 +200,18 @@ class SiteConfig(models.Model):
         default=False,
         help_text='Kill switch for the read-only token API (/api/v1/) used by LLM clients. Off: every API request gets 503.',
     )
+    centralbox_enabled = models.BooleanField(
+        default=True,
+        help_text=(
+            'Kill switch for centralbox hash lookups. Off: no request is sent to centralbox; '
+            'verdicts already stored are still shown with their date. Lookups also need the '
+            'CENTRALBOX_API_KEY environment variable.'
+        ),
+    )
+    # Set by centralbox.py when centralbox fails (down, key revoked, rate
+    # limited): no calls until then, from any worker. Clear it to retry at once.
+    centralbox_paused_until = models.DateTimeField(null=True, blank=True)
+    centralbox_pause_reason = models.CharField(max_length=200, blank=True, default='')
     # Bumped whenever the analyzer's in-memory rule buckets are invalidated, so
     # every worker process (not just the one that saved the rule) reloads them.
     # See analyzer.invalidate_rule_buckets_cache.
@@ -687,6 +717,10 @@ class RuleTag(models.Model):
     # entry. A matching line carries the tag even when no tagged rule decided
     # it. Results are stored per cached analysis (UploadedLogAnalysis.line_tags).
     match_log_lines = models.BooleanField(default=False)
+    # The regex also runs on the centralbox family and malware type of the
+    # SHA256s in scanner logs and Fixlogs (HashVerdict): such a log carries the
+    # tag, and its log page shows it next to the hash (tagging.centralbox_tag_hits).
+    match_centralbox = models.BooleanField(default=False)
     builtin_code = models.CharField(max_length=64, null=True, blank=True, unique=True, default=None)
     # Sets the badge colour. Deleting a category moves its tags to the default
     # one first (views.tags.tag_categories_view), so PROTECT never fires there.
@@ -774,24 +808,8 @@ def count_fixlog_results(content: str) -> dict:
     migration that recounts stored Fixlogs.
     """
     counts = {'total': 0, 'success': 0, 'not_found': 0, 'error': 0}
-    in_fixlist = False
-    stars = 0
-    for line in (content or '').splitlines():
-        if in_fixlist:
-            if _FIXLIST_STARS_RE.match(line):
-                stars += 1
-                if stars >= 2:
-                    in_fixlist = False
-            continue
-        if _FIXLIST_CONTENT_RE.match(line):
-            in_fixlist = True
-            stars = 0
-            continue
-        idx = line.find(' => ')
-        if idx == -1:
-            continue
+    for _line_no, _target, status in iter_fixlog_results(content):
         counts['total'] += 1
-        status = line[idx + 4:]
         if 'successfully' in status:
             counts['success'] += 1
         elif 'not found' in status:
@@ -799,6 +817,38 @@ def count_fixlog_results(content: str) -> dict:
         elif 'Error' in status:
             counts['error'] += 1
     return counts
+
+
+def iter_fixlog_results(content: str):
+    """Yield ``(line_no, target, result)`` for each ` => ` result line of a Fixlog.
+
+    `line_no` counts ``content.split('\\n')`` from 1, like the log page's line
+    anchors; `target` is the text before ` => `, `result` the text after it.
+    Each such line is split again with ``splitlines()`` (as
+    log_highlighting.apply_analysis_statuses does), so lines are the same as
+    ``content.splitlines()`` and the counts match what migration 0092 stored,
+    even with lone '\\r' or other line separators. The echoed fixlist
+    ("fixlist content:" up to the second '*****' line) is skipped, see
+    count_fixlog_results. Pure function.
+    """
+    in_fixlist = False
+    stars = 0
+    for index, raw in enumerate((content or '').split('\n')):
+        for line in raw.splitlines():
+            if in_fixlist:
+                if _FIXLIST_STARS_RE.match(line):
+                    stars += 1
+                    if stars >= 2:
+                        in_fixlist = False
+                continue
+            if _FIXLIST_CONTENT_RE.match(line):
+                in_fixlist = True
+                stars = 0
+                continue
+            idx = line.find(' => ')
+            if idx == -1:
+                continue
+            yield index + 1, line[:idx], line[idx + 4:]
 
 
 def detect_log_type(content: str) -> str:
@@ -1136,6 +1186,8 @@ class UploadedLog(models.Model):
         from .log_highlighting import compute_tool_stats
         self.tool_stats = compute_tool_stats(self.log_type, self.content or '')
         self.save(update_fields=[*self.analysis_stat_update_fields(), 'is_incomplete', 'tool_stats'])
+        # SHA256s for the centralbox markers; local parsing only, never raises.
+        UploadedLogFileHash.rebuild_for(self)
 
         from .tagging import compute_line_tags, current_line_tags
 
@@ -1242,6 +1294,205 @@ class UploadedLogAnalysis(models.Model):
 
     def __str__(self):
         return f'cached analysis for {self.upload_id} [{self.rule_set_key}]'
+
+
+class UploadedLogFileHash(models.Model):
+    """A SHA256 found in an uploaded log, with the file it belongs to (see
+    file_hashes.extract_file_hashes). Rebuilt with the analysis stats.
+
+    `auto` rows (scanner detections, MAU files, Fixlog File: blocks) are looked
+    up on centralbox by themselves; the rest only when an analyst asks from the
+    hash menu. `anchor_line_no` is the detection / path line the hash belongs
+    to, which the summary box flags. `normalized_path` is the analyzer's
+    filepath key, so a case's FRST lines can be matched against it.
+    """
+
+    upload = models.ForeignKey(UploadedLog, on_delete=models.CASCADE, related_name='file_hashes')
+    # '' for an MD5-only row (Trojan Killer); see `md5`.
+    sha256 = models.CharField(max_length=64, db_index=True, blank=True, default='')
+    # The file's MD5 when the log gives one. A row with both is a local
+    # MD5 -> SHA256 pair (centralbox.resolve_md5s), so a Trojan Killer MD5 can
+    # show the verdict of a file seen in a Malwarebytes log or a Fixlog.
+    md5 = models.CharField(max_length=32, db_index=True, blank=True, default='')
+    line_no = models.PositiveIntegerField()
+    anchor_line_no = models.PositiveIntegerField()
+    path = models.TextField(blank=True, default='')
+    normalized_path = models.TextField(blank=True, default='')
+    detection = models.CharField(max_length=255, blank=True, default='')
+    source = models.CharField(max_length=32, default='other')
+    auto = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['upload', 'line_no']
+        indexes = [models.Index(fields=['upload', 'auto'], name='fixlist_filehash_upload_auto')]
+
+    def __str__(self):
+        return f'{self.sha256 or self.md5} in {self.upload_id} line {self.line_no}'
+
+    @classmethod
+    def rebuild_for(cls, upload):
+        """Replace the upload's rows from its current content. Never raises:
+        a parsing problem must not break the stats recalculation around it."""
+        from .file_hashes import extract_file_hashes
+
+        try:
+            rows = extract_file_hashes(upload.log_type, upload.content or '')
+            # One unit: readers never see the log without rows, a failed
+            # insert keeps the old ones, and the savepoint keeps an outer
+            # transaction usable after the error is swallowed.
+            with transaction.atomic():
+                cls.objects.filter(upload=upload).delete()
+                cls.objects.bulk_create([
+                    cls(
+                        upload=upload, sha256=row.sha256, line_no=row.line_no,
+                        anchor_line_no=row.anchor_line_no, path=row.path,
+                        normalized_path=row.normalized_path, detection=row.detection,
+                        source=row.source, auto=row.auto, md5=row.md5,
+                    )
+                    for row in rows
+                ], batch_size=1000)
+        except Exception:
+            logger.exception('Storing file hashes failed for upload_id=%s', upload.upload_id)
+
+
+class HashVerdict(models.Model):
+    """centralbox's answer for one SHA256, cached and kept even when centralbox
+    is down or gone (the page then shows it with its date). Only validated
+    values are stored; see centralbox.py, the only code that writes it."""
+
+    STATE_KNOWN = 'known'
+    STATE_UNKNOWN = 'unknown'
+    STATE_CHOICES = [(STATE_KNOWN, 'known'), (STATE_UNKNOWN, 'not in centralbox')]
+    VERDICT_CLEAN = 'clean'
+    VERDICT_SUSPICIOUS = 'suspicious'
+    VERDICT_MALICIOUS = 'malicious'
+    VERDICTS = (VERDICT_CLEAN, VERDICT_SUSPICIOUS, VERDICT_MALICIOUS)
+
+    sha256 = models.CharField(max_length=64, unique=True)
+    state = models.CharField(max_length=16, choices=STATE_CHOICES)
+    verdict = models.CharField(max_length=16, blank=True, default='')
+    family = models.CharField(max_length=64, blank=True, default='')
+    malware_type = models.CharField(max_length=32, blank=True, default='')
+    score = models.SmallIntegerField(null=True, blank=True)
+    threat_score = models.SmallIntegerField(null=True, blank=True)
+    # {"malicious": 5, "suspicious": 1, ...} from /verdict, only for flagged hashes.
+    provider_counts = models.JSONField(default=dict, blank=True)
+    # [{"source": "Triage", "status": "malicious", "url": "https://..."}], at most 6.
+    links = models.JSONField(default=list, blank=True)
+    checked_at = models.DateTimeField()
+    next_check_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        ordering = ['-checked_at']
+
+    def __str__(self):
+        return f'{self.sha256} {self.verdict or self.state}'
+
+    def as_dict(self):
+        return {
+            'sha256': self.sha256,
+            'state': self.state,
+            'verdict': self.verdict,
+            'family': self.family,
+            'malware_type': self.malware_type,
+            'threat_score': self.threat_score,
+            'checked_at': self.checked_at.date().isoformat() if self.checked_at else '',
+            'report_url': f'https://centralbox.dev/analysis/{self.sha256}' if self.state == self.STATE_KNOWN else '',
+            'links': list(self.links or [])[:6],
+        }
+
+
+class CorrelationCache(models.Model):
+    """The correlations of an FRST log (case_correlations.correlations_for_upload),
+    per viewer scope: 'case:<owner id>' when the viewer has a case with the log,
+    else 'user' (the forum user's logs, the same for everyone). `signature`
+    covers everything the result depends on; a mismatch means recompute."""
+
+    upload = models.ForeignKey(UploadedLog, on_delete=models.CASCADE, related_name='correlation_caches')
+    scope_key = models.CharField(max_length=40)
+    signature = models.CharField(max_length=40)
+    payload = models.JSONField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['upload', 'scope_key'], name='correlation_cache_unique_scope'),
+        ]
+
+    def __str__(self):
+        return f'correlations of {self.upload_id} [{self.scope_key}]'
+
+
+class HashAlias(models.Model):
+    """centralbox's answer for an MD5: the SHA256 it stands for, or '' when
+    centralbox did not know it at `checked_at`. Written by centralbox.py after
+    a manual MD5 check or an MD5 fresh lookup; the verdict itself is the
+    SHA256's HashVerdict. (Pairs seen in logs need no row here: they are in
+    UploadedLogFileHash.)"""
+
+    md5 = models.CharField(max_length=32, unique=True)
+    sha256 = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    checked_at = models.DateTimeField()
+    next_check_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ['-checked_at']
+
+    def __str__(self):
+        return f'{self.md5} -> {self.sha256 or "not in centralbox"}'
+
+
+class CentralboxUsageMinute(models.Model):
+    """Calls to centralbox per wall-clock minute and API key, shared by every
+    worker process (the cache is per process). For the server key ('')
+    centralbox.take_budget increments it atomically and refuses once the
+    minute's limit is reached; a helper's key (a short hash of it) is only
+    counted, since centralbox itself limits those (HTTP 429)."""
+
+    minute = models.BigIntegerField()
+    key_id = models.CharField(max_length=16, blank=True, default='')
+    calls = models.PositiveIntegerField(default=0)
+    failures = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['-minute']
+        constraints = [
+            models.UniqueConstraint(fields=['minute', 'key_id'], name='centralbox_usage_minute_key_unique'),
+        ]
+
+    def __str__(self):
+        return f'minute {self.minute} [{self.key_id or "server"}]: {self.calls} calls, {self.failures} failures'
+
+
+class CentralboxFreshLookup(models.Model):
+    """A fresh centralbox analysis a helper started for one SHA256 (with their
+    own key). One row per hash: it enforces the cooldown for everyone and
+    tracks the run while the page waits for it. The result itself goes to
+    HashVerdict like every other answer."""
+
+    STATE_RUNNING = 'running'
+    STATE_DONE = 'done'
+    STATE_NOT_FOUND = 'not_found'
+    STATE_ERROR = 'error'
+    STATE_CHOICES = [
+        (STATE_RUNNING, 'running'), (STATE_DONE, 'done'),
+        (STATE_NOT_FOUND, 'not found anywhere'), (STATE_ERROR, 'error'),
+    ]
+
+    # The looked-up hash: a SHA256, or an MD5 (Trojan Killer).
+    sha256 = models.CharField(max_length=64, unique=True)
+    requested_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name='centralbox_fresh_lookups',
+    )
+    requested_at = models.DateTimeField()
+    state = models.CharField(max_length=16, choices=STATE_CHOICES, default=STATE_RUNNING)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-requested_at']
+
+    def __str__(self):
+        return f'{self.sha256} {self.state} ({self.requested_at:%Y-%m-%d %H:%M})'
 
 
 class FixlistSnippet(models.Model):
@@ -1367,6 +1618,67 @@ class InfectionCase(models.Model):
             if not cls.objects.filter(case_id=candidate).exists():
                 return candidate
         raise ValidationError('Unable to generate a unique infection case id.')
+
+    MAX_EXTRA_USERNAMES = 20
+
+    def extra_username_list(self):
+        """The case's other forum usernames, in the order they were entered."""
+        if self.pk is None:
+            return []
+        return [row.username for row in self.extra_usernames.all()]
+
+    def all_usernames(self):
+        """The main username first, then the other ones."""
+        return [self.username, *self.extra_username_list()]
+
+    @classmethod
+    def clean_extra_usernames(cls, names, main_username=''):
+        """Stripped, deduplicated other usernames without the main one (exact
+        comparison, as everywhere for case usernames); at most
+        MAX_EXTRA_USERNAMES, 1-255 characters each."""
+        if isinstance(names, str):
+            names = names.split(',')
+        result = []
+        for name in names or []:
+            name = (name or '').strip()[:255]
+            if name and name != main_username and name not in result:
+                result.append(name)
+        return result[:cls.MAX_EXTRA_USERNAMES]
+
+    def set_extra_usernames(self, names):
+        """Replace the other usernames (see clean_extra_usernames). Returns the stored list."""
+        cleaned = self.clean_extra_usernames(names, self.username)
+        self.extra_usernames.exclude(username__in=cleaned).delete()
+        existing = set(self.extra_usernames.values_list('username', flat=True))
+        InfectionCaseUsername.objects.bulk_create(
+            [InfectionCaseUsername(case=self, username=name) for name in cleaned if name not in existing],
+            ignore_conflicts=True,
+        )
+        return cleaned
+
+    @staticmethod
+    def username_q(username, prefix=''):
+        """Q for cases whose main or other username is exactly `username`
+        (use with .distinct(): the other names are a join)."""
+        return Q(**{f'{prefix}username': username}) | Q(**{f'{prefix}extra_usernames__username': username})
+
+
+class InfectionCaseUsername(models.Model):
+    """Another forum username of an infection case (the main one is
+    InfectionCase.username). Matched exactly, like the main one: new logs,
+    fixlists and responses of any of the case's names join it."""
+
+    case = models.ForeignKey(InfectionCase, on_delete=models.CASCADE, related_name='extra_usernames')
+    username = models.CharField(max_length=255, db_index=True)
+
+    class Meta:
+        ordering = ['id']
+        constraints = [
+            models.UniqueConstraint(fields=['case', 'username'], name='infection_case_username_unique'),
+        ]
+
+    def __str__(self):
+        return f'{self.username} ({self.case_id})'
 
 
 class InfectionCaseLog(models.Model):
@@ -1731,12 +2043,12 @@ def _auto_assign_new_uploaded_log_to_infection_cases(sender, instance, created, 
         return
 
     candidate_cases = InfectionCase.objects.filter(
-        username=instance.forum_username,
+        InfectionCase.username_q(instance.forum_username),
         auto_assign_new_items=True,
         is_training=False,
         status=InfectionCase.STATUS_OPEN,
         deleted_at__isnull=True,
-    )
+    ).distinct()
 
     if instance.recipient_user_id is None:
         candidate_owner_ids = list(candidate_cases.values_list('owner_id', flat=True).distinct())
@@ -1774,13 +2086,13 @@ def _auto_assign_new_fixlist_to_infection_cases(sender, instance, created, raw=F
         return
 
     candidate_cases = InfectionCase.objects.filter(
+        InfectionCase.username_q(instance.username),
         owner=instance.owner,
-        username=instance.username,
         auto_assign_new_items=True,
         is_training=False,
         status=InfectionCase.STATUS_OPEN,
         deleted_at__isnull=True,
-    )
+    ).distinct()
 
     InfectionCaseFixlist.objects.bulk_create(
         [
@@ -1806,13 +2118,13 @@ def _auto_assign_new_response_to_infection_cases(sender, instance, raw=False, **
         return
 
     candidate_cases = InfectionCase.objects.filter(
+        InfectionCase.username_q(instance.username),
         owner=instance.owner,
-        username=instance.username,
         auto_assign_new_items=True,
         is_training=False,
         status=InfectionCase.STATUS_OPEN,
         deleted_at__isnull=True,
-    )
+    ).distinct()
 
     InfectionCaseResponse.objects.bulk_create(
         [

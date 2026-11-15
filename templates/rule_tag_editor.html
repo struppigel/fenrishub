@@ -232,6 +232,13 @@
             </label>
             <div class="tag-editor-note" id="tagLogLinesBroad" hidden>No status is ticked, so every log line is checked whatever its verdict.</div>
         </div>
+        <div class="form-group">
+            <label class="checkbox-label" for="tagMatchCentralbox">
+                <input type="checkbox" id="tagMatchCentralbox">
+                also match centralbox family and malware type
+            </label>
+            <div class="tag-editor-note" id="tagCentralboxPreview" hidden></div>
+        </div>
         <div class="tag-condition-group" id="tagStatuses">
             <span class="tag-condition-label">rule status (any of)</span>
             {% for code, label, color in status_choices %}
@@ -325,6 +332,8 @@
     const entryTypeBoxes = [...document.querySelectorAll('#tagEntryTypes input[type="checkbox"]')];
     const logLinesInput = document.getElementById('tagMatchLogLines');
     const logLinesBroadNote = document.getElementById('tagLogLinesBroad');
+    const centralboxInput = document.getElementById('tagMatchCentralbox');
+    const centralboxPreview = document.getElementById('tagCentralboxPreview');
 
     // Links the speeches or snippets the user can link to this tag: chips for
     // the linked ones and a search box for the rest, which can be many.
@@ -468,7 +477,21 @@
             match_scope: scopeInput.value,
             match_statuses: ticked(statusBoxes),
             match_entry_types: ticked(entryTypeBoxes),
+            match_centralbox: centralboxInput.checked,
         };
+    }
+
+    // Which stored centralbox family / malware type names the regex finds.
+    function showCentralboxPreview(names) {
+        if (!centralboxInput.checked || !Array.isArray(names)) {
+            centralboxPreview.hidden = true;
+            centralboxPreview.textContent = '';
+            return;
+        }
+        centralboxPreview.hidden = false;
+        centralboxPreview.textContent = names.length
+            ? 'centralbox results matched so far: ' + names.map((item) => `${item.name} (${item.field}, ${item.count})`).join(', ')
+            : 'No stored centralbox result matches this regex yet.';
     }
 
     function syncLogLinesNote() {
@@ -694,6 +717,7 @@
             if (sequence !== previewSequence) return;
             setPreviewStatus('');
             resetPreview();
+            showCentralboxPreview(data.centralbox);
             previewedPattern = JSON.stringify(conditions);
             const groups = data.groups || {};
             const counts = data.counts || {};
@@ -786,6 +810,7 @@
         entryTypeBoxes.forEach((box) => { box.checked = tag.match_entry_types.includes(box.value); });
         autoApplyInput.checked = tag.auto_apply;
         logLinesInput.checked = tag.match_log_lines;
+        centralboxInput.checked = Boolean(tag.match_centralbox);
     }
     syncAutoApply();
     syncLogLinesNote();
@@ -800,6 +825,7 @@
     patternInput.addEventListener('input', syncAutoApply);
     [patternInput, excludeInput].forEach((input) => input.addEventListener('input', schedulePreview));
     scopeInput.addEventListener('change', schedulePreview);
+    centralboxInput.addEventListener('change', schedulePreview);
     [...statusBoxes, ...entryTypeBoxes].forEach((box) => box.addEventListener('change', schedulePreview));
 
     const advancedToggle = document.getElementById('tagAdvancedToggle');

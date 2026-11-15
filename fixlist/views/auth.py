@@ -4,11 +4,14 @@ Authentication and user account views for FenrisHub.
 Handles: login, password changes, dashboard, logout.
 """
 
+import re
+
 from django.shortcuts import render, redirect
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 # The fix message lives in the user's flagged FRST fix speech; the default is
@@ -78,6 +81,49 @@ def change_password_view(request):
     return render(request, 'change_password.html', {'form': form})
 
 
+CENTRALBOX_KEY_RE = re.compile(r'^cbt_[A-Za-z0-9_-]{8,200}$')
+
+
+def _centralbox_key_hint(key):
+    return f'{key[:8]}\u2026{key[-3:]}'
+
+
+def _save_centralbox_key(request, profile):
+    """Store, replace or remove the helper's own centralbox key (encrypted).
+    An empty field keeps the stored key. The key is checked with one /ping."""
+    from ..centralbox import check_personal_key
+    from ..secret_box import encrypt
+
+    if request.POST.get('centralbox_key_remove'):
+        profile.centralbox_key_encrypted = ''
+        profile.centralbox_key_hint = ''
+        profile.centralbox_key_status = ''
+        profile.centralbox_key_checked_at = None
+        profile.save(update_fields=[
+            'centralbox_key_encrypted', 'centralbox_key_hint', 'centralbox_key_status', 'centralbox_key_checked_at',
+        ])
+        messages.info(request, 'Your centralbox key was removed.')
+        return
+    key = (request.POST.get('centralbox_key') or '').strip()
+    if not key:
+        return
+    if not CENTRALBOX_KEY_RE.match(key):
+        messages.error(request, 'That does not look like a centralbox API key (cbt_...). It was not saved.')
+        return
+    status, message = check_personal_key(key)
+    profile.centralbox_key_encrypted = encrypt(key)
+    profile.centralbox_key_hint = _centralbox_key_hint(key)
+    profile.centralbox_key_status = status
+    profile.centralbox_key_checked_at = timezone.now()
+    profile.save(update_fields=[
+        'centralbox_key_encrypted', 'centralbox_key_hint', 'centralbox_key_status', 'centralbox_key_checked_at',
+    ])
+    if status == UserProfile.CENTRALBOX_KEY_REJECTED:
+        messages.error(request, f'Your centralbox key was saved, but {message[0].lower() + message[1:]}')
+    else:
+        messages.info(request, f'Your centralbox key was saved. {message}')
+
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def profile_view(request):
@@ -100,6 +146,7 @@ def profile_view(request):
         ])
         if old_rule_set_mode != new_rule_set_mode:
             on_user_rule_set_mode_changed(request.user, old_rule_set_mode, new_rule_set_mode)
+        _save_centralbox_key(request, profile)
         messages.success(request, 'Profile settings updated successfully.')
         return redirect('profile')
 
@@ -117,6 +164,9 @@ def profile_view(request):
             'profile_word_wrap': profile.word_wrap,
             'profile_uploads_all_channels_default': profile.uploads_all_channels_default,
             'profile_rule_set_mode': profile.rule_set_mode,
+            # Only the hint and status; the key itself never reaches a page.
+            'centralbox_key_hint': profile.centralbox_key_hint if profile.centralbox_key_encrypted else '',
+            'centralbox_key_status': profile.centralbox_key_status,
             'rule_set_mode_choices': UserProfile.RULE_SET_MODE_CHOICES,
         },
     )

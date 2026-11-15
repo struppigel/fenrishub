@@ -51,13 +51,14 @@
         {% for case in cases %}
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title">{{ case.case_id }} | {{ case.username }}</div>
+                <div class="fixlist-title">{{ case.case_id }} | {{ case.username }}{% if case.extra_names %} <span class="muted" title="{{ case.extra_names|join:', ' }}">(+{{ case.extra_names|length }})</span>{% endif %}</div>
                 <div class="fixlist-meta">
                     items {{ case.item_count }} | created {{ case.created_at|date:"Y-m-d H:i" }} | last activity {{ case.last_activity|date:"Y-m-d H:i" }} | status <span class="{% if case.status == 'open' %}case-status-open{% else %}case-status-closed{% endif %}">{{ case.get_status_display|lower }}</span>{% if case.is_training %} | <span style="color: var(--la-status-i);">observe</span>{% endif %}
                 </div>
             </div>
             <div class="fixlist-actions">
                 <a href="{% url 'view_infection_case' case.case_id %}"><button type="button">view</button></a>
+                {% if case.open_url %}<a href="{{ case.open_url }}" target="_blank" rel="noopener noreferrer" title="{{ case.open_url }}"><button type="button">open</button></a>{% endif %}
                 <form method="post" action="{% url 'infection_case_set_status' case.case_id %}" class="case-status-form">
                     {% csrf_token %}
                     {% if case.status == 'open' %}

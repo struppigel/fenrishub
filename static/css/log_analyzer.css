@@ -354,6 +354,9 @@ body.panel-resizing * {
 .log-line {
     padding: 2px 8px;
     border-bottom: 1px solid var(--la-border-muted);
+    /* The container's colour, set on the line so .line-actions can inherit
+       it (and the hover / copied colours) when it sits over the text. */
+    background-color: var(--la-bg-4);
     cursor: pointer;
     font-family: monospace;
     font-size: 12px;
@@ -1361,4 +1364,123 @@ button.lookup-menu-item {
     color: var(--la-warning-text);
     background: var(--la-warning-bg);
     border: 1px solid var(--la-warning-border);
+}
+
+/* centralbox case suggestion (centralbox_suggestions.js): the line's file has
+   a malicious SHA-256 in another log of the same case. Clicking queues B. */
+.centralbox-suggestion-chip {
+    margin-left: 6px;
+    padding: 0 4px;
+    font: inherit;
+    font-size: 10px;
+    line-height: 1.4;
+    color: var(--la-status-b);
+    background: var(--la-bg-3);
+    border: 1px dashed var(--la-status-b);
+    cursor: pointer;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.centralbox-suggestion-chip.centralbox-suggestion-conflict {
+    border-style: solid;
+}
+
+.centralbox-suggestion-chip:hover {
+    text-decoration: underline;
+}
+
+/* Case correlation icon (case_correlations.js): the line's file appears in
+   another log of the same case; red when one of them has a malicious
+   centralbox result. Clicking lists the other logs. */
+.line-correlation-trigger {
+    /* The same box as the copy / search icons next to it (.line-copy-trigger),
+       so the glyphs share their line; no nudging. */
+    flex: 0 0 auto;
+    min-width: 20px;
+    margin: 0 -6px 0 0;
+    padding: 0 4px;
+    text-align: center;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.2;
+    /* Grey like the copy / search icons unless a related log has a finding. */
+    color: var(--la-text-neutral);
+    background-color: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+}
+
+
+.line-correlation-trigger:hover {
+    text-decoration: underline;
+}
+
+.line-correlation-menu .line-correlation-source .line-copy-menu-key {
+    color: var(--la-text-primary);
+}
+
+.line-correlation-menu .line-correlation-bad .line-copy-menu-value {
+    color: var(--la-status-b);
+}
+
+
+/* Panel rows: the detection's severity, and a muted "different system?". */
+.line-correlation-menu .line-correlation-sev-b .line-copy-menu-value { color: var(--la-status-b); }
+.line-correlation-menu .line-correlation-sev-p .line-copy-menu-value { color: var(--la-status-p); }
+.line-correlation-menu .line-correlation-sev-g .line-copy-menu-value { color: var(--la-status-g); }
+.line-correlation-menu .line-correlation-sev-w .line-copy-menu-value { color: var(--la-status-w); }
+.line-correlation-menu .line-correlation-system-different .line-copy-menu-key { color: var(--la-text-disabled); }
+
+
+/* The line's buttons (info, copy, search) as one block at the end of the line. */
+.line-actions {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+/* Word wrap off: the line can be wider than the view, so the buttons stick to
+   its right edge and cover the cut-off text, in the line's own colour. */
+body.no-word-wrap #logLines .line-actions {
+    position: sticky;
+    right: 0;
+    padding-left: 6px;
+    background-color: inherit;
+}
+
+
+/* The icon in the colour of the worst related finding (line-verdict precedence). */
+.line-correlation-trigger[data-status="b"] { color: var(--la-status-b); }
+.line-correlation-trigger[data-status="p"] { color: var(--la-status-p); }
+.line-correlation-trigger[data-status="c"] { color: var(--la-status-c); }
+.line-correlation-trigger[data-status="a"] { color: var(--la-status-a); }
+.line-correlation-trigger[data-status="w"] { color: var(--la-status-w); }
+.line-correlation-trigger[data-status="g"] { color: var(--la-status-g); }
+.line-correlation-trigger[data-status="s"] { color: var(--la-status-s); }
+.line-correlation-trigger[data-status="i"] { color: var(--la-status-i); }
+.line-correlation-trigger[data-status="j"] { color: var(--la-status-j); }
+
+/* Word wrap off: the copy / search icons are invisible until the line is
+   hovered (or their menu is open), so they take no room either; a cut-off
+   line then runs to the right edge. Only icons actually shown (hover, or the
+   correlation icon) cover the end of the text. */
+body.no-word-wrap #logLines .log-line:not(:hover) .line-copy-trigger:not([aria-expanded="true"]):not(:focus-visible),
+body.no-word-wrap #logLines .log-line:not(:hover) .line-search-trigger:not([aria-expanded="true"]):not(:focus-visible) {
+    display: none;
+}
+
+body.no-word-wrap #logLines .log-line:not(:hover) .line-actions {
+    padding-left: 0;
+}
+
+body.no-word-wrap #logLines .log-line:not(:hover) .line-actions:has(.line-correlation-trigger) {
+    padding-left: 6px;
+}
+
+/* With the copy icon hidden there is nothing to tuck the info icon against. */
+body.no-word-wrap #logLines .log-line:not(:hover) .line-correlation-trigger {
+    margin-right: 0;
 }

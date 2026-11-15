@@ -39,6 +39,11 @@
         </div>
 
         <div class="form-group">
+            <label for="other_usernames">other usernames (optional)</label>
+            <input type="text" id="other_usernames" name="other_usernames" value="{{ prefill_other_usernames|default:''|escape }}" placeholder="comma-separated, e.g. a second forum account of the same person" autocomplete="off">
+        </div>
+
+        <div class="form-group">
             <label for="symptom_description">symptom description (optional)</label>
             <textarea id="symptom_description" name="symptom_description" rows="5" placeholder="What happened, and what symptoms were observed?">{{ prefill_symptom_description|default:''|escape }}</textarea>
         </div>
@@ -51,7 +56,7 @@
         <div class="form-group" id="autoAssignGroup">
             <label style="display: inline-flex; align-items: center; gap: 8px; margin-bottom: 0; color: var(--la-text-primary);">
                 <input type="checkbox" name="auto_assign_new_items" value="1" id="autoAssignCheckbox" {% if prefill_auto_assign_new_items %}checked{% endif %}>
-                <span>auto-assign newly uploaded logs and fixlists for this username to this case</span>
+                <span>auto-assign newly uploaded logs and fixlists for these usernames to this case</span>
             </label>
         </div>
 

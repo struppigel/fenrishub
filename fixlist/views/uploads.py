@@ -17,6 +17,7 @@ from django.urls import reverse
 from django.db.models import Count, Q
 from urllib.parse import urlencode
 
+from ..file_hashes import HASH_LOG_TYPES
 from ..forms import UploadedLogForm
 from ..log_converters import convert_log_to_response
 from ..log_highlighting import (
@@ -30,6 +31,7 @@ from ..upload_utils import (
     soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
     schedule_analysis_stats_recalc, get_fresh_cached_analysis, schedule_cached_analysis_refresh,
 )
+from .centralbox import add_fixlog_hash_summary, page_correlation_context, page_hash_context
 from .guest import deny_guests
 from .upload_actions import (
     handle_delete_action, handle_assign_to_me_action, handle_unassign_to_general_action,
@@ -499,8 +501,11 @@ def view_uploaded_log(request, upload_id):
 
     # None for log types without a highlighter (FRST etc.), which keep the plain view.
     highlight = highlight_log(uploaded_log.log_type, uploaded_log.content)
+    correlation_context = {}
     if highlight is not None and uploaded_log.log_type in UploadedLog.ANALYZED_LOG_TYPES:
         _apply_frst_rule_statuses(uploaded_log, highlight)
+        # What related logs say about the files of these lines (cached).
+        correlation_context = page_correlation_context(uploaded_log, request.user, highlight)
     if uploaded_log.log_type == 'Fixlog':
         # Same numbers as the Fixlog chips in the uploads / cases lists.
         fixlog_stats = [
@@ -515,11 +520,21 @@ def view_uploaded_log(request, upload_id):
         else:
             highlight.stats = fixlog_stats + highlight.stats
 
+    # Stored centralbox verdicts for the log's SHA256s (database only; the page
+    # asks for missing ones afterwards, so it never waits on centralbox).
+    centralbox_context = {}
+    if highlight is not None and uploaded_log.log_type in HASH_LOG_TYPES:
+        centralbox_context = page_hash_context(uploaded_log, request.user)
+        if uploaded_log.log_type == 'Fixlog':
+            add_fixlog_hash_summary(highlight, uploaded_log, centralbox_context)
+
     return render(request, 'view_uploaded_log.html', {
         'uploaded_log': uploaded_log,
         'converted_response': converted_response,
         'highlight': highlight,
         'highlighted_html': render_highlighted_html(highlight),
+        'centralbox': centralbox_context,
+        'correlations': correlation_context,
     })
 
 

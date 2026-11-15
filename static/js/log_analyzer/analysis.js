@@ -748,9 +748,10 @@ async function parseLogs() {
         parseButton.textContent = 'analyzing...';
     }
 
+    let selectedUploadId = '';
     try {
         const uploadSelect = document.getElementById('uploadSourceSelect');
-        const selectedUploadId = uploadSelect ? (uploadSelect.value || '').trim() : '';
+        selectedUploadId = uploadSelect ? (uploadSelect.value || '').trim() : '';
         if (selectedUploadId) {
             console.log('Parsing with upload_id:', selectedUploadId);
         }
@@ -773,6 +774,12 @@ async function parseLogs() {
     }
 
     renderLogLines();
+    if (typeof refreshCentralboxSuggestions === 'function') {
+        refreshCentralboxSuggestions(selectedUploadId);
+    }
+    if (typeof refreshCaseCorrelations === 'function') {
+        refreshCaseCorrelations(selectedUploadId);
+    }
 
     document.getElementById('logInput').style.display = 'none';
     document.getElementById('logLines').style.display = 'block';
@@ -1977,10 +1984,16 @@ function renderLogLines() {
             openLineSearchMenu(searchBtn, index);
         });
 
+        // The line's buttons in one block: with word wrap off it stays at the
+        // right edge of the view even when the line is cut off (log_analyzer.css).
+        const actions = document.createElement('span');
+        actions.className = 'line-actions';
+        actions.appendChild(copyBtn);
+        actions.appendChild(searchBtn);
+
         lineDiv.appendChild(badge);
         lineDiv.appendChild(text);
-        lineDiv.appendChild(copyBtn);
-        lineDiv.appendChild(searchBtn);
+        lineDiv.appendChild(actions);
 
         const reasons = Array.isArray(entry.reasons) ? entry.reasons : [];
         const lineTags = typeof ruleTagsFor === 'function' ? ruleTagsFor(entry.tag_ids) : [];
@@ -1991,7 +2004,17 @@ function renderLogLines() {
             const chipBox = document.createElement('span');
             chipBox.className = 'line-tag-chips';
             buildLineTagChips(entry.tag_ids).forEach((chip) => chipBox.appendChild(chip));
-            lineDiv.insertBefore(chipBox, copyBtn);
+            lineDiv.insertBefore(chipBox, actions);
+        }
+        // What other logs of the case say about the line's file (case_correlations.js).
+        if (typeof buildCaseCorrelationButton === 'function') {
+            const correlationButton = buildCaseCorrelationButton(entry);
+            if (correlationButton) actions.insertBefore(correlationButton, copyBtn);
+        }
+        // A "suggested B" from centralbox (centralbox_suggestions.js), if any.
+        if (typeof buildCentralboxSuggestionChip === 'function') {
+            const suggestionChip = buildCentralboxSuggestionChip(entry, index);
+            if (suggestionChip) lineDiv.insertBefore(suggestionChip, actions);
         }
         // The tag filter (speech_suggestions.js) hides lines without this class.
         if (typeof lineMatchesTagFilter === 'function' && lineMatchesTagFilter(entry)) {

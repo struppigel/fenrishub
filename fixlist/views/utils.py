@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 from datetime import timedelta
 from django.utils import timezone
 
-from ..models import ApiRequestLog, InfectionCase, UploadedLog, Fixlist
+from ..models import ApiRequestLog, CentralboxUsageMinute, InfectionCase, UploadedLog, Fixlist
 
 
 def _purge_old_trash():
@@ -44,6 +44,10 @@ def _purge_old_api_request_logs():
     retention_days = max(1, int(getattr(settings, 'API_LOG_RETENTION_DAYS', 90)))
     cutoff = timezone.now() - timedelta(days=retention_days)
     ApiRequestLog.objects.filter(created_at__lt=cutoff).delete()
+    # centralbox per-minute call counters only matter for the current minute;
+    # a week is kept for a look at recent usage.
+    week_ago_minute = int((timezone.now() - timedelta(days=7)).timestamp()) // 60
+    CentralboxUsageMinute.objects.filter(minute__lt=week_ago_minute).delete()
 
 
 def _autoclose_stale_cases():

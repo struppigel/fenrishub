@@ -32,9 +32,11 @@ from .models import (
     AccessLog,
     ApiRequestLog,
     ApiToken,
+    CentralboxFreshLookup,
     ClassificationRule,
     Fixlist,
     FixlistSnippet,
+    HashVerdict,
     InfectionCase,
     InfectionCaseFixlist,
     InfectionCaseLog,
@@ -182,6 +184,43 @@ class ApiRequestLogAdmin(admin.ModelAdmin):
         'created_at', 'token', 'user', 'endpoint', 'target', 'status_code', 'count',
         'response_bytes', 'duration_ms', 'ip_address', 'user_agent',
     )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(HashVerdict)
+class HashVerdictAdmin(admin.ModelAdmin):
+    """centralbox answers cached per SHA256; written only by fixlist/centralbox.py.
+    Deleting a row makes the hash be looked up again."""
+
+    list_display = ('sha256', 'state', 'verdict', 'family', 'malware_type', 'threat_score', 'checked_at', 'next_check_at')
+    list_filter = ('state', 'verdict')
+    search_fields = ('sha256', 'family')
+    readonly_fields = (
+        'sha256', 'state', 'verdict', 'family', 'malware_type', 'score', 'threat_score',
+        'provider_counts', 'links', 'checked_at', 'next_check_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(CentralboxFreshLookup)
+class CentralboxFreshLookupAdmin(admin.ModelAdmin):
+    """Fresh centralbox lookups helpers started; a row blocks new lookups of
+    the hash until the cooldown ends. Deleting a row lifts the cooldown."""
+
+    list_display = ('sha256', 'state', 'requested_by', 'requested_at', 'finished_at')
+    list_filter = ('state',)
+    search_fields = ('sha256', 'requested_by__username')
+    readonly_fields = ('sha256', 'state', 'requested_by', 'requested_at', 'finished_at')
 
     def has_add_permission(self, request):
         return False
@@ -1027,9 +1066,13 @@ class ParsedFilepathExclusionAdmin(admin.ModelAdmin):
 
 @admin.register(SiteConfig)
 class SiteConfigAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'guest_token_preview', 'api_enabled', 'updated_at')
+    list_display = ('__str__', 'guest_token_preview', 'api_enabled', 'centralbox_enabled', 'updated_at')
     readonly_fields = ('updated_at',)
-    fields = ('guest_token', 'api_enabled', 'updated_at')
+    fields = (
+        'guest_token', 'api_enabled',
+        'centralbox_enabled', 'centralbox_paused_until', 'centralbox_pause_reason',
+        'updated_at',
+    )
     change_list_template = 'admin/fixlist/siteconfig/change_list.html'
 
     def guest_token_preview(self, obj):

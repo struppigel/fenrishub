@@ -36,6 +36,7 @@ from ..tagging import (
     parse_tag_category_priority,
     save_tag,
     matching_rule_ids,
+    preview_centralbox_names,
     preview_conditions,
     schedule_line_tag_refresh,
     serialize_tag,
@@ -294,7 +295,7 @@ def _tag_editor(request, tag):
         # nothing that affects matching is hidden.
         'advanced_open': bool(tag and (
             tag.exclude_pattern or tag.match_statuses or tag.match_entry_types
-            or tag.match_scope != RuleTag.SCOPE_ANY or tag.match_log_lines
+            or tag.match_scope != RuleTag.SCOPE_ANY or tag.match_log_lines or tag.match_centralbox
         )),
         'scope_choices': RuleTag.SCOPE_CHOICES,
         # The default first; get_default() makes sure there is one to preselect.
@@ -412,7 +413,10 @@ def rule_tag_preview_api(request):
     if message:
         return PayloadValidator.error_response(message)
 
-    return JsonResponse(preview_conditions(conditions, tag=tag))
+    result = preview_conditions(conditions, tag=tag)
+    if conditions.centralbox:
+        result['centralbox'] = preview_centralbox_names(conditions)
+    return JsonResponse(result)
 
 
 @login_required

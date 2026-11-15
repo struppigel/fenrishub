@@ -211,7 +211,7 @@
     {% if highlight.summary %}
     <ul class="hl-summary-list" style="--hl-summary-line: {{ highlight.summary_line_ch }}ch">
         {% for item in highlight.summary_shown %}
-        <li><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}" title="{{ item.name }}"><span class="hl-jump-line">L{{ item.line_no }}</span> {% if item.status %}<span class="hl-jump-status hl-sev-{{ item.severity }}">{{ item.status }}</span> {% endif %}<span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}</a></li>
+        <li data-line="{{ item.line_no }}"{% if item.correlation_added %} data-cor-added{% endif %}><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}" title="{{ item.name }}"><span class="hl-jump-line">L{{ item.line_no }}</span> {% if item.status %}<span class="hl-jump-status hl-sev-{{ item.severity }}">{{ item.status }}</span> {% endif %}<span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}{% if item.correlation %} <span class="hl-jump-cor">{{ item.correlation }}</span>{% endif %}</a></li>
         {% endfor %}
     </ul>
     {% if highlight.summary_hidden_count %}<div class="hl-summary-more">and {{ highlight.summary_hidden_count }} more</div>{% endif %}
@@ -301,6 +301,8 @@
 </div>
 
 {% if converted_response %}{{ converted_response|json_script:"convertedResponse" }}{% endif %}
+{% if centralbox %}{{ centralbox|json_script:"centralboxData" }}{% endif %}
+{% if correlations %}{{ correlations|json_script:"correlationData" }}{% endif %}
 
 <script>
 // The content is rendered as chunked .log-chunk blocks (see chunk_log filter)
@@ -631,6 +633,635 @@ function openUrl(url) {
     window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+// centralbox verdicts for SHA-256 tokens (fixlist/centralbox.py). All of it is
+// optional: without data, on any error or with centralbox down the page just
+// has no markers. Labels are drawn by CSS from data attributes (::after), so
+// they never become part of the line text that copy and download read.
+const Centralbox = (function () {
+    const none = { menuItems: () => [] };
+    let data = null;
+    try {
+        const el = document.getElementById('centralboxData');
+        data = el ? JSON.parse(el.textContent) : null;
+    } catch (error) {
+        data = null;
+    }
+    if (!data || typeof data !== 'object') return none;
+    const verdicts = (data.verdicts && typeof data.verdicts === 'object') ? data.verdicts : {};
+    const tags = (data.tags && typeof data.tags === 'object') ? data.tags : {};
+    const fresh = (data.fresh && typeof data.fresh === 'object') ? data.fresh : {};
+    const auto = Array.isArray(data.auto) ? data.auto : [];
+    // Trojan Killer file MD5s: shown through the SHA256 they stand for
+    // (md5_map), or as "not in centralbox" once centralbox said so.
+    const md5Rows = Array.isArray(data.md5_rows) ? data.md5_rows : [];
+    const md5Map = (data.md5_map && typeof data.md5_map === 'object') ? data.md5_map : {};
+    const md5Unknown = (data.md5_unknown && typeof data.md5_unknown === 'object') ? data.md5_unknown : {};
+    const md5Set = new Set(md5Rows.map(row => row && row.md5).filter(Boolean));
+    let available = data.available === true;
+    const VERDICTS = ['malicious', 'suspicious', 'clean'];
+    const DOT = ' · ';
+    const FRESH_POLL_MS = 4000;
+    const FRESH_POLL_TRIES = 30;
+    // Hashes whose label shows a running check; render() leaves them alone.
+    const busy = new Set();
+
+    function csrfToken() {
+        const field = document.querySelector('input[name="csrfmiddlewaretoken"]');
+        return field ? field.value : '';
+    }
+
+    function label(v) {
+        if (!v || typeof v !== 'object') return null;
+        if (v.state === 'unknown') return { cls: 'unknown', text: 'not in centralbox' };
+        if (!VERDICTS.includes(v.verdict)) return null;
+        if (v.verdict === 'malicious') return { cls: 'malicious', text: maliciousName(v) };
+        return { cls: v.verdict, text: v.family ? v.verdict + DOT + v.family : v.verdict };
+    }
+
+    // Malicious: the family if known, else the malware type, else "malicious".
+    function maliciousName(v) {
+        return v.family || v.malware_type || 'malicious';
+    }
+
+    // The hover text keeps the verdict: "malicious · asyncrat".
+    function verdictText(v, fallback) {
+        if (!v || !VERDICTS.includes(v.verdict)) return fallback;
+        return v.family ? v.verdict + DOT + v.family : v.verdict;
+    }
+
+    // A SHA256, or an MD5 the log lists as a file (not a PE section hash).
+    function isHash(hash) {
+        return /^[0-9a-f]{64}$/.test(hash) || (/^[0-9a-f]{32}$/.test(hash) && md5Set.has(hash));
+    }
+
+    function shaFor(hash) {
+        return hash.length === 64 ? hash : (md5Map[hash] || '');
+    }
+
+    function verdictFor(hash) {
+        const sha = shaFor(hash);
+        if (sha) return verdicts[sha] || null;
+        if (md5Unknown[hash]) return { state: 'unknown', checked_at: md5Unknown[hash] };
+        return null;
+    }
+
+    function today() {
+        return new Date().toISOString().slice(0, 10);
+    }
+
+    function tagNames(hash) {
+        const names = tags[shaFor(hash)];
+        return Array.isArray(names) ? names.filter(name => typeof name === 'string' && name) : [];
+    }
+
+    function describe(v, text, hash) {
+        const parts = ['centralbox: ' + text];
+        if (Number.isInteger(v.threat_score)) parts.push('threat ' + v.threat_score);
+        if (v.malware_type) parts.push(String(v.malware_type));
+        if (v.checked_at) parts.push('checked ' + v.checked_at);
+        const names = hash ? tagNames(hash) : [];
+        if (names.length) parts.push('tags: ' + names.join(', '));
+        return parts.join(DOT);
+    }
+
+    function tokensFor(hash) {
+        const root = document.getElementById('uploadedContent');
+        if (!root) return [];
+        return Array.from(root.querySelectorAll('.hl-hash'))
+            .filter(token => token.textContent.trim().toLowerCase() === hash);
+    }
+
+    function markTokens() {
+        const root = document.getElementById('uploadedContent');
+        if (!root) return;
+        root.querySelectorAll('.hl-hash').forEach(token => {
+            const hash = token.textContent.trim().toLowerCase();
+            if (!isHash(hash) || busy.has(hash) || token.classList.contains('hl-section-md5')) return;
+            const v = verdictFor(hash);
+            const l = label(v);
+            if (!l) return;
+            const names = tagNames(hash);
+            const text = (l.cls === 'unknown' ? l.text : 'centralbox: ' + l.text)
+                + (names.length ? DOT + names.join(', ') : '');
+            token.dataset.cb = l.cls;
+            token.dataset.cbLabel = text;
+            token.title = describe(v, verdictText(v, l.text), hash);
+        });
+    }
+
+    function showBusy(hash, text) {
+        busy.add(hash);
+        tokensFor(hash).forEach(token => {
+            token.dataset.cb = 'pending';
+            token.dataset.cbLabel = text;
+        });
+    }
+
+    function endBusy(hash, note) {
+        busy.delete(hash);
+        tokensFor(hash).forEach(token => {
+            if (!verdictFor(hash)) {
+                delete token.dataset.cb;
+                delete token.dataset.cbLabel;
+            }
+            if (note) token.title = note;
+        });
+        render();
+        if (note) {
+            tokensFor(hash).forEach(token => { token.title = note + (token.title && token.title !== note ? '\n' + token.title : ''); });
+        }
+    }
+
+    // Scanner detections in the summary box: "centralbox: <family or malware
+    // type>" (malicious) or "centralbox: clean" from the verdict of the detection's hash.
+    function flagSummary() {
+        const byAnchor = new Map();
+        function add(anchor, hash) {
+            const list = byAnchor.get(anchor) || [];
+            list.push(hash);
+            byAnchor.set(anchor, list);
+        }
+        auto.forEach(row => { if (row && row.flag) add(row.anchor_line_no, row.sha256); });
+        md5Rows.forEach(row => { if (row && row.flag) add(row.anchor_line_no, row.md5); });
+        (Array.isArray(data.checked_rows) ? data.checked_rows : []).forEach(row => {
+            if (row && row.sha256) add(row.anchor_line_no, row.sha256);
+        });
+        if (!byAnchor.size) return;
+        document.querySelectorAll('#highlightSummary a.hl-jump').forEach(link => {
+            const hashes = byAnchor.get(Number(link.dataset.line));
+            if (!hashes) return;
+            const found = hashes.map(h => verdictFor(h)).filter(v => v && VERDICTS.includes(v.verdict));
+            const v = VERDICTS.map(name => found.find(f => f.verdict === name)).find(Boolean);
+            if (!v) return;
+            const text = v.verdict === 'malicious' ? 'centralbox: ' + maliciousName(v)
+                : v.verdict === 'suspicious' ? 'suspicious on centralbox' : 'centralbox: clean';
+            let flag = link.querySelector('.hl-cb-flag');
+            if (!flag) {
+                flag = document.createElement('span');
+                flag.className = 'hl-cb-flag';
+                link.append(' ', flag);
+            }
+            flag.dataset.cb = v.verdict;
+            flag.textContent = text;
+            flag.title = describe(v, v.family ? v.verdict + DOT + v.family : v.verdict);
+        });
+    }
+
+    function render() {
+        try {
+            markTokens();
+            flagSummary();
+        } catch (error) {
+            // Markers are a nicety; never let them break the page.
+        }
+    }
+
+    function acceptVerdict(hash, v) {
+        if (!v || typeof v !== 'object') return;
+        if (/^[0-9a-f]{64}$/.test(hash)) {
+            verdicts[hash] = v;
+        } else if (/^[0-9a-f]{32}$/.test(hash) && /^[0-9a-f]{64}$/.test(v.sha256 || '')) {
+            // An MD5's answer is its SHA256's verdict.
+            md5Map[hash] = v.sha256;
+            verdicts[v.sha256] = v;
+            delete md5Unknown[hash];
+        }
+    }
+
+    function merge(body) {
+        if (!body || typeof body !== 'object') return;
+        available = body.available === true;
+        const incoming = body.verdicts && typeof body.verdicts === 'object' ? body.verdicts : {};
+        Object.keys(incoming).forEach(hash => acceptVerdict(hash, incoming[hash]));
+    }
+
+    // {status, body} of a JSON request; body is null when there is none.
+    async function request(url, options) {
+        try {
+            const response = await fetch(url, Object.assign({ credentials: 'same-origin' }, options));
+            let body = null;
+            try {
+                body = await response.json();
+            } catch (error) {
+                body = null;
+            }
+            return { status: response.status, body: body && typeof body === 'object' ? body : null };
+        } catch (error) {
+            return { status: 0, body: null };
+        }
+    }
+
+    function postJson(url, payload) {
+        return request(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRFToken': csrfToken() },
+            body: JSON.stringify(payload || {}),
+        });
+    }
+
+    async function poll(attempt) {
+        if (!available || !auto.length || !data.check_url) return;
+        const { status, body } = await postJson(data.check_url, {});
+        if (status !== 200 || !body) return;
+        merge(body);
+        render();
+        if (available && Number(body.pending) > 0 && attempt < 4) {
+            setTimeout(() => poll(attempt + 1), 4000 * (attempt + 1));
+        }
+    }
+
+    async function checkOne(hash) {
+        showBusy(hash, 'centralbox: checking…');
+        const { status, body } = await postJson(data.hash_url, { sha256: hash, upload_id: data.upload_id });
+        let note = '';
+        if (status === 200 && body) {
+            available = body.available === true;
+            acceptVerdict(hash, body.verdict);
+            if (body.unknown && hash.length === 32) md5Unknown[hash] = today();
+            if (!body.verdict && !body.unknown) {
+                note = available ? 'centralbox: no answer yet, try again later' : 'centralbox is not available right now';
+            }
+            // e.g. the helper's own key has to wait after a centralbox 429.
+            if (typeof body.note === 'string' && body.note) note = body.note;
+        } else {
+            note = 'centralbox: the check failed, try again later';
+        }
+        endBusy(hash, note);
+    }
+
+    function localTime(iso) {
+        const date = new Date(iso);
+        return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+    }
+
+    function inCooldown(info) {
+        if (!info || !info.next_at) return false;
+        const next = new Date(info.next_at);
+        return !Number.isNaN(next.getTime()) && next > new Date();
+    }
+
+    // A fresh lookup: centralbox analyses the hash anew with the helper's own
+    // key, then the page asks for the result every few seconds.
+    async function followFresh(hash, tries) {
+        const url = data.fresh_status_url.replace('0'.repeat(64), hash);
+        for (let attempt = 0; attempt < tries; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, FRESH_POLL_MS));
+            const { status, body } = await request(url, { headers: { 'Accept': 'application/json' } });
+            if (status !== 200 || !body) continue;
+            if (body.fresh && typeof body.fresh === 'object') fresh[hash] = body.fresh;
+            if (body.state === 'running') continue;
+            acceptVerdict(hash, body.verdict);
+            if (body.state === 'not_found' && hash.length === 32) md5Unknown[hash] = today();
+            endBusy(hash, body.state === 'error' ? 'centralbox: the lookup failed, try again after the cooldown' : '');
+            return;
+        }
+        endBusy(hash, 'centralbox: the lookup is still running; reload the page later');
+    }
+
+    async function startFresh(hash) {
+        showBusy(hash, 'centralbox: looking up…');
+        const { status, body } = await postJson(data.fresh_url, { sha256: hash, upload_id: data.upload_id });
+        if (body && body.fresh && typeof body.fresh === 'object') fresh[hash] = body.fresh;
+        if (status !== 200 || !body || !body.ok) {
+            const message = (body && body.message) || 'centralbox: the lookup could not be started';
+            endBusy(hash, message);
+            window.alert(message);
+            return;
+        }
+        if (body.state !== 'running') {
+            acceptVerdict(hash, body.verdict);
+            if (body.state === 'not_found' && hash.length === 32) md5Unknown[hash] = today();
+            endBusy(hash, '');
+            return;
+        }
+        followFresh(hash, FRESH_POLL_TRIES);
+    }
+
+    function freshItem(hash, known) {
+        if (!data.fresh_url) return null;
+        if (!data.can_fresh_lookup) {
+            return { key: 'centralbox', value: 'add your centralbox key in your profile to run lookups',
+                     run: () => { window.location.href = data.profile_url; } };
+        }
+        const info = fresh[hash];
+        if (info && info.state === 'running' && inCooldown(info)) {
+            return { key: 'centralbox', value: 'fresh lookup running…',
+                     run: () => { if (!busy.has(hash)) { showBusy(hash, 'centralbox: looking up…'); followFresh(hash, FRESH_POLL_TRIES); } } };
+        }
+        if (inCooldown(info)) {
+            const when = localTime(info.next_at);
+            const who = info.requested_by ? ` by ${info.requested_by}` : '';
+            const message = `Looked up ${localTime(info.requested_at)}${who}. A new lookup is possible after ${when}.`;
+            return { key: 'centralbox', value: `fresh lookup: next possible ${when}`, run: () => window.alert(message) };
+        }
+        return { key: 'centralbox', value: known ? 're-run lookup' : 'run fresh lookup', run: () => startFresh(hash) };
+    }
+
+    // Hash menu entries: the report once the hash is known, a cached re-check
+    // for unknown ones, and a fresh lookup with the helper's own key.
+    function menuItems(token) {
+        const hash = token.textContent.trim().toLowerCase();
+        if (!isHash(hash) || busy.has(hash) || token.classList.contains('hl-section-md5')) return [];
+        const v = verdictFor(hash);
+        const l = label(v);
+        const known = Boolean(l && v.report_url);
+        const items = [];
+        if (known) {
+            items.push({ key: 'centralbox', value: 'report' + DOT + l.text, run: () => openUrl(v.report_url) });
+        } else if ((available || data.can_fresh_lookup) && data.hash_url) {
+            // Checked with the helper's own key when they have one, else the server key.
+            items.push({ key: 'centralbox', value: l ? 'check again' : 'check this hash', run: () => checkOne(hash) });
+        }
+        const freshEntry = freshItem(hash, known);
+        if (freshEntry) items.push(freshEntry);
+        return items;
+    }
+
+    render();
+    // Logs with many hashes are not checked by themselves (data.auto_check).
+    if (available && auto.length && data.auto_check !== false) setTimeout(() => poll(0), 300);
+    return { menuItems };
+})();
+
+// Correlations (fixlist/case_correlations.py): an FRST / Addition line whose
+// file appears in related logs (the helper's case, else the same forum user)
+// gets a coloured marker after its text (outside the line, so copy and
+// download stay unchanged) and an info button next to the copy / search icons
+// that lists what those logs say. Lines with a coloured finding are also in
+// the summary box. The page renders what is stored; when that is outdated
+// (`fresh` false) the script asks for current ones and redraws. Optional:
+// without data nothing changes, and a failed refresh keeps the stored view.
+const CaseCorrelations = (function () {
+    const none = { has: () => false, header: () => '', menuItems: () => [], statusClass: () => '' };
+    let data = null;
+    try {
+        const el = document.getElementById('correlationData');
+        data = el ? JSON.parse(el.textContent) : null;
+    } catch (error) {
+        data = null;
+    }
+    if (!data || typeof data !== 'object') return none;
+    if (!data.lines || typeof data.lines !== 'object') data.lines = {};
+    const DOT = ' · ';
+    const STATUS_CLASS = { B: 'b', P: 'p', C: 'c', A: 'a', '!': 'w', G: 'g', S: 's', I: 'i', J: 'j' };
+    // Summary severity per status, as views/centralbox.py _CORRELATION_SUMMARY_SEVERITY.
+    const SUMMARY_SEVERITY = { B: 'b', P: 'p', C: 'c', A: 'w', '!': 'w', G: 'g', S: 'i', I: 'i', J: 'j' };
+    const root = document.getElementById('uploadedContent');
+    const hasLog = !!(root && root.classList.contains('hl-log'));
+
+    function entriesFor(line) {
+        const no = line && line.dataset ? line.dataset.n : '';
+        const item = no ? data.lines[no] : null;
+        return item && Array.isArray(item.entries) ? item.entries : [];
+    }
+
+    function logUrl(entry) {
+        const id = String(entry.upload_id || '');
+        const line = Number(entry.line_no);
+        if (!/^[A-Za-z0-9_-]+$/.test(id)) return '';
+        return `/uploads/${encodeURIComponent(id)}/` + (Number.isInteger(line) && line > 0 ? `#L${line}` : '');
+    }
+
+    function header() {
+        return data.scope === 'user'
+            ? `same file in other logs of user ${data.name} (no case of yours)`
+            : 'same file in other logs of this case';
+    }
+
+    // What a related log says, without log ids: the detection name or family
+    // and the centralbox verdict (or the fixlist result).
+    function finding(entry) {
+        if (entry.kind === 'fixlog') return entry.result || 'fixlist result';
+        const result = entry.centralbox && typeof entry.centralbox === 'object' ? entry.centralbox : null;
+        const name = (result && (result.family || result.malware_type)) || entry.detection || '';
+        const verdict = result && result.verdict ? 'centralbox: ' + result.verdict
+            : result && result.state === 'unknown' ? 'not in centralbox' : '';
+        // A detection of a folder this line's file is in.
+        const where = entry.in_folder ? 'in detected folder' : '';
+        return [name, verdict, where].filter(Boolean).join(DOT) || (entry.kind === 'hash' ? 'file hash' : 'detection');
+    }
+
+    // One row per finding: the log type it was found in (and a warning when
+    // that log seems to come from another system). Clicking opens that log
+    // at the line.
+    function menuItems(line) {
+        const items = [];
+        const seen = new Set();
+        entriesFor(line).forEach(entry => {
+            if (!entry || typeof entry !== 'object') return;
+            const key = String(entry.log_type || 'log') + (entry.system === 'different' ? DOT + 'other system?' : '');
+            const value = finding(entry);
+            if (seen.has(key + '\n' + value)) return;
+            seen.add(key + '\n' + value);
+            const url = logUrl(entry);
+            items.push({ key, value, run: () => { if (url) openUrl(url); } });
+        });
+        return items;
+    }
+
+    // A marker per correlated line, in its status colour, in the same column
+    // as the hover icons: each marker copies their layout (info, copy, search,
+    // the last two invisible) and is placed like them, outside the line, so
+    // copy and download stay the raw log. Clicks go to the hover icons.
+    let markers = [];
+    let listening = false;
+    // All layout reads first, then all writes: interleaving them would force
+    // a reflow per marker on every scroll event.
+    function place() {
+        if (!markers.length) return;
+        const rootRect = root.getBoundingClientRect();
+        const base = root.scrollTop - rootRect.top - root.clientTop;
+        const right = root.scrollLeft + root.clientWidth - 2;
+        const tops = markers.map(([line]) => (
+            line.getClientRects().length ? line.getBoundingClientRect().top + base : null
+        ));
+        markers.forEach(([, group], index) => { group.hidden = tops[index] === null; });
+        const widths = markers.map(([, group]) => group.offsetWidth);
+        markers.forEach(([, group], index) => {
+            if (tops[index] === null) return;
+            group.style.top = `${tops[index]}px`;
+            group.style.left = `${right - widths[index]}px`;
+        });
+    }
+
+    function drawMarkers() {
+        if (!hasLog) return;
+        markers.forEach(([, group]) => group.remove());
+        markers = [];
+        Object.keys(data.lines).forEach(no => {
+            if (!/^\d+$/.test(no)) return;
+            const line = document.getElementById('L' + no);
+            if (!line) return;
+            const item = data.lines[no] || {};
+            const group = document.createElement('span');
+            group.className = 'hl-line-actions hl-cor-marker';
+            group.setAttribute('aria-hidden', 'true');
+            ['hl-line-info-trigger', 'hl-line-copy-trigger', 'hl-line-search-trigger'].forEach((cls, index) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.tabIndex = -1;
+                button.className = cls;
+                button.textContent = ['ⓘ', '⎘', '⌕'][index];
+                if (index > 0) button.style.visibility = 'hidden';
+                group.appendChild(button);
+            });
+            group.dataset.cor = STATUS_CLASS[item.status] || 'none';
+            root.appendChild(group);
+            markers.push([line, group]);
+        });
+        root.classList.toggle('hl-has-correlations', markers.length > 0);
+        if (!markers.length) return;
+        place();
+        if (listening) return;
+        listening = true;
+        root.addEventListener('scroll', place, { passive: true });
+        root.addEventListener('toggle', place, true);
+        window.addEventListener('resize', place);
+        if (window.ResizeObserver) new ResizeObserver(place).observe(root);
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(place);
+    }
+
+    // The summary's empty note, while a list this script added replaces it.
+    let removedEmpty = null;
+
+    function span(cls, text) {
+        const el = document.createElement('span');
+        el.className = cls;
+        el.textContent = text;
+        return el;
+    }
+
+    // The summary entries of the correlations, built like the server's
+    // (the summary list in this template; views/centralbox.py
+    // page_correlation_context): "correlated: ..." after a line the rules
+    // already list, else the line itself as a new entry in line order.
+    function drawSummary() {
+        const pane = document.getElementById('highlightSummary');
+        if (!pane) return;
+        let list = pane.querySelector('.hl-summary-list');
+        if (list) {
+            list.querySelectorAll('li[data-cor-added]').forEach(li => li.remove());
+            list.querySelectorAll('.hl-jump-cor').forEach(el => {
+                const prev = el.previousSibling;
+                if (prev && prev.nodeType === Node.TEXT_NODE && prev.textContent === ' ') prev.remove();
+                el.remove();
+            });
+        }
+        // With "and N more" the list stops early: no entries past its end.
+        const truncated = !!pane.querySelector('.hl-summary-more');
+        const wanted = Object.keys(data.lines)
+            .filter(no => /^\d+$/.test(no) && SUMMARY_SEVERITY[(data.lines[no] || {}).status])
+            .map(Number).sort((a, b) => a - b);
+        wanted.forEach(no => {
+            const item = data.lines[String(no)];
+            const note = 'correlated: ' + (item.note || 'finding');
+            if (!list) {
+                list = document.createElement('ul');
+                list.className = 'hl-summary-list';
+                const empty = pane.querySelector('.hl-summary-empty');
+                if (empty) {
+                    removedEmpty = empty;
+                    empty.remove();
+                }
+                pane.appendChild(list);
+            }
+            const items = Array.from(list.children);
+            const existing = items.find(li => Number(li.dataset.line) === no);
+            if (existing) {
+                const link = existing.querySelector('a.hl-jump');
+                if (link) link.append(' ', span('hl-jump-cor', note));
+                return;
+            }
+            const after = items.find(li => Number(li.dataset.line) > no);
+            if (!after && truncated && items.length) return;
+            const severity = SUMMARY_SEVERITY[item.status];
+            const li = document.createElement('li');
+            li.dataset.line = String(no);
+            li.setAttribute('data-cor-added', '');
+            const link = document.createElement('a');
+            link.href = '#L' + no;
+            link.className = 'hl-jump';
+            link.dataset.line = String(no);
+            link.title = item.text || '';
+            link.append(
+                span('hl-jump-line', 'L' + no), ' ',
+                span('hl-jump-status hl-sev-' + severity, item.status), ' ',
+                span('hl-jump-name hl-sev-' + severity, item.text || ''), ' ',
+                span('hl-jump-cor', note),
+            );
+            li.appendChild(link);
+            list.insertBefore(li, after || null);
+        });
+        if (!list) return;
+        if (!list.children.length) {
+            // Back to the server's empty note if this script replaced it.
+            if (removedEmpty) list.replaceWith(removedEmpty);
+            else list.remove();
+            return;
+        }
+        const last = Math.max(...Array.from(list.children).map(li => Number(li.dataset.line) || 1));
+        list.style.setProperty('--hl-summary-line', `${1 + String(last).length}ch`);
+    }
+
+    // The endpoint keys correlations by stripped line text, the page by line
+    // number. Same mapping as the server's: every log line with that text.
+    function byLineNumber(answer) {
+        const texts = answer.correlations && typeof answer.correlations === 'object' ? answer.correlations : {};
+        const statuses = answer.statuses && typeof answer.statuses === 'object' ? answer.statuses : {};
+        const notes = answer.notes && typeof answer.notes === 'object' ? answer.notes : {};
+        const lines = {};
+        if (!hasLog || !Object.keys(texts).length) return lines;
+        root.querySelectorAll('.hl-line[data-n]').forEach(el => {
+            const text = el.textContent.trim();
+            if (!text || !Object.prototype.hasOwnProperty.call(texts, text)) return;
+            const entries = texts[text];
+            if (!Array.isArray(entries)) return;
+            lines[el.dataset.n] = {
+                status: typeof statuses[text] === 'string' ? statuses[text] : '',
+                entries,
+                text,
+                note: typeof notes[text] === 'string' ? notes[text] : '',
+            };
+        });
+        return lines;
+    }
+
+    function refresh() {
+        const url = typeof data.refresh_url === 'string' ? data.refresh_url : '';
+        if (!url.startsWith('/')) return;
+        fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+            .then(response => (response.ok ? response.json() : null))
+            .then(answer => {
+                if (!answer || typeof answer !== 'object') return;
+                data = {
+                    scope: answer.scope || '',
+                    name: answer.name || '',
+                    lines: byLineNumber(answer),
+                    fresh: true,
+                    refresh_url: url,
+                };
+                drawMarkers();
+                drawSummary();
+            })
+            .catch(() => { /* keep the stored view */ });
+    }
+
+    try {
+        drawMarkers();
+    } catch (error) {
+        // Markers are a nicety; never let them break the page.
+    }
+    if (data.fresh === false) refresh();
+
+    function statusClass(line) {
+        const no = line && line.dataset ? line.dataset.n : '';
+        const item = no ? data.lines[no] : null;
+        return item ? (STATUS_CLASS[item.status] || 'none') : '';
+    }
+
+    return { has: line => entriesFor(line).length > 0, header, menuItems, statusClass };
+})();
+
 function openHashMenu(token) {
     const lookup = hashLookup(token);
     if (!lookup) return false;
@@ -638,6 +1269,7 @@ function openHashMenu(token) {
     TokenMenu.open(token, lookup.label, [
         { key: 'copy', value: lookup.hash, run: () => copyAndFlash(lookup.hash, token) },
         { key: 'virustotal', value: lookup.url, run: () => openUrl(lookup.url) },
+        ...Centralbox.menuItems(token),
     ]);
     return true;
 }
@@ -741,8 +1373,17 @@ function buildLineSearchItems(line) {
         items.push({ key, value, run: () => openGoogleSearch(value) });
         const hash = hashLookup(token);
         if (hash) items.push({ key: 'virustotal', value, run: () => openUrl(hash.url) });
+        // centralbox reports exist for SHA-256 only.
+        if (hash && hash.hash.length === 64) {
+            items.push({ key: 'centralbox', value, run: () => openUrl(centralboxReportUrl(hash.hash)) });
+        }
     });
     return items;
+}
+
+// Only a plain 64-hex hash ever goes into the URL (hashLookup checked it).
+function centralboxReportUrl(hash) {
+    return 'https://centralbox.dev/analysis/' + hash.toLowerCase();
 }
 
 function openTokenMenu(token) {
@@ -801,6 +1442,8 @@ function openTokenMenu(token) {
         return button;
     }
 
+    const infoButton = makeButton('hl-line-info-trigger', '\u24d8', 'what related logs say about this file');
+    infoButton.hidden = true;
     const copyButton = makeButton('hl-line-copy-trigger', '\u2398', 'copy line or component');
     const searchButton = makeButton('hl-line-search-trigger', '\u2315', 'search component (Google, VirusTotal, CyberChef)');
     root.appendChild(actions);
@@ -808,11 +1451,16 @@ function openTokenMenu(token) {
     let currentLine = null;
 
     function menuOpenHere() {
-        return TokenMenu.isOpenFor(copyButton) || TokenMenu.isOpenFor(searchButton);
+        return TokenMenu.isOpenFor(copyButton) || TokenMenu.isOpenFor(searchButton) || TokenMenu.isOpenFor(infoButton);
     }
 
     function placeActions(line) {
         currentLine = line;
+        infoButton.hidden = !CaseCorrelations.has(line);
+        // Same colour as the line's marker underneath.
+        const cor = CaseCorrelations.statusClass(line);
+        if (cor) actions.dataset.cor = cor;
+        else delete actions.dataset.cor;
         actions.hidden = false;
         const lineRect = line.getBoundingClientRect();
         const rootRect = root.getBoundingClientRect();
@@ -850,6 +1498,11 @@ function openTokenMenu(token) {
         event.preventDefault();
         event.stopPropagation();
         openLineMenu(searchButton, 'search', buildLineSearchItems);
+    });
+    infoButton.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        openLineMenu(infoButton, CaseCorrelations.header(), CaseCorrelations.menuItems);
     });
 })();
 

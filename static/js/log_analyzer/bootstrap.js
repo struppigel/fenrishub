@@ -174,6 +174,11 @@ async function loadSelectedUploadForAnalyzer() {
         if (cachedAnalysis) {
             applyAnalysisPayload(cachedAnalysis, { resetCopied: true });
             showCachedAnalysisLayout();
+            // Correlations and centralbox suggestions are cached on the server:
+            // show them with the cached analysis instead of waiting for the
+            // fresh one (parseLogs asks again afterwards, which is cheap).
+            if (typeof refreshCaseCorrelations === 'function') refreshCaseCorrelations(uploadId);
+            if (typeof refreshCentralboxSuggestions === 'function') refreshCentralboxSuggestions(uploadId);
             stopSpinner();
             stopSpinner = startStatusSpinner(
                 statusElement,

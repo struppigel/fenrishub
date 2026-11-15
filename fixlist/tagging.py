@@ -148,6 +148,8 @@ class TagConditions:
     entry_types: tuple = ()
     # Also run the conditions on analysed log lines (RuleTag.match_log_lines).
     lines: bool = False
+    # Also run the regex on centralbox family / malware type (RuleTag.match_centralbox).
+    centralbox: bool = False
 
     @classmethod
     def of(cls, tag):
@@ -158,6 +160,7 @@ class TagConditions:
             statuses=tuple(tag.match_statuses or ()),
             entry_types=tuple(tag.match_entry_types or ()),
             lines=bool(tag.match_log_lines),
+            centralbox=bool(getattr(tag, 'match_centralbox', False)),
         )
 
     @property
@@ -275,6 +278,8 @@ def describe_conditions(conditions):
         parts.append(f'not "{conditions.exclude_pattern}" in {scope}')
     if conditions.lines:
         parts.append('also on log lines')
+    if conditions.centralbox and conditions.pattern:
+        parts.append('also on centralbox family and malware type')
     return ', '.join(parts)
 
 
@@ -674,6 +679,7 @@ def serialize_tag(tag):
         'match_statuses': list(tag.match_statuses or []),
         'match_entry_types': list(tag.match_entry_types or []),
         'match_log_lines': tag.match_log_lines,
+        'match_centralbox': tag.match_centralbox,
         'auto_apply': tag.auto_apply,
         'builtin': tag.builtin_code is not None,
         # The category sets the badge colour (see tag_category_class).
@@ -711,6 +717,12 @@ def conditions_from_payload(payload, tag=None):
         values['lines'] = payload['match_log_lines']
     else:
         values['lines'] = base.lines
+    if 'match_centralbox' in payload:
+        if not isinstance(payload['match_centralbox'], bool):
+            return None, 'Field "match_centralbox" must be a boolean.'
+        values['centralbox'] = payload['match_centralbox']
+    else:
+        values['centralbox'] = base.centralbox
     return TagConditions(**values), None
 
 
@@ -772,7 +784,7 @@ def save_tag(user, tag, payload):
     The one place tag fields are validated and stored, shared by the tag editor
     and the token API. Payload fields: name, description, match_pattern,
     exclude_pattern, match_scope, match_statuses, match_entry_types,
-    match_log_lines, auto_apply, category_id (null for the default category),
+    match_log_lines, match_centralbox, auto_apply, category_id (null for the default category),
     speech_ids, snippet_ids. Absent fields keep the tag's values. Applying the
     tag to rules is left to the caller; when what the tag matches on log lines
     changes, the stored line matches are refreshed in the background.
@@ -819,6 +831,8 @@ def save_tag(user, tag, payload):
         return None, 'Applying automatically needs a condition: a regex, a status or an entry type.'
     if conditions.lines and conditions.is_empty:
         return None, 'Matching log lines needs a condition: a regex, a status or an entry type.'
+    if conditions.centralbox and not conditions.pattern:
+        return None, 'Matching centralbox family and malware type needs a regex.'
 
     line_key_before = _line_key(TagConditions.of(tag)) if tag is not None else None
     if tag is None:
@@ -831,6 +845,7 @@ def save_tag(user, tag, payload):
     tag.match_statuses = list(conditions.statuses)
     tag.match_entry_types = list(conditions.entry_types)
     tag.match_log_lines = conditions.lines
+    tag.match_centralbox = conditions.centralbox
     tag.auto_apply = auto_apply
     tag.category_id = category_id
     tag.updated_by = user
@@ -986,10 +1001,13 @@ def current_line_tags(tags=None):
 
 
 def _line_and_builtin_tags():
-    """``(current line tags, {builtin_code: tag pk})`` in one query, for listings."""
-    tags = list(RuleTag.objects.filter(Q(match_log_lines=True) | Q(builtin_code__isnull=False)))
+    """``(current line tags, {builtin_code: tag pk}, centralbox tags)`` in one query, for listings."""
+    tags = list(RuleTag.objects.filter(
+        Q(match_log_lines=True) | Q(builtin_code__isnull=False) | Q(match_centralbox=True)
+    ))
     builtin_by_code = {tag.builtin_code: tag.pk for tag in tags if tag.builtin_code is not None}
-    return current_line_tags(tags), builtin_by_code
+    centralbox_tags = [tag for tag in tags if tag.match_centralbox and tag.match_pattern]
+    return current_line_tags(tags), builtin_by_code, centralbox_tags
 
 
 def _stored_line_tags(current, hits):
@@ -1406,9 +1424,15 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
         .values_list('pk', 'builtin_code')
     )
     current = current_line_tags()
-    # A tag on no rule, without a warning of its own and not matching lines is in no log.
+    centralbox_tags = set(
+        RuleTag.objects.filter(pk__in=tag_ids, match_centralbox=True)
+        .exclude(match_pattern='').values_list('pk', flat=True)
+    )
+    # A tag on no rule, without a warning of its own, not matching lines and
+    # not matching centralbox results is in no log.
     if any(
         not rules_by_tag[tag_id] and tag_id not in builtin_codes and tag_id not in current
+        and tag_id not in centralbox_tags
         for tag_id in tag_ids
     ):
         return [], 0
@@ -1429,6 +1453,16 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
         analyzed.add(upload_pk)
         if has_all_tags(rule_ids, codes, line_hits):
             matched.add(upload_pk)
+
+    # Scanner logs and Fixlogs carry tags only through their hashes' centralbox
+    # family / malware type (they have no analysis).
+    if centralbox_tags and set(tag_ids) <= centralbox_tags:
+        from .file_hashes import HASH_LOG_TYPES
+
+        hash_logs = candidates.filter(log_type__in=HASH_LOG_TYPES).values('pk')
+        for upload_pk, hits in centralbox_tag_hits(hash_logs).items():
+            if all(tag_id in hits for tag_id in tag_ids):
+                matched.add(upload_pk)
 
     # Logs of a type the analyzer skips never have an analysis and hold no
     # tags; only analyzable ones are worth reporting as missed.
@@ -1485,7 +1519,7 @@ def found_tags_by_upload(upload_pks, rule_set_key):
         return found
 
     candidates = UploadedLog.objects.filter(pk__in=upload_pks)
-    current, builtin_by_code = _line_and_builtin_tags()
+    current, builtin_by_code, centralbox_tags = _line_and_builtin_tags()
     rule_ids_by_upload = {}
     codes_by_upload = {}
     line_tag_ids_by_upload = {}
@@ -1493,12 +1527,15 @@ def found_tags_by_upload(upload_pks, rule_set_key):
         rule_ids_by_upload[upload_pk] = rule_ids
         codes_by_upload[upload_pk] = codes
         line_tag_ids_by_upload[upload_pk] = set(line_hits)
-    if not rule_ids_by_upload:
-        return found
 
     tag_ids_by_upload = tag_ids_by_key(
         rule_ids_by_upload, codes_by_upload, line_tag_ids_by_upload, builtin_by_code=builtin_by_code,
-    )
+    ) if rule_ids_by_upload else {}
+    # Scanner logs and Fixlogs: tags matched through their hashes' centralbox results.
+    for upload_pk, hits in centralbox_tag_hits(upload_pks, tags=centralbox_tags).items():
+        tag_ids_by_upload.setdefault(upload_pk, set()).update(hits)
+    if not tag_ids_by_upload:
+        return found
     all_tag_ids = set().union(*tag_ids_by_upload.values())
     tags = {
         tag.pk: {
@@ -1513,6 +1550,112 @@ def found_tags_by_upload(upload_pks, rule_set_key):
             key=lambda tag: tag['name'].lower(),
         )
     return found
+
+
+def centralbox_tags_by_sha(sha256s, tags=None):
+    """{sha256: {tag_id}}: the tags whose regex (match_centralbox) finds the
+    hash's stored centralbox family or malware type, whatever the verdict.
+    Two queries (one when `tags`, the match_centralbox tags, are passed in;
+    none when there are no such tags); reads stored HashVerdict rows only,
+    so it is always current."""
+    from .models import HashVerdict
+
+    if tags is None:
+        tags = RuleTag.objects.filter(match_centralbox=True).exclude(match_pattern='').only(
+            'pk', 'match_pattern', 'exclude_pattern',
+        )
+    compiled = []
+    for tag in tags:
+        pattern = compile_pattern(tag.match_pattern)
+        if pattern is not None:
+            compiled.append((tag.pk, pattern, compile_pattern(tag.exclude_pattern)))
+    if not compiled:
+        return {}
+    result = {}
+    verdicts = (
+        HashVerdict.objects.filter(sha256__in=sha256s)
+        .filter(~Q(family='') | ~Q(malware_type=''))
+        .values_list('sha256', 'family', 'malware_type')
+    )
+    for sha, family, malware_type in verdicts:
+        texts = [text for text in (family, malware_type) if text]
+        hits = {
+            tag_id for tag_id, pattern, exclude in compiled
+            if any(pattern.search(text) for text in texts)
+            and not (exclude is not None and any(exclude.search(text) for text in texts))
+        }
+        if hits:
+            result[sha] = hits
+    return result
+
+
+def preview_centralbox_names(conditions, limit=50):
+    """The stored centralbox family / malware type names the conditions' regex
+    finds (and the exclude regex does not), with how many hashes carry each:
+    [{"name", "field", "count"}], most frequent first. For the tag editor."""
+    from .models import HashVerdict
+
+    pattern = compile_pattern(conditions.pattern)
+    if pattern is None:
+        return []
+    exclude = compile_pattern(conditions.exclude_pattern)
+    found = []
+    for field in ('family', 'malware_type'):
+        rows = (
+            HashVerdict.objects.exclude(**{field: ''})
+            .values_list(field).annotate(n=Count('pk')).order_by('-n')
+        )
+        for name, count in rows:
+            if pattern.search(name) and not (exclude is not None and exclude.search(name)):
+                found.append({'name': name, 'field': field.replace('_', ' '), 'count': count})
+    found.sort(key=lambda item: -item['count'])
+    return found[:limit]
+
+
+def centralbox_tag_hits(uploads, tags=None):
+    """``{upload_pk: {tag_id: {sha256}}}``: the tags the logs carry through the
+    centralbox family / malware type of their SHA256s (RuleTag.match_centralbox).
+
+    `uploads` is a list of primary keys or a queryset of them; `tags`, the
+    match_centralbox tags if already loaded. At most three queries for any
+    number of logs (plus one for the tags when not passed in), none more when no tag matches centralbox results. Never
+    raises: a failure only means no such tags.
+    """
+    from .models import UploadedLogFileHash
+
+    try:
+        hashes = UploadedLogFileHash.objects.filter(upload_id__in=uploads)
+        if tags is None:
+            # Loaded once for both lookups below (SHA256 rows and MD5 rows).
+            tags = list(
+                RuleTag.objects.filter(match_centralbox=True).exclude(match_pattern='')
+                .only('pk', 'match_pattern', 'exclude_pattern')
+            )
+        if not tags:
+            return {}
+        by_sha = centralbox_tags_by_sha(hashes.exclude(sha256='').values('sha256'), tags=tags)
+        # Trojan Killer rows carry only an MD5: use the SHA256 it stands for.
+        md5_rows = list(hashes.filter(sha256='').exclude(md5='').values_list('upload_id', 'md5').distinct())
+        md5_map = {}
+        if md5_rows:
+            from .centralbox import resolve_md5s
+
+            md5_map = resolve_md5s({md5 for _, md5 in md5_rows})
+            if md5_map:
+                by_sha.update(centralbox_tags_by_sha(set(md5_map.values()), tags=tags))
+        if not by_sha:
+            return {}
+        result = {}
+        pairs = list(hashes.filter(sha256__in=list(by_sha)).values_list('upload_id', 'sha256').distinct())
+        pairs += [(upload_pk, md5_map[md5]) for upload_pk, md5 in md5_rows if md5_map.get(md5) in by_sha]
+        for upload_pk, sha in pairs:
+            hits = result.setdefault(upload_pk, {})
+            for tag_id in by_sha[sha]:
+                hits.setdefault(tag_id, set()).add(sha)
+        return result
+    except Exception:
+        logger.exception('Matching tags on centralbox results failed')
+        return {}
 
 
 def tags_for_listing(tags):

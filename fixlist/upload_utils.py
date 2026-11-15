@@ -103,6 +103,18 @@ def _recalculate_analysis_stats_in_thread(upload_pk: int) -> None:
         upload.recalculate_analysis_stats()
     except Exception:
         logger.exception('Background analysis_stats recalculation failed (upload_pk=%s)', upload_pk)
+        connections.close_all()
+        return
+    try:
+        # Look up the log's SHA256s on centralbox while nobody waits for it, so
+        # the verdicts are usually there when the log is opened. Does nothing
+        # when centralbox is off, paused or failing (see centralbox.py).
+        from .centralbox import check_upload_hashes, is_available
+
+        if is_available():
+            check_upload_hashes(upload)
+    except Exception:
+        logger.exception('Background centralbox check failed (upload_pk=%s)', upload_pk)
     finally:
         connections.close_all()
 

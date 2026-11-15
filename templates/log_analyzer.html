@@ -545,6 +545,10 @@ window.logAnalyzerConfig = {
     uploadedLogContentUrlTemplate: "{% url 'uploaded_log_content_api' '__UPLOAD_ID__' %}",
     cachedAnalysisUrlTemplate: "{% url 'uploaded_log_cached_analysis_api' '__UPLOAD_ID__' %}",
     edgeAddonRedirectUrlTemplate: "{% url 'edge_addon_redirect' '__CRXID__' %}",
+    // centralbox case suggestions (idea 4); empty for guests, which disables them.
+    centralboxSuggestionsUrl: "{% if not is_guest %}{% url 'centralbox_suggestions_api' %}{% endif %}",
+    // What other logs of the case say about a line's file; empty for guests.
+    caseCorrelationsUrl: "{% if not is_guest %}{% url 'case_correlations_api' %}{% endif %}",
     initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
     initialFixlistId: "{{ initial_fixlist_id|default:''|escapejs }}",
     snippetsApiUrl: "{% url 'snippets_api' %}",
@@ -572,6 +576,8 @@ window.logAnalyzerConfig = {
 <script defer src="{% static 'js/rule_tag_picker.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/shared.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/analysis.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/centralbox_suggestions.js' %}"></script>
+<script defer src="{% static 'js/log_analyzer/case_correlations.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/conflict_wizard.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/rule_preview.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/draft_autosave.js' %}"></script>

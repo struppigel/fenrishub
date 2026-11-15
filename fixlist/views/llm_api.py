@@ -625,6 +625,8 @@ def _case_summary(infection_case, user):
     return {
         'case_id': infection_case.case_id,
         'forum_username': infection_case.username,
+        # Further forum usernames of the same person (InfectionCaseUsername).
+        'other_usernames': infection_case.extra_username_list(),
         'status': infection_case.status,
         'is_training': infection_case.is_training,
         'owner': infection_case.owner.username,
@@ -858,11 +860,12 @@ def api_user(request, forum_username):
     uploads = _live_uploads().filter(forum_username__iexact=forum_username)
     own_cases = (
         InfectionCase.objects.filter(
+            Q(username__iexact=forum_username) | Q(extra_usernames__username__iexact=forum_username),
             owner=request.user,
-            username__iexact=forum_username,
             deleted_at__isnull=True,
         )
         .select_related('owner')
+        .distinct()
     )
     return JsonResponse({
         'untrusted_forum_username': forum_username,

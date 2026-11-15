@@ -1,0 +1,256 @@
+// Case correlations (fixlist/case_correlations.py): an FRST / Addition line
+// whose file also appears in another log of the same infection case gets an
+// info icon. Clicking it lists what those logs say about the file: scanner
+// detections with their SHA-256 / MD5 and stored centralbox result, and what a
+// fixlist did to it. Read-only; nothing here changes a line's status.
+//
+// Everything is optional: without correlations, on any error or for guests
+// the analyzer looks exactly as before.
+
+const CASE_CORRELATIONS_URL = analyzerConfig.caseCorrelationsUrl || '';
+const CORRELATION_DOT = ' · ';
+
+let caseCorrelations = new Map();
+// Line text -> the worst related finding as a line-verdict status letter
+// (computed by the server with the line-verdict precedence).
+let caseCorrelationStatuses = new Map();
+let caseCorrelationsUploadId = '';
+// 'case': the helper's own cases with this log; 'user': no such case, so the
+// other logs of the same forum user (caseCorrelationsName).
+let caseCorrelationsScope = '';
+let caseCorrelationsName = '';
+
+let correlationMenuEl = null;
+let correlationMenuTrigger = null;
+
+function caseCorrelationsFor(entry) {
+    if (!entry || typeof entry.line !== 'string') return [];
+    return caseCorrelations.get(entry.line.trim()) || [];
+}
+
+// What a related log says, without log ids: the detection name or family
+// and the centralbox verdict (or the fixlist result).
+function correlationFinding(item) {
+    if (item.kind === 'fixlog') return item.result || 'fixlist result';
+    const result = item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
+    const name = (result && (result.family || result.malware_type)) || item.detection || '';
+    const verdict = result && result.verdict ? 'centralbox: ' + result.verdict
+        : result && result.state === 'unknown' ? 'not in centralbox' : '';
+    // A detection of a folder this line's file is in.
+    const where = item.in_folder ? 'in detected folder' : '';
+    return [name, verdict, where].filter(Boolean).join(CORRELATION_DOT) || (item.kind === 'hash' ? 'file hash' : 'detection');
+}
+
+// The log type a finding comes from, flagged when that log seems to come
+// from another system.
+function correlationSource(item) {
+    return String(item.log_type || 'log') + (item.system === 'different' ? CORRELATION_DOT + 'other system?' : '');
+}
+
+// One row per distinct finding (same log type and finding listed once).
+function correlationRows(items) {
+    const seen = new Set();
+    return items.filter((item) => {
+        const key = correlationSource(item) + '\n' + correlationFinding(item);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function correlationSummary(items) {
+    return correlationRows(items).map((item) => `${correlationSource(item)}: ${correlationFinding(item)}`).join('\n');
+}
+
+function correlationHeader() {
+    return caseCorrelationsScope === 'user'
+        ? `same file in other logs of user ${caseCorrelationsName} (no case of yours)`
+        : 'same file in other logs of this case';
+}
+
+const CORRELATION_STATUS_CLASS = {
+    B: 'b', P: 'p', C: 'c', A: 'a', '!': 'w', G: 'g', S: 's', I: 'i', J: 'j',
+};
+
+function caseCorrelationStatusFor(entry) {
+    if (!entry || typeof entry.line !== 'string') return '';
+    return caseCorrelationStatuses.get(entry.line.trim()) || '';
+}
+
+// The info icon for one analyzer row, or null.
+function buildCaseCorrelationButton(entry) {
+    try {
+        const items = caseCorrelationsFor(entry);
+        if (!items.length) return null;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'line-correlation-trigger';
+        const status = caseCorrelationStatusFor(entry);
+        if (CORRELATION_STATUS_CLASS[status]) button.dataset.status = CORRELATION_STATUS_CLASS[status];
+        button.textContent = 'ⓘ';
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', 'false');
+        button.setAttribute('aria-label', 'what other logs of this case say about this file');
+        button.title = correlationHeader() + ':\n' + correlationSummary(items);
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            openCaseCorrelationMenu(button, items);
+        });
+        return button;
+    } catch (error) {
+        return null;
+    }
+}
+
+function closeCaseCorrelationMenu() {
+    if (correlationMenuTrigger) {
+        correlationMenuTrigger.setAttribute('aria-expanded', 'false');
+        correlationMenuTrigger = null;
+    }
+    if (correlationMenuEl) {
+        correlationMenuEl.hidden = true;
+        correlationMenuEl.innerHTML = '';
+    }
+}
+
+function ensureCaseCorrelationMenu() {
+    if (correlationMenuEl && document.body.contains(correlationMenuEl)) return correlationMenuEl;
+    const menu = document.createElement('div');
+    menu.className = 'line-copy-menu line-correlation-menu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    menu.addEventListener('click', (event) => event.stopPropagation());
+    document.body.appendChild(menu);
+    document.addEventListener('click', closeCaseCorrelationMenu);
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeCaseCorrelationMenu(); });
+    window.addEventListener('resize', closeCaseCorrelationMenu);
+    correlationMenuEl = menu;
+    return menu;
+}
+
+function correlationLogUrl(item) {
+    const id = String(item.upload_id || '');
+    const line = Number(item.line_no);
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) return '';
+    return `/uploads/${encodeURIComponent(id)}/` + (Number.isInteger(line) && line > 0 ? `#L${line}` : '');
+}
+
+function addCorrelationMenuItem(menu, key, value, run, extraClass) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'line-copy-menu-item' + (extraClass ? ' ' + extraClass : '');
+    item.setAttribute('role', 'menuitem');
+    const label = document.createElement('span');
+    label.className = 'line-copy-menu-key';
+    label.textContent = key;
+    const preview = document.createElement('span');
+    preview.className = 'line-copy-menu-value';
+    preview.textContent = value;
+    item.append(label, preview);
+    item.addEventListener('click', (event) => {
+        event.stopPropagation();
+        closeCaseCorrelationMenu();
+        run();
+    });
+    menu.appendChild(item);
+}
+
+function openNewTab(url) {
+    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function openCaseCorrelationMenu(trigger, items) {
+    if (correlationMenuTrigger === trigger && correlationMenuEl && !correlationMenuEl.hidden) {
+        closeCaseCorrelationMenu();
+        return;
+    }
+    if (typeof closeLineCopyMenu === 'function') closeLineCopyMenu();
+    if (typeof closeLineSearchMenu === 'function') closeLineSearchMenu();
+    const menu = ensureCaseCorrelationMenu();
+    menu.innerHTML = '';
+    const header = document.createElement('div');
+    header.className = 'line-copy-menu-header';
+    header.textContent = correlationHeader();
+    menu.appendChild(header);
+
+    // Clicking a row opens that log at the line (its id is never shown).
+    correlationRows(items).forEach((item) => {
+        const classes = ['line-correlation-source', `line-correlation-system-${item.system || 'unknown'}`];
+        if (['b', 'p', 'g', 'w'].includes(item.severity)) classes.push(`line-correlation-sev-${item.severity}`);
+        if (item.centralbox && item.centralbox.verdict === 'malicious') classes.push('line-correlation-bad');
+        addCorrelationMenuItem(menu, correlationSource(item), correlationFinding(item),
+            () => openNewTab(correlationLogUrl(item)), classes.join(' '));
+    });
+
+    menu.hidden = false;
+    if (correlationMenuTrigger && correlationMenuTrigger !== trigger) {
+        correlationMenuTrigger.setAttribute('aria-expanded', 'false');
+    }
+    correlationMenuTrigger = trigger;
+    trigger.setAttribute('aria-expanded', 'true');
+
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth || 320;
+    const menuHeight = menu.offsetHeight || 0;
+    let left = rect.right - menuWidth;
+    if (left < 8) left = Math.max(8, rect.left);
+    if (left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
+    let top = rect.bottom + 4;
+    if (top + menuHeight > window.innerHeight - 8) top = Math.max(8, rect.top - menuHeight - 4);
+    menu.style.left = `${left + window.scrollX}px`;
+    menu.style.top = `${top + window.scrollY}px`;
+}
+
+function isValidCorrelation(item) {
+    return item && typeof item === 'object'
+        && ['hash', 'detection', 'fixlog'].includes(item.kind)
+        && typeof item.upload_id === 'string' && typeof item.log_type === 'string';
+}
+
+// Fetch the correlations for the loaded upload, then redraw the rows.
+async function refreshCaseCorrelations(uploadId) {
+    const id = String(uploadId || '').trim();
+    if (id !== caseCorrelationsUploadId) {
+        caseCorrelations = new Map();
+        caseCorrelationsUploadId = id;
+    }
+    if (!id || !CASE_CORRELATIONS_URL) return;
+    let body = null;
+    try {
+        const url = `${CASE_CORRELATIONS_URL}?upload_id=${encodeURIComponent(id)}`;
+        const response = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+        if (!response.ok) return;
+        body = await response.json();
+    } catch (error) {
+        return;
+    }
+    if (!body || typeof body !== 'object' || id !== caseCorrelationsUploadId) return;
+    caseCorrelationsScope = body.scope === 'user' ? 'user' : 'case';
+    caseCorrelationsName = typeof body.name === 'string' ? body.name : '';
+    const raw = body.correlations && typeof body.correlations === 'object' ? body.correlations : {};
+    const rawStatuses = body.statuses && typeof body.statuses === 'object' ? body.statuses : {};
+    const previousStatuses = JSON.stringify([...caseCorrelationStatuses]);
+    caseCorrelationStatuses = new Map(
+        Object.keys(rawStatuses)
+            .filter((line) => typeof rawStatuses[line] === 'string' && CORRELATION_STATUS_CLASS[rawStatuses[line]])
+            .map((line) => [line.trim(), rawStatuses[line]]),
+    );
+    const next = new Map();
+    Object.keys(raw).forEach((line) => {
+        const items = Array.isArray(raw[line]) ? raw[line].filter(isValidCorrelation) : [];
+        if (line.trim() && items.length) next.set(line.trim(), items);
+    });
+    const changed = next.size !== caseCorrelations.size
+        || [...next.keys()].some((line) => !caseCorrelations.has(line))
+        || previousStatuses !== JSON.stringify([...caseCorrelationStatuses]);
+    caseCorrelations = next;
+    if (changed && typeof renderLogLines === 'function' && analyzedLines.length) {
+        try {
+            renderLogLines();
+            // The legend's "correlated (n)" filter (speech_suggestions.js).
+            if (typeof renderRuleTagsLine === 'function') renderRuleTagsLine(lastAnalysisPayload);
+        } catch (error) {
+            // Never let correlations break the analyzer.
+        }
+    }
+}

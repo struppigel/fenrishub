@@ -596,6 +596,14 @@ class PerToolHighlightTests(SimpleTestCase):
                          [('w', 'Not Deleted', 'agibagflppafhfonkefpklndlohkclcb')])
         self.assertEqual(_classes(_line(clean, ADWCLEANER_CLEAN, 'Deleted       '))['hl-sev-c'], 'Deleted')
 
+    def test_adwcleaner_clean_log_followed_by_its_scan_log(self):
+        # One upload with both logs: each part follows its own mode.
+        both = highlight_log('AdwCleaner', ADWCLEANER_CLEAN + '\n\n' + ADWCLEANER_SCAN)
+        self.assertEqual(both.summary_title, 'AdwCleaner detections')
+        self.assertEqual([(i.severity, i.name) for i in both.summary], [
+            ('w', 'Not Deleted'), ('p', 'PUP.Optional.Legacy'), ('p', 'Adware.Ghokswa'),
+        ])
+
     def test_emsisoft_detections(self):
         result = highlight_log('Emsisoft', EMSISOFT)
         self.assertEqual([(i.line_no, i.severity, i.name) for i in result.summary],

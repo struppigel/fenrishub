@@ -248,6 +248,33 @@ def _selected_response_ids(request):
     ]
 
 
+def _seed_case_items(case, user):
+    """Link the logs, fixlists and responses of all the case's usernames
+    ("add all items for X"): logs within the helper's scope (any for training
+    cases), the helper's own fixlists and their responses. Returns
+    (logs, fixlists) linked, counted before linking (existing links are kept)."""
+    names = case.all_usernames()
+    if case.is_training:
+        log_scope = UploadedLog.objects.filter(deleted_at__isnull=True)
+    else:
+        log_scope = get_action_scoped_uploads(user).filter(deleted_at__isnull=True)
+    scoped_logs = list(log_scope.filter(forum_username__in=names).defer('content'))
+    owned_fixlists = list(
+        Fixlist.objects.filter(owner=user, deleted_at__isnull=True, username__in=names)
+    )
+    # Responses are separate items, so seeding has to link them too or
+    # "add all items" quietly leaves them out.
+    response_ids = [fixlist.pk for fixlist in owned_fixlists if (fixlist.response or '').strip()]
+    with transaction.atomic():
+        _link_case_items(case, scoped_logs, owned_fixlists, user)
+        _link_case_responses(case, response_ids, user)
+    return len(scoped_logs), len(owned_fixlists)
+
+
+def _usernames_label(case):
+    return ', '.join(f'u/{name}' for name in case.all_usernames())
+
+
 def _link_case_responses(case, response_ids, added_by):
     """Link responses to a case. The response text itself is never touched."""
     if not response_ids:
@@ -313,8 +340,9 @@ def _selected_items_for_case_request(request, case):
     logs = list(scoped_uploads)
     fixlists = list(scoped_fixlists)
 
-    mismatched_logs = [log for log in logs if log.forum_username != case.username]
-    mismatched_fixlists = [fixlist for fixlist in fixlists if fixlist.username != case.username]
+    case_names = set(case.all_usernames())
+    mismatched_logs = [log for log in logs if log.forum_username not in case_names]
+    mismatched_fixlists = [fixlist for fixlist in fixlists if fixlist.username not in case_names]
 
     return {
         'logs': logs,
@@ -337,10 +365,14 @@ def infection_cases_view(request):
             Prefetch('fixlist_links__fixlist', queryset=Fixlist.objects.defer('content')),
             Prefetch('response_links__fixlist', queryset=Fixlist.objects.defer('content')),
             'note_entries',
+            'extra_usernames',
         )
     )
 
     for case in cases:
+        case.extra_names = [row.username for row in case.extra_usernames.all()]
+        # Only web links get an "open" button (the field also allows ftp).
+        case.open_url = case.reference_url if case.reference_url.lower().startswith(('http://', 'https://')) else ''
         visible_logs = [
             link.uploaded_log
             for link in case.log_links.all()
@@ -392,6 +424,7 @@ def create_infection_case_view(request):
 
     if request.method == 'POST':
         username = (request.POST.get('username') or '').strip()
+        other_usernames = (request.POST.get('other_usernames') or '').strip()
         symptom_description = (request.POST.get('symptom_description') or '').strip()
         reference_url = (request.POST.get('reference_url') or '').strip()
         auto_assign_new_items = (request.POST.get('auto_assign_new_items') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
@@ -417,6 +450,7 @@ def create_infection_case_view(request):
                 'create_infection_case.html',
                 {
                     'prefill_username': username,
+                    'prefill_other_usernames': other_usernames,
                     'prefill_symptom_description': symptom_description,
                     'prefill_reference_url': reference_url,
                     'prefill_auto_assign_new_items': auto_assign_new_items,
@@ -427,7 +461,17 @@ def create_infection_case_view(request):
             )
 
         infection_case.save()
+        infection_case.set_extra_usernames(other_usernames)
         messages.success(request, f'Infection case {infection_case.case_id} created.')
+        if not infection_case.is_training:
+            # The user's existing logs and fixlists join right away, like
+            # "add all items for X"; later ones join through auto-assignment.
+            logs_added, fixlists_added = _seed_case_items(infection_case, request.user)
+            if logs_added or fixlists_added:
+                messages.info(
+                    request,
+                    f'Added {logs_added} log(s) and {fixlists_added} fixlist(s) of {_usernames_label(infection_case)}.',
+                )
         return redirect('view_infection_case', case_id=infection_case.case_id)
 
     return render(
@@ -474,40 +518,16 @@ def view_infection_case(request, case_id):
                         messages.error(request, message)
             else:
                 infection_case.save()
+                if 'other_usernames' in request.POST:
+                    infection_case.set_extra_usernames(request.POST.get('other_usernames') or '')
                 messages.success(request, 'Case details updated.')
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
         if action == 'seed_username_items':
-            if infection_case.is_training:
-                scoped_logs = list(
-                    UploadedLog.objects.filter(
-                        deleted_at__isnull=True,
-                        forum_username=infection_case.username,
-                    ).defer('content')
-                )
-            else:
-                scoped_logs = list(
-                    get_action_scoped_uploads(request.user).filter(
-                        deleted_at__isnull=True,
-                        forum_username=infection_case.username,
-                    ).defer('content')
-                )
-            owned_fixlists = list(
-                Fixlist.objects.filter(
-                    owner=request.user,
-                    deleted_at__isnull=True,
-                    username=infection_case.username,
-                )
-            )
-            # Responses are separate items, so seeding has to link them too or
-            # "add all items" quietly leaves them out.
-            response_ids = [fixlist.pk for fixlist in owned_fixlists if (fixlist.response or '').strip()]
-            with transaction.atomic():
-                _link_case_items(infection_case, scoped_logs, owned_fixlists, request.user)
-                _link_case_responses(infection_case, response_ids, request.user)
+            _seed_case_items(infection_case, request.user)
             messages.success(
                 request,
-                f'Added logs, fixlists and responses for u/{infection_case.username} to this case.',
+                f'Added logs, fixlists and responses for {_usernames_label(infection_case)} to this case.',
             )
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
@@ -767,6 +787,7 @@ def view_infection_case(request, case_id):
         'view_infection_case.html',
         {
             'infection_case': infection_case,
+            'extra_usernames': infection_case.extra_username_list(),
             'helper_upload_url': helper_upload_url,
             'timeline_items': timeline_items,
             'selectable_uploads': selectable_uploads,

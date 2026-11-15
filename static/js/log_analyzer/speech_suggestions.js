@@ -31,6 +31,17 @@ let lastAnalysisPayload = null;
 let activeTagFilterId = null;
 const TAG_FILTER_ANY_TAG = 'any-tag';
 const TAG_FILTER_WITH_SPEECH = 'with-speech';
+// Lines whose file appears in related logs (case_correlations.js).
+const TAG_FILTER_CORRELATED = 'correlated';
+
+function lineIsCorrelated(entry) {
+    return typeof caseCorrelationsFor === 'function' && caseCorrelationsFor(entry).length > 0;
+}
+
+function correlatedLineCount() {
+    const lines = typeof analyzedLines !== 'undefined' ? analyzedLines : [];
+    return lines.reduce((count, entry) => count + (lineIsCorrelated(entry) ? 1 : 0), 0);
+}
 // The tags some speech (own or shared) fits, for the "with speech" filter.
 let speechTagIdsForFilter = new Set();
 
@@ -343,6 +354,9 @@ function lineMatchesTagFilter(entry) {
     if (activeTagFilterId === TAG_FILTER_WITH_SPEECH) {
         return lineHasSpeechTag(entry, speechTagIdsForFilter);
     }
+    if (activeTagFilterId === TAG_FILTER_CORRELATED) {
+        return lineIsCorrelated(entry);
+    }
     return (entry.tag_ids || []).includes(activeTagFilterId);
 }
 
@@ -480,6 +494,9 @@ function refreshSnippetSuggestions() {
 // the row still lists it (it has matched lines).
 function tagFilterStillApplies(filterId, payload) {
     const tagsWithLines = ((payload && payload.rule_tags) || []).filter((tag) => tag.line_count);
+    if (filterId === TAG_FILTER_CORRELATED) {
+        return correlatedLineCount() > 0;
+    }
     if (filterId === TAG_FILTER_ANY_TAG || filterId === TAG_FILTER_WITH_SPEECH) {
         return tagsWithLines.length > 0;
     }
@@ -515,9 +532,10 @@ function renderRuleTagsLine(payload) {
     // built-in or whole-log tag has no lines to filter to (its warning box
     // shows it instead).
     const tags = ((payload && payload.rule_tags) || []).filter((tag) => tag.line_count);
+    const correlated = correlatedLineCount();
     line.innerHTML = '';
-    line.hidden = tags.length === 0;
-    if (!tags.length) {
+    line.hidden = tags.length === 0 && correlated === 0 && activeTagFilterId !== TAG_FILTER_CORRELATED;
+    if (line.hidden) {
         syncLegendExtraHeight(line);
         return;
     }
@@ -546,9 +564,23 @@ function renderRuleTagsLine(payload) {
     const separator = document.createElement('span');
     separator.className = 'tag-filter-separator';
     separator.textContent = '|';
-    line.appendChild(separator);
+    if (tags.length) line.appendChild(separator);
     const lines = typeof analyzedLines !== 'undefined' ? analyzedLines : [];
     const counts = tagFilterCounts(lines, speechTagIdsForFilter);
+    if (correlated > 0 || activeTagFilterId === TAG_FILTER_CORRELATED) {
+        line.appendChild(buildTagFilterItem({
+            className: 'tag-filter-special',
+            label: `correlated (${correlated})`,
+            filterId: TAG_FILTER_CORRELATED,
+            hint: 'click to show only lines whose file appears in related logs (the \u24d8 icon)',
+            fadedOut: filterActive && activeTagFilterId !== TAG_FILTER_CORRELATED,
+            disabled: correlated === 0 && activeTagFilterId !== TAG_FILTER_CORRELATED,
+        }));
+    }
+    if (!tags.length) {
+        syncLegendExtraHeight(line);
+        return;
+    }
     line.appendChild(buildTagFilterItem({
         className: 'tag-filter-special',
         label: `tagged (${counts.tagged})`,

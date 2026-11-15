@@ -82,7 +82,11 @@
         <strong>contents</strong>
         <ul>
             <li><a href="#fenris">Fenris</a></li>
-            <li><a href="#uploads">Uploads</a></li>
+            <li><a href="#uploads">Uploads</a>
+                <ul>
+                    <li><a href="#hash-verdicts">Hash verdicts (centralbox)</a></li>
+                </ul>
+            </li>
             <li><a href="#analyze">Analyze</a>
                 <ul>
                     <li><a href="#log-line-verdicts">Log line verdicts</a></li>
@@ -178,6 +182,27 @@
     <p><strong>unassign</strong> just removes the assignment again. This is useful if you want another helper to take the log for analysis. If a log is assigned to another helper and you desperately still want to work on it but the helper isn't online and can't unassign the log, then you can <strong>copy</strong> the assigned log.</p>
 
     <p>The <strong>copy</strong> button only appears if the log is assigned to someone else. The copy button creates a copy with new keywords (because these must be unique) and autoassigns the log to you.</p>
+
+    <h3 id="hash-verdicts">Hash verdicts (centralbox)</h3>
+    <p>SHA-256 hashes in Malwarebytes, HitmanPro, MAU and Fixlog logs are checked on <a href="https://centralbox.dev" target="_blank" rel="noopener noreferrer">centralbox</a>, which combines the results of many sandboxes and scanners. The verdict appears as a small label after the hash: <strong>centralbox: malicious</strong> (with the malware family if known), <strong>centralbox: suspicious</strong>, <strong>centralbox: clean</strong> or <strong>not in centralbox</strong>. Hover over it for the date it was checked. The label is not part of the log text, so copying or downloading the log is not affected.</p>
+
+    <p>The hashes are checked right after the upload and again when you open the log. In Fixlogs only the hashes of <code>File:</code> blocks are checked by themselves. Folder listings can hold thousands of hashes, so check those one at a time: click or right-click the hash and choose <strong>centralbox - check this hash</strong>. Once a hash is known, the same menu entry opens its centralbox report.</p>
+
+    <p>In the summary box of Malwarebytes, HitmanPro and Trojan Killer logs, a detection whose file hash is known gets a flag: <strong>centralbox: family</strong> when centralbox says malicious (the malware type if no family is known, else just <strong>malicious</strong>; hover for the details), or <strong>centralbox: clean</strong> when it says clean. A clean verdict can also just mean that the scanners behind centralbox do not know the file well yet, so treat it as a hint, not as proof of a false positive.</p>
+
+    <p>In the analyzer, an FRST line whose file has a malicious hash in another log of the same case gets a <strong>suggested B</strong> chip. If a rule already gave the line another verdict, the chip shows both (for example <code>rule: C · centralbox: malicious</code>). Clicking the chip queues B for the line with a prefilled rule description; nothing changes until you save the rules as usual.</p>
+
+    <p><strong>Trojan Killer</strong> logs only list MD5 hashes. If the same file appears in a Malwarebytes log or in a Fixlog <code>File:</code> block anywhere in Fenris, its MD5 shows that file's centralbox verdict too. Otherwise use the hash menu on the MD5: <strong>check this hash</strong> asks centralbox (it only knows MD5s someone ran a lookup on), and <strong>run fresh lookup</strong> lets centralbox find the file with your own key. PE section hashes (the <code>.text</code>, <code>.rsrc</code> ... lines) are not file hashes and get no centralbox entry.</p>
+
+    <p>Logs with many hashes (more than 50 that would be checked automatically) are not checked by themselves; check their hashes one at a time from the hash menu.</p>
+
+    <p><strong>Fresh lookups:</strong> centralbox only knows files someone has submitted there, so many hashes show <strong>not in centralbox</strong> at first. If you enter your own centralbox API key in your <a href="{% url 'profile' %}">profile</a>, the hash menu offers <strong>run fresh lookup</strong> (or <strong>re-run lookup</strong> for known hashes). centralbox then asks its sandboxes and scanners; the label shows <strong>centralbox: looking up...</strong> and changes to the verdict when it is ready, usually within a minute. The lookup runs under your centralbox account; the result is shared with every helper. A hash can get a fresh lookup only once every 24 hours, whoever started it. Fenris sets no limit of its own for your key: if centralbox says your key made too many requests, Fenris waits as long as centralbox asks and tells you how long. Your key is stored encrypted and is never shown again.</p>
+
+    <p><strong>Tags:</strong> a rule tag with <strong>also match centralbox family and malware type</strong> ticked (under more options in the tag editor) also matches the centralbox results of hashes in scanner logs and Fixlogs, whatever the verdict. Such a log then carries the tag in the uploads list, in cases and in tag search, and the log page shows the tag in the label next to the hash.</p>
+
+    <p><strong>Same file in other logs of the case:</strong> in the analyzer, an FRST or Addition line whose file also appears in another log of the same case gets an <strong>&#9432;</strong> icon: red when one of those logs has a malicious centralbox result or a malware (B) detection, orange for a PUP (P) detection. Only your own cases count; if the log is in none of them, the other logs of the same forum user are used instead (the panel says which). Each entry says whether that log seems to come from the <strong>same system</strong> (same computer name or Windows profile name), a <strong>different system?</strong>, or that this is unknown; entries from a different system do not colour the icon. The legend's <strong>correlated</strong> filter shows only lines with an icon. The icon's colour follows the same order as line verdicts (B, P, C, A, !, G, S, I, J): the worst finding of the other logs wins. In the normal log view of an FRST or Addition log, such lines get the same coloured &#9432; after their text, the &#9432; next to the copy and search icons opens the same list, and lines with a coloured &#9432; are listed in the summary box as <strong>correlated: ...</strong>, with the status letter of the worst finding. Click it to see what the other logs say about the file: scanner detections with their SHA-256 / MD5 and centralbox result, detections of ESET, Emsisoft and AdwCleaner, and what a fixlist did to the file (moved, not found, ...). Each entry opens that log at the right line; hashes are copied with a click. In Fixlogs, the summary box also lists every <code>File:</code> entry and every hash with a centralbox result.</p>
+
+    <p>If centralbox is down or switched off, Fenris works as before: new hashes just get no label, and verdicts checked earlier are still shown with their date. Only the hash itself is ever sent to centralbox, never paths, user names or log contents.</p>
 
     <h2 id="analyze">Analyze</h2>
     <p>This is the heart of the log analysis and Fixlist creation and the original purpose of Fenris. On the left side you see the log. Each line will be categorized into one of 10 verdicts, which have their own color. The legend on the bottom explains the colors and the shorthand for each verdict category. If you click on the legend, the log lines will be filtered to show or not show lines of that category.</p>
@@ -482,6 +507,10 @@
     <p>If you are learning or observing other helpers, please stick with the training/observer option.</p>
 
     <p>The username should be the exact name that is saved in Fenris as the log's username.</p>
+
+    <p>If the same person uses more than one forum account, enter the other names under <strong>other usernames</strong> (comma-separated), on the create form or later in the case's details. Logs and fixlists of any of these names are added automatically, and "add all items" covers all of them. The names must match exactly, like the main username.</p>
+
+    <p>When you create an actual case (not a training case), the user's existing logs and fixlists are added right away, the same as clicking "add all items". Logs uploaded later join through auto-assignment. In the cases list, <strong>open</strong> opens the case's reference URL.</p>
 
     <p>In the symptom description I typically copy/paste the initial text or help request of the user.</p>
 

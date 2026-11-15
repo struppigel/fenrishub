@@ -387,6 +387,12 @@ class ApiCaseVisibilityTests(ApiTestBase):
         self.assertEqual([c['case_id'] for c in body['own_cases']], [self.own_case.case_id])
         self.assertEqual([u['upload_id'] for u in body['uploads']], ['amber-falcon'])
 
+    def test_user_finds_own_case_through_another_username(self):
+        self.own_case.set_extra_usernames(['JaneDoe'])
+        body = self.api_get('api_v1_user', 'janedoe').json()
+        self.assertEqual([c['case_id'] for c in body['own_cases']], [self.own_case.case_id])
+        self.assertEqual(body['own_cases'][0]['other_usernames'], ['JaneDoe'])
+
     def test_upload_metadata_hides_other_owners_case_ids(self):
         body = self.api_get('api_v1_upload', 'amber-falcon').json()
         self.assertEqual(body['own_case_ids'], [self.own_case.case_id])

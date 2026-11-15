@@ -10,6 +10,14 @@ from .views.analyzer import (
     uploaded_log_cached_analysis_api,
 )
 from .views.api_tokens import api_tokens_view
+from .views.centralbox import (
+    case_correlations_api,
+    centralbox_fresh_start_api,
+    centralbox_fresh_status_api,
+    centralbox_hash_check_api,
+    centralbox_suggestions_api,
+    centralbox_upload_check_api,
+)
 from .views.tags import (
     rule_tag_add_view,
     rule_tag_edit_view,
@@ -151,6 +159,12 @@ urlpatterns = [
     path('api/analyze-log/line-details/', analyze_line_details_api, name='analyze_line_details_api'),
     path('api/analyze-log/status/', update_analyzed_line_status_api, name='update_analyzed_line_status_api'),
     path('api/edge-addon/<str:crxid>/', edge_addon_redirect_view, name='edge_addon_redirect'),
+    path('api/centralbox/uploads/<str:upload_id>/check/', centralbox_upload_check_api, name='centralbox_upload_check_api'),
+    path('api/centralbox/hash/', centralbox_hash_check_api, name='centralbox_hash_check_api'),
+    path('api/centralbox/suggestions/', centralbox_suggestions_api, name='centralbox_suggestions_api'),
+    path('api/cases/correlations/', case_correlations_api, name='case_correlations_api'),
+    path('api/centralbox/fresh/', centralbox_fresh_start_api, name='centralbox_fresh_start_api'),
+    path('api/centralbox/fresh/<str:sha256>/', centralbox_fresh_status_api, name='centralbox_fresh_status_api'),
     path('api/fixlist/rules-preview/', preview_pending_rule_changes_api, name='preview_pending_rule_changes_api'),
     path('api/fixlist/rules-persist/', persist_pending_rule_changes_api, name='persist_pending_rule_changes_api'),
     path('fixes/snippets/', snippets_view, name='snippets'),

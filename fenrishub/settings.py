@@ -4,6 +4,36 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _load_dotenv(path):
+    """Read KEY=VALUE lines from a local, gitignored .env into the environment.
+
+    Only fills names that are not set already, so a real environment variable
+    (e.g. on Railway, which has no .env file) always wins. Blank lines and
+    '#' comments are skipped; spaces around '=' and surrounding quotes are
+    allowed. A missing or unreadable file is ignored."""
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        name, value = line.split('=', 1)
+        name = name.strip()
+        if name.startswith('export '):
+            name = name[len('export '):].strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+            value = value[1:-1]
+        if name:
+            os.environ.setdefault(name, value)
+
+
+_load_dotenv(BASE_DIR / '.env')
+
+
 def _env_bool(name, default=False):
     value = os.getenv(name)
     if value is None:
@@ -22,6 +52,11 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-fenrishub-dev-key-change-i
 
 DEBUG = _env_bool('DEBUG', True)
 TESTING = 'test' in sys.argv
+
+# centralbox.dev hash lookups (fixlist/centralbox.py). Empty: the feature is
+# off and nothing is ever sent; stored verdicts are still shown. Never set
+# under the test runner, whatever the shell has: tests opt in explicitly.
+CENTRALBOX_API_KEY = '' if TESTING else os.getenv('CENTRALBOX_API_KEY', '').strip()
 
 ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', ['localhost', '127.0.0.1'])
 CSRF_TRUSTED_ORIGINS = _env_list('CSRF_TRUSTED_ORIGINS', [])
