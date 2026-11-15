@@ -595,9 +595,13 @@ def view_infection_case(request, case_id):
             if not case_logs:
                 messages.error(request, 'This case has no logs to change.')
                 return redirect('view_infection_case', case_id=infection_case.case_id)
-            # Same rule as the single-log toggle: observe cases can hold logs
-            # from other helpers' channels, and those stay as they are.
-            allowed_pks = [log.pk for log in case_logs if user_can_delete_uploaded_log(request.user, log)]
+            # Same rule as the single-log toggle: any log may be protected;
+            # protection is only removed from logs the helper may delete
+            # (observe cases can hold logs from other helpers' channels).
+            allowed_pks = [
+                log.pk for log in case_logs
+                if protect or user_can_delete_uploaded_log(request.user, log)
+            ]
             skipped = len(case_logs) - len(allowed_pks)
             # .update() bypasses auto_now, so stamp updated_at like the single toggle does.
             changed = UploadedLog.objects.filter(pk__in=allowed_pks).update(

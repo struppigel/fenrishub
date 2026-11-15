@@ -93,6 +93,13 @@ class SuggestionTests(TestCase):
         with self.assertNumQueries(5):
             centralbox_name_suggestions()
 
+    def test_generic_and_unknown_are_never_suggested(self):
+        verdict(SHA_A, family='Generic', malware_type='generic')
+        verdict(SHA_B, family='unknown', malware_type='stealer')
+        result = centralbox_name_suggestions()
+        self.assertEqual(result['families'], [])
+        self.assertEqual([row['name'] for row in result['types']], ['stealer'])
+
     def test_nothing_stored(self):
         self.assertEqual(centralbox_name_suggestions(), {'families': [], 'types': []})
 

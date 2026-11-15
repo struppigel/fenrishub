@@ -234,10 +234,16 @@ def _record_failure(failure, key_id=BUDGET_READS):
 # Validation
 # ---------------------------------------------------------------------------
 
+# Names centralbox sends when it has none: stored as no name, so labels fall
+# back to the verdict ("malicious") instead of saying "Unknown".
+PLACEHOLDER_LABELS = frozenset({'unknown', 'none', 'n/a', 'null'})
+
+
 def _label(value):
+    """A family or malware type name: '' for anything invalid or a placeholder."""
     if isinstance(value, str):
         value = value.strip()
-        if _LABEL_RE.match(value):
+        if _LABEL_RE.match(value) and value.lower() not in PLACEHOLDER_LABELS:
             return value
     return ''
 

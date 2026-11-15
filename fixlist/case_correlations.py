@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ENTRIES_PER_LINE = 20
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 4
+CORRELATION_VERSION = 5
 # Detections are read from these logs' summary boxes (log_highlighting).
 DETECTION_LOG_TYPES = ('ESET', 'Emsisoft', 'AdwCleaner', 'Malwarebytes', 'HitmanPro', 'Trojan Killer')
 

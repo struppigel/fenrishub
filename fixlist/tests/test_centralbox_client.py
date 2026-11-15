@@ -269,3 +269,19 @@ class CentralboxHttpTests(TestCase):
                 with self.assertRaises(centralbox._Failure) as caught:
                     centralbox._http_get('/status/x')
             self.assertEqual(caught.exception.kind, 'bad')
+
+
+class PlaceholderNameTests(TestCase):
+    """centralbox's "Unknown" family / malware type is no name: labels then say "malicious"."""
+
+    def test_placeholders_are_stored_as_no_name(self):
+        sha = 'ab' * 32
+        status = centralbox._parse_status({'ok': True, 'analysed': True, 'sha256': sha,
+                                           'verdict': 'malicious', 'family': 'Unknown', 'score': 90}, sha)
+        self.assertEqual(status['family'], '')
+        details = centralbox._parse_verdict_details({'ok': True, 'hash': sha, 'malware_type': 'unknown'}, sha)
+        self.assertEqual(details['malware_type'], '')
+        for name in ('None', 'N/A', 'null'):
+            self.assertEqual(centralbox._label(name), '', name)
+        self.assertEqual(centralbox._label('AsyncRAT'), 'AsyncRAT')
+        self.assertEqual(centralbox._label('unknown-loader'), 'unknown-loader')

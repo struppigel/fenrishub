@@ -51,14 +51,25 @@ class UploadedLogProtectionTests(TestCase):
         log.refresh_from_db()
         self.assertFalse(log.is_protected)
 
-    def test_other_helpers_channel_cannot_toggle_protection(self):
+    def test_other_helpers_log_can_be_protected_but_not_unprotected(self):
         bob = _make_user('bob')
         log = self._make_log('bobs-log', recipient_user=bob)
+        url = reverse('view_uploaded_log', args=[log.upload_id])
 
-        self.client.post(reverse('view_uploaded_log', args=[log.upload_id]), {'action': 'protect'})
+        page = self.client.get(url)
+        self.assertContains(page, 'value="protect"')
+        self.assertNotContains(page, 'value="delete"')
 
+        self.client.post(url, {'action': 'protect'})
         log.refresh_from_db()
-        self.assertFalse(log.is_protected)
+        self.assertTrue(log.is_protected)
+
+        # Only bob (who may delete it) can take the protection away.
+        page = self.client.get(url)
+        self.assertNotContains(page, 'value="unprotect"')
+        self.client.post(url, {'action': 'unprotect'})
+        log.refresh_from_db()
+        self.assertTrue(log.is_protected)
 
     def test_detail_view_shows_protected_state(self):
         log = self._make_log('shown-log', is_protected=True)
@@ -386,24 +397,26 @@ class InfectionCaseBulkProtectionTests(TestCase):
         log.refresh_from_db()
         self.assertFalse(log.is_protected)
 
-    def test_logs_assigned_to_another_helper_are_skipped(self):
+    def test_logs_of_another_helper_are_protected_but_not_unprotected(self):
         from ..models import InfectionCase
 
         bob = _make_user('bob')
         training_case = InfectionCase.objects.create(owner=self.user, username='victim', is_training=True)
         mine = self._make_log('my-log', case=training_case)
         bobs = self._make_log('bobs-log', case=training_case, recipient_user=bob)
+        url = reverse('view_infection_case', args=[training_case.case_id])
 
-        response = self.client.post(
-            reverse('view_infection_case', args=[training_case.case_id]),
-            {'action': 'protect_logs'},
-            follow=True,
-        )
-
+        self.client.post(url, {'action': 'protect_logs'})
         mine.refresh_from_db()
         bobs.refresh_from_db()
         self.assertTrue(mine.is_protected)
-        self.assertFalse(bobs.is_protected)
+        self.assertTrue(bobs.is_protected)
+
+        response = self.client.post(url, {'action': 'unprotect_logs'}, follow=True)
+        mine.refresh_from_db()
+        bobs.refresh_from_db()
+        self.assertFalse(mine.is_protected)
+        self.assertTrue(bobs.is_protected)
         self.assertContains(response, '1 skipped')
 
     def test_case_page_shows_lock_icon_and_matching_button(self):

@@ -1629,6 +1629,11 @@ def suggested_tag_pattern(name):
     return f'{start}{escaped}{end}'
 
 
+# Names that say nothing about the malware: never suggested as a tag. (The
+# placeholders are also stored as no name, see centralbox.PLACEHOLDER_LABELS.)
+UNSUGGESTED_CENTRALBOX_NAMES = frozenset({'generic', 'unknown', 'none', 'n/a', 'null'})
+
+
 def centralbox_name_suggestions():
     """The stored centralbox names no tag covers yet, for the "centralbox
     names" page: {'families': [row], 'types': [row]} with row = {name,
@@ -1649,7 +1654,7 @@ def centralbox_name_suggestions():
     ):
         for field, value in (('family', family), ('malware_type', malware_type)):
             value = (value or '').strip()
-            if not value:
+            if not value or value.lower() in UNSUGGESTED_CENTRALBOX_NAMES:
                 continue
             entry = groups[field].setdefault(value.lower(), {'spellings': Counter(), 'shas': set()})
             entry['spellings'][value] += 1

@@ -427,8 +427,10 @@ def view_uploaded_log(request, upload_id):
         action = request.POST.get('action', '')
 
         if action in ('protect', 'unprotect'):
-            if not user_can_delete_uploaded_log(request.user, uploaded_log):
-                messages.error(request, f'Only the assigned helper can change protection for {upload_id}.')
+            # Any helper may protect any log (e.g. another helper's, so it
+            # survives); only who may delete it may take the protection away.
+            if action == 'unprotect' and not user_can_delete_uploaded_log(request.user, uploaded_log):
+                messages.error(request, f'Only the assigned helper can remove the protection of {upload_id}.')
                 return redirect('view_uploaded_log', upload_id=upload_id)
             uploaded_log.is_protected = action == 'protect'
             uploaded_log.save(update_fields=['is_protected', 'updated_at'])
