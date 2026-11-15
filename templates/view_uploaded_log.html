@@ -1049,7 +1049,9 @@ const CaseCorrelations = (function () {
             : result && result.state === 'unknown' ? 'not in centralbox' : '';
         // A detection of a folder this line's file is in.
         const where = entry.in_folder ? 'in detected folder' : '';
-        return [name, verdict, where].filter(Boolean).join(DOT) || (entry.kind === 'hash' ? 'file hash' : 'detection');
+        // A Windows Defender event in a Fixlog, not a scanner's detection.
+        const source = entry.source === 'defender' ? 'Defender' : '';
+        return [name, verdict, source, where].filter(Boolean).join(DOT) || (entry.kind === 'hash' ? 'file hash' : 'detection');
     }
 
     // One row per finding: the log type it was found in (and a warning when

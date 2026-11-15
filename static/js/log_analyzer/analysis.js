@@ -1141,6 +1141,12 @@ function openLineCopyMenu(trigger, index) {
     menu.appendChild(header);
 
     const items = buildLineLookupItems(entry);
+    // Hashes of the line's file found in related logs (case_correlations.js).
+    if (typeof correlationHashValues === 'function') {
+        correlationHashValues(caseCorrelationsFor(entry)).forEach((hash) => {
+            items.push({ key: hash.length === 64 ? 'sha256' : 'md5', value: hash });
+        });
+    }
 
     items.forEach(({ key, value }) => {
         const item = document.createElement('button');
@@ -1243,14 +1249,24 @@ function openLineSearchMenu(trigger, index) {
     const menu = ensureLineSearchMenu();
     menu.innerHTML = '';
 
+    // Hashes of the line's file found in related logs (case_correlations.js):
+    // looked up on VirusTotal, like the hash menus of the log page.
+    const correlatedHashes = typeof correlationHashValues === 'function'
+        ? correlationHashValues(caseCorrelationsFor(entry)) : [];
+
     const header = document.createElement('div');
     header.className = 'line-copy-menu-header';
-    header.textContent = 'search on google';
+    header.textContent = correlatedHashes.length ? 'search' : 'search on google';
     menu.appendChild(header);
 
-    const items = buildLineLookupItems(entry);
+    const items = buildLineLookupItems(entry).map(({ key, value }) => ({
+        key, value, url: 'https://www.google.com/search?q=' + encodeURIComponent(value),
+    }));
+    correlatedHashes.forEach((hash) => {
+        items.push({ key: 'virustotal', value: hash, url: 'https://www.virustotal.com/gui/file/' + hash });
+    });
 
-    items.forEach(({ key, value }) => {
+    items.forEach(({ key, value, url }) => {
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'line-copy-menu-item';
@@ -1268,7 +1284,7 @@ function openLineSearchMenu(trigger, index) {
         item.appendChild(preview);
         item.addEventListener('click', (event) => {
             event.stopPropagation();
-            window.open('https://www.google.com/search?q=' + encodeURIComponent(value), '_blank', 'noopener');
+            window.open(url, '_blank', 'noopener');
             closeLineSearchMenu();
         });
         menu.appendChild(item);

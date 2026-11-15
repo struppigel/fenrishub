@@ -210,3 +210,46 @@ class FixlogFolderMd5Tests(TestCase):
         page = self.client.get(reverse('view_uploaded_log', args=['fix-folder']))
         items = [(item.line_no, item.severity, item.name, item.target) for item in page.context['highlight'].summary]
         self.assertIn((5, 'b', 'MD5', 'C:\\Users\\kayde\\AppData\\Roaming\\qmjaq\\jfhc.exe'), items)
+
+
+FILES_MD5 = '5384844e71c09368b5d625682cf8e5c9'
+FIXLOG_FILES_IN_DIRECTORY = '\n'.join([
+    'Fix result of Farbar Recovery Scan Tool (x64) Version: 10-11-2026',
+    '========================= FilesInDirectory: C:\\Users\\kayde\\AppData\\Local\\exodus\\app-26.5.7\\resources\\*.asar ========================',
+    '',
+    f'2026-06-03 04:32 - 2026-06-03 04:32 - 079269420 ____A [{FILES_MD5.upper()}] () '
+    'C:\\Users\\kayde\\AppData\\Local\\exodus\\app-26.5.7\\resources\\app.asar',
+    '',
+    '====== End of FilesInDirectory: ======',
+])
+
+
+class FixlogFilesInDirectoryMd5Tests(TestCase):
+    """FilesInDirectory: blocks list files like Folder: blocks: an MD5 per file, checkable by request."""
+
+    def setUp(self):
+        cache.clear()
+        centralbox._consecutive_failures = 0
+        self.user = make_user()
+        self.client.force_login(self.user)
+        self.fix = make_uploaded_log('fix-files', log_type='Fixlog', content=FIXLOG_FILES_IN_DIRECTORY,
+                                     forum_username='nobody')
+        UploadedLogFileHash.rebuild_for(self.fix)
+
+    def test_one_md5_row_for_the_listed_file(self):
+        rows = [row for row in extract_file_hashes('Fixlog', FIXLOG_FILES_IN_DIRECTORY) if row.md5]
+        self.assertEqual([(row.md5, row.sha256, row.auto, row.source, row.line_no, row.path) for row in rows], [
+            (FILES_MD5, '', False, 'fixlog_folder', 4,
+             'C:\\Users\\kayde\\AppData\\Local\\exodus\\app-26.5.7\\resources\\app.asar'),
+        ])
+
+    @override_settings(CENTRALBOX_API_KEY='cbt_server')
+    def test_the_md5_can_be_checked(self):
+        with mock.patch.object(centralbox, '_http_get',
+                               return_value={'ok': True, 'analysed': False, 'hash': FILES_MD5}) as http:
+            response = self.client.post(reverse('centralbox_hash_check_api'),
+                                        json.dumps({'sha256': FILES_MD5, 'upload_id': 'fix-files'}),
+                                        content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        http.assert_called_once_with(f'/status/{FILES_MD5}')
+        self.assertTrue(response.json()['unknown'])

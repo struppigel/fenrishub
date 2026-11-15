@@ -46,7 +46,9 @@ function correlationFinding(item) {
         : result && result.state === 'unknown' ? 'not in centralbox' : '';
     // A detection of a folder this line's file is in.
     const where = item.in_folder ? 'in detected folder' : '';
-    return [name, verdict, where].filter(Boolean).join(CORRELATION_DOT) || (item.kind === 'hash' ? 'file hash' : 'detection');
+    // A Windows Defender event in a Fixlog, not a scanner's detection.
+    const source = item.source === 'defender' ? 'Defender' : '';
+    return [name, verdict, source, where].filter(Boolean).join(CORRELATION_DOT) || (item.kind === 'hash' ? 'file hash' : 'detection');
 }
 
 // The log type a finding comes from, flagged when that log seems to come
@@ -271,6 +273,20 @@ async function freshLookupCorrelatedHash(target, spot) {
         }
     }
     await finishCorrelationLookup(spot, 'centralbox: still running; reload the analysis later', false);
+}
+
+// Distinct file hashes of the entries (SHA-256, else the MD5 alone), for the
+// line's search menu (analysis.js: VirusTotal).
+function correlationHashValues(items) {
+    const hashes = [];
+    (Array.isArray(items) ? items : []).forEach((item) => {
+        if (!item || item.kind !== 'hash') return;
+        const sha = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/.test(item.sha256) ? item.sha256 : '';
+        const md5 = typeof item.md5 === 'string' && /^[0-9a-f]{32}$/.test(item.md5) ? item.md5 : '';
+        const hash = sha || md5;
+        if (hash && !hashes.includes(hash)) hashes.push(hash);
+    });
+    return hashes;
 }
 
 function correlationSummary(items) {

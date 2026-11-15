@@ -9,7 +9,8 @@ real file hashes. In FRST / Addition / SecurityCheck logs they are file names,
 crash bucket ids or URL parts, so those types yield nothing.
 
 MD5s are kept where they name a file: next to its SHA256 (Malwarebytes,
-Fixlog File:), or alone (Trojan Killer, the entries of a Fixlog Folder: block).
+Fixlog File:), or alone (Trojan Killer, the entries of a Fixlog Folder: or
+FilesInDirectory: block).
 
 A row is `auto` when it may be checked on centralbox without anyone asking:
 scanner detections, MAU file hashes and the hashes of a Fixlog `File:` block.
@@ -64,10 +65,11 @@ _FIXLOG_FILE_BANNER_RE = re.compile(r'^=+ File: ')
 _FIXLOG_BANNER_RE = re.compile(r'^={5,}')
 # Fixlog folder listing: "  [<hash>] date - date - size - Signer: X - <path>"
 _FOLDER_LIST_RE = re.compile(r'^\s*\[([0-9A-Fa-f]{64})\]\s')
-# Fixlog "Folder:" block: "===== Folder: <path> =====" ... "====== End of Folder: ======",
+# Fixlog "Folder:" / "FilesInDirectory:" block: "===== Folder: <path> =====" ...
+# "====== End of Folder: ======",
 # one line per entry with its MD5 (all zeros for directories):
 # "2026-11-11 17:32 - 2026-11-11 17:32 - 000000312 ____H [<md5>] (<signer>) <path>"
-_FIXLOG_FOLDER_BANNER_RE = re.compile(r'^=+ Folder: ')
+_FIXLOG_FOLDER_BANNER_RE = re.compile(r'^=+ (?:Folder|FilesInDirectory): ')
 _FOLDER_MD5_RE = re.compile(
     r'^\s*\d{4}-\d\d-\d\d \d\d:\d\d - \d{4}-\d\d-\d\d \d\d:\d\d - \d+ \S+ '
     r'\[([0-9A-Fa-f]{32})\] \(.*?\) ((?:[A-Za-z]:\\|\\\\).*?)\s*$'

@@ -532,3 +532,105 @@ class LogViewNeverWaitsTests(TestCase):
         response = self.page_without_computing()
         self.assertEqual(response.context['correlations'], {})
         self.assertNotIn('id="correlationData"', response.content.decode())
+
+
+CELESTIAL = 'C:\\Users\\Bob\\Downloads\\Celestial-Setup-6.2.2.exe'
+CELESTIAL_LINE = (f'2026-05-23 16:10 - 2026-05-23 16:10 - 012345678 _____ (Celestial) {CELESTIAL}')
+DEFENDER_BLOCKS = '\n'.join([
+    'Fix result of Farbar Recovery Scan Tool (x64) Version: 10-11-2026',
+    "========= Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'} =========",
+    '',
+    # Newest first: the action taken (1117) before the detection (1116).
+    'Time     : 5/23/2026 4:20:25 PM',
+    'ID       : 1117',
+    'Threat   : Trojan:Win32/Malgent!MSR',
+    'Severity : Severe',
+    f'Path     : file:_{CELESTIAL}',
+    'Process  : C:\\Windows\\explorer.exe',
+    'Action   : Quarantine',
+    '',
+    'Time     : 5/23/2026 4:20:20 PM',
+    'ID       : 1116',
+    'Threat   : Trojan:Win32/Malgent!MSR',
+    'Severity : Severe',
+    f'Path     : file:_{CELESTIAL}',
+    'Process  : C:\\Windows\\explorer.exe',
+    'Action   : Not Applicable',
+    '',
+    'Time     : 5/23/2026 4:00:00 PM',
+    'ID       : 1116',
+    'Threat   : HackTool:Win32/Patcher',
+    'Severity : High',
+    'Path     : containerfile:_C:\\Users\\Bob\\Downloads\\Skedule.rar; \r',
+    '           file:_C:\\Users\\Bob\\Downloads\\Skedule.rar->Schedule I\\Custom.dll\r',
+    'Process  : Unknown',
+    'Action   : Remove',
+    '',
+    'Time     : 5/23/2026 3:00:00 PM',
+    'ID       : 1116',
+    'Threat   : PUA:Win32/Presenoker',
+    'Severity : Low',
+    # Wrapped mid-word by PowerShell; a URL and a process entry follow.
+    'Path     : webfile:_C:\\Users\\Bob\\OneDrive\\Deskto',
+    '           p\\Lichii.exe|https://example.com/x?a=1|pid:3,ProcessStart:1; process:_pid:3,ProcessStart:1',
+    'Process  : C:\\Windows\\explorer.exe',
+    'Action   : Quarantine',
+    '',
+    'Time     : 5/23/2026 2:00:00 PM',
+    'ID       : 1116',
+    'Threat   : Behavior:Win32/Execution',
+    'Path     : behavior:_process: C:\\Windows\\x.exe, pid:1; regkey:_HKLM\\Software\\X',
+    'Action   : Not Applicable',
+])
+
+
+class DefenderDetectionTests(TestCase):
+    def test_parser_finds_the_files_with_threat_and_action(self):
+        from ..case_correlations import defender_severity, iter_defender_detections
+
+        found = sorted(iter_defender_detections(DEFENDER_BLOCKS), key=lambda item: item[0])
+        lines = DEFENDER_BLOCKS.split('\n')
+        self.assertEqual([(threat, action, path) for _line, threat, action, path in found], [
+            ('Trojan:Win32/Malgent!MSR', 'Quarantine', CELESTIAL),
+            ('HackTool:Win32/Patcher', 'Remove', 'C:\\Users\\Bob\\Downloads\\Skedule.rar'),
+            ('PUA:Win32/Presenoker', 'Quarantine', 'C:\\Users\\Bob\\OneDrive\\Desktop\\Lichii.exe'),
+        ])
+        # The Threat line of the event whose action is kept.
+        self.assertEqual(lines[found[0][0] - 1], 'Threat   : Trojan:Win32/Malgent!MSR')
+        self.assertEqual(lines[found[0][0] + 3], 'Action   : Quarantine')
+        self.assertEqual([defender_severity(threat) for _l, threat, _a, _p in found], ['b', 'g', 'p'])
+
+    def test_frst_line_correlates_with_the_defender_detection(self):
+        user = make_user()
+        self.client.force_login(user)
+        case = InfectionCase.objects.create(owner=user, username='bob', auto_assign_new_items=False)
+        frst = make_uploaded_log('frst-def', log_type='FRST', forum_username='nobody',
+                                 content='\n'.join(['Scan result of Farbar Recovery Scan Tool (FRST)', CELESTIAL_LINE]))
+        cache_analysis(frst, [CELESTIAL_LINE])
+        fix = make_uploaded_log('fix-def', log_type='Fixlog', content=DEFENDER_BLOCKS, forum_username='nobody')
+        for upload in (frst, fix):
+            InfectionCaseLog.objects.create(case=case, uploaded_log=upload)
+        with mock.patch.object(centralbox, '_http_get') as http, mock.patch.object(centralbox, '_request') as request:
+            body = self.client.get(reverse('case_correlations_api'), {'upload_id': 'frst-def'}).json()
+        http.assert_not_called()
+        request.assert_not_called()
+        (item,) = body['correlations'][CELESTIAL_LINE]
+        self.assertEqual((item['kind'], item['upload_id'], item['detection'], item['action'], item['source']),
+                         ('detection', 'fix-def', 'Trojan:Win32/Malgent!MSR', 'Quarantine', 'defender'))
+        self.assertEqual(body['statuses'][CELESTIAL_LINE], 'B')
+        self.assertEqual(body['notes'][CELESTIAL_LINE], 'Trojan:Win32/Malgent!MSR · Defender · Fixlog')
+
+    def test_a_defender_exclusion_line_correlates_by_its_path(self):
+        exclusion = 'HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths|' + CELESTIAL
+        user = make_user()
+        self.client.force_login(user)
+        case = InfectionCase.objects.create(owner=user, username='bob', auto_assign_new_items=False)
+        frst = make_uploaded_log('frst-excl', log_type='FRST', forum_username='nobody',
+                                 content='\n'.join(['Scan result of Farbar Recovery Scan Tool (FRST)', exclusion]))
+        cache_analysis(frst, [exclusion])  # no parsed components: the path comes from after the "|"
+        fix = make_uploaded_log('fix-excl', log_type='Fixlog', content=DEFENDER_BLOCKS, forum_username='nobody')
+        for upload in (frst, fix):
+            InfectionCaseLog.objects.create(case=case, uploaded_log=upload)
+        body = self.client.get(reverse('case_correlations_api'), {'upload_id': 'frst-excl'}).json()
+        (item,) = body['correlations'][exclusion]
+        self.assertEqual((item['detection'], item['source']), ('Trojan:Win32/Malgent!MSR', 'defender'))
