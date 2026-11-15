@@ -111,5 +111,27 @@ const CentralboxLookup = (function () {
         return { message: 'centralbox: still running; reload later', refresh: false };
     }
 
-    return { targets, verdictText, check, fresh };
+    // A circle with an up arrow, drawn (no font has a dependable glyph for
+    // it): shown instead of the circled i while a line's correlations hold a
+    // hash a lookup can be started for. Constant markup, no data in it; CSS
+    // class .cb-lookup-icon sizes it like the glyph it replaces.
+    // Matched against the font's circled i (rendered side by side): a light
+    // circle, the arrow about as heavy as the glyph's i; sized 1.2em in CSS.
+    const ICON_SVG = '<svg class="cb-lookup-icon" viewBox="0 0 16 16" aria-hidden="true">'
+        + '<circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.1"/>'
+        + '<path d="M8 11.4V5M5.6 7.4L8 5l2.4 2.4" fill="none" stroke="currentColor" stroke-width="1.7" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    // Puts the lookup icon or the circled i into an info button.
+    function setIcon(button, lookup) {
+        if (lookup) {
+            button.innerHTML = ICON_SVG;
+            button.dataset.lookup = '1';
+        } else {
+            button.textContent = 'ⓘ';
+            delete button.dataset.lookup;
+        }
+    }
+
+    return { targets, verdictText, check, fresh, setIcon };
 })();

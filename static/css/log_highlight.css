@@ -141,6 +141,16 @@
     display: none;
 }
 
+/* A correlated hash can be looked up: a drawn circle with an up arrow
+   instead of the circled i (centralbox_lookup.js), same size and colour. */
+.uploaded-content .hl-line-info-trigger .cb-lookup-icon {
+    display: inline-block;
+    /* The circled i glyph is about 1.2em across in this font. */
+    width: 1.2em;
+    height: 1.2em;
+    vertical-align: -0.24em;
+}
+
 /* The hover icons cover a line's correlation marker (same place and size). */
 .uploaded-content .hl-line-actions:not(.hl-cor-marker) {
     z-index: 3;

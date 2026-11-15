@@ -1264,6 +1264,8 @@ function openLineSearchMenu(trigger, index) {
     }));
     correlatedHashes.forEach((hash) => {
         items.push({ key: 'virustotal', value: hash, url: 'https://www.virustotal.com/gui/file/' + hash });
+        // centralbox reports exist for SHA-256 only (as in the log view's search menu).
+        if (hash.length === 64) items.push({ key: 'centralbox', value: hash, url: 'https://centralbox.dev/analysis/' + hash });
     });
 
     items.forEach(({ key, value, url }) => {

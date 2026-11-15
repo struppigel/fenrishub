@@ -564,6 +564,13 @@ function buildLineCopyItems(line) {
             add('folder', parentFolder(value));
         }
     });
+    // Hashes of the line's file found in related logs (correlations), as in
+    // the analyzer: copied like the line's own, looked up from the search menu.
+    CaseCorrelations.hashes(line).forEach(hash => {
+        const before = items.length;
+        add(hash.length === 64 ? 'sha256' : 'md5', hash);
+        if (items.length > before) items[items.length - 1].hash = hash;
+    });
     return items;
 }
 
@@ -1077,7 +1084,9 @@ const Centralbox = (function () {
 // (`fresh` false) the script asks for current ones and redraws. Optional:
 // without data nothing changes, and a failed refresh keeps the stored view.
 const CaseCorrelations = (function () {
-    const none = { has: () => false, header: () => '', menuItems: () => [], statusClass: () => '' };
+    const none = {
+        has: () => false, canLookup: () => false, hashes: () => [], header: () => '', menuItems: () => [], statusClass: () => '',
+    };
     let data = null;
     try {
         const el = document.getElementById('correlationData');
@@ -1185,6 +1194,31 @@ const CaseCorrelations = (function () {
             });
         }
         return items;
+    }
+
+    // A correlated hash can be looked up (the panel then offers it): the
+    // line's icon is a circle with an up arrow instead of the circled i.
+    function lookupPossible(entries) {
+        return lookupConfig.can_lookup && typeof CentralboxLookup === 'object'
+            && CentralboxLookup.targets(Array.isArray(entries) ? entries : []).length > 0;
+    }
+
+    // Distinct file hashes of the line's correlations (SHA-256, else the MD5 alone).
+    function correlatedHashes(entries) {
+        const hashes = [];
+        (Array.isArray(entries) ? entries : []).forEach(entry => {
+            if (!entry || entry.kind !== 'hash') return;
+            const sha = typeof entry.sha256 === 'string' && /^[0-9a-f]{64}$/.test(entry.sha256) ? entry.sha256 : '';
+            const md5 = typeof entry.md5 === 'string' && /^[0-9a-f]{32}$/.test(entry.md5) ? entry.md5 : '';
+            const hash = sha || md5;
+            if (hash && !hashes.includes(hash)) hashes.push(hash);
+        });
+        return hashes;
+    }
+
+    function setInfoIcon(button, lookup) {
+        if (typeof CentralboxLookup === 'object') CentralboxLookup.setIcon(button, lookup);
+        else button.textContent = 'ⓘ';
     }
 
     const LOOKUP_URLS = {
@@ -1309,7 +1343,7 @@ const CaseCorrelations = (function () {
             button.type = 'button';
             button.tabIndex = -1;
             button.className = 'hl-line-info-trigger';
-            button.textContent = 'ⓘ';
+            setInfoIcon(button, lookupPossible(item.entries));
             group.appendChild(button);
             group.dataset.cor = STATUS_CLASS[item.status] || 'none';
             root.appendChild(group);
@@ -1468,7 +1502,12 @@ const CaseCorrelations = (function () {
         return item ? (STATUS_CLASS[item.status] || 'none') : '';
     }
 
-    return { has: line => entriesFor(line).length > 0, header, menuItems, statusClass };
+    return {
+        has: line => entriesFor(line).length > 0,
+        canLookup: line => lookupPossible(entriesFor(line)),
+        hashes: line => correlatedHashes(entriesFor(line)),
+        header, menuItems, statusClass,
+    };
 })();
 
 function openHashMenu(token) {
@@ -1572,7 +1611,15 @@ function openEntryPointMenu(token) {
 // VirusTotal lookup for hashes and a CyberChef disassembly for entry points.
 function buildLineSearchItems(line) {
     const items = [];
-    buildLineCopyItems(line).forEach(({ key, value, token }) => {
+    buildLineCopyItems(line).forEach(({ key, value, token, hash: correlated }) => {
+        if (correlated) {
+            // A correlated hash: VirusTotal (and centralbox for a SHA-256), like a hash on the line.
+            items.push({ key: 'virustotal', value, run: () => openUrl(virusTotalHashUrl(correlated, false)) });
+            if (correlated.length === 64) {
+                items.push({ key: 'centralbox', value, run: () => openUrl(centralboxReportUrl(correlated)) });
+            }
+            return;
+        }
         const entryPoint = entryPointLookup(token);
         if (entryPoint) {
             items.push({ key: 'cyberchef', value: `disassemble as ${entryPoint.bits}-bit`,
@@ -1668,6 +1715,8 @@ function openTokenMenu(token) {
     function placeActions(line) {
         currentLine = line;
         infoButton.hidden = !CaseCorrelations.has(line);
+        // Same icon as the line's marker underneath (lookup arrow or circled i).
+        if (typeof CentralboxLookup === 'object') CentralboxLookup.setIcon(infoButton, CaseCorrelations.canLookup(line));
         // Same colour as the line's marker underneath.
         const cor = CaseCorrelations.statusClass(line);
         if (cor) actions.dataset.cor = cor;

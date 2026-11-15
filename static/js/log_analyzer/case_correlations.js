@@ -230,14 +230,6 @@ function caseCorrelationStatusFor(entry) {
     return caseCorrelationStatuses.get(entry.line.trim()) || '';
 }
 
-// A circle with an up arrow, drawn (no font has a dependable glyph for it):
-// the line's correlations hold a hash centralbox has no verdict for, so the
-// menu offers a lookup. Same box and colour as the info icon.
-const CORRELATION_LOOKUP_ICON = '<svg class="line-correlation-lookup-icon" viewBox="0 0 16 16" aria-hidden="true">'
-    + '<circle cx="8" cy="8" r="6.8" fill="none" stroke="currentColor" stroke-width="1.5"/>'
-    + '<path d="M8 11.6V4.8M5.2 7.4L8 4.6l2.8 2.8" fill="none" stroke="currentColor" stroke-width="1.6" '
-    + 'stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
 // Lines whose correlations offer a centralbox lookup (correlationLookupTargets).
 function correlationLookupLines() {
     if (!CENTRALBOX_LOOKUPS_ON) return [];
@@ -260,13 +252,9 @@ function buildCaseCorrelationButton(entry) {
         const status = caseCorrelationStatusFor(entry);
         if (CORRELATION_STATUS_CLASS[status]) button.dataset.status = CORRELATION_STATUS_CLASS[status];
         const lookup = CENTRALBOX_LOOKUPS_ON && correlationLookupTargets(items).length > 0;
-        if (lookup) {
-            // Our own constant markup (no data in it).
-            button.innerHTML = CORRELATION_LOOKUP_ICON;
-            button.dataset.lookup = '1';
-        } else {
-            button.textContent = 'ⓘ';
-        }
+        // A circle with an up arrow instead of the circled i (centralbox_lookup.js).
+        if (typeof CentralboxLookup === 'object') CentralboxLookup.setIcon(button, lookup);
+        else button.textContent = 'ⓘ';
         button.setAttribute('aria-haspopup', 'menu');
         button.setAttribute('aria-expanded', 'false');
         button.setAttribute('aria-label', lookup
