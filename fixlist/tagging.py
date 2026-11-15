@@ -1629,9 +1629,15 @@ def suggested_tag_pattern(name):
     return f'{start}{escaped}{end}'
 
 
-# Names that say nothing about the malware: never suggested as a tag. (The
-# placeholders are also stored as no name, see centralbox.PLACEHOLDER_LABELS.)
-UNSUGGESTED_CENTRALBOX_NAMES = frozenset({'generic', 'unknown', 'none', 'n/a', 'null'})
+# Names that say nothing about the malware, besides centralbox's placeholders
+# (centralbox.PLACEHOLDER_LABELS, stored as no name): never suggested as a tag.
+UNSUGGESTED_EXTRA_CENTRALBOX_NAMES = frozenset({'generic'})
+
+
+def unsuggested_centralbox_names():
+    from .centralbox import PLACEHOLDER_LABELS
+
+    return PLACEHOLDER_LABELS | UNSUGGESTED_EXTRA_CENTRALBOX_NAMES
 
 
 def centralbox_name_suggestions():
@@ -1647,6 +1653,7 @@ def centralbox_name_suggestions():
     stands for (a pair seen in a log, or centralbox's answer). Database only."""
     from .models import HashAlias, HashVerdict, UploadedLogFileHash
 
+    skipped = unsuggested_centralbox_names()
     groups = {'family': {}, 'malware_type': {}}
     for sha, family, malware_type in (
         HashVerdict.objects.filter(~Q(family='') | ~Q(malware_type=''))
@@ -1654,7 +1661,7 @@ def centralbox_name_suggestions():
     ):
         for field, value in (('family', family), ('malware_type', malware_type)):
             value = (value or '').strip()
-            if not value or value.lower() in UNSUGGESTED_CENTRALBOX_NAMES:
+            if not value or value.lower() in skipped:
                 continue
             entry = groups[field].setdefault(value.lower(), {'spellings': Counter(), 'shas': set()})
             entry['spellings'][value] += 1

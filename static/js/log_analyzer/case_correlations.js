@@ -141,12 +141,13 @@ function placeCorrelationHint() {
         return;
     }
     const rect = anchor.getBoundingClientRect();
-    // Only while the icon is inside the visible part of the log list: a line
-    // scrolled out of it would put the label over the rest of the page.
+    // Only while the icon is wholly inside the visible part of the log list:
+    // a line scrolled (even partly) out of it would put the label over the
+    // rest of the page.
     const area = anchor.closest('#logLines');
     if (area) {
         const box = area.getBoundingClientRect();
-        if (rect.bottom <= box.top || rect.top >= box.bottom || rect.right <= box.left || rect.left >= box.right) {
+        if (rect.top < box.top || rect.bottom > box.bottom || rect.left < box.left || rect.right > box.right) {
             hint.hidden = true;
             return;
         }

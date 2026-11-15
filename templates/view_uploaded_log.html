@@ -190,7 +190,7 @@
         <button type="submit" name="action" value="delete" class="delete-btn" onclick="return confirm('Delete this upload?');">delete</button>
         {% endif %}
     </form>
-    {% elif not uploaded_log.is_protected %}
+    {% elif not uploaded_log.is_protected and not uploaded_log.deleted_at %}
     {# Another helper's log: anyone may protect it; only they may unprotect or delete it. #}
     <form method="post">
         {% csrf_token %}

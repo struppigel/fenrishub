@@ -281,7 +281,9 @@ class PlaceholderNameTests(TestCase):
         self.assertEqual(status['family'], '')
         details = centralbox._parse_verdict_details({'ok': True, 'hash': sha, 'malware_type': 'unknown'}, sha)
         self.assertEqual(details['malware_type'], '')
-        for name in ('None', 'N/A', 'null'):
+        for name in ('None', 'null'):
             self.assertEqual(centralbox._label(name), '', name)
+        # Not a valid name at all ('/' is not allowed), placeholder or not.
+        self.assertEqual(centralbox._label('N/A'), '')
         self.assertEqual(centralbox._label('AsyncRAT'), 'AsyncRAT')
         self.assertEqual(centralbox._label('unknown-loader'), 'unknown-loader')

@@ -429,8 +429,12 @@ def view_uploaded_log(request, upload_id):
         if action in ('protect', 'unprotect'):
             # Any helper may protect any log (e.g. another helper's, so it
             # survives); only who may delete it may take the protection away.
-            if action == 'unprotect' and not user_can_delete_uploaded_log(request.user, uploaded_log):
-                messages.error(request, f'Only the assigned helper can remove the protection of {upload_id}.')
+            # A log in another helper's trash stays theirs: protecting it would
+            # keep it out of their "empty trash" and the automatic purge.
+            if not user_can_delete_uploaded_log(request.user, uploaded_log) and (
+                action == 'unprotect' or uploaded_log.deleted_at is not None
+            ):
+                messages.error(request, f'Only the assigned helper can change the protection of {upload_id}.')
                 return redirect('view_uploaded_log', upload_id=upload_id)
             uploaded_log.is_protected = action == 'protect'
             uploaded_log.save(update_fields=['is_protected', 'updated_at'])

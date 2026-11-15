@@ -71,6 +71,16 @@ class UploadedLogProtectionTests(TestCase):
         log.refresh_from_db()
         self.assertTrue(log.is_protected)
 
+    def test_other_helpers_trashed_log_cannot_be_protected(self):
+        bob = _make_user('bob')
+        log = self._make_log('bobs-trash', recipient_user=bob, deleted_at=timezone.now())
+        url = reverse('view_uploaded_log', args=[log.upload_id])
+
+        self.assertNotContains(self.client.get(url), 'value="protect"')
+        self.client.post(url, {'action': 'protect'})
+        log.refresh_from_db()
+        self.assertFalse(log.is_protected)
+
     def test_detail_view_shows_protected_state(self):
         log = self._make_log('shown-log', is_protected=True)
 

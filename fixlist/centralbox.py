@@ -236,7 +236,7 @@ def _record_failure(failure, key_id=BUDGET_READS):
 
 # Names centralbox sends when it has none: stored as no name, so labels fall
 # back to the verdict ("malicious") instead of saying "Unknown".
-PLACEHOLDER_LABELS = frozenset({'unknown', 'none', 'n/a', 'null'})
+PLACEHOLDER_LABELS = frozenset({'unknown', 'none', 'null'})
 
 
 def _label(value):
