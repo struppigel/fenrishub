@@ -1401,8 +1401,16 @@ button.lookup-menu-item {
     /* Last in the row: tucked against the search icon in front of it, as
        close as the search icon is to the copy icon (.line-search-trigger). */
     margin: 0 0 0 -11px;
-    padding: 0 4px;
-    text-align: center;
+    /* One fixed box for the circled i and the lookup arrow, the icon centred
+       in it: both sit in exactly the same spot (the glyph and the drawn icon
+       differ in width and height by a pixel or so). */
+    box-sizing: border-box;
+    width: calc(1.2em + 10px);
+    height: calc(1.2em + 2px);
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-family: inherit;
     font-size: 12px;
     font-weight: 700;
@@ -1422,11 +1430,10 @@ button.lookup-menu-item {
 /* A hash of the line's correlations can be looked up on centralbox: a drawn
    circle with an up arrow instead of the circled i, same size and colour. */
 .line-correlation-trigger .cb-lookup-icon {
-    display: inline-block;
+    display: block;
     /* The circled i glyph is about 1.2em across in this font. */
     width: 1.2em;
     height: 1.2em;
-    vertical-align: -0.24em;
 }
 
 /* centralbox lookup feedback (case_correlations.js): a small label right in
@@ -1531,7 +1538,7 @@ body:not(.no-word-wrap) #logLines .line-actions {
 }
 
 body:not(.no-word-wrap) #logLines .log-line:has(.line-correlation-trigger) .line-text {
-    padding-right: 26px;
+    padding-right: 31px;  /* the info box (1.2em + 10px) and the 6px in front */
 }
 
 /* Lines with tag badges or a centralbox suggestion: those sit at the end of
