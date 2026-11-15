@@ -549,6 +549,10 @@ window.logAnalyzerConfig = {
     centralboxSuggestionsUrl: "{% if not is_guest %}{% url 'centralbox_suggestions_api' %}{% endif %}",
     // What other logs of the case say about a line's file; empty for guests.
     caseCorrelationsUrl: "{% if not is_guest %}{% url 'case_correlations_api' %}{% endif %}",
+    // centralbox lookups of correlated hashes from the correlation menu; empty for guests.
+    centralboxHashCheckUrl: "{% if not is_guest %}{% url 'centralbox_hash_check_api' %}{% endif %}",
+    centralboxFreshStartUrl: "{% if not is_guest %}{% url 'centralbox_fresh_start_api' %}{% endif %}",
+    centralboxFreshStatusUrl: "{% if not is_guest %}{% url 'centralbox_fresh_status_api' '0000000000000000000000000000000000000000000000000000000000000000' %}{% endif %}",
     initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
     initialFixlistId: "{{ initial_fixlist_id|default:''|escapejs }}",
     snippetsApiUrl: "{% url 'snippets_api' %}",

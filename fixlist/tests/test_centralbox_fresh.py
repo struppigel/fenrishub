@@ -207,3 +207,9 @@ class ManualCheckTests(TestCase):
         self.assertTrue(body['available'])
         self.assertEqual(body['verdict']['verdict'], 'clean')
         self.assertNotIn('note', body)
+
+    def test_analyzer_gets_the_lookup_urls_for_correlated_hashes(self):
+        page = self.client.get(reverse('log_analyzer')).content.decode()
+        self.assertIn(f'centralboxHashCheckUrl: "{reverse("centralbox_hash_check_api")}"', page)
+        self.assertIn(f'centralboxFreshStartUrl: "{reverse("centralbox_fresh_start_api")}"', page)
+        self.assertIn(reverse('centralbox_fresh_status_api', args=['0' * 64]), page)

@@ -30,10 +30,18 @@ function caseCorrelationsFor(entry) {
 
 // What a related log says, without log ids: the detection name or family
 // and the centralbox verdict (or the fixlist result).
+function correlationHash(item) {
+    if (item.kind !== 'hash') return '';
+    const sha = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/.test(item.sha256) ? item.sha256 : '';
+    const md5 = typeof item.md5 === 'string' && /^[0-9a-f]{32}$/.test(item.md5) ? item.md5 : '';
+    return sha ? 'SHA-256 ' + sha : md5 ? 'MD5 ' + md5 : '';
+}
+
 function correlationFinding(item) {
     if (item.kind === 'fixlog') return item.result || 'fixlist result';
     const result = item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
-    const name = (result && (result.family || result.malware_type)) || item.detection || '';
+    // A bare hash (no detection, no centralbox result) shows the hash itself.
+    const name = (result && (result.family || result.malware_type)) || item.detection || correlationHash(item);
     const verdict = result && result.verdict ? 'centralbox: ' + result.verdict
         : result && result.state === 'unknown' ? 'not in centralbox' : '';
     // A detection of a folder this line's file is in.
@@ -69,6 +77,123 @@ function correlationReportUrls(items) {
         if (CENTRALBOX_REPORT_URL_RE.test(url) && !urls.includes(url)) urls.push(url);
     });
     return urls;
+}
+
+const CENTRALBOX_CHECK_URL = analyzerConfig.centralboxHashCheckUrl || '';
+const CENTRALBOX_FRESH_URL = analyzerConfig.centralboxFreshStartUrl || '';
+const CENTRALBOX_FRESH_STATUS_URL = analyzerConfig.centralboxFreshStatusUrl || '';
+const CENTRALBOX_FRESH_POLL_MS = 4000;
+const CENTRALBOX_FRESH_POLL_TRIES = 30;
+
+// Correlated hashes without a centralbox verdict (never checked, or not in
+// centralbox): [{hash, uploadId, short}]. The endpoints accept a hash only
+// together with a log that contains it: the related log of the entry.
+function correlationLookupTargets(items) {
+    const targets = [];
+    const seen = new Set();
+    items.forEach((item) => {
+        if (!item || item.kind !== 'hash') return;
+        const result = item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
+        if (result && result.report_url) return;  // known: the report entry covers it
+        const sha = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/.test(item.sha256) ? item.sha256 : '';
+        const md5 = typeof item.md5 === 'string' && /^[0-9a-f]{32}$/.test(item.md5) ? item.md5 : '';
+        const hash = sha || md5;
+        const uploadId = String(item.upload_id || '');
+        if (!hash || seen.has(hash) || !/^[A-Za-z0-9_-]+$/.test(uploadId)) return;
+        seen.add(hash);
+        targets.push({ hash, uploadId, short: (sha ? 'SHA-256 ' : 'MD5 ') + hash.slice(0, 12) + '…' });
+    });
+    return targets;
+}
+
+function correlationHint(anchor, message) {
+    if (typeof showLineHint !== 'function') return;
+    showLineHint(anchor && anchor.isConnected ? anchor : document.body, message);
+}
+
+function centralboxVerdictText(verdict) {
+    if (!verdict || typeof verdict !== 'object') return '';
+    if (verdict.state === 'unknown') return 'not in centralbox';
+    if (verdict.verdict === 'malicious') return 'centralbox: ' + (verdict.family || verdict.malware_type || 'malicious');
+    return verdict.verdict ? 'centralbox: ' + verdict.verdict : '';
+}
+
+async function postCentralbox(url, payload) {
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify(payload),
+        });
+        let body = null;
+        try {
+            body = await response.json();
+        } catch (error) {
+            body = null;
+        }
+        return { status: response.status, body };
+    } catch (error) {
+        return { status: 0, body: null };
+    }
+}
+
+// A new answer changes the correlations (colour, finding): fetch them again.
+function refreshCorrelationsAfterLookup() {
+    if (caseCorrelationsUploadId) refreshCaseCorrelations(caseCorrelationsUploadId);
+}
+
+async function checkCorrelatedHash(target, anchor) {
+    correlationHint(anchor, 'centralbox: checking…');
+    const { status, body } = await postCentralbox(CENTRALBOX_CHECK_URL, { sha256: target.hash, upload_id: target.uploadId });
+    let message = 'centralbox: the check failed, try again later';
+    if (status === 200 && body && typeof body === 'object') {
+        message = centralboxVerdictText(body.verdict)
+            || (body.unknown ? 'not in centralbox'
+                : body.available ? 'centralbox: no answer yet, try again later' : 'centralbox is not available right now');
+    }
+    correlationHint(anchor, message);
+    refreshCorrelationsAfterLookup();
+}
+
+async function freshLookupCorrelatedHash(target, anchor) {
+    correlationHint(anchor, 'centralbox: starting a fresh lookup…');
+    const { status, body } = await postCentralbox(CENTRALBOX_FRESH_URL, { sha256: target.hash, upload_id: target.uploadId });
+    if (status !== 200 || !body || body.ok !== true) {
+        const message = body && typeof body.message === 'string' && body.message ? body.message : 'the lookup could not be started';
+        correlationHint(anchor, 'centralbox: ' + message);
+        return;
+    }
+    if (body.state !== 'running') {
+        correlationHint(anchor, centralboxVerdictText(body.verdict) || 'centralbox: ' + body.state);
+        refreshCorrelationsAfterLookup();
+        return;
+    }
+    correlationHint(anchor, 'centralbox: looking up…');
+    const url = CENTRALBOX_FRESH_STATUS_URL.replace('0'.repeat(64), encodeURIComponent(target.hash));
+    for (let attempt = 0; attempt < CENTRALBOX_FRESH_POLL_TRIES; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, CENTRALBOX_FRESH_POLL_MS));
+        let state = null;
+        try {
+            const response = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+            state = response.ok ? await response.json() : null;
+        } catch (error) {
+            state = null;
+        }
+        if (state && typeof state === 'object' && state.state && state.state !== 'running') {
+            const text = state.state === 'error'
+                ? 'centralbox: the lookup failed, try again after the cooldown'
+                : centralboxVerdictText(state.verdict) || (state.state === 'not_found' ? 'not in centralbox' : 'centralbox: done');
+            correlationHint(anchor, text);
+            refreshCorrelationsAfterLookup();
+            return;
+        }
+    }
+    correlationHint(anchor, 'centralbox: the lookup is still running; reload the analysis later');
 }
 
 function correlationSummary(items) {
@@ -198,6 +323,20 @@ function openCaseCorrelationMenu(trigger, items) {
     // the hash menus' VirusTotal entry.
     correlationReportUrls(items).forEach((url) => {
         addCorrelationMenuItem(menu, 'centralbox', url, () => openNewTab(url));
+    });
+    // Correlated hashes without a centralbox verdict: look them up from here,
+    // like from the hash menu of the log they are in.
+    const targets = correlationLookupTargets(items);
+    targets.forEach((target) => {
+        const which = targets.length > 1 ? ' ' + target.short : '';
+        if (CENTRALBOX_CHECK_URL) {
+            addCorrelationMenuItem(menu, 'centralbox', 'check this hash' + which,
+                () => checkCorrelatedHash(target, trigger));
+        }
+        if (CENTRALBOX_FRESH_URL && CENTRALBOX_FRESH_STATUS_URL) {
+            addCorrelationMenuItem(menu, 'centralbox', 'run fresh lookup' + which,
+                () => freshLookupCorrelatedHash(target, trigger));
+        }
     });
 
     menu.hidden = false;

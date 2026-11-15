@@ -117,16 +117,30 @@ class CaseCorrelationTests(TestCase):
         self.assertEqual((item['upload_id'], item['md5'], item['sha256']), ('tk-log', EVIL_MD5, EVIL_SHA))
         self.assertIsNone(item['centralbox'])
 
-    def test_unchecked_folder_listing_rows_are_left_out(self):
+    def test_a_bare_hash_for_the_path_counts_even_if_never_checked(self):
         listing = self.add_log('folder-log', 'Fixlog', '\n'.join([
             '========================= Folder: C:\\Users\\Bob\\AppData\\Roaming\\evil ========================',
             f'  [{EVIL_SHA}] 03/08/2026 - 03/08/2026 - 1 MB - Signer: - C:\\Users\\Bob\\AppData\\Roaming\\evil\\evil.exe',
         ]))
         self.assertTrue(UploadedLogFileHash.objects.filter(upload=listing, source='fixlog_folder').exists())
-        self.assertEqual(self.get(), {})
+        (item,) = self.get()[RUN_LINE]
+        self.assertEqual((item['kind'], item['sha256'], item['centralbox'], item['detection']),
+                         ('hash', EVIL_SHA, None, ''))
+        body = self.client.get(reverse('case_correlations_api'), {'upload_id': 'frst-log'}).json()
+        self.assertEqual(body['statuses'][RUN_LINE], '')  # a hash alone has no status: grey marker
         now = timezone.now()
         HashVerdict.objects.create(sha256=EVIL_SHA, state='unknown', checked_at=now, next_check_at=now)
         self.assertEqual(self.get()[RUN_LINE][0]['centralbox']['state'], 'unknown')
+
+    def test_a_folder_block_md5_counts_too(self):
+        self.add_log('folder-md5', 'Fixlog', '\n'.join([
+            '========================= Folder: C:\\Users\\Bob\\AppData\\Roaming\\evil ========================',
+            f'2026-11-11 17:32 - 2026-11-11 17:32 - 000000312 ____A [{EVIL_MD5.upper()}] () '
+            'C:\\Users\\Bob\\AppData\\Roaming\\evil\\evil.exe',
+            '====== End of Folder: ======',
+        ]))
+        (item,) = self.get()[RUN_LINE]
+        self.assertEqual((item['md5'], item['sha256'], item['centralbox']), (EVIL_MD5, '', None))
 
     def test_nothing_without_case_cache_or_frst_type(self):
         self.add_log('fix-log', 'Fixlog', FIXLOG)

@@ -1023,12 +1023,20 @@ const CaseCorrelations = (function () {
             : 'same file in other logs of this case';
     }
 
+    function bareHash(entry) {
+        if (entry.kind !== 'hash') return '';
+        const sha = typeof entry.sha256 === 'string' && /^[0-9a-f]{64}$/.test(entry.sha256) ? entry.sha256 : '';
+        const md5 = typeof entry.md5 === 'string' && /^[0-9a-f]{32}$/.test(entry.md5) ? entry.md5 : '';
+        return sha ? 'SHA-256 ' + sha : md5 ? 'MD5 ' + md5 : '';
+    }
+
     // What a related log says, without log ids: the detection name or family
     // and the centralbox verdict (or the fixlist result).
     function finding(entry) {
         if (entry.kind === 'fixlog') return entry.result || 'fixlist result';
         const result = entry.centralbox && typeof entry.centralbox === 'object' ? entry.centralbox : null;
-        const name = (result && (result.family || result.malware_type)) || entry.detection || '';
+        // A bare hash (no detection, no centralbox result) shows the hash itself.
+        const name = (result && (result.family || result.malware_type)) || entry.detection || bareHash(entry);
         const verdict = result && result.verdict ? 'centralbox: ' + result.verdict
             : result && result.state === 'unknown' ? 'not in centralbox' : '';
         // A detection of a folder this line's file is in.

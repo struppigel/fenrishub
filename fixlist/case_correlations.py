@@ -3,8 +3,9 @@
 For each FRST / Addition line whose file path also appears in another log of
 one of the upload's cases, collect what that log says about the file:
 
-- a hash row (Malwarebytes, HitmanPro, Trojan Killer, MAU, Fixlog File:): the
-  detection, SHA256 / MD5 and the stored centralbox result;
+- a hash row (Malwarebytes, HitmanPro, Trojan Killer, MAU, Fixlog File: and
+  Folder: blocks, folder listings): the detection, SHA256 / MD5 and the
+  stored centralbox result if any (a bare hash counts too);
 - a detection of a scanner without hashes (ESET, Emsisoft, AdwCleaner, and
   hash-less detections of the others): detection name and action;
 - a Fixlog result ("<path> => moved successfully").
@@ -35,12 +36,9 @@ logger = logging.getLogger(__name__)
 
 MAX_ENTRIES_PER_LINE = 20
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 3
+CORRELATION_VERSION = 4
 # Detections are read from these logs' summary boxes (log_highlighting).
 DETECTION_LOG_TYPES = ('ESET', 'Emsisoft', 'AdwCleaner', 'Malwarebytes', 'HitmanPro', 'Trojan Killer')
-# Hash rows of these sources only count once they have a stored result:
-# folder listings hold thousands of unchecked hashes.
-CHECKED_ONLY_SOURCES = ('fixlog_folder', 'fixlog_other', 'other')
 
 
 SCOPE_CASE = 'case'
@@ -160,8 +158,6 @@ def _hash_entries(upload_ids, index):
     for row in rows:
         sha = row.sha256 or md5_map.get(row.md5, '')
         result = _centralbox_result(sha, row.md5, verdicts, unknown_md5s)
-        if row.source in CHECKED_ONLY_SOURCES and result is None:
-            continue
         covered.add((row.upload_id, row.anchor_line_no))
         index.setdefault(row.normalized_path, []).append({
             'kind': 'hash',
