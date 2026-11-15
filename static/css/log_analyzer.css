@@ -1417,6 +1417,23 @@ button.lookup-menu-item {
     text-decoration: underline;
 }
 
+/* centralbox lookup feedback (case_correlations.js): a small label right in
+   front of the line's info icon, on its row, styled like the line menus. */
+.correlation-lookup-hint {
+    position: absolute;
+    z-index: 120;
+    padding: 1px 6px;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    color: var(--la-text-primary);
+    background: var(--la-bg-1);
+    border: 1px solid var(--la-border-strong);
+    box-shadow: var(--la-shadow);
+    pointer-events: none;
+}
+
 .line-correlation-menu .line-correlation-source .line-copy-menu-key {
     color: var(--la-text-primary);
 }
@@ -1463,24 +1480,44 @@ body.no-word-wrap #logLines .line-actions {
 .line-correlation-trigger[data-status="i"] { color: var(--la-status-i); }
 .line-correlation-trigger[data-status="j"] { color: var(--la-status-j); }
 
-/* Word wrap off: the copy / search icons are invisible until the line is
-   hovered (or their menu is open), so they take no room either; a cut-off
-   line then runs to the right edge. Only icons actually shown (hover, or the
-   correlation icon) cover the end of the text. */
-body.no-word-wrap #logLines .log-line:not(:hover) .line-copy-trigger:not([aria-expanded="true"]):not(:focus-visible),
-body.no-word-wrap #logLines .log-line:not(:hover) .line-search-trigger:not([aria-expanded="true"]):not(:focus-visible) {
+/* The copy / search icons are invisible until the line is hovered (or their
+   menu is open), so they take no room either: the text runs to the right
+   edge. Only icons actually shown (hover, or the correlation icon) cover the
+   end of the text. Word wrap off: a cut-off line; word wrap on: see below. */
+#logLines .log-line:not(:hover) .line-copy-trigger:not([aria-expanded="true"]):not(:focus-visible),
+#logLines .log-line:not(:hover) .line-search-trigger:not([aria-expanded="true"]):not(:focus-visible) {
     display: none;
 }
 
-body.no-word-wrap #logLines .log-line:not(:hover) .line-actions {
+#logLines .log-line:not(:hover) .line-actions {
     padding-left: 0;
 }
 
-body.no-word-wrap #logLines .log-line:not(:hover) .line-actions:has(.line-correlation-trigger) {
+#logLines .log-line:not(:hover) .line-actions:has(.line-correlation-trigger) {
     padding-left: 6px;
 }
 
 /* With the copy icon hidden there is nothing to tuck the info icon against. */
-body.no-word-wrap #logLines .log-line:not(:hover) .line-correlation-trigger {
+#logLines .log-line:not(:hover) .line-correlation-trigger {
     margin-right: 0;
+}
+
+/* Word wrap on: the buttons sit over the end of the line's first row, in the
+   line's own colour, instead of keeping a column free on every row; hovering
+   shows them without re-wrapping the text. A line with an info icon keeps
+   room for that icon only (its box plus the 6px in front). */
+body:not(.no-word-wrap) #logLines .log-line {
+    position: relative;
+}
+
+body:not(.no-word-wrap) #logLines .line-actions {
+    position: absolute;
+    top: 2px;
+    right: 8px;
+    padding-left: 6px;
+    background-color: inherit;
+}
+
+body:not(.no-word-wrap) #logLines .log-line:has(.line-correlation-trigger) .line-text {
+    padding-right: 26px;
 }

@@ -106,9 +106,72 @@ function correlationLookupTargets(items) {
     return targets;
 }
 
-function correlationHint(anchor, message) {
-    if (typeof showLineHint !== 'function') return;
-    showLineHint(anchor && anchor.isConnected ? anchor : document.body, message);
+// Lookup feedback sits right in front of the line's ⓘ icon, on its row. A
+// redraw replaces the icon (e.g. when the answer changes the correlations),
+// so the icon is found again by its line; without one the hint goes away.
+// `spot` is {anchor, line}; `done` lets the hint fade after a moment.
+let correlationLookupHint = null;
+let correlationLookupHintTimer = null;
+const CORRELATION_HINT_MS = 4000;
+
+function removeCorrelationHint() {
+    if (correlationLookupHintTimer) clearTimeout(correlationLookupHintTimer);
+    correlationLookupHintTimer = null;
+    if (correlationLookupHint) correlationLookupHint.remove();
+    correlationLookupHint = null;
+    correlationLookupHintSpot = null;
+}
+
+function correlationTriggerFor(spot) {
+    if (spot.anchor && spot.anchor.isConnected) return spot.anchor;
+    const found = Array.from(document.querySelectorAll('.line-correlation-trigger'))
+        .find((button) => button.correlationLine === spot.line);
+    if (found) spot.anchor = found;
+    return found || null;
+}
+
+let correlationLookupHintSpot = null;
+
+function placeCorrelationHint() {
+    const hint = correlationLookupHint;
+    const anchor = hint && correlationLookupHintSpot ? correlationTriggerFor(correlationLookupHintSpot) : null;
+    if (!hint) return;
+    if (!anchor) {
+        removeCorrelationHint();
+        return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    const width = hint.offsetWidth || 0;
+    const height = hint.offsetHeight || 0;
+    let left = rect.left - width - 4;
+    if (left < 8) left = rect.right + 4;  // no room in front: just behind it
+    const top = rect.top + (rect.height - height) / 2;
+    hint.style.left = `${left + window.scrollX}px`;
+    hint.style.top = `${top + window.scrollY}px`;
+}
+
+// The log list scrolls on its own: keep the hint next to its icon.
+document.addEventListener('scroll', placeCorrelationHint, { capture: true, passive: true });
+window.addEventListener('resize', placeCorrelationHint);
+
+function correlationHint(spot, message, done = false) {
+    if (correlationLookupHintTimer) clearTimeout(correlationLookupHintTimer);
+    correlationLookupHintTimer = null;
+    if (!correlationTriggerFor(spot)) {
+        removeCorrelationHint();
+        return;
+    }
+    if (!correlationLookupHint) {
+        correlationLookupHint = document.createElement('div');
+        correlationLookupHint.className = 'correlation-lookup-hint';
+        correlationLookupHint.setAttribute('role', 'status');
+        correlationLookupHint.setAttribute('aria-live', 'polite');
+        document.body.appendChild(correlationLookupHint);
+    }
+    correlationLookupHintSpot = spot;
+    correlationLookupHint.textContent = message;
+    placeCorrelationHint();
+    if (done) correlationLookupHintTimer = setTimeout(removeCorrelationHint, CORRELATION_HINT_MS);
 }
 
 function centralboxVerdictText(verdict) {
@@ -142,13 +205,18 @@ async function postCentralbox(url, payload) {
     }
 }
 
-// A new answer changes the correlations (colour, finding): fetch them again.
-function refreshCorrelationsAfterLookup() {
-    if (caseCorrelationsUploadId) refreshCaseCorrelations(caseCorrelationsUploadId);
+// The final answer: shown in front of the icon, then the correlations are
+// fetched again (a new answer changes colour and finding) and the hint
+// follows the redrawn icon.
+async function finishCorrelationLookup(spot, message, refresh = true) {
+    correlationHint(spot, message, true);
+    if (!refresh || !caseCorrelationsUploadId) return;
+    await refreshCaseCorrelations(caseCorrelationsUploadId);
+    if (correlationLookupHint && correlationLookupHint.textContent === message) correlationHint(spot, message, true);
 }
 
-async function checkCorrelatedHash(target, anchor) {
-    correlationHint(anchor, 'centralbox: checking…');
+async function checkCorrelatedHash(target, spot) {
+    correlationHint(spot, 'centralbox: checking…');
     const { status, body } = await postCentralbox(CENTRALBOX_CHECK_URL, { sha256: target.hash, upload_id: target.uploadId });
     let message = 'centralbox: the check failed, try again later';
     if (status === 200 && body && typeof body === 'object') {
@@ -156,24 +224,22 @@ async function checkCorrelatedHash(target, anchor) {
             || (body.unknown ? 'not in centralbox'
                 : body.available ? 'centralbox: no answer yet, try again later' : 'centralbox is not available right now');
     }
-    correlationHint(anchor, message);
-    refreshCorrelationsAfterLookup();
+    await finishCorrelationLookup(spot, message);
 }
 
-async function freshLookupCorrelatedHash(target, anchor) {
-    correlationHint(anchor, 'centralbox: starting a fresh lookup…');
+async function freshLookupCorrelatedHash(target, spot) {
+    correlationHint(spot, 'centralbox: starting a fresh lookup…');
     const { status, body } = await postCentralbox(CENTRALBOX_FRESH_URL, { sha256: target.hash, upload_id: target.uploadId });
     if (status !== 200 || !body || body.ok !== true) {
         const message = body && typeof body.message === 'string' && body.message ? body.message : 'the lookup could not be started';
-        correlationHint(anchor, 'centralbox: ' + message);
+        await finishCorrelationLookup(spot, 'centralbox: ' + message, false);
         return;
     }
     if (body.state !== 'running') {
-        correlationHint(anchor, centralboxVerdictText(body.verdict) || 'centralbox: ' + body.state);
-        refreshCorrelationsAfterLookup();
+        await finishCorrelationLookup(spot, centralboxVerdictText(body.verdict) || 'centralbox: ' + body.state);
         return;
     }
-    correlationHint(anchor, 'centralbox: looking up…');
+    correlationHint(spot, 'centralbox: looking up…');
     const url = CENTRALBOX_FRESH_STATUS_URL.replace('0'.repeat(64), encodeURIComponent(target.hash));
     for (let attempt = 0; attempt < CENTRALBOX_FRESH_POLL_TRIES; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, CENTRALBOX_FRESH_POLL_MS));
@@ -188,12 +254,11 @@ async function freshLookupCorrelatedHash(target, anchor) {
             const text = state.state === 'error'
                 ? 'centralbox: the lookup failed, try again after the cooldown'
                 : centralboxVerdictText(state.verdict) || (state.state === 'not_found' ? 'not in centralbox' : 'centralbox: done');
-            correlationHint(anchor, text);
-            refreshCorrelationsAfterLookup();
+            await finishCorrelationLookup(spot, text);
             return;
         }
     }
-    correlationHint(anchor, 'centralbox: the lookup is still running; reload the analysis later');
+    await finishCorrelationLookup(spot, 'centralbox: still running; reload the analysis later', false);
 }
 
 function correlationSummary(items) {
@@ -223,6 +288,8 @@ function buildCaseCorrelationButton(entry) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'line-correlation-trigger';
+        // Lets a running lookup find this line's icon again after a redraw.
+        button.correlationLine = entry.line.trim();
         const status = caseCorrelationStatusFor(entry);
         if (CORRELATION_STATUS_CLASS[status]) button.dataset.status = CORRELATION_STATUS_CLASS[status];
         button.textContent = 'ⓘ';
@@ -327,15 +394,16 @@ function openCaseCorrelationMenu(trigger, items) {
     // Correlated hashes without a centralbox verdict: look them up from here,
     // like from the hash menu of the log they are in.
     const targets = correlationLookupTargets(items);
+    const spot = () => ({ anchor: trigger, line: trigger.correlationLine || '' });
     targets.forEach((target) => {
         const which = targets.length > 1 ? ' ' + target.short : '';
         if (CENTRALBOX_CHECK_URL) {
             addCorrelationMenuItem(menu, 'centralbox', 'check this hash' + which,
-                () => checkCorrelatedHash(target, trigger));
+                () => checkCorrelatedHash(target, spot()));
         }
         if (CENTRALBOX_FRESH_URL && CENTRALBOX_FRESH_STATUS_URL) {
             addCorrelationMenuItem(menu, 'centralbox', 'run fresh lookup' + which,
-                () => freshLookupCorrelatedHash(target, trigger));
+                () => freshLookupCorrelatedHash(target, spot()));
         }
     });
 
