@@ -177,7 +177,11 @@ def _extract_malwarebytes(bodies, out):
                     md5=md5)
 
 
-def _extract_hitmanpro(bodies, out):
+def _extract_hitmanpro(bodies, out, source='hitmanpro', auto=True):
+    """HitmanPro: "      SHA-256 . . . : <hash>" under the file's item line
+    (the path, indented by three spaces), with the item's "> engine :
+    detection". Also the HitmanPro output in a Fixlog (source
+    'fixlog_hitmanpro', manual only)."""
     in_section = False
     item = None  # (anchor line_no, path, [rows])
     for i, body in enumerate(bodies):
@@ -189,7 +193,7 @@ def _extract_hitmanpro(bodies, out):
             continue
         m = _HMP_SHA_RE.match(body)
         if m and item is not None:
-            row = out.add(m.group(1), i + 1, item[0], item[1], '', 'hitmanpro', True)
+            row = out.add(m.group(1), i + 1, item[0], item[1], '', source, auto)
             if row is not None:
                 item[2].append(row)
             continue
@@ -288,6 +292,9 @@ def extract_file_hashes(log_type, content):
             _extract_trojan_killer(bodies, out)
         elif log_type == 'Fixlog':
             _extract_fixlog(bodies, out)
+            # HitmanPro results in the Fixlog: the path is on the item line
+            # above the hash. Checked from the hash menu only, like the rest.
+            _extract_hitmanpro(bodies, out, source='fixlog_hitmanpro', auto=False)
         out.add_leftovers(bodies)
         auto_seen = 0
         for row in out.rows:

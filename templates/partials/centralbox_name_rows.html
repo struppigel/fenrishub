@@ -1,0 +1,25 @@
+{% comment %}
+One row per centralbox name no tag covers yet (tagging.centralbox_name_suggestions):
+create a tag for it, or turn on centralbox matching for a tag whose regex already finds it.
+{% endcomment %}
+{% for row in rows %}
+<div class="tag-row">
+    <div class="tag-row-header">
+        <div>
+            <span class="tag-row-name">{{ row.name }}</span>
+            <span class="tag-row-meta">{{ row.hashes }} hash{{ row.hashes|pluralize:"es" }} - {{ row.logs }} log{{ row.logs|pluralize }}</span>
+            {% if row.near_tags %}
+            <div class="cb-names-near">
+                {% for tag in row.near_tags %}<a href="{% url 'rule_tag_edit' tag.id %}?centralbox=1" title="this tag's regex already finds the name; open it with centralbox matching ticked">{{ tag.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+                already {{ row.near_tags|length|pluralize:"finds,find" }} this name - turn on centralbox matching
+            </div>
+            {% endif %}
+        </div>
+        {% if not row.near_tags %}
+        <div class="tag-row-actions">
+            <a href="{% url 'rule_tag_add' %}?centralbox={{ row.name|urlencode:'' }}"><button type="button">create tag</button></a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}

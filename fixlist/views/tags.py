@@ -23,14 +23,16 @@ from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from ..analyzer import parse_rule_line
-from ..models import DEFAULT_TAG_CATEGORY_COLOR, ClassificationRule, RuleTag, TagCategory
+from ..models import DEFAULT_TAG_CATEGORY_COLOR, ClassificationRule, HashVerdict, RuleTag, TagCategory
 from ..tagging import (
     CONDITION_STATUSES,
     TagConditions,
     apply_tag,
+    centralbox_name_suggestions,
     conditions_error,
     conditions_from_payload,
     delete_tag,
+    is_stored_centralbox_name,
     linkable_snippets,
     linkable_speeches,
     parse_tag_category_priority,
@@ -41,6 +43,7 @@ from ..tagging import (
     schedule_line_tag_refresh,
     serialize_tag,
     suggest_tags,
+    suggested_tag_pattern,
     tag_category_error,
     tag_fields_error,
     tag_rule_counts,
@@ -250,7 +253,7 @@ def _entry_type_choices():
     return [(value, value.replace('_', ' ')) for value in values]
 
 
-def _tag_editor(request, tag):
+def _tag_editor(request, tag, prefill=None):
     status_labels = dict(ClassificationRule.STATUS_CHOICES)
     linked_ids = set(tag.speeches.values_list('pk', flat=True)) if tag else set()
     linked_snippet_ids = set(tag.snippets.values_list('pk', flat=True)) if tag else set()
@@ -290,6 +293,8 @@ def _tag_editor(request, tag):
         ),
         'tag': tag,
         'tag_json': serialize_tag(tag) if tag else None,
+        # From the "centralbox names" page: what to fill in (nothing is saved).
+        'prefill_json': prefill,
         'run_preview': bool(tag and not TagConditions.of(tag).is_empty),
         # "more options" opens by itself when the tag uses any of them, so
         # nothing that affects matching is hidden.
@@ -314,15 +319,38 @@ def _tag_editor(request, tag):
 @login_required
 @require_http_methods(["GET"])
 def rule_tag_add_view(request):
-    """Full-page editor for a new tag. Saving goes through rule_tag_save_api."""
-    return _tag_editor(request, None)
+    """Full-page editor for a new tag. Saving goes through rule_tag_save_api.
+    `?centralbox=<name>` (from the "centralbox names" page) fills in a tag
+    for that stored centralbox family or malware type."""
+    prefill = None
+    name = (request.GET.get('centralbox') or '').strip()
+    if name and is_stored_centralbox_name(name):
+        prefill = {'name': name, 'match_pattern': suggested_tag_pattern(name), 'match_centralbox': True}
+    return _tag_editor(request, None, prefill)
 
 
 @login_required
 @require_http_methods(["GET"])
 def rule_tag_edit_view(request, pk):
-    """Full-page editor for one tag; the regex preview runs on load."""
-    return _tag_editor(request, get_object_or_404(RuleTag, pk=pk))
+    """Full-page editor for one tag; the regex preview runs on load.
+    `?centralbox=1` ticks its centralbox matching (saved only on save)."""
+    tag = get_object_or_404(RuleTag, pk=pk)
+    prefill = {'match_centralbox': True} if request.GET.get('centralbox') == '1' else None
+    return _tag_editor(request, tag, prefill)
+
+
+@login_required
+@require_http_methods(["GET"])
+def rule_tag_centralbox_names_view(request):
+    """Stored centralbox families and malware types no tag covers yet, with a
+    link to create a tag for each, or to turn on centralbox matching for an
+    existing tag whose regex already finds the name. Database only."""
+    suggestions = centralbox_name_suggestions()
+    return render(request, 'tag_centralbox_names.html', {
+        'families': suggestions['families'],
+        'types': suggestions['types'],
+        'has_results': HashVerdict.objects.filter(~Q(family='') | ~Q(malware_type='')).exists(),
+    })
 
 
 @login_required

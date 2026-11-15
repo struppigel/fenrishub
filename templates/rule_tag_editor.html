@@ -304,6 +304,7 @@
 </div>
 
 {{ tag_json|json_script:"tagData" }}
+{{ prefill_json|json_script:"tagPrefillData" }}
 {{ linkable_speeches_json|json_script:"ownSpeechesData" }}
 {{ linkable_snippets_json|json_script:"ownSnippetsData" }}
 {% endblock %}
@@ -860,7 +861,24 @@
     });
 
     nameInput.focus();
-    {% if run_preview %}runPreview();{% endif %}
+    // From the "centralbox names" page: a new tag for a centralbox name, or
+    // an existing tag with its centralbox matching ticked. Nothing is saved
+    // until the analyst saves.
+    const prefill = JSON.parse(document.getElementById('tagPrefillData').textContent || 'null');
+    if (prefill && typeof prefill === 'object') {
+        if (!tag) {
+            if (typeof prefill.name === 'string') nameInput.value = prefill.name;
+            if (typeof prefill.match_pattern === 'string') patternInput.value = prefill.match_pattern;
+        }
+        if (prefill.match_centralbox === true) centralboxInput.checked = true;
+        advanced.hidden = false;
+        syncAdvancedToggle();
+        syncCategoryPreview();
+        syncAutoApply();
+        runPreview();
+    } else {
+        {% if run_preview %}runPreview();{% endif %}
+    }
 })();
 </script>
 {% endblock %}

@@ -20,6 +20,7 @@ from .views.centralbox import (
 )
 from .views.tags import (
     rule_tag_add_view,
+    rule_tag_centralbox_names_view,
     rule_tag_edit_view,
     rule_tag_preview_api,
     rule_tag_save_api,
@@ -177,6 +178,7 @@ urlpatterns = [
     path('tags/', rule_tags_view, name='rule_tags'),
     path('tags/add/', rule_tag_add_view, name='rule_tag_add'),
     path('tags/categories/', tag_categories_view, name='tag_categories'),
+    path('tags/centralbox/', rule_tag_centralbox_names_view, name='rule_tag_centralbox_names'),
     path('tags/<int:pk>/edit/', rule_tag_edit_view, name='rule_tag_edit'),
     path('api/tags/', rule_tags_api, name='rule_tags_api'),
     path('api/tags/save/', rule_tag_save_api, name='rule_tag_save_api'),

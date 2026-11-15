@@ -51,7 +51,7 @@ from django.conf import settings
 from django.db import connections, transaction
 from django.db.models import Case, Count, F, IntegerField, JSONField, Max, Q, Value, When
 from django.db.models.fields.json import KT
-from django.db.models.functions import Cast
+from django.db.models.functions import Cast, Lower
 
 from .models import (
     TAG_CATEGORY_COLOR_RE, ClassificationRule, FixlistSnippet, RuleTag, Speech, TagCategory, UploadedLog,
@@ -1610,6 +1610,118 @@ def preview_centralbox_names(conditions, limit=50):
                 found.append({'name': name, 'field': field.replace('_', ' '), 'count': count})
     found.sort(key=lambda item: -item['count'])
     return found[:limit]
+
+
+_REGEX_META_RE = re.compile(r'([\\.^$*+?()\[\]{}|/-])')
+
+
+def suggested_tag_pattern(name):
+    """A tag regex for one centralbox name: the name as a whole word, with
+    only the regex metacharacters escaped (valid for RE2 as well), so it also
+    finds the name in rule descriptions. `\\b` only next to word characters:
+    a name like ".net" has no word boundary in front."""
+    name = (name or '').strip()
+    if not name:
+        return ''
+    escaped = _REGEX_META_RE.sub(r'\\\1', name)
+    start = r'\b' if re.match(r'\w', name[0]) else ''
+    end = r'\b' if re.match(r'\w', name[-1]) else ''
+    return f'{start}{escaped}{end}'
+
+
+def centralbox_name_suggestions():
+    """The stored centralbox names no tag covers yet, for the "centralbox
+    names" page: {'families': [row], 'types': [row]} with row = {name,
+    hashes, logs, near_tags: [{id, name}]}, most logs first.
+
+    A name is covered when a tag with centralbox matching (match_centralbox)
+    finds it; covered names are left out. `near_tags` are the other tags whose
+    regex already finds the name: turning their centralbox matching on beats a
+    duplicate tag. `logs` counts live logs with one of the name's hashes,
+    MD5-only rows (Trojan Killer, Fixlog Folder:) through the SHA256 their MD5
+    stands for (a pair seen in a log, or centralbox's answer). Database only."""
+    from .models import HashAlias, HashVerdict, UploadedLogFileHash
+
+    groups = {'family': {}, 'malware_type': {}}
+    for sha, family, malware_type in (
+        HashVerdict.objects.filter(~Q(family='') | ~Q(malware_type=''))
+        .values_list('sha256', 'family', 'malware_type')
+    ):
+        for field, value in (('family', family), ('malware_type', malware_type)):
+            value = (value or '').strip()
+            if not value:
+                continue
+            entry = groups[field].setdefault(value.lower(), {'spellings': Counter(), 'shas': set()})
+            entry['spellings'][value] += 1
+            entry['shas'].add(sha)
+    if not groups['family'] and not groups['malware_type']:
+        return {'families': [], 'types': []}
+
+    tags = []
+    for tag in RuleTag.objects.exclude(match_pattern='').only(
+        'pk', 'name', 'match_pattern', 'exclude_pattern', 'match_centralbox',
+    ).order_by(Lower('name')):
+        pattern = compile_pattern(tag.match_pattern)
+        if pattern is not None:
+            tags.append((tag, pattern, compile_pattern(tag.exclude_pattern)))
+
+    def finds(pattern, exclude, text):
+        return bool(pattern.search(text)) and not (exclude is not None and exclude.search(text))
+
+    open_names = {}
+    for field, names in groups.items():
+        for key, entry in names.items():
+            name = entry['spellings'].most_common(1)[0][0]
+            matching = [(tag, tag.match_centralbox) for tag, pattern, exclude in tags if finds(pattern, exclude, name)]
+            if any(centralbox for _tag, centralbox in matching):
+                continue
+            open_names[(field, key)] = {
+                'name': name, 'shas': entry['shas'],
+                'near_tags': [{'id': tag.pk, 'name': tag.name} for tag, _centralbox in matching],
+            }
+
+    # Which live logs hold each open name's hashes.
+    all_shas = set().union(*(entry['shas'] for entry in open_names.values())) if open_names else set()
+    uploads_by_sha = {}
+    if all_shas:
+        live = UploadedLogFileHash.objects.filter(upload__deleted_at__isnull=True)
+        for sha, upload_pk in live.filter(sha256__in=all_shas).values_list('sha256', 'upload_id').distinct():
+            uploads_by_sha.setdefault(sha, set()).add(upload_pk)
+        md5_to_sha = dict(
+            UploadedLogFileHash.objects.filter(sha256__in=all_shas).exclude(md5='')
+            .values_list('md5', 'sha256').distinct()
+        )
+        md5_to_sha.update(
+            HashAlias.objects.filter(sha256__in=all_shas).values_list('md5', 'sha256')
+        )
+        if md5_to_sha:
+            for md5, upload_pk in (
+                live.filter(sha256='', md5__in=list(md5_to_sha)).values_list('md5', 'upload_id').distinct()
+            ):
+                uploads_by_sha.setdefault(md5_to_sha[md5], set()).add(upload_pk)
+
+    result = {'families': [], 'types': []}
+    for (field, _key), entry in open_names.items():
+        uploads = set().union(*(uploads_by_sha.get(sha, set()) for sha in entry['shas']))
+        result['families' if field == 'family' else 'types'].append({
+            'name': entry['name'],
+            'hashes': len(entry['shas']),
+            'logs': len(uploads),
+            'near_tags': entry['near_tags'],
+        })
+    for rows in result.values():
+        rows.sort(key=lambda row: (-row['logs'], -row['hashes'], row['name'].lower()))
+    return result
+
+
+def is_stored_centralbox_name(name):
+    """True when `name` is a stored centralbox family or malware type (any case)."""
+    from .models import HashVerdict
+
+    name = (name or '').strip()
+    if not name or len(name) > RuleTag.NAME_MAX_LENGTH or any(ord(ch) < 32 for ch in name):
+        return False
+    return HashVerdict.objects.filter(Q(family__iexact=name) | Q(malware_type__iexact=name)).exists()
 
 
 def centralbox_tag_hits(uploads, tags=None):

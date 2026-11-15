@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}centralbox names - Fenris{% endblock %}
+
+{% block page_context_label %}centralbox names{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
+<style>
+    .cb-names-toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+
+    .cb-names-intro {
+        font-size: 12px;
+        color: var(--la-text-neutral);
+        margin-bottom: 12px;
+        max-width: 900px;
+    }
+
+    .cb-names-section {
+        margin-bottom: 16px;
+    }
+
+    .cb-names-section h3 {
+        margin: 0 0 4px;
+    }
+
+    .cb-names-note {
+        font-size: 12px;
+        color: var(--la-text-muted);
+        margin-bottom: 8px;
+    }
+
+    .cb-names-near {
+        font-size: 12px;
+        color: var(--la-text-neutral);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div>
+    <div class="cb-names-toolbar">
+        <a href="{% url 'rule_tags' %}"><button type="button">back to tags</button></a>
+    </div>
+    <div class="cb-names-intro">
+        centralbox families and malware types found for hashes in Fenris logs that no tag covers yet - no tag with
+        "also match centralbox family and malware type" finds them. Create a tag for one, or, where an existing tag's
+        regex already finds the name, turn on its centralbox matching. Most logs first.
+    </div>
+
+    {% if not has_results %}
+    <div class="cb-names-note">no centralbox results with a family or malware type are stored yet.</div>
+    {% elif not families and not types %}
+    <div class="cb-names-note">every stored centralbox name has a tag.</div>
+    {% else %}
+    <div class="cb-names-section">
+        <h3>families</h3>
+        {% if families %}
+        {% include 'partials/centralbox_name_rows.html' with rows=families %}
+        {% else %}
+        <div class="cb-names-note">every stored family has a tag.</div>
+        {% endif %}
+    </div>
+    <div class="cb-names-section">
+        <h3>malware types</h3>
+        <div class="cb-names-note">generic names (stealer, trojan, ...): a tag for one covers every family of that type.</div>
+        {% if types %}
+        {% include 'partials/centralbox_name_rows.html' with rows=types %}
+        {% else %}
+        <div class="cb-names-note">every stored malware type has a tag.</div>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

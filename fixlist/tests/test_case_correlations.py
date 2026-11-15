@@ -132,6 +132,20 @@ class CaseCorrelationTests(TestCase):
         HashVerdict.objects.create(sha256=EVIL_SHA, state='unknown', checked_at=now, next_check_at=now)
         self.assertEqual(self.get()[RUN_LINE][0]['centralbox']['state'], 'unknown')
 
+    def test_hitmanpro_results_in_a_fixlog_correlate_by_their_path(self):
+        self.add_log('fix-hmp', 'Fixlog', '\n'.join([
+            'Fix result of Farbar Recovery Scan Tool (x64) Version: 01-11-2026',
+            'Malware _____________________________________________________________________',
+            '',
+            '   C:\\Users\\Bob\\AppData\\Roaming\\evil\\evil.exe',
+            '      Size . . . . . . . : 4 110 654 bytes',
+            f'      SHA-256  . . . . . : {EVIL_SHA.upper()}',
+            '    > SurfRight  . . . . : Mal/Generic-S',
+        ]))
+        (item,) = self.get()[RUN_LINE]
+        self.assertEqual((item['kind'], item['sha256'], item['detection'], item['anchor_line_no']),
+                         ('hash', EVIL_SHA, 'Mal/Generic-S', 4))
+
     def test_a_folder_block_md5_counts_too(self):
         self.add_log('folder-md5', 'Fixlog', '\n'.join([
             '========================= Folder: C:\\Users\\Bob\\AppData\\Roaming\\evil ========================',

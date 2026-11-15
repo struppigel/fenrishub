@@ -85,6 +85,15 @@ class ExtractFileHashesTests(TestCase):
         self.assertEqual(row.detection, 'Mal/Generic-S')
         self.assertEqual(row.path, 'C:\\Users\\User\\Desktop\\Love Town.exe')
 
+    def test_hitmanpro_results_in_a_fixlog_get_their_path_but_stay_manual(self):
+        fixlog = 'Fix result of Farbar Recovery Scan Tool (x64) Version: 01-11-2026\n' + HITMANPRO
+        (row,) = [r for r in extract_file_hashes('Fixlog', fixlog) if r.source == 'fixlog_hitmanpro']
+        self.assertFalse(row.auto)
+        self.assertEqual(row.path, 'C:\\Users\\User\\Desktop\\Love Town.exe')
+        self.assertEqual(row.detection, 'Mal/Generic-S')
+        self.assertIn('Love Town.exe', fixlog.split('\n')[row.anchor_line_no - 1])
+        self.assertFalse([r for r in extract_file_hashes('Fixlog', fixlog) if r.source == 'other'])
+
     def test_fixlog_only_file_blocks_are_automatic(self):
         rows = by_sha(extract_file_hashes('Fixlog', FIXLOG_FILE_BLOCK))
         self.assertTrue(rows[H1].auto)
