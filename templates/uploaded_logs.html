@@ -58,16 +58,6 @@
         min-width: 0;
     }
 
-    .upload-stats .stat-b { color: var(--la-status-b); }
-    .upload-stats .stat-p { color: var(--la-status-p); }
-    .upload-stats .stat-c { color: var(--la-status-c); }
-    .upload-stats .stat-a { color: var(--la-status-a); }
-    .upload-stats .stat-w { color: var(--la-status-w); }
-    .upload-stats .stat-g { color: var(--la-status-g); }
-    .upload-stats .stat-s { color: var(--la-status-s); }
-    .upload-stats .stat-i { color: var(--la-status-i); }
-    .upload-stats .stat-j { color: var(--la-status-j); }
-    .upload-stats .stat-u { color: var(--la-status-unknown); }
 
     .upload-stats .rule-set-tag { color: var(--la-text-muted); }
 
@@ -225,40 +215,7 @@
                 <div class="fixlist-meta">
                     {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}{% if not is_trash and uploaded_log.content_hash %} | <span class="content-hash{% if uploaded_log.is_hash_duplicate %} duplicate-hash{% endif %}" title="{{ uploaded_log.content_hash }}">{{ uploaded_log.content_hash|truncatechars:11 }}</span>{% endif %}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}{% if uploaded_log.is_protected %} | <span class="protected-state" title="this upload cannot be trashed, deleted, merged away or auto-purged">protected</span>{% endif %}{% if is_trash and uploaded_log.deleted_at %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}{% endif %}
                 </div>
-                <div class="fixlist-meta upload-stats">
-                    lines {{ uploaded_log.total_line_count }}
-                    {% if uploaded_log.log_type == 'FRST' or uploaded_log.log_type == 'Addition' or uploaded_log.log_type == 'FRST&Addition' %}
-                    |
-                    <span class="{{ uploaded_log.count_malware|stat_class:'b' }}">B {{ uploaded_log.count_malware }}</span>
-                    <span class="{{ uploaded_log.count_pup|stat_class:'p' }}">P {{ uploaded_log.count_pup }}</span>
-                    <span class="{{ uploaded_log.count_clean|stat_class:'c' }}">C {{ uploaded_log.count_clean }}</span>
-                    <span class="{{ uploaded_log.count_alert|stat_class:'a' }}">A {{ uploaded_log.count_alert }}</span>
-                    <span class="{{ uploaded_log.count_warning|stat_class:'w' }}">! {{ uploaded_log.count_warning }}</span>
-                    <span class="{{ uploaded_log.count_grayware|stat_class:'g' }}">G {{ uploaded_log.count_grayware }}</span>
-                    <span class="{{ uploaded_log.count_security|stat_class:'s' }}">S {{ uploaded_log.count_security }}</span>
-                    <span class="{{ uploaded_log.count_info|stat_class:'i' }}">I {{ uploaded_log.count_info }}</span>
-                    <span class="stat-j">J {{ uploaded_log.count_junk }}</span>
-                    <span class="{{ uploaded_log.count_unknown|stat_class:'u' }}">? {{ uploaded_log.count_unknown }}</span>
-                    {% with matched_count=uploaded_log.count_malware|add:uploaded_log.count_pup|add:uploaded_log.count_clean|add:uploaded_log.count_alert|add:uploaded_log.count_warning|add:uploaded_log.count_grayware|add:uploaded_log.count_security|add:uploaded_log.count_info|add:uploaded_log.count_junk %}
-                        {% if uploaded_log.total_line_count > 0 %}
-                            <span class="stat-match">-> {% widthratio matched_count uploaded_log.total_line_count 100 %}% known</span>
-                        {% else %}
-                            <span class="stat-match">-> 0% known</span>
-                        {% endif %}
-                    {% endwith %}
-                    {% with rule_set_label=uploaded_log.effective_rule_set_label %}
-                    | <span class="rule-set-tag rule-set-tag-{{ rule_set_label }}" title="stats above were computed using the {{ rule_set_label }} rule set">{{ rule_set_label }} rules</span>
-                    {% endwith %}
-                    {% elif uploaded_log.log_type == 'Fixlog' %}
-                    | {{ uploaded_log.fixlog_total }} ops |
-                    <span class="{{ uploaded_log.fixlog_success|stat_class:'c' }}">ok {{ uploaded_log.fixlog_success }}</span>
-                    <span class="{{ uploaded_log.fixlog_not_found|stat_class:'u' }}">n/f {{ uploaded_log.fixlog_not_found }}</span>
-                    <span class="{{ uploaded_log.fixlog_error|stat_class:'b' }}">err {{ uploaded_log.fixlog_error }}</span>
-                    {% elif uploaded_log.tool_stats %}
-                    |{% for chip in uploaded_log.tool_stats %}
-                    <span class="stat-{{ chip.2 }}">{{ chip.0 }} {{ chip.1 }}</span>{% endfor %}
-                    {% endif %}
-                </div>
+                {% include "partials/upload_stat_chips.html" with show_rule_set=True %}
                 {% include "partials/upload_tags_text.html" with tags=uploaded_log.rule_tags %}
             </div>
         </div>

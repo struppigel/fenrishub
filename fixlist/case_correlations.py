@@ -89,9 +89,14 @@ SYSTEM_DIFFERENT = 'different'
 SYSTEM_UNKNOWN = 'unknown'
 
 
+# Computer names sit in a log's header and profile paths turn up early: only
+# the start of a log is read (the same everywhere, see views/uploads.py).
+SYSTEM_SIGNAL_CHARS = 200_000
+
+
 def system_signals(content):
-    """(computer names, profile names), lowercased, from a log's text."""
-    content = content or ''
+    """(computer names, profile names), lowercased, from the start of a log's text."""
+    content = (content or '')[:SYSTEM_SIGNAL_CHARS]
     computers = set()
     profiles = set()
     for user_name, computer in _RAN_BY_RE.findall(content):

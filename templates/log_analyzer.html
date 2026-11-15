@@ -553,6 +553,7 @@ window.logAnalyzerConfig = {
     centralboxHashCheckUrl: "{% if not is_guest %}{% url 'centralbox_hash_check_api' %}{% endif %}",
     centralboxFreshStartUrl: "{% if not is_guest %}{% url 'centralbox_fresh_start_api' %}{% endif %}",
     centralboxFreshStatusUrl: "{% if not is_guest %}{% url 'centralbox_fresh_status_api' '0000000000000000000000000000000000000000000000000000000000000000' %}{% endif %}",
+    centralboxAvailable: {% if centralbox_available %}true{% else %}false{% endif %},
     initialUploadId: "{{ initial_upload_id|default:''|escapejs }}",
     initialFixlistId: "{{ initial_fixlist_id|default:''|escapejs }}",
     snippetsApiUrl: "{% url 'snippets_api' %}",
@@ -581,6 +582,7 @@ window.logAnalyzerConfig = {
 <script defer src="{% static 'js/log_analyzer/shared.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/analysis.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/centralbox_suggestions.js' %}"></script>
+<script defer src="{% static 'js/centralbox_lookup.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/case_correlations.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/conflict_wizard.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/rule_preview.js' %}"></script>

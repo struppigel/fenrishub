@@ -634,3 +634,30 @@ class DefenderDetectionTests(TestCase):
         body = self.client.get(reverse('case_correlations_api'), {'upload_id': 'frst-excl'}).json()
         (item,) = body['correlations'][exclusion]
         self.assertEqual((item['detection'], item['source']), ('Trojan:Win32/Malgent!MSR', 'defender'))
+
+
+class LogViewLookupTests(TestCase):
+    """The log page's info panel can look up correlated hashes: it gets the
+    same endpoints as the analyzer, and whether centralbox is available."""
+
+    def test_correlation_context_carries_the_lookup_urls(self):
+        from django.test import override_settings
+
+        user = make_user()
+        case = InfectionCase.objects.create(owner=user, username='bob', auto_assign_new_items=False)
+        frst = make_uploaded_log('frst-look', log_type='FRST', content=FRST, forum_username='nobody')
+        cache_analysis(frst, [RUN_LINE, OTHER_LINE])
+        mb = make_uploaded_log('mb-look', log_type='Malwarebytes', content=MB_SAME, forum_username='nobody')
+        UploadedLogFileHash.rebuild_for(mb)
+        for upload in (frst, mb):
+            InfectionCaseLog.objects.create(case=case, uploaded_log=upload)
+        correlations_for_upload(frst, user)
+        self.client.force_login(user)
+        with override_settings(CENTRALBOX_API_KEY='cbt_server'):
+            context = self.client.get(reverse('view_uploaded_log', args=['frst-look'])).context['correlations']
+        self.assertTrue(context['can_lookup'])
+        self.assertEqual(context['hash_url'], reverse('centralbox_hash_check_api'))
+        self.assertEqual(context['fresh_url'], reverse('centralbox_fresh_start_api'))
+        self.assertEqual(context['fresh_status_url'], reverse('centralbox_fresh_status_api', args=['0' * 64]))
+        context = self.client.get(reverse('view_uploaded_log', args=['frst-look'])).context['correlations']
+        self.assertFalse(context['can_lookup'])  # no server key in tests

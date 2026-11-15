@@ -396,6 +396,12 @@ def page_correlation_context(uploaded_log, user, highlight):
             'fresh': bool(fresh),
             'refresh_url': f"{reverse('case_correlations_api')}?upload_id={uploaded_log.upload_id}",
             'scope': '', 'name': '', 'lines': {},
+            # Lookups of correlated hashes from the info panel (each with the
+            # related log that holds the hash, as the analyzer does).
+            'can_lookup': centralbox.is_available(),
+            'hash_url': reverse('centralbox_hash_check_api'),
+            'fresh_url': reverse('centralbox_fresh_start_api'),
+            'fresh_status_url': reverse('centralbox_fresh_status_api', args=['0' * 64]),
         }
         if result is None:
             return context

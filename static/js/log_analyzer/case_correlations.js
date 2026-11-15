@@ -84,28 +84,17 @@ function correlationReportUrls(items) {
 const CENTRALBOX_CHECK_URL = analyzerConfig.centralboxHashCheckUrl || '';
 const CENTRALBOX_FRESH_URL = analyzerConfig.centralboxFreshStartUrl || '';
 const CENTRALBOX_FRESH_STATUS_URL = analyzerConfig.centralboxFreshStatusUrl || '';
-const CENTRALBOX_FRESH_POLL_MS = 4000;
-const CENTRALBOX_FRESH_POLL_TRIES = 30;
+// Lookups only for a signed-in helper (the URLs are empty for guests) while
+// centralbox is available (log_analyzer view).
+const CENTRALBOX_LOOKUPS_ON = Boolean(analyzerConfig.centralboxAvailable)
+    && Boolean(CENTRALBOX_CHECK_URL || (CENTRALBOX_FRESH_URL && CENTRALBOX_FRESH_STATUS_URL));
+const CENTRALBOX_LOOKUP_URLS = {
+    check: CENTRALBOX_CHECK_URL, fresh: CENTRALBOX_FRESH_URL, freshStatus: CENTRALBOX_FRESH_STATUS_URL,
+};
 
-// Correlated hashes without a centralbox verdict (never checked, or not in
-// centralbox): [{hash, uploadId, short}]. The endpoints accept a hash only
-// together with a log that contains it: the related log of the entry.
+// Correlated hashes without a centralbox verdict (shared: centralbox_lookup.js).
 function correlationLookupTargets(items) {
-    const targets = [];
-    const seen = new Set();
-    items.forEach((item) => {
-        if (!item || item.kind !== 'hash') return;
-        const result = item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
-        if (result && result.report_url) return;  // known: the report entry covers it
-        const sha = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/.test(item.sha256) ? item.sha256 : '';
-        const md5 = typeof item.md5 === 'string' && /^[0-9a-f]{32}$/.test(item.md5) ? item.md5 : '';
-        const hash = sha || md5;
-        const uploadId = String(item.upload_id || '');
-        if (!hash || seen.has(hash) || !/^[A-Za-z0-9_-]+$/.test(uploadId)) return;
-        seen.add(hash);
-        targets.push({ hash, uploadId, short: (sha ? 'SHA-256 ' : 'MD5 ') + hash.slice(0, 12) + '…' });
-    });
-    return targets;
+    return typeof CentralboxLookup === 'object' ? CentralboxLookup.targets(items) : [];
 }
 
 // Lookup feedback sits right in front of the line's ⓘ icon, on its row. A
@@ -188,37 +177,6 @@ function correlationHint(spot, message, done = false) {
     if (done) correlationLookupHintTimer = setTimeout(removeCorrelationHint, CORRELATION_HINT_MS);
 }
 
-function centralboxVerdictText(verdict) {
-    if (!verdict || typeof verdict !== 'object') return '';
-    if (verdict.state === 'unknown') return 'not in centralbox';
-    if (verdict.verdict === 'malicious') return 'centralbox: ' + (verdict.family || verdict.malware_type || 'malicious');
-    return verdict.verdict ? 'centralbox: ' + verdict.verdict : '';
-}
-
-async function postCentralbox(url, payload) {
-    try {
-        const response = await fetch(url, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                'X-CSRFToken': getCookie('csrftoken'),
-            },
-            body: JSON.stringify(payload),
-        });
-        let body = null;
-        try {
-            body = await response.json();
-        } catch (error) {
-            body = null;
-        }
-        return { status: response.status, body };
-    } catch (error) {
-        return { status: 0, body: null };
-    }
-}
-
 // The final answer: shown in front of the icon, then the correlations are
 // fetched again (a new answer changes colour and finding) and the hint
 // follows the redrawn icon.
@@ -230,49 +188,13 @@ async function finishCorrelationLookup(spot, message, refresh = true) {
 }
 
 async function checkCorrelatedHash(target, spot) {
-    correlationHint(spot, 'centralbox: checking…');
-    const { status, body } = await postCentralbox(CENTRALBOX_CHECK_URL, { sha256: target.hash, upload_id: target.uploadId });
-    let message = 'centralbox: the check failed, try again later';
-    if (status === 200 && body && typeof body === 'object') {
-        message = centralboxVerdictText(body.verdict)
-            || (body.unknown ? 'not in centralbox'
-                : body.available ? 'centralbox: no answer yet, try again later' : 'centralbox is not available right now');
-    }
-    await finishCorrelationLookup(spot, message);
+    const result = await CentralboxLookup.check(target, CENTRALBOX_LOOKUP_URLS, (message) => correlationHint(spot, message));
+    await finishCorrelationLookup(spot, result.message, result.refresh);
 }
 
 async function freshLookupCorrelatedHash(target, spot) {
-    correlationHint(spot, 'centralbox: starting a fresh lookup…');
-    const { status, body } = await postCentralbox(CENTRALBOX_FRESH_URL, { sha256: target.hash, upload_id: target.uploadId });
-    if (status !== 200 || !body || body.ok !== true) {
-        const message = body && typeof body.message === 'string' && body.message ? body.message : 'the lookup could not be started';
-        await finishCorrelationLookup(spot, 'centralbox: ' + message, false);
-        return;
-    }
-    if (body.state !== 'running') {
-        await finishCorrelationLookup(spot, centralboxVerdictText(body.verdict) || 'centralbox: ' + body.state);
-        return;
-    }
-    correlationHint(spot, 'centralbox: looking up…');
-    const url = CENTRALBOX_FRESH_STATUS_URL.replace('0'.repeat(64), encodeURIComponent(target.hash));
-    for (let attempt = 0; attempt < CENTRALBOX_FRESH_POLL_TRIES; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, CENTRALBOX_FRESH_POLL_MS));
-        let state = null;
-        try {
-            const response = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
-            state = response.ok ? await response.json() : null;
-        } catch (error) {
-            state = null;
-        }
-        if (state && typeof state === 'object' && state.state && state.state !== 'running') {
-            const text = state.state === 'error'
-                ? 'centralbox: the lookup failed, try again after the cooldown'
-                : centralboxVerdictText(state.verdict) || (state.state === 'not_found' ? 'not in centralbox' : 'centralbox: done');
-            await finishCorrelationLookup(spot, text);
-            return;
-        }
-    }
-    await finishCorrelationLookup(spot, 'centralbox: still running; reload the analysis later', false);
+    const result = await CentralboxLookup.fresh(target, CENTRALBOX_LOOKUP_URLS, (message) => correlationHint(spot, message));
+    await finishCorrelationLookup(spot, result.message, result.refresh);
 }
 
 // Distinct file hashes of the entries (SHA-256, else the MD5 alone), for the
@@ -308,6 +230,23 @@ function caseCorrelationStatusFor(entry) {
     return caseCorrelationStatuses.get(entry.line.trim()) || '';
 }
 
+// A circle with an up arrow, drawn (no font has a dependable glyph for it):
+// the line's correlations hold a hash centralbox has no verdict for, so the
+// menu offers a lookup. Same box and colour as the info icon.
+const CORRELATION_LOOKUP_ICON = '<svg class="line-correlation-lookup-icon" viewBox="0 0 16 16" aria-hidden="true">'
+    + '<circle cx="8" cy="8" r="6.8" fill="none" stroke="currentColor" stroke-width="1.5"/>'
+    + '<path d="M8 11.6V4.8M5.2 7.4L8 4.6l2.8 2.8" fill="none" stroke="currentColor" stroke-width="1.6" '
+    + 'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+// Lines whose correlations offer a centralbox lookup (correlationLookupTargets).
+function correlationLookupLines() {
+    if (!CENTRALBOX_LOOKUPS_ON) return [];
+    return [...caseCorrelations.entries()]
+        .filter(([, items]) => correlationLookupTargets(items).length > 0)
+        .map(([line]) => line)
+        .sort();
+}
+
 // The info icon for one analyzer row, or null.
 function buildCaseCorrelationButton(entry) {
     try {
@@ -320,11 +259,21 @@ function buildCaseCorrelationButton(entry) {
         button.correlationLine = entry.line.trim();
         const status = caseCorrelationStatusFor(entry);
         if (CORRELATION_STATUS_CLASS[status]) button.dataset.status = CORRELATION_STATUS_CLASS[status];
-        button.textContent = 'ⓘ';
+        const lookup = CENTRALBOX_LOOKUPS_ON && correlationLookupTargets(items).length > 0;
+        if (lookup) {
+            // Our own constant markup (no data in it).
+            button.innerHTML = CORRELATION_LOOKUP_ICON;
+            button.dataset.lookup = '1';
+        } else {
+            button.textContent = 'ⓘ';
+        }
         button.setAttribute('aria-haspopup', 'menu');
         button.setAttribute('aria-expanded', 'false');
-        button.setAttribute('aria-label', 'what other logs of this case say about this file');
-        button.title = correlationHeader() + ':\n' + correlationSummary(items);
+        button.setAttribute('aria-label', lookup
+            ? 'what other logs of this case say about this file; a hash can be looked up on centralbox'
+            : 'what other logs of this case say about this file');
+        button.title = correlationHeader() + ':\n' + correlationSummary(items)
+            + (lookup ? '\n(a hash without centralbox verdict: look it up from this menu)' : '');
         button.addEventListener('click', (event) => {
             event.stopPropagation();
             openCaseCorrelationMenu(button, items);
@@ -423,7 +372,7 @@ function openCaseCorrelationMenu(trigger, items) {
     });
     // Correlated hashes without a centralbox verdict: look them up from here,
     // like from the hash menu of the log they are in.
-    const targets = correlationLookupTargets(items);
+    const targets = CENTRALBOX_LOOKUPS_ON ? correlationLookupTargets(items) : [];
     const spot = () => ({ anchor: trigger, line: trigger.correlationLine || '' });
     targets.forEach((target) => {
         const which = targets.length > 1 ? ' ' + target.short : '';
@@ -485,6 +434,8 @@ async function refreshCaseCorrelations(uploadId) {
     const raw = body.correlations && typeof body.correlations === 'object' ? body.correlations : {};
     const rawStatuses = body.statuses && typeof body.statuses === 'object' ? body.statuses : {};
     const previousStatuses = JSON.stringify([...caseCorrelationStatuses]);
+    // A lookup's answer can change the icon without changing the status.
+    const previousLookups = JSON.stringify(correlationLookupLines());
     caseCorrelationStatuses = new Map(
         Object.keys(rawStatuses)
             .filter((line) => typeof rawStatuses[line] === 'string' && CORRELATION_STATUS_CLASS[rawStatuses[line]])
@@ -495,10 +446,12 @@ async function refreshCaseCorrelations(uploadId) {
         const items = Array.isArray(raw[line]) ? raw[line].filter(isValidCorrelation) : [];
         if (line.trim() && items.length) next.set(line.trim(), items);
     });
-    const changed = next.size !== caseCorrelations.size
-        || [...next.keys()].some((line) => !caseCorrelations.has(line))
-        || previousStatuses !== JSON.stringify([...caseCorrelationStatuses]);
+    const keysChanged = next.size !== caseCorrelations.size
+        || [...next.keys()].some((line) => !caseCorrelations.has(line));
     caseCorrelations = next;
+    const changed = keysChanged
+        || previousStatuses !== JSON.stringify([...caseCorrelationStatuses])
+        || previousLookups !== JSON.stringify(correlationLookupLines());
     if (changed && typeof renderLogLines === 'function' && analyzedLines.length) {
         try {
             renderLogLines();

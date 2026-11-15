@@ -132,6 +132,57 @@
         display: none !important;
     }
 
+    /* Feedback of a centralbox lookup from the info panel, next to the line's marker. */
+    .hl-cor-lookup-hint {
+        position: absolute;
+        z-index: 120;
+        padding: 1px 6px;
+        font-family: monospace;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: nowrap;
+        color: var(--la-text-primary);
+        background: var(--la-bg-1);
+        border: 1px solid var(--la-border-strong);
+        box-shadow: var(--la-shadow);
+        pointer-events: none;
+    }
+
+    /* Related logs tab (partials/related_logs.html): case-page rows, scrolling
+       inside the pane when there are many. */
+    .related-logs-pane {
+        max-height: 420px;
+        overflow-y: auto;
+    }
+
+    /* Like the case page's log rows (.fixlist-item), without its hover border. */
+    .related-logs-pane .related-log {
+        display: flex;
+        margin-bottom: 6px;
+        padding: 6px 8px;
+        background-color: var(--la-bg-1);
+        border: 1px solid var(--la-border);
+    }
+
+    .related-logs-head,
+    .related-logs-empty {
+        margin-bottom: 6px;
+        font-size: 12px;
+        color: var(--la-text-muted);
+    }
+
+    .related-system,
+    .related-correlated {
+        margin-left: 8px;
+        font-size: 11px;
+        font-weight: normal;
+    }
+
+    .related-system-same { color: var(--la-success); }
+    .related-system-different { color: var(--la-text-disabled); }
+    .related-correlated { color: var(--la-info); }
+
+
     .uploaded-log-page.log-maximized .uploaded-content {
         height: calc(100vh - 110px);
         max-height: none;
@@ -203,12 +254,15 @@
 
 <h3>upload {{ uploaded_log.upload_id }}</h3>
 {% with has_summary=highlight.has_summary %}
-<div class="log-info-panel{% if has_summary %} has-tabs{% endif %}" id="logInfoPanel">
-{% if has_summary %}
-<div class="panel-tabs log-info-tabs" role="tablist" aria-label="summary or metadata">
-    <button type="button" class="panel-tab tab-active" id="infoTabSummary" data-info-tab="summary" role="tab" aria-selected="true" aria-controls="highlightSummary">summary</button>
-    <button type="button" class="panel-tab" id="infoTabMetadata" data-info-tab="metadata" role="tab" aria-selected="false" aria-controls="logMetadata">metadata</button>
+<div class="log-info-panel{% if has_info_tabs %} has-tabs{% endif %}" id="logInfoPanel">
+{% if has_info_tabs %}
+<div class="panel-tabs log-info-tabs" role="tablist" aria-label="log information">
+    {% if has_summary %}<button type="button" class="panel-tab tab-active" id="infoTabSummary" data-info-tab="summary" role="tab" aria-selected="true" aria-controls="highlightSummary">summary</button>{% endif %}
+    {% if related_count %}<button type="button" class="panel-tab" id="infoTabRelated" data-info-tab="related" role="tab" aria-selected="false" aria-controls="relatedLogs" title="the logs correlations use: your cases with this log, else the same forum user">related logs ({{ related_count }})</button>{% endif %}
+    <button type="button" class="panel-tab{% if not has_summary %} tab-active{% endif %}" id="infoTabMetadata" data-info-tab="metadata" role="tab" aria-selected="{% if has_summary %}false{% else %}true{% endif %}" aria-controls="logMetadata">metadata</button>
 </div>
+{% endif %}
+{% if has_summary %}
 <div class="hl-summary log-info-pane" id="highlightSummary" data-info-pane="summary" role="tabpanel" aria-labelledby="infoTabSummary">
     <div class="hl-summary-head">
         {% if highlight.summary_title %}<span class="hl-summary-title">{{ highlight.summary_title }}</span>{% endif %}
@@ -226,7 +280,11 @@
     {% endif %}
 </div>
 {% endif %}
-<div class="meta-grid log-info-pane" id="logMetadata" data-info-pane="metadata"{% if has_summary %} role="tabpanel" aria-labelledby="infoTabMetadata" hidden{% endif %}>
+{% if related_count %}
+{# Loaded when the tab is first opened (views/uploads.py related_logs_fragment). #}
+<div class="log-info-pane related-logs-pane" id="relatedLogs" data-info-pane="related" data-url="{% url 'uploaded_log_related' uploaded_log.upload_id %}" role="tabpanel" aria-labelledby="infoTabRelated" hidden><div class="related-logs-empty">loading...</div></div>
+{% endif %}
+<div class="meta-grid log-info-pane" id="logMetadata" data-info-pane="metadata"{% if has_info_tabs %} role="tabpanel" aria-labelledby="infoTabMetadata"{% if has_summary %} hidden{% endif %}{% endif %}>
     <div class="meta-key">id</div>
     <div>{{ uploaded_log.upload_id }}</div>
     <div class="meta-key">filename</div>
@@ -310,6 +368,8 @@
 {% if centralbox %}{{ centralbox|json_script:"centralboxData" }}{% endif %}
 {% if correlations %}{{ correlations|json_script:"correlationData" }}{% endif %}
 
+{# Lookups of correlated hashes, shared with the analyzer. #}
+<script src="{% static 'js/centralbox_lookup.js' %}"></script>
 <script>
 // The content is rendered as chunked .log-chunk blocks (see chunk_log filter)
 // so the browser can skip off-screen layout. Each chunk drops its trailing
@@ -355,7 +415,7 @@ function toggleLogMaximized(force) {
     });
 })();
 
-// Summary / metadata tabs. The chosen tab is remembered per browser;
+// Summary / related logs / metadata tabs. The chosen tab is remembered per browser;
 // storage may be unavailable, so every access is guarded.
 (function () {
     const panel = document.getElementById('logInfoPanel');
@@ -364,7 +424,29 @@ function toggleLogMaximized(force) {
     if (!tabs.length) return;
     const STORAGE_KEY = 'uploadedLogInfoTab';
 
+    // The related logs load the first time their tab is shown.
+    let relatedLoaded = false;
+    function loadRelated() {
+        const pane = document.getElementById('relatedLogs');
+        if (relatedLoaded || !pane || !pane.dataset.url) return;
+        relatedLoaded = true;
+        fetch(pane.dataset.url, { credentials: 'same-origin', headers: { Accept: 'text/html' } })
+            // A redirect means the login page (session expired): not ours to show.
+            .then((response) => (response.ok && !response.redirected ? response.text() : Promise.reject(response.status)))
+            // Our own server-rendered (escaped) template, same origin.
+            .then((html) => { pane.innerHTML = html; })
+            .catch(() => {
+                relatedLoaded = false;
+                pane.innerHTML = '';
+                const note = document.createElement('div');
+                note.className = 'related-logs-empty';
+                note.textContent = 'could not load the related logs - open the tab again to retry';
+                pane.appendChild(note);
+            });
+    }
+
     function selectTab(name, remember) {
+        if (name === 'related') loadRelated();
         tabs.forEach((tab) => {
             const active = tab.dataset.infoTab === name;
             tab.classList.toggle('tab-active', active);
@@ -373,14 +455,16 @@ function toggleLogMaximized(force) {
         panel.querySelectorAll('[data-info-pane]').forEach((pane) => {
             pane.hidden = pane.dataset.infoPane !== name;
         });
-        if (remember) {
+        if (remember && name !== 'related') {
             try { localStorage.setItem(STORAGE_KEY, name); } catch (e) {}
         }
     }
 
     let saved = null;
     try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
-    if (saved && tabs.some((tab) => tab.dataset.infoTab === saved)) selectTab(saved, false);
+    // "related logs" is not reopened by itself: it would load the list (and
+    // maybe compute correlations) on every page view.
+    if (saved && saved !== 'related' && tabs.some((tab) => tab.dataset.infoTab === saved)) selectTab(saved, false);
     tabs.forEach((tab) => tab.addEventListener('click', () => selectTab(tab.dataset.infoTab, true)));
 })();
 
@@ -1003,6 +1087,14 @@ const CaseCorrelations = (function () {
     }
     if (!data || typeof data !== 'object') return none;
     if (!data.lines || typeof data.lines !== 'object') data.lines = {};
+    // centralbox lookups of correlated hashes (views/centralbox.py
+    // page_correlation_context); kept when the correlations are refreshed.
+    const lookupConfig = {
+        can_lookup: data.can_lookup === true,
+        hash_url: typeof data.hash_url === 'string' ? data.hash_url : '',
+        fresh_url: typeof data.fresh_url === 'string' ? data.fresh_url : '',
+        fresh_status_url: typeof data.fresh_status_url === 'string' ? data.fresh_status_url : '',
+    };
     const DOT = ' · ';
     const STATUS_CLASS = { B: 'b', P: 'p', C: 'c', A: 'a', '!': 'w', G: 'g', S: 's', I: 'i', J: 'j' };
     // Summary severity per status, as views/centralbox.py _CORRELATION_SUMMARY_SEVERITY.
@@ -1077,7 +1169,100 @@ const CaseCorrelations = (function () {
             if (/^https:\/\/centralbox\.dev\/analysis\/[0-9a-f]{64}$/.test(url) && !reports.includes(url)) reports.push(url);
         });
         reports.forEach(url => items.push({ key: 'centralbox', value: url, run: () => openUrl(url) }));
+        // Correlated hashes without a centralbox verdict: look them up here,
+        // as in the analyzer (with the related log that holds the hash).
+        const targets = lookupConfig.can_lookup && typeof CentralboxLookup === 'object'
+            ? CentralboxLookup.targets(entriesFor(line)) : [];
+        if (targets.length) {
+            targets.forEach(target => {
+                const which = targets.length > 1 ? ' ' + target.short : '';
+                if (lookupConfig.hash_url) {
+                    items.push({ key: 'centralbox', value: 'check this hash' + which, run: () => checkHash(target, line) });
+                }
+                if (lookupConfig.fresh_url && lookupConfig.fresh_status_url) {
+                    items.push({ key: 'centralbox', value: 'run fresh lookup' + which, run: () => freshLookup(target, line) });
+                }
+            });
+        }
         return items;
+    }
+
+    const LOOKUP_URLS = {
+        check: lookupConfig.hash_url, fresh: lookupConfig.fresh_url, freshStatus: lookupConfig.fresh_status_url,
+    };
+
+    // Lookup feedback: a small label in front of the line's marker (or at the
+    // line's end), on its row. It follows scrolling and a redraw of the
+    // markers, hides while the line is outside the visible log, and fades a
+    // moment after the answer.
+    let lookupHint = null;
+    let lookupHintTimer = null;
+    let lookupHintLine = '';
+
+    function removeHint() {
+        if (lookupHintTimer) clearTimeout(lookupHintTimer);
+        lookupHintTimer = null;
+        if (lookupHint) lookupHint.remove();
+        lookupHint = null;
+        lookupHintLine = '';
+    }
+
+    function placeHint() {
+        if (!lookupHint) return;
+        const current = lookupHintLine ? document.getElementById('L' + lookupHintLine) : null;
+        if (!current) {
+            removeHint();
+            return;
+        }
+        const marker = markers.find(([markerLine]) => markerLine === current);
+        const anchor = marker && !marker[1].hidden ? marker[1] : current;
+        const rect = anchor.getBoundingClientRect();
+        const box = root ? root.getBoundingClientRect() : null;
+        lookupHint.hidden = Boolean(box && (rect.top < box.top || rect.top + 12 > box.bottom));
+        if (lookupHint.hidden) return;
+        const width = lookupHint.offsetWidth || 0;
+        const height = lookupHint.offsetHeight || 0;
+        const left = marker ? rect.left - width - 4 : rect.right - width;
+        lookupHint.style.left = `${Math.max(8, left) + window.scrollX}px`;
+        lookupHint.style.top = `${rect.top + (Math.min(rect.height, 18) - height) / 2 + window.scrollY}px`;
+    }
+
+    document.addEventListener('scroll', placeHint, { capture: true, passive: true });
+    window.addEventListener('resize', placeHint);
+
+    function hint(line, message, done) {
+        if (lookupHintTimer) clearTimeout(lookupHintTimer);
+        lookupHintTimer = null;
+        const no = line && line.dataset ? line.dataset.n : '';
+        if (!no) return;
+        if (!lookupHint) {
+            lookupHint = document.createElement('div');
+            lookupHint.className = 'hl-cor-lookup-hint';
+            lookupHint.setAttribute('role', 'status');
+            lookupHint.setAttribute('aria-live', 'polite');
+            document.body.appendChild(lookupHint);
+        }
+        lookupHintLine = no;
+        lookupHint.textContent = message;
+        placeHint();
+        if (done) lookupHintTimer = setTimeout(removeHint, 4000);
+    }
+
+    // The answer: shown, then the correlations are fetched again (a new
+    // answer changes marker and summary) and the label follows the redraw.
+    async function finishLookup(line, result) {
+        hint(line, result.message, true);
+        if (!result.refresh) return;
+        await refresh();
+        if (lookupHint && lookupHint.textContent === result.message) hint(line, result.message, true);
+    }
+
+    async function checkHash(target, line) {
+        await finishLookup(line, await CentralboxLookup.check(target, LOOKUP_URLS, (message) => hint(line, message)));
+    }
+
+    async function freshLookup(target, line) {
+        await finishLookup(line, await CentralboxLookup.fresh(target, LOOKUP_URLS, (message) => hint(line, message)));
     }
 
     // A marker per correlated line, in its status colour: the info icon alone,
@@ -1251,12 +1436,13 @@ const CaseCorrelations = (function () {
 
     function refresh() {
         const url = typeof data.refresh_url === 'string' ? data.refresh_url : '';
-        if (!url.startsWith('/')) return;
-        fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+        if (!url.startsWith('/')) return Promise.resolve();
+        return fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
             .then(response => (response.ok ? response.json() : null))
             .then(answer => {
                 if (!answer || typeof answer !== 'object') return;
                 data = {
+                    ...lookupConfig,
                     scope: answer.scope || '',
                     name: answer.name || '',
                     lines: byLineNumber(answer),

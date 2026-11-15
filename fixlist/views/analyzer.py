@@ -24,6 +24,7 @@ from ..analyzer import (
     analyze_log_text, parse_rule_line, inspect_line_matches,
     VALID_STATUSES,
 )
+from ..centralbox import is_available as centralbox_is_available
 from ..models import ClassificationRule, Fixlist, UploadedLog
 from ..rule_sets import (
     SHARED_RULE_SET_KEY,
@@ -131,6 +132,8 @@ def log_analyzer_view(request):
             'upload_link_helper_base': upload_link_helper_base,
             'upload_link_general': upload_link_general,
             'fixlist_template': fixlist_template,
+            # Lookups of correlated hashes are only offered while centralbox works.
+            'centralbox_available': centralbox_is_available(),
         },
     )
 

@@ -1,0 +1,20 @@
+{% load rule_tags %}{% comment %}
+The "related logs" tab of a log page (views/uploads.py related_logs_fragment):
+the logs correlations use, newest first, with chips, tags, a same-system
+badge and how many lines the two logs share a correlation for.
+{% endcomment %}<div class="related-logs-head">{% if scope == 'user' %}other logs of forum user {{ name }} (no case of yours){% else %}logs of your cases with this log{% endif %}</div>
+{% for uploaded_log in logs %}
+<div class="related-log">
+    <div style="flex: 1;">
+        <div class="fixlist-title"><span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|log_type_css_slug }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>{% if uploaded_log.system == 'same' %}<span class="related-system related-system-same" title="same computer or Windows profile name as this log">same system</span>{% elif uploaded_log.system == 'different' %}<span class="related-system related-system-different" title="another computer or Windows profile name than this log">other system?</span>{% endif %}{% if uploaded_log.correlated_lines %}<span class="related-correlated" title="{{ uploaded_log.correlated_title }}">{{ uploaded_log.correlated_lines }} correlated line{{ uploaded_log.correlated_lines|pluralize }}</span>{% endif %}</div>
+        <div class="fixlist-meta">
+            uploaded {{ uploaded_log.created_at|date:"Y-m-d H:i" }}{% if uploaded_log.scan_date %} | scanned {{ uploaded_log.scan_date|date:"Y-m-d H:i" }}{% endif %} | {{ uploaded_log.forum_username }}
+        </div>
+        {% include "partials/upload_stat_chips.html" %}
+        {% include "partials/upload_tags_text.html" with tags=uploaded_log.rule_tags %}
+    </div>
+</div>
+{% empty %}
+<div class="related-logs-empty">no related logs</div>
+{% endfor %}
+{% if more_count %}<div class="related-logs-empty">and {{ more_count }} more</div>{% endif %}

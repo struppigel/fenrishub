@@ -111,6 +111,7 @@ from .views.statistics import statistics_view
 from .views.uploads import (
     diff_uploaded_logs_view,
     download_uploaded_log,
+    related_logs_fragment,
     upload_log_view,
     uploaded_log_content_api,
     uploaded_logs_view,
@@ -141,6 +142,7 @@ urlpatterns = [
     path('uploads/search/', log_search_view, name='log_search'),
     path('uploads/search/download/', log_search_download_view, name='log_search_download'),
     path('uploads/<str:upload_id>/', view_uploaded_log, name='view_uploaded_log'),
+    path('uploads/<str:upload_id>/related/', related_logs_fragment, name='uploaded_log_related'),
     path('uploads/<str:upload_id>/download/', download_uploaded_log, name='download_uploaded_log'),
     path('uploads/diff/<str:id1>/<str:id2>/', diff_uploaded_logs_view, name='diff_uploaded_logs'),
     path('fixes/trash/', fixlists_trash_view, name='fixlists_trash'),

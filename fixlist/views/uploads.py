@@ -15,6 +15,7 @@ from django.core.paginator import Paginator
 from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from django.db.models import Count, Q
+from django.db.models.functions import Substr
 from urllib.parse import urlencode
 
 from ..file_hashes import HASH_LOG_TYPES
@@ -23,7 +24,10 @@ from ..log_converters import convert_log_to_response
 from ..log_highlighting import (
     HighlightResult, Stat, apply_analysis_statuses, highlight_log, render_highlighted_html,
 )
-from ..models import LOG_TYPE_UNKNOWN, RuleTag, UploadedLog
+from ..case_correlations import (
+    SYSTEM_SIGNAL_CHARS, correlations_for_upload, related_upload_ids, same_system, system_signals,
+)
+from ..models import LOG_TYPE_UNKNOWN, CorrelationCache, InfectionCaseLog, RuleTag, UploadedLog
 from ..permissions import user_can_delete_uploaded_log
 from ..rule_sets import SHARED_RULE_SET_KEY, resolve_effective_rule_set_key, resolve_user_rule_set_key
 from ..tagging import found_tags_by_upload, logs_with_tags, tags_for_listing
@@ -534,6 +538,14 @@ def view_uploaded_log(request, upload_id):
         if uploaded_log.log_type in ('Fixlog', 'MAU'):
             add_hash_summary(highlight, uploaded_log, centralbox_context)
 
+    # The "related logs" tab: only how many there are now (one query); the
+    # list itself loads when the tab is opened (related_logs_fragment).
+    try:
+        related_count = len(related_upload_ids(uploaded_log, request.user)[0])
+    except Exception:
+        logger.exception('Counting the related logs failed for %s', upload_id)
+        related_count = 0
+
     return render(request, 'view_uploaded_log.html', {
         'uploaded_log': uploaded_log,
         'converted_response': converted_response,
@@ -541,6 +553,97 @@ def view_uploaded_log(request, upload_id):
         'highlighted_html': render_highlighted_html(highlight),
         'centralbox': centralbox_context,
         'correlations': correlation_context,
+        'related_count': related_count,
+        'has_info_tabs': bool((highlight is not None and highlight.has_summary) or related_count),
+    })
+
+
+RELATED_LOGS_LIMIT = 100
+
+
+def _correlated_line_counts(uploaded_log, user, logs):
+    """{upload pk: (lines, title)}: how many lines the log and each related
+    log share a correlation for. An FRST / Addition log counts its own lines
+    with an entry from the other log (computed if needed: this runs after the
+    page). Any other log counts the stored correlations of related FRST /
+    Addition logs that have an entry from it (never computed here)."""
+    by_upload_id = {log.upload_id: log.pk for log in logs}
+    counts = {}
+    if uploaded_log.log_type in UploadedLog.ANALYZED_LOG_TYPES:
+        result = correlations_for_upload(uploaded_log, user)
+        for entries in (result.get('lines') or {}).values():
+            for upload_id in {entry.get('upload_id') for entry in entries if isinstance(entry, dict)}:
+                if upload_id in by_upload_id:
+                    counts[by_upload_id[upload_id]] = counts.get(by_upload_id[upload_id], 0) + 1
+        title = 'lines of this log with a correlation from that log'
+        return {pk: (n, title) for pk, n in counts.items()}
+    analyzed = [log.pk for log in logs if log.log_type in UploadedLog.ANALYZED_LOG_TYPES]
+    if not analyzed:
+        return {}
+    # Each log's current scope, as related_upload_ids picks it: the viewer's
+    # case scope while the log is in one of their live cases, else the
+    # forum-user scope (an old case row would be outdated).
+    in_own_case = set(
+        InfectionCaseLog.objects.filter(
+            uploaded_log_id__in=analyzed, case__owner_id=user.pk, case__deleted_at__isnull=True,
+        ).values_list('uploaded_log_id', flat=True)
+    )
+    rows = {}
+    for upload_pk, scope_key, payload in (
+        CorrelationCache.objects.filter(upload_id__in=analyzed, scope_key__in=[f'case:{user.pk}', 'user'])
+        .values_list('upload_id', 'scope_key', 'payload')
+    ):
+        if (scope_key == 'user') != (upload_pk in in_own_case):
+            rows[upload_pk] = payload
+    title = "lines of that log with a correlation from this log"
+    result = {}
+    for upload_pk, payload in rows.items():
+        lines = (payload or {}).get('lines') if isinstance(payload, dict) else None
+        if not isinstance(lines, dict):
+            continue
+        n = sum(
+            1 for entries in lines.values()
+            if isinstance(entries, list) and any(
+                isinstance(entry, dict) and entry.get('upload_id') == uploaded_log.upload_id for entry in entries
+            )
+        )
+        if n:
+            result[upload_pk] = (n, title)
+    return result
+
+
+@login_required
+@require_http_methods(["GET"])
+def related_logs_fragment(request, upload_id):
+    """The "related logs" tab of a log page as an HTML fragment: the logs
+    correlations use (case_correlations.related_upload_ids), newest first,
+    with chips, tags, a same-system badge and the correlated line count."""
+    uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
+    ids, scope, name = related_upload_ids(uploaded_log, request.user)
+    related = UploadedLog.objects.filter(pk__in=ids).defer('content').order_by('-created_at', '-pk')
+    total = related.count()
+    logs = list(related[:RELATED_LOGS_LIMIT])
+    if logs:
+        tags_by_upload = found_tags_by_upload([log.pk for log in logs], resolve_user_rule_set_key(request.user))
+        starts = dict(
+            UploadedLog.objects.filter(pk__in=[uploaded_log.pk] + [log.pk for log in logs])
+            .annotate(head=Substr('content', 1, SYSTEM_SIGNAL_CHARS)).values_list('pk', 'head')
+        )
+        own = system_signals(starts.get(uploaded_log.pk) or '')
+        try:
+            correlated = _correlated_line_counts(uploaded_log, request.user, logs)
+        except Exception:
+            logger.exception('Counting correlated lines failed for %s', upload_id)
+            correlated = {}
+        for log in logs:
+            log.rule_tags = tags_for_listing(tags_by_upload.get(log.pk, []))
+            log.system = same_system(own, system_signals(starts.get(log.pk) or ''))
+            log.correlated_lines, log.correlated_title = correlated.get(log.pk, (0, ''))
+    return render(request, 'partials/related_logs.html', {
+        'logs': logs,
+        'scope': scope,
+        'name': name,
+        'more_count': max(0, total - len(logs)),
     })
 
 
