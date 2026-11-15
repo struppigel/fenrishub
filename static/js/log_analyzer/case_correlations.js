@@ -333,9 +333,11 @@ function ensureCaseCorrelationMenu() {
     return menu;
 }
 
+// That log at the entry's line, which its page scrolls to and marks. For a
+// hash: the file's entry (path line or detection header), not the hash line.
 function correlationLogUrl(item) {
     const id = String(item.upload_id || '');
-    const line = Number(item.line_no);
+    const line = Number(item.anchor_line_no || item.line_no);
     if (!/^[A-Za-z0-9_-]+$/.test(id)) return '';
     return `/uploads/${encodeURIComponent(id)}/` + (Number.isInteger(line) && line > 0 ? `#L${line}` : '');
 }

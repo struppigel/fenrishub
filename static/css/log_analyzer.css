@@ -1398,7 +1398,9 @@ button.lookup-menu-item {
        so the glyphs share their line; no nudging. */
     flex: 0 0 auto;
     min-width: 20px;
-    margin: 0 -6px 0 0;
+    /* Last in the row: tucked against the search icon in front of it, as
+       close as the search icon is to the copy icon (.line-search-trigger). */
+    margin: 0 0 0 -11px;
     padding: 0 4px;
     text-align: center;
     font-family: inherit;
@@ -1497,9 +1499,9 @@ body.no-word-wrap #logLines .line-actions {
     padding-left: 6px;
 }
 
-/* With the copy icon hidden there is nothing to tuck the info icon against. */
+/* With the search icon hidden there is nothing to tuck the info icon against. */
 #logLines .log-line:not(:hover) .line-correlation-trigger {
-    margin-right: 0;
+    margin-left: 0;
 }
 
 /* Word wrap on: the buttons sit over the end of the line's first row, in the

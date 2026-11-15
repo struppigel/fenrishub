@@ -2007,9 +2007,11 @@ function renderLogLines() {
             lineDiv.insertBefore(chipBox, actions);
         }
         // What other logs of the case say about the line's file (case_correlations.js).
+        // Last, at the right edge: the copy / search icons appear in front of
+        // it on hover, so it never moves under the pointer.
         if (typeof buildCaseCorrelationButton === 'function') {
             const correlationButton = buildCaseCorrelationButton(entry);
-            if (correlationButton) actions.insertBefore(correlationButton, copyBtn);
+            if (correlationButton) actions.appendChild(correlationButton);
         }
         // A "suggested B" from centralbox (centralbox_suggestions.js), if any.
         if (typeof buildCentralboxSuggestionChip === 'function') {

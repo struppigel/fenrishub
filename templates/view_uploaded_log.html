@@ -1010,9 +1010,11 @@ const CaseCorrelations = (function () {
         return item && Array.isArray(item.entries) ? item.entries : [];
     }
 
+    // That log at the entry's line (the file's entry for a hash), which its
+    // page scrolls to and marks (LineJump).
     function logUrl(entry) {
         const id = String(entry.upload_id || '');
-        const line = Number(entry.line_no);
+        const line = Number(entry.anchor_line_no || entry.line_no);
         if (!/^[A-Za-z0-9_-]+$/.test(id)) return '';
         return `/uploads/${encodeURIComponent(id)}/` + (Number.isInteger(line) && line > 0 ? `#L${line}` : '');
     }
@@ -1070,10 +1072,10 @@ const CaseCorrelations = (function () {
         return items;
     }
 
-    // A marker per correlated line, in its status colour, in the same column
-    // as the hover icons: each marker copies their layout (info, copy, search,
-    // the last two invisible) and is placed like them, outside the line, so
-    // copy and download stay the raw log. Clicks go to the hover icons.
+    // A marker per correlated line, in its status colour: the info icon alone,
+    // at the right edge where the hover icons end with theirs, placed outside
+    // the line so copy and download stay the raw log. Clicks go to the hover
+    // icons, which cover it.
     let markers = [];
     let listening = false;
     // All layout reads first, then all writes: interleaving them would force
@@ -1097,7 +1099,10 @@ const CaseCorrelations = (function () {
 
     function drawMarkers() {
         if (!hasLog) return;
-        markers.forEach(([, group]) => group.remove());
+        markers.forEach(([line, group]) => {
+            group.remove();
+            line.classList.remove('hl-cor-line');
+        });
         markers = [];
         Object.keys(data.lines).forEach(no => {
             if (!/^\d+$/.test(no)) return;
@@ -1107,17 +1112,16 @@ const CaseCorrelations = (function () {
             const group = document.createElement('span');
             group.className = 'hl-line-actions hl-cor-marker';
             group.setAttribute('aria-hidden', 'true');
-            ['hl-line-info-trigger', 'hl-line-copy-trigger', 'hl-line-search-trigger'].forEach((cls, index) => {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.tabIndex = -1;
-                button.className = cls;
-                button.textContent = ['ⓘ', '⎘', '⌕'][index];
-                if (index > 0) button.style.visibility = 'hidden';
-                group.appendChild(button);
-            });
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.tabIndex = -1;
+            button.className = 'hl-line-info-trigger';
+            button.textContent = 'ⓘ';
+            group.appendChild(button);
             group.dataset.cor = STATUS_CLASS[item.status] || 'none';
             root.appendChild(group);
+            // Only these lines keep room on the right (for the marker).
+            line.classList.add('hl-cor-line');
             markers.push([line, group]);
         });
         root.classList.toggle('hl-has-correlations', markers.length > 0);
@@ -1453,10 +1457,12 @@ function openTokenMenu(token) {
         return button;
     }
 
-    const infoButton = makeButton('hl-line-info-trigger', '\u24d8', 'what related logs say about this file');
-    infoButton.hidden = true;
     const copyButton = makeButton('hl-line-copy-trigger', '\u2398', 'copy line or component');
     const searchButton = makeButton('hl-line-search-trigger', '\u2315', 'search component (Google, VirusTotal, CyberChef)');
+    // Last, at the right edge where the line's marker is: hovering adds the
+    // other icons in front of it, so it never moves under the pointer.
+    const infoButton = makeButton('hl-line-info-trigger', '\u24d8', 'what related logs say about this file');
+    infoButton.hidden = true;
     root.appendChild(actions);
 
     let currentLine = null;
@@ -1517,24 +1523,60 @@ function openTokenMenu(token) {
     });
 })();
 
-// Summary entries jump to their log line: open its section, scroll the log
-// container to it and mark it briefly.
+// Jump to a log line: open its section, scroll the log to it and mark it for
+// a while (the mark fades out). Used by the summary entries and for #L<n>
+// links, e.g. from a correlation in another log ("same file in ...").
+const LineJump = (function () {
+    let flashTimer = null;
+
+    function jump(no, flashMs) {
+        const line = document.getElementById('L' + no);
+        if (!line || !line.classList.contains('hl-line')) return false;
+        const section = line.closest('details');
+        if (section && !section.open) section.open = true;
+        line.scrollIntoView({ block: 'center' });
+        document.querySelectorAll('#uploadedContent .hl-flash').forEach(el => el.classList.remove('hl-flash'));
+        void line.offsetWidth;
+        line.classList.add('hl-flash');
+        if (flashTimer) clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => line.classList.remove('hl-flash'), flashMs);
+        return true;
+    }
+
+    function lineFromHash() {
+        const match = /^#L(\d+)$/.exec(window.location.hash || '');
+        return match ? match[1] : '';
+    }
+
+    // Opened at #L<n>: wait for the layout (lazily laid out chunks, fonts),
+    // then jump, and once more in case positions shifted meanwhile.
+    function jumpToHash() {
+        const no = lineFromHash();
+        if (!no) return;
+        requestAnimationFrame(() => {
+            if (!jump(no, 4000)) return;
+            setTimeout(() => {
+                const line = document.getElementById('L' + no);
+                if (line) line.scrollIntoView({ block: 'center' });
+            }, 300);
+        });
+    }
+
+    window.addEventListener('hashchange', jumpToHash);
+    if (document.readyState === 'complete') jumpToHash();
+    else window.addEventListener('load', jumpToHash);
+    return { jump };
+})();
+
 (function () {
     const summary = document.getElementById('highlightSummary');
     if (!summary) return;
     summary.addEventListener('click', function (event) {
         const link = event.target.closest('a.hl-jump');
         if (!link) return;
-        const line = document.getElementById('L' + link.dataset.line);
-        if (!line) return;
+        if (!document.getElementById('L' + link.dataset.line)) return;
         event.preventDefault();
-        const section = line.closest('details');
-        if (section && !section.open) section.open = true;
-        line.scrollIntoView({ block: 'center' });
-        line.classList.remove('hl-flash');
-        void line.offsetWidth;
-        line.classList.add('hl-flash');
-        setTimeout(() => line.classList.remove('hl-flash'), 1500);
+        LineJump.jump(link.dataset.line, 1500);
     });
 })();
 
