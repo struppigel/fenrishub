@@ -8,10 +8,14 @@ Only SHA256 is extracted, and only from the log types whose 64-hex values are
 real file hashes. In FRST / Addition / SecurityCheck logs they are file names,
 crash bucket ids or URL parts, so those types yield nothing.
 
+MD5s are kept where they name a file: next to its SHA256 (Malwarebytes,
+Fixlog File:), or alone (Trojan Killer, the entries of a Fixlog Folder: block).
+
 A row is `auto` when it may be checked on centralbox without anyone asking:
 scanner detections, MAU file hashes and the hashes of a Fixlog `File:` block.
 Everything else (Fixlog folder listings with thousands of hashes, PowerShell
-output, stray hashes) is only checked when an analyst asks from the hash menu.
+output, stray hashes, MD5-only rows) is only checked when an analyst asks
+from the hash menu.
 
 Line numbers count `content.split('\\n')` from 1, exactly like the `L{no}` ids
 of log_highlighting.render_highlighted_html, so the page can find the token.
@@ -60,6 +64,15 @@ _FIXLOG_FILE_BANNER_RE = re.compile(r'^=+ File: ')
 _FIXLOG_BANNER_RE = re.compile(r'^={5,}')
 # Fixlog folder listing: "  [<hash>] date - date - size - Signer: X - <path>"
 _FOLDER_LIST_RE = re.compile(r'^\s*\[([0-9A-Fa-f]{64})\]\s')
+# Fixlog "Folder:" block: "===== Folder: <path> =====" ... "====== End of Folder: ======",
+# one line per entry with its MD5 (all zeros for directories):
+# "2026-11-11 17:32 - 2026-11-11 17:32 - 000000312 ____H [<md5>] (<signer>) <path>"
+_FIXLOG_FOLDER_BANNER_RE = re.compile(r'^=+ Folder: ')
+_FOLDER_MD5_RE = re.compile(
+    r'^\s*\d{4}-\d\d-\d\d \d\d:\d\d - \d{4}-\d\d-\d\d \d\d:\d\d - \d+ \S+ '
+    r'\[([0-9A-Fa-f]{32})\] \(.*?\) ((?:[A-Za-z]:\\|\\\\).*?)\s*$'
+)
+_ZERO_MD5 = '0' * 32
 
 
 @dataclass
@@ -220,14 +233,21 @@ def _extract_trojan_killer(bodies, out):
 
 
 def _extract_fixlog(bodies, out):
-    in_file_block = False
+    in_file_block = in_folder_block = False
     current = (None, '')  # (line_no, path) of the file the block is describing
     current_md5 = ''
     for i, body in enumerate(bodies):
         if _FIXLOG_BANNER_RE.match(body):
             in_file_block = bool(_FIXLOG_FILE_BANNER_RE.match(body))
+            in_folder_block = bool(_FIXLOG_FOLDER_BANNER_RE.match(body))
             current, current_md5 = (None, ''), ''
             continue
+        if in_folder_block:
+            # MD5 only, like Trojan Killer: checked from the hash menu, never by itself.
+            m = _FOLDER_MD5_RE.match(body)
+            if m and m.group(1) != _ZERO_MD5:
+                out.add('', i + 1, i + 1, m.group(2), '', 'fixlog_folder', False, md5=m.group(1))
+                continue
         if in_file_block:
             if _PATH_START_RE.match(body.strip()):
                 # "C:\x\y.exe [symlink -> ...]": keep only the file's own path.

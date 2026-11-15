@@ -22,7 +22,7 @@ from .. import centralbox
 from .. import frst_extractors as ex
 from ..case_correlations import cached_correlations, correlations_for_upload, related_upload_ids, summary_note
 from ..file_hashes import is_md5, is_sha256
-from ..models import HashVerdict, RuleTag, UploadedLog, UploadedLogFileHash, UserProfile
+from ..models import HashVerdict, RuleTag, UploadedLog, UploadedLogFileHash
 from ..tagging import centralbox_tags_by_sha
 from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
 
@@ -66,29 +66,30 @@ def page_hash_context(uploaded_log, user=None):
             return {}
         auto = [
             {'sha256': sha, 'line_no': line_no, 'anchor_line_no': anchor,
-             # Scanner detections and Fixlog File: entries get a flag in the summary box.
-             'flag': source in ('malwarebytes', 'hitmanpro', 'fixlog_file')}
+             # Scanner detections, MAU files and Fixlog File: entries get a flag in the summary box.
+             'flag': source in ('malwarebytes', 'hitmanpro', 'fixlog_file', 'mau')}
             for sha, line_no, anchor, is_auto, source, md5 in rows if is_auto
         ]
-        # MD5-only rows (Trojan Killer): marked through the SHA256 they stand
-        # for (a pair seen in another log, or centralbox's answer).
+        # MD5-only rows (Trojan Killer, Fixlog Folder:): marked through the
+        # SHA256 they stand for (a pair seen in another log, or centralbox's answer).
         md5_rows = [
-            {'md5': md5, 'line_no': line_no, 'anchor_line_no': anchor, 'flag': source == 'trojan_killer'}
+            {'md5': md5, 'line_no': line_no, 'anchor_line_no': anchor,
+             'flag': source in ('trojan_killer', 'fixlog_folder')}
             for sha, line_no, anchor, is_auto, source, md5 in rows if md5 and not sha
         ]
         md5s = {row['md5'] for row in md5_rows}
         md5_map = centralbox.resolve_md5s(md5s)
         shas = {sha for sha, *_ in rows if sha} | set(md5_map.values())
         verdicts = {row.sha256: row.as_dict() for row in HashVerdict.objects.filter(sha256__in=shas)}
-        profile = UserProfile.objects.filter(user=user).first() if user is not None and user.is_authenticated else None
+        available = centralbox.is_available()
         return {
-            'available': centralbox.is_available(),
+            'available': available,
             'auto': auto,
             # Logs with many hashes are not checked by themselves (menu only).
             'auto_check': len({row['sha256'] for row in auto}) <= centralbox.auto_check_limit(),
             'verdicts': verdicts,
             # Hashes checked by hand (e.g. in a Fixlog folder listing): their
-            # line is in the summary box too (add_fixlog_hash_summary).
+            # line is in the summary box too (add_hash_summary).
             'checked_rows': [
                 {'sha256': sha, 'anchor_line_no': line_no}
                 for sha, line_no, anchor, is_auto, source, md5 in rows if sha and not is_auto and sha in verdicts
@@ -98,13 +99,13 @@ def page_hash_context(uploaded_log, user=None):
             'md5_unknown': centralbox.unknown_md5s(md5s - set(md5_map)),
             'tags': _tags_by_sha(shas),
             'fresh': centralbox.fresh_lookup_info(shas | md5s),
-            'can_fresh_lookup': bool(profile and profile.can_run_centralbox_lookups()),
+            # Any helper, with the server key (once per hash per cooldown).
+            'can_fresh_lookup': available,
             'upload_id': uploaded_log.upload_id,
             'check_url': reverse('centralbox_upload_check_api', args=[uploaded_log.upload_id]),
             'hash_url': reverse('centralbox_hash_check_api'),
             'fresh_url': reverse('centralbox_fresh_start_api'),
             'fresh_status_url': reverse('centralbox_fresh_status_api', args=['0' * 64]),
-            'profile_url': reverse('profile'),
         }
     except Exception:
         logger.exception('Building the centralbox page context failed for %s', uploaded_log.upload_id)
@@ -114,27 +115,44 @@ def page_hash_context(uploaded_log, user=None):
 _SUMMARY_SEVERITY = {'malicious': 'b', 'suspicious': 'w', 'clean': 'c'}
 
 
-def add_fixlog_hash_summary(highlight, uploaded_log, context):
-    """Fixlog summary box: every File: entry, and every line whose hash has a
-    stored centralbox result (e.g. checked by hand in a folder listing), next
-    to the failures the highlighter lists. The page adds the centralbox flag.
+def add_hash_summary(highlight, uploaded_log, context):
+    """Summary box of a Fixlog or MAU log: the lines whose hash has a stored
+    centralbox result, next to what the highlighter lists. Fixlog: also every
+    File: entry, and "not in centralbox" answers (e.g. checked by hand in a
+    folder listing). MAU (dozens of hashes, checked by themselves): only real
+    verdicts, at the file's path line. The page adds the centralbox flag.
     Database only; never raises."""
     try:
         if highlight is None or not context:
             return
+        mau = uploaded_log.log_type == 'MAU'
         verdicts = context.get('verdicts') or {}
+        md5_map = context.get('md5_map') or {}
+        md5_unknown = context.get('md5_unknown') or {}
         items = []
         seen = {item.line_no for item in highlight.summary}
         rows = (
-            UploadedLogFileHash.objects.filter(upload=uploaded_log).exclude(sha256='')
-            .values_list('sha256', 'line_no', 'anchor_line_no', 'source', 'path')
+            UploadedLogFileHash.objects.filter(upload=uploaded_log)
+            .values_list('sha256', 'md5', 'line_no', 'anchor_line_no', 'source', 'path')
         )
-        for sha, line_no, anchor, source, path in rows:
-            verdict = verdicts.get(sha)
+        for sha, md5, line_no, anchor, source, path in rows:
+            if sha:
+                verdict, kind = verdicts.get(sha), 'SHA-256'
+            elif md5 in md5_map:
+                # An MD5-only row (Folder: block) whose SHA256 is known.
+                verdict, kind = verdicts.get(md5_map[md5]), 'MD5'
+            elif md5 in md5_unknown:
+                verdict, kind = {'state': HashVerdict.STATE_UNKNOWN}, 'MD5'
+            else:
+                continue
             if source == 'fixlog_file':
                 line, name = anchor, 'File:'
+            elif mau:
+                if (verdict or {}).get('verdict') not in _SUMMARY_SEVERITY:
+                    continue
+                line, name = anchor, kind
             elif verdict is not None:
-                line, name = line_no, 'SHA-256'
+                line, name = line_no, kind
             else:
                 continue
             if line in seen:
@@ -144,9 +162,12 @@ def add_fixlog_hash_summary(highlight, uploaded_log, context):
             items.append(SummaryItem(line, severity, name, path or sha))
         if items:
             highlight.summary = sorted(highlight.summary + items, key=lambda item: item.line_no)
-            highlight.summary_title = 'Fixlog failures, files and centralbox results'
+            highlight.summary_title = (
+                f'{highlight.summary_title} and centralbox results' if mau and highlight.summary_title
+                else 'Fixlog failures, files and centralbox results'
+            )
     except Exception:
-        logger.exception('Adding hashes to the Fixlog summary failed for %s', uploaded_log.upload_id)
+        logger.exception('Adding hashes to the summary failed for %s', uploaded_log.upload_id)
 
 
 @login_required
@@ -169,11 +190,10 @@ def centralbox_hash_check_api(request):
     sha, _uploaded_log, error = _json_hash_and_log(request)
     if error:
         return error
-    # The helper's own centralbox key when they have one, else the server key.
-    key, profile = centralbox.helper_key(request.user)
     if is_md5(sha):
-        # Trojan Killer MD5: through a known SHA256, else centralbox's MD5 answer.
-        result = centralbox.check_md5(sha, force=True, key=key, profile=profile)
+        # An MD5-only file (Trojan Killer, Fixlog Folder:): through a known
+        # SHA256, else centralbox's MD5 answer.
+        result = centralbox.check_md5(sha, force=True)
         answer = {
             'available': result['available'], 'verdict': result['verdict'],
             'sha256': result['sha256'], 'unknown': result['unknown'],
@@ -183,13 +203,8 @@ def centralbox_hash_check_api(request):
         # stored (e.g. someone just submitted the sample there); limited per hash.
         result = centralbox.check_hashes(
             [sha], max_calls=2, deadline_seconds=MANUAL_CHECK_DEADLINE_SECONDS, force=True,
-            key=key, profile=profile,
         )
         answer = {'available': result['available'], 'verdict': result['verdicts'].get(sha)}
-    # centralbox told the helper's key to wait (HTTP 429): say for how long.
-    waiting = centralbox.key_paused_seconds(centralbox.key_id_of(key)) if key else 0
-    if waiting:
-        answer['note'] = centralbox.rate_limited_message(waiting)
     return JsonResponse(answer)
 
 
@@ -227,7 +242,7 @@ def _fresh_response(result):
 @require_http_methods(['POST'])
 def centralbox_fresh_start_api(request):
     """Start a fresh centralbox analysis of one hash of the log, with the
-    helper's own centralbox key. Once per hash per cooldown, for everyone."""
+    server key, for any helper. Once per hash per cooldown, for everyone."""
     sha, _uploaded_log, error = _json_hash_and_log(request)
     if error:
         return error

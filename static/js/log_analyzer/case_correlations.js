@@ -58,6 +58,19 @@ function correlationRows(items) {
     });
 }
 
+const CENTRALBOX_REPORT_URL_RE = /^https:\/\/centralbox\.dev\/analysis\/[0-9a-f]{64}$/;
+
+// Distinct centralbox report URLs of the entries (stored verdicts of known hashes).
+function correlationReportUrls(items) {
+    const urls = [];
+    items.forEach((item) => {
+        const result = item && item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
+        const url = result && typeof result.report_url === 'string' ? result.report_url : '';
+        if (CENTRALBOX_REPORT_URL_RE.test(url) && !urls.includes(url)) urls.push(url);
+    });
+    return urls;
+}
+
 function correlationSummary(items) {
     return correlationRows(items).map((item) => `${correlationSource(item)}: ${correlationFinding(item)}`).join('\n');
 }
@@ -180,6 +193,11 @@ function openCaseCorrelationMenu(trigger, items) {
         if (item.centralbox && item.centralbox.verdict === 'malicious') classes.push('line-correlation-bad');
         addCorrelationMenuItem(menu, correlationSource(item), correlationFinding(item),
             () => openNewTab(correlationLogUrl(item)), classes.join(' '));
+    });
+    // The centralbox report of each correlated hash, shown as its URL like
+    // the hash menus' VirusTotal entry.
+    correlationReportUrls(items).forEach((url) => {
+        addCorrelationMenuItem(menu, 'centralbox', url, () => openNewTab(url));
     });
 
     menu.hidden = false;

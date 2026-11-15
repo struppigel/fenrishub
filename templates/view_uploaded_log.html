@@ -881,8 +881,6 @@ const Centralbox = (function () {
             if (!body.verdict && !body.unknown) {
                 note = available ? 'centralbox: no answer yet, try again later' : 'centralbox is not available right now';
             }
-            // e.g. the helper's own key has to wait after a centralbox 429.
-            if (typeof body.note === 'string' && body.note) note = body.note;
         } else {
             note = 'centralbox: the check failed, try again later';
         }
@@ -900,8 +898,8 @@ const Centralbox = (function () {
         return !Number.isNaN(next.getTime()) && next > new Date();
     }
 
-    // A fresh lookup: centralbox analyses the hash anew with the helper's own
-    // key, then the page asks for the result every few seconds.
+    // A fresh lookup: centralbox analyses the hash anew (with the server key),
+    // then the page asks for the result every few seconds.
     async function followFresh(hash, tries) {
         const url = data.fresh_status_url.replace('0'.repeat(64), hash);
         for (let attempt = 0; attempt < tries; attempt += 1) {
@@ -938,11 +936,8 @@ const Centralbox = (function () {
     }
 
     function freshItem(hash, known) {
-        if (!data.fresh_url) return null;
-        if (!data.can_fresh_lookup) {
-            return { key: 'centralbox', value: 'add your centralbox key in your profile to run lookups',
-                     run: () => { window.location.href = data.profile_url; } };
-        }
+        // Any helper, with the server key; none while centralbox is off or paused.
+        if (!data.fresh_url || !data.can_fresh_lookup) return null;
         const info = fresh[hash];
         if (info && info.state === 'running' && inCooldown(info)) {
             return { key: 'centralbox', value: 'fresh lookup running…',
@@ -957,8 +952,9 @@ const Centralbox = (function () {
         return { key: 'centralbox', value: known ? 're-run lookup' : 'run fresh lookup', run: () => startFresh(hash) };
     }
 
-    // Hash menu entries: the report once the hash is known, a cached re-check
-    // for unknown ones, and a fresh lookup with the helper's own key.
+    // Hash menu entries: the report once the hash is known (shown as its URL,
+    // like the VirusTotal entry), a cached re-check for unknown ones, and a
+    // fresh lookup.
     function menuItems(token) {
         const hash = token.textContent.trim().toLowerCase();
         if (!isHash(hash) || busy.has(hash) || token.classList.contains('hl-section-md5')) return [];
@@ -967,9 +963,8 @@ const Centralbox = (function () {
         const known = Boolean(l && v.report_url);
         const items = [];
         if (known) {
-            items.push({ key: 'centralbox', value: 'report' + DOT + l.text, run: () => openUrl(v.report_url) });
-        } else if ((available || data.can_fresh_lookup) && data.hash_url) {
-            // Checked with the helper's own key when they have one, else the server key.
+            items.push({ key: 'centralbox', value: v.report_url, run: () => openUrl(v.report_url) });
+        } else if (available && data.hash_url) {
             items.push({ key: 'centralbox', value: l ? 'check again' : 'check this hash', run: () => checkOne(hash) });
         }
         const freshEntry = freshItem(hash, known);
@@ -1056,6 +1051,14 @@ const CaseCorrelations = (function () {
             const url = logUrl(entry);
             items.push({ key, value, run: () => { if (url) openUrl(url); } });
         });
+        // The centralbox report of each correlated hash, shown as its URL.
+        const reports = [];
+        entriesFor(line).forEach(entry => {
+            const result = entry && entry.centralbox && typeof entry.centralbox === 'object' ? entry.centralbox : null;
+            const url = result && typeof result.report_url === 'string' ? result.report_url : '';
+            if (/^https:\/\/centralbox\.dev\/analysis\/[0-9a-f]{64}$/.test(url) && !reports.includes(url)) reports.push(url);
+        });
+        reports.forEach(url => items.push({ key: 'centralbox', value: url, run: () => openUrl(url) }));
         return items;
     }
 

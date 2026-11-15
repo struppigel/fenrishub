@@ -76,25 +76,6 @@
         </div>
 
         <div class="form-group">
-            <label for="centralbox_key">centralbox API key</label>
-            <div class="field-help">Your own key from <a href="https://centralbox.dev" target="_blank" rel="noopener noreferrer">centralbox.dev</a>. With it you can run fresh centralbox lookups of SHA-256 hashes from the hash menu of a log; they run under your centralbox account and limits. Results are shared with every helper. The key is stored encrypted and never shown again. Leave the field empty to keep the stored key.</div>
-            {% if centralbox_key_hint %}
-            <div class="field-help">stored key: <code>{{ centralbox_key_hint }}</code>
-                {% if centralbox_key_status == 'ok' %}<span style="color: var(--la-success);">- accepted by centralbox</span>
-                {% elif centralbox_key_status == 'rejected' %}<span style="color: var(--la-danger);">- rejected by centralbox, enter a new one</span>
-                {% else %}<span>- not verified yet</span>{% endif %}
-            </div>
-            {% endif %}
-            <input type="password" id="centralbox_key" name="centralbox_key" autocomplete="off" spellcheck="false" placeholder="cbt_...">
-            {% if centralbox_key_hint %}
-            <label class="checkbox-label">
-                <input type="checkbox" name="centralbox_key_remove">
-                <span>remove my centralbox key</span>
-            </label>
-            {% endif %}
-        </div>
-
-        <div class="form-group">
             <div class="section-title">api tokens</div>
             <div class="field-help">Personal read-only tokens for LLM clients such as Claude Code or Claude Desktop: <a href="{% url 'api_tokens' %}">manage api tokens</a>.</div>
         </div>

@@ -214,3 +214,43 @@ class CaseSuggestionTests(TestCase):
         self.assertEqual(self.get('mb-evil')['suggestions'], [])
         self.assertEqual(self.get('no-such-log')['suggestions'], [])
         self.assertEqual(self.client.get(self.url).json()['suggestions'], [])
+
+
+class MauSummaryTests(TestCase):
+    """MAU summary box: files whose hash has a real centralbox verdict, at the path line."""
+
+    def test_verdicts_are_listed_and_unknown_hashes_are_not(self):
+        from .test_file_hashes import H1, H2, H3, MAU_FILES
+        from .test_log_highlighting import MAU_REPORT
+
+        from ..models import LogTypeDetectionRule
+
+        # The page re-checks the type: with the report header and a rule it stays MAU.
+        LogTypeDetectionRule.objects.create(
+            name='MAU', log_type='MAU', pattern=r'MAU Log|Malicious App Uninstaller',
+            scope=LogTypeDetectionRule.SCOPE_START,
+        )
+        content = MAU_REPORT + '\n' + MAU_FILES
+        user = make_user()
+        self.client.force_login(user)
+        mau = make_uploaded_log('mau-log', log_type='MAU', content=content, forum_username='nobody')
+        UploadedLogFileHash.rebuild_for(mau)
+        now = timezone.now()
+        HashVerdict.objects.create(sha256=H1, state='known', verdict='malicious', family='asyncrat',
+                                   checked_at=now, next_check_at=now + timedelta(days=7))
+        HashVerdict.objects.create(sha256=H2, state='known', verdict='clean',
+                                   checked_at=now, next_check_at=now + timedelta(days=7))
+        HashVerdict.objects.create(sha256=H3, state='unknown', checked_at=now, next_check_at=now + timedelta(days=1))
+        with mock.patch.object(centralbox, '_http_get') as http:
+            response = self.client.get(reverse('view_uploaded_log', args=['mau-log']))
+        http.assert_not_called()
+        lines = content.split('\n')
+        items = [(item.line_no, item.severity, item.name, item.target)
+                 for item in response.context['highlight'].summary if item.name == 'SHA-256']
+        self.assertEqual(items, [
+            (lines.index(f'  SHA256: {H1}'), 'b', 'SHA-256',
+             'c:\\users\\bob\\appdata\\local\\via\\via chrome runtime\\.gitattributes'),
+            (lines.index(f'  SHA256: {H2}'), 'c', 'SHA-256', 'c:\\users\\bob\\appdata\\local\\via\\x.cfg'),
+        ])
+        self.assertTrue(response.context['highlight'].summary_title.endswith('and centralbox results'))
+        self.assertTrue(all(row['flag'] for row in response.context['centralbox']['auto']))

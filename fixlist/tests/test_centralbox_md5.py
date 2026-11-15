@@ -20,7 +20,6 @@ from ..rule_sets import SHARED_RULE_SET_KEY
 from ..tagging import found_tags_by_upload
 from ..views.centralbox import page_hash_context
 from .factories import make_uploaded_log, make_user
-from .test_centralbox_fresh import give_key
 from .test_file_hashes import FIXLOG_FILE_BLOCK, H1
 from .test_log_highlighting import MALWAREBYTES, TROJAN_KILLER
 
@@ -125,11 +124,11 @@ class TrojanKillerMarksTests(TestCase):
             self.assertEqual(response.status_code, 404, md5)
 
     @override_settings(CENTRALBOX_API_KEY='cbt_server')
-    def test_md5_fresh_lookup_with_the_helpers_key(self):
-        give_key(self.user)
+    def test_md5_fresh_lookup_with_the_server_key(self):
         calls = []
 
         def fake(method, path, key, body=None):
+            self.assertEqual(key, 'cbt_server')
             calls.append((method, path, body))
             if method == 'POST':
                 return {'ok': True, 'status': 'running', 'hash': TK_MD5}
@@ -158,3 +157,56 @@ class TrojanKillerMarksTests(TestCase):
                                      content_type='application/json')
         self.assertEqual(again.status_code, 429)
         request.assert_not_called()
+
+
+
+FOLDER_MD5 = '844b0c9e2b98586eb43755cd853ef646'
+FIXLOG_FOLDER = '\n'.join([
+    'Fix result of Farbar Recovery Scan Tool (x64) Version: 10-11-2026',
+    '========================= Folder: C:\\Users\\kayde\\AppData\\Roaming\\qmjaq ========================',
+    '',
+    '2026-11-11 17:32 - 2026-11-11 17:32 - 000000000 ____D [00000000000000000000000000000000] () '
+    'C:\\Users\\kayde\\AppData\\Roaming\\qmjaq\\sub',
+    f'2026-11-11 17:32 - 2026-11-11 17:32 - 000000312 ____H [{FOLDER_MD5.upper()}] (Some Signer (x)) '
+    'C:\\Users\\kayde\\AppData\\Roaming\\qmjaq\\jfhc.exe',
+    '',
+    '====== End of Folder: ======',
+    f'2026-11-11 17:32 - 2026-11-11 17:32 - 000000312 ____A [{"b" * 32}] () C:\\Outside\\block.exe',
+])
+
+
+class FixlogFolderMd5Tests(TestCase):
+    """Fixlog Folder: blocks list an MD5 per file: checkable by request only."""
+
+    def setUp(self):
+        cache.clear()
+        centralbox._consecutive_failures = 0
+        self.user = make_user()
+        self.client.force_login(self.user)
+        self.fix = make_uploaded_log('fix-folder', log_type='Fixlog', content=FIXLOG_FOLDER, forum_username='nobody')
+        UploadedLogFileHash.rebuild_for(self.fix)
+
+    def test_one_md5_row_per_file_inside_the_block(self):
+        rows = [row for row in extract_file_hashes('Fixlog', FIXLOG_FOLDER) if row.md5]
+        self.assertEqual([(row.md5, row.sha256, row.auto, row.source, row.line_no, row.path) for row in rows], [
+            (FOLDER_MD5, '', False, 'fixlog_folder', 5, 'C:\\Users\\kayde\\AppData\\Roaming\\qmjaq\\jfhc.exe'),
+        ])
+
+    def test_never_checked_by_itself(self):
+        self.assertEqual(set(centralbox.auto_hashes_of([self.fix.pk])), set())
+        context = page_hash_context(self.fix, self.user)
+        self.assertEqual(context['md5_rows'], [{'md5': FOLDER_MD5, 'line_no': 5, 'anchor_line_no': 5, 'flag': True}])
+
+    @override_settings(CENTRALBOX_API_KEY='cbt_server')
+    def test_manual_check_and_summary_entry(self):
+        answer = {'ok': True, 'analysed': True, 'hash': FOLDER_MD5, 'htype': 'MD5', 'sha256': MB_SHA,
+                  'verdict': 'malicious', 'family': 'asyncrat', 'score': 100}
+        with mock.patch.object(centralbox, '_http_get', side_effect=[answer, None]) as http:
+            body = self.client.post(reverse('centralbox_hash_check_api'),
+                                    json.dumps({'sha256': FOLDER_MD5, 'upload_id': 'fix-folder'}),
+                                    content_type='application/json').json()
+        self.assertEqual(http.call_args_list[0].args, (f'/status/{FOLDER_MD5}',))
+        self.assertEqual((body['sha256'], body['verdict']['family']), (MB_SHA, 'asyncrat'))
+        page = self.client.get(reverse('view_uploaded_log', args=['fix-folder']))
+        items = [(item.line_no, item.severity, item.name, item.target) for item in page.context['highlight'].summary]
+        self.assertIn((5, 'b', 'MD5', 'C:\\Users\\kayde\\AppData\\Roaming\\qmjaq\\jfhc.exe'), items)

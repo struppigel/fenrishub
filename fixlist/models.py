@@ -151,27 +151,9 @@ class UserProfile(models.Model):
     )
     # Uploads / trash lists open on "all channels" instead of "my channel".
     uploads_all_channels_default = models.BooleanField(default=False)
-    # The helper's own centralbox.dev API key, for fresh lookups (centralbox.py).
-    # Stored encrypted (secret_box.py); only the hint is ever shown.
-    CENTRALBOX_KEY_UNVERIFIED = 'unverified'
-    CENTRALBOX_KEY_OK = 'ok'
-    CENTRALBOX_KEY_REJECTED = 'rejected'
-    centralbox_key_encrypted = models.TextField(blank=True, default='')
-    centralbox_key_hint = models.CharField(max_length=32, blank=True, default='')
-    centralbox_key_status = models.CharField(max_length=16, blank=True, default='')
-    centralbox_key_checked_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f'Profile for {self.user.username}'
-
-    def centralbox_key(self):
-        """The decrypted key, or None (no key, or SECRET_KEY changed). Never log it."""
-        from .secret_box import decrypt
-
-        return decrypt(self.centralbox_key_encrypted)
-
-    def can_run_centralbox_lookups(self):
-        return bool(self.centralbox_key_encrypted) and self.centralbox_key_status != self.CENTRALBOX_KEY_REJECTED
 
 
 class AccessLog(models.Model):
@@ -1444,10 +1426,10 @@ class HashAlias(models.Model):
 
 class CentralboxUsageMinute(models.Model):
     """Calls to centralbox per wall-clock minute and API key, shared by every
-    worker process (the cache is per process). For the server key ('')
-    centralbox.take_budget increments it atomically and refuses once the
-    minute's limit is reached; a helper's key (a short hash of it) is only
-    counted, since centralbox itself limits those (HTTP 429)."""
+    worker process (the cache is per process). centralbox.take_budget
+    increments it atomically and refuses once the minute's limit is reached.
+    `key_id` is the budget bucket of the server key: '' for reads, 'fresh'
+    for fresh lookups."""
 
     minute = models.BigIntegerField()
     key_id = models.CharField(max_length=16, blank=True, default='')

@@ -38,7 +38,7 @@ from django.utils import timezone
 from .file_hashes import is_md5, is_sha256
 from .models import (
     CentralboxFreshLookup, CentralboxUsageMinute, HashAlias, HashVerdict, SiteConfig, UploadedLog,
-    UploadedLogFileHash, UserProfile,
+    UploadedLogFileHash,
 )
 
 logger = logging.getLogger('fixlist.centralbox')
@@ -151,13 +151,14 @@ def _http_get(path):
 # Budget and pause, shared across worker processes
 # ---------------------------------------------------------------------------
 
-def key_id_of(key):
-    """A short, non-reversible id for a helper's key ('' is the server key)."""
-    return hashlib.sha256(key.encode('utf-8')).hexdigest()[:16] if key else ''
+# Budget buckets in CentralboxUsageMinute.key_id: the server key's reads, and
+# its fresh lookups (centralbox limits those separately).
+BUDGET_READS = ''
+BUDGET_FRESH = 'fresh'
 
 
-def take_budget(key_id='', limit=None):
-    """Count one call against this minute's limit for one key; False when it is used up."""
+def take_budget(key_id=BUDGET_READS, limit=None):
+    """Count one call against this minute's limit of a bucket; False when it is used up."""
     if limit is None:
         limit = int(_setting('CENTRALBOX_CALLS_PER_MINUTE', 60))
     limit = max(1, int(limit))
@@ -170,81 +171,6 @@ def take_budget(key_id='', limit=None):
         minute=minute, key_id=key_id, calls__lt=limit,
     ).update(calls=F('calls') + 1)
     return updated == 1
-
-
-# A helper's own key has no Fenris-side limit: centralbox publishes none and
-# answers 429 with Retry-After once one is exceeded. Then that key (only)
-# waits that long. Per process (Django's cache): at worst each worker sends
-# one more request and gets another 429.
-KEY_PAUSE_MIN_SECONDS = 5
-KEY_PAUSE_MAX_SECONDS = 3600
-KEY_PAUSE_DEFAULT_SECONDS = 60
-
-
-def _key_pause_cache_key(key_id):
-    return f'centralbox-key-pause:{key_id}'
-
-
-def pause_key(key_id, retry_after=None):
-    """Hold a helper's key back for centralbox's Retry-After (5 s to 1 h).
-    Returns the seconds."""
-    from django.core.cache import cache
-
-    try:
-        seconds = int(str(retry_after).strip())
-    except (TypeError, ValueError):
-        seconds = KEY_PAUSE_DEFAULT_SECONDS
-    seconds = min(KEY_PAUSE_MAX_SECONDS, max(KEY_PAUSE_MIN_SECONDS, seconds))
-    try:
-        cache.set(_key_pause_cache_key(key_id), time.time() + seconds, timeout=seconds)
-    except Exception:
-        logger.exception('Pausing a helper centralbox key failed')
-    return seconds
-
-
-def key_paused_seconds(key_id):
-    """Seconds a helper's key still has to wait after a 429, else 0."""
-    from django.core.cache import cache
-
-    if not key_id:
-        return 0
-    try:
-        until = cache.get(_key_pause_cache_key(key_id))
-    except Exception:
-        return 0
-    if not isinstance(until, (int, float)):
-        return 0
-    return max(0, int(until - time.time() + 0.999))
-
-
-def rate_limited_message(seconds):
-    return f'centralbox rate-limits your key; try again in {seconds} s.'
-
-
-def count_call(key_id):
-    """Count a call with a key in this minute's usage row (statistics only, never refuses)."""
-    minute = int(time.time()) // 60
-    try:
-        CentralboxUsageMinute.objects.get_or_create(minute=minute, key_id=key_id)
-    except IntegrityError:
-        pass
-    except Exception:
-        return
-    try:
-        CentralboxUsageMinute.objects.filter(minute=minute, key_id=key_id).update(calls=F('calls') + 1)
-    except Exception:
-        pass
-
-
-def _spend(key_id):
-    """May one call go out? The server key ('') counts against its per-minute
-    budget; a helper's key goes unless centralbox told it to wait."""
-    if not key_id:
-        return take_budget('')
-    if key_paused_seconds(key_id):
-        return False
-    count_call(key_id)
-    return True
 
 
 def _pause(until, reason):
@@ -269,11 +195,9 @@ def _retry_after_seconds(value):
 _last_failure = threading.local()
 
 
-def _record_failure(failure, key_id=''):
-    """Count a failure and pause lookups when needed. Returns True when paused.
-
-    A helper's own key (`key_id` set) being rejected or rate limited is that
-    helper's problem and pauses nothing; centralbox being down still does."""
+def _record_failure(failure, key_id=BUDGET_READS):
+    """Count a failure (in the bucket of the call) and pause lookups when
+    needed. Returns True when paused."""
     global _consecutive_failures
     _last_failure.kind = failure.kind
     try:
@@ -282,11 +206,6 @@ def _record_failure(failure, key_id=''):
         ).update(failures=F('failures') + 1)
     except Exception:
         pass
-    if key_id and failure.kind in ('auth', 'rate'):
-        if failure.kind == 'rate':
-            pause_key(key_id, failure.retry_after)
-        logger.info('centralbox refused a helper key (%s: %s)', failure.kind, failure.detail)
-        return False
     now = timezone.now()
     if failure.kind == 'auth':
         _pause(now + PAUSE_ON_AUTH_ERROR, f'centralbox rejected the API key ({failure.detail})')
@@ -421,41 +340,33 @@ def _store(sha, fields):
     return verdict
 
 
-def _lookup_one(sha, key=None):
+def _lookup_one(sha):
     """(HashVerdict or None, calls used, stop) for one hash; `stop` ends the
-    run (server budget used up, the helper's key told to wait, or centralbox
-    failing). `key`: a helper's own key; None means the server key."""
-    if key:
-        key_id = key_id_of(key)
-
-        def get(path):
-            return _request('GET', path, key)
-    else:
-        key_id, get = '', _http_get
-    if not _spend(key_id):
+    run (budget used up, or centralbox failing)."""
+    if not take_budget():
         return None, 0, True
     calls = 1
     try:
-        data = get(f'/status/{sha}')
+        data = _http_get(f'/status/{sha}')
         if data is None:
             raise _Failure('bad', '/status answered 404')
         fields = _parse_status(data, sha)
     except _Failure as failure:
-        _record_failure(failure, key_id)
+        _record_failure(failure)
         return None, calls, True
     if fields is None:
         _record_success()
         return None, calls, False
     paused = False
-    if fields.get('verdict') in _FLAGGED and _spend(key_id):
+    if fields.get('verdict') in _FLAGGED and take_budget():
         calls += 1
         try:
-            details = get(f'/lookup/{sha}/verdict')
+            details = _http_get(f'/lookup/{sha}/verdict')
             if details is not None:
                 fields.update(_parse_verdict_details(details, sha))
         except _Failure as failure:
             # The verdict itself is valid; store it without the extras.
-            paused = _record_failure(failure, key_id)
+            paused = _record_failure(failure)
     if not paused:
         _record_success()
     return _store(sha, fields), calls, paused
@@ -472,35 +383,12 @@ def _manual_recheck_allowed(sha):
     return cache.add(f'centralbox-recheck:{sha}', 1, timeout=MANUAL_RECHECK_COOLDOWN_SECONDS)
 
 
-def helper_key(user):
-    """(key, profile) of a helper's own usable centralbox key, or (None, None)."""
-    try:
-        if user is None or not getattr(user, 'is_authenticated', False):
-            return None, None
-        profile = UserProfile.objects.filter(user=user).first()
-        if profile is None or not profile.can_run_centralbox_lookups():
-            return None, None
-        key = profile.centralbox_key()
-        return (key, profile) if key else (None, None)
-    except Exception:
-        logger.exception('Reading a helper centralbox key failed')
-        return None, None
-
-
-def _key_rejected_check(profile):
-    """After a run with a helper's key: mark the key rejected if centralbox refused it."""
-    if profile is not None and getattr(_last_failure, 'kind', None) == 'auth':
-        _mark_key(profile, UserProfile.CENTRALBOX_KEY_REJECTED)
-
-
-def check_hashes(sha256s, max_calls=25, deadline_seconds=8.0, force=False, key=None, profile=None):
+def check_hashes(sha256s, max_calls=25, deadline_seconds=8.0, force=False):
     """Look up the given hashes that have no fresh stored verdict.
 
     `force` (an analyst's explicit "check again") also re-asks centralbox for
     hashes with a fresh stored answer, at most once per hash every
-    MANUAL_RECHECK_COOLDOWN_SECONDS. `key` / `profile`: a helper's own key
-    (helper_key) to ask with instead of the server key; the answers are
-    stored for everyone all the same.
+    MANUAL_RECHECK_COOLDOWN_SECONDS.
 
     Returns {'available': bool, 'verdicts': {sha: dict}, 'pending': int}:
     every given hash with a stored verdict (fresh or stale, so pages keep
@@ -516,9 +404,8 @@ def check_hashes(sha256s, max_calls=25, deadline_seconds=8.0, force=False, key=N
                 seen.add(sha)
                 wanted.append(sha)
         stored = {row.sha256: row for row in HashVerdict.objects.filter(sha256__in=wanted)} if wanted else {}
-        available = _switch_is_on() if key else is_available()
+        available = is_available()
         result['available'] = available
-        _last_failure.kind = None
         if available and wanted:
             now = timezone.now()
             todo = [
@@ -531,14 +418,12 @@ def check_hashes(sha256s, max_calls=25, deadline_seconds=8.0, force=False, key=N
             for sha in todo:
                 if calls >= max_calls or time.monotonic() >= deadline:
                     break
-                verdict, used, stop = _lookup_one(sha, key=key)
+                verdict, used, stop = _lookup_one(sha)
                 calls += used
                 if verdict is not None:
                     stored[sha] = verdict
                 if stop:
                     break
-            if key:
-                _key_rejected_check(profile)
         result['verdicts'] = {sha: stored[sha].as_dict() for sha in wanted if sha in stored}
         if available:
             result['pending'] = sum(1 for sha in wanted if sha not in stored)
@@ -674,21 +559,14 @@ def _store_alias(md5, sha=''):
     HashAlias.objects.update_or_create(md5=md5, defaults={'sha256': sha, 'checked_at': now, 'next_check_at': now + ttl})
 
 
-def _lookup_md5(md5, key=None):
+def _lookup_md5(md5):
     """Ask centralbox about an MD5: (HashVerdict of its SHA256 or None,
     'known' / 'unknown' / '' (no answer), stop). Stores the alias and the
-    verdict. `key`: a helper's own key; None means the server key."""
-    if key:
-        key_id = key_id_of(key)
-
-        def get(path):
-            return _request('GET', path, key)
-    else:
-        key_id, get = '', _http_get
-    if not _spend(key_id):
+    verdict."""
+    if not take_budget():
         return None, '', True
     try:
-        data = get(f'/status/{md5}')
+        data = _http_get(f'/status/{md5}')
         if data is None or data.get('ok') is not True:
             raise _Failure('bad', 'status answer is not ok')
         if data.get('analysed') is False:
@@ -702,29 +580,28 @@ def _lookup_md5(md5, key=None):
             raise _Failure('bad', 'status answer for an MD5 has no SHA256')
         fields = _parse_status(data, sha)
     except _Failure as failure:
-        _record_failure(failure, key_id)
+        _record_failure(failure)
         return None, '', True
     _store_alias(md5, sha)
     if fields is None:
         _record_success()
         return None, '', False
     paused = False
-    if fields.get('verdict') in _FLAGGED and _spend(key_id):
+    if fields.get('verdict') in _FLAGGED and take_budget():
         try:
-            details = get(f'/lookup/{sha}/verdict')
+            details = _http_get(f'/lookup/{sha}/verdict')
             if details is not None:
                 fields.update(_parse_verdict_details(details, sha))
         except _Failure as failure:
-            paused = _record_failure(failure, key_id)
+            paused = _record_failure(failure)
     if not paused:
         _record_success()
     return _store(sha, fields), 'known', paused
 
 
-def check_md5(md5, force=False, key=None, profile=None):
+def check_md5(md5, force=False):
     """A manual check of one MD5 (centralbox only answers for MD5s someone ran
-    a fresh lookup on), with a helper's own key if given, else the server key.
-    Returns {available, verdict, sha256, unknown}. Never raises."""
+    a fresh lookup on). Returns {available, verdict, sha256, unknown}. Never raises."""
     result = {'available': False, 'verdict': None, 'sha256': '', 'unknown': False}
     try:
         md5 = (md5 or '').strip().lower()
@@ -732,18 +609,15 @@ def check_md5(md5, force=False, key=None, profile=None):
             return result
         sha = resolve_md5s([md5]).get(md5, '')
         if sha:
-            checked = check_hashes([sha], max_calls=2, force=force, key=key, profile=profile)
+            checked = check_hashes([sha], max_calls=2, force=force)
             result.update(available=checked['available'], verdict=checked['verdicts'].get(sha), sha256=sha)
             return result
-        available = _switch_is_on() if key else is_available()
+        available = is_available()
         result['available'] = available
         alias = HashAlias.objects.filter(md5=md5).first()
         fresh = alias is not None and alias.next_check_at > timezone.now()
         if available and (not fresh or (force and _manual_recheck_allowed(md5))):
-            _last_failure.kind = None
-            verdict, state, _ = _lookup_md5(md5, key=key)
-            if key:
-                _key_rejected_check(profile)
+            verdict, state, _ = _lookup_md5(md5)
             if verdict is not None:
                 result.update(verdict=verdict.as_dict(), sha256=verdict.sha256)
                 return result
@@ -756,9 +630,10 @@ def check_md5(md5, force=False, key=None, profile=None):
 
 
 # ---------------------------------------------------------------------------
-# Fresh lookups: a helper asks centralbox to analyse a hash anew, with their
-# own key (centralbox then queries VirusTotal, Triage, Kaspersky, ...). One
-# per hash per cooldown, for everyone; the result lands in HashVerdict.
+# Fresh lookups: any helper asks centralbox to analyse a hash anew, with the
+# server key (centralbox then queries VirusTotal, Triage, Kaspersky, ...). One
+# per hash per cooldown, for everyone, and at most
+# CENTRALBOX_FRESH_LOOKUPS_PER_MINUTE across Fenris; the result lands in HashVerdict.
 # ---------------------------------------------------------------------------
 
 FRESH_LOOKUP_TIMEOUT = timedelta(minutes=15)
@@ -793,15 +668,6 @@ def fresh_lookup_info(sha256s):
         return {}
 
 
-def _switch_is_on():
-    try:
-        config = SiteConfig.get_solo()
-        paused_until = config.centralbox_paused_until
-        return config.centralbox_enabled and not (paused_until and paused_until > timezone.now())
-    except Exception:
-        return False
-
-
 def _claim(sha, user):
     """Take the hash's cooldown slot. None when taken, else the claimed row."""
     now = timezone.now()
@@ -823,12 +689,6 @@ def _release(row):
     CentralboxFreshLookup.objects.filter(pk=row.pk, requested_at=row.requested_at).delete()
 
 
-def _mark_key(profile, status):
-    UserProfile.objects.filter(pk=profile.pk).update(
-        centralbox_key_status=status, centralbox_key_checked_at=timezone.now(),
-    )
-
-
 def _finish(row, state):
     CentralboxFreshLookup.objects.filter(pk=row.pk).update(state=state, finished_at=timezone.now())
     row.state = state
@@ -839,16 +699,16 @@ def _result(ok, state='', message='', verdict=None, info=None, status=200):
     return {'ok': ok, 'state': state, 'message': message, 'verdict': verdict, 'fresh': info, 'http_status': status}
 
 
-def _complete(row, sha, key):
-    """centralbox finished: read and store the answer with the helper's key."""
+def _complete(row, sha):
+    """centralbox finished: read and store the answer."""
     if is_md5(sha):
-        verdict, state, _ = _lookup_md5(sha, key=key)
+        verdict, state, _ = _lookup_md5(sha)
         if verdict is not None:
             _finish(row, CentralboxFreshLookup.STATE_DONE)
         elif state == 'unknown':
             _finish(row, CentralboxFreshLookup.STATE_NOT_FOUND)
         return verdict
-    verdict, _, _ = _lookup_one(sha, key=key)
+    verdict, _, _ = _lookup_one(sha)
     if verdict is not None and verdict.state == HashVerdict.STATE_KNOWN:
         _finish(row, CentralboxFreshLookup.STATE_DONE)
         return verdict
@@ -858,25 +718,21 @@ def _complete(row, sha, key):
     return None
 
 
+def fresh_lookups_per_minute():
+    return max(1, int(_setting('CENTRALBOX_FRESH_LOOKUPS_PER_MINUTE', 15)))
+
+
 def start_fresh_lookup(sha, user):
     """Ask centralbox for a fresh analysis of `sha` (a SHA256, or an MD5) with
-    the user's own key.
+    the server key, for any logged-in helper.
 
     Returns a dict {ok, state, message, verdict, fresh, http_status}. Never raises."""
     try:
         sha = (sha or '').strip().lower()
         if not (is_sha256(sha) or is_md5(sha)):
             return _result(False, message='Not a SHA-256 or MD5 hash.', status=400)
-        if not _switch_is_on():
+        if not is_available():
             return _result(False, message='centralbox lookups are switched off or paused right now.', status=503)
-        profile, _ = UserProfile.objects.get_or_create(user=user)
-        key = profile.centralbox_key() if profile.can_run_centralbox_lookups() else None
-        if not key:
-            return _result(False, message='Add your own centralbox API key in your profile to run lookups.', status=403)
-        key_id = key_id_of(key)
-        waiting = key_paused_seconds(key_id)
-        if waiting:
-            return _result(False, message=rate_limited_message(waiting), status=429)
         row = _claim(sha, user)
         if row is None:
             existing = CentralboxFreshLookup.objects.select_related('requested_by').get(sha256=sha)
@@ -884,32 +740,31 @@ def start_fresh_lookup(sha, user):
             who = info['requested_by'] or 'someone'
             return _result(False, state=existing.state, info=info, status=429,
                            message=f'Already looked up by {who}; a new lookup is possible after {info["next_at"][:16].replace("T", " ")} UTC.')
-        count_call(key_id)
+        if not take_budget(BUDGET_FRESH, fresh_lookups_per_minute()):
+            _release(row)
+            return _result(False, message='Too many fresh lookups this minute; try again shortly.', status=429)
         known_sha = resolve_md5s([sha]).get(sha, '') if is_md5(sha) else sha
         known = bool(known_sha) and HashVerdict.objects.filter(sha256=known_sha, state=HashVerdict.STATE_KNOWN).exists()
         try:
-            data = _request('POST', '/lookup', key, {'hash': sha, 'force': known, 'notify': False})
+            data = _request('POST', '/lookup', api_key(), {'hash': sha, 'force': known, 'notify': False})
             if data is None or data.get('ok') is not True:
                 raise _Failure('bad', 'lookup answer is not ok')
         except _Failure as failure:
             _release(row)
-            _record_failure(failure, key_id)
+            _record_failure(failure, BUDGET_FRESH)
             if failure.kind == 'auth':
-                _mark_key(profile, UserProfile.CENTRALBOX_KEY_REJECTED)
-                return _result(False, message='centralbox rejected your API key. Check it in your profile.', status=403)
+                return _result(False, message='centralbox rejected the server key; lookups are paused.', status=503)
             if failure.kind == 'rate':
-                seconds = key_paused_seconds(key_id) or pause_key(key_id, failure.retry_after)
-                return _result(False, message=rate_limited_message(seconds), status=429)
+                seconds = _retry_after_seconds(failure.retry_after)
+                return _result(False, message=f'centralbox is rate limiting; try again in {seconds} s.', status=429)
             return _result(False, message='centralbox could not be reached; try again later.', status=503)
-        if profile.centralbox_key_status != UserProfile.CENTRALBOX_KEY_OK:
-            _mark_key(profile, UserProfile.CENTRALBOX_KEY_OK)
         status = data.get('status')
         if status == 'not_found':
             verdict = _store_unknown(sha)
             _finish(row, CentralboxFreshLookup.STATE_NOT_FOUND)
             return _result(True, state=row.state, verdict=verdict, info=_fresh_info(row))
         if status == 'done':
-            verdict = _complete(row, sha, key)
+            verdict = _complete(row, sha)
             if verdict is not None:
                 return _result(True, state=row.state, verdict=verdict.as_dict(), info=_fresh_info(row))
         return _result(True, state=CentralboxFreshLookup.STATE_RUNNING, info=_fresh_info(row))
@@ -933,8 +788,8 @@ def _stored_for(hash_value):
 
 def poll_fresh_lookup(sha):
     """Progress of a fresh lookup: {ok, state, verdict, fresh}. While it runs,
-    asks centralbox at most every FRESH_POLL_MIN_SECONDS (with the requester's
-    key) and stores the answer once centralbox is done. Never raises."""
+    asks centralbox at most every FRESH_POLL_MIN_SECONDS and stores the
+    answer once centralbox is done. Never raises."""
     try:
         from django.core.cache import cache
 
@@ -952,22 +807,14 @@ def poll_fresh_lookup(sha):
         running = _result(True, state=row.state, info=_fresh_info(row))
         if not cache.add(f'centralbox-fresh-poll:{sha}', 1, timeout=FRESH_POLL_MIN_SECONDS):
             return running
-        profile = UserProfile.objects.filter(user_id=row.requested_by_id).first() if row.requested_by_id else None
-        # A key centralbox already refused (or one removed since) would only
-        # fail again until the timeout; the server key can still read the result.
-        key = profile.centralbox_key() if profile and profile.can_run_centralbox_lookups() else None
-        key = key or api_key()
-        if not key or not _switch_is_on():
-            return running
-        key_id = key_id_of(key) if key != api_key() else ''
-        if not _spend(key_id):
+        if not is_available() or not take_budget():
             return running
         try:
-            data = _request('GET', f'/status/{sha}', key)
+            data = _http_get(f'/status/{sha}')
             if data is None or data.get('ok') is not True:
                 raise _Failure('bad', 'status answer is not ok')
         except _Failure as failure:
-            _record_failure(failure, key_id)
+            _record_failure(failure)
             return running
         lookup = data.get('lookup')
         if lookup == 'running' or (data.get('in_progress') is True and data.get('analysed') is not True):
@@ -979,29 +826,10 @@ def poll_fresh_lookup(sha):
             verdict = _store_unknown(sha)
             _finish(row, CentralboxFreshLookup.STATE_NOT_FOUND)
             return _result(True, state=row.state, verdict=verdict, info=_fresh_info(row))
-        verdict = _complete(row, sha, None if key_id == '' else key)
+        verdict = _complete(row, sha)
         if verdict is None:
             return running
         return _result(True, state=row.state, verdict=verdict.as_dict(), info=_fresh_info(row))
     except Exception:
         logger.exception('Polling a centralbox fresh lookup failed')
         return _result(False, state='error', status=500)
-
-
-def check_personal_key(key):
-    """(status, message) for a key a helper is saving: 'ok' when /ping works
-    and lists the lookup scope, 'rejected' when centralbox refuses it, and
-    'unverified' when centralbox cannot be reached. Never raises."""
-    try:
-        data = _request('GET', '/ping', key)
-    except _Failure as failure:
-        if failure.kind == 'auth':
-            return UserProfile.CENTRALBOX_KEY_REJECTED, 'centralbox rejected this key.'
-        return UserProfile.CENTRALBOX_KEY_UNVERIFIED, 'centralbox could not be reached; the key was saved unverified.'
-    except Exception:
-        logger.exception('Checking a centralbox key failed')
-        return UserProfile.CENTRALBOX_KEY_UNVERIFIED, 'The key could not be checked; it was saved unverified.'
-    scopes = data.get('scopes') if isinstance(data, dict) else None
-    if isinstance(scopes, list) and 'lookup' in scopes:
-        return UserProfile.CENTRALBOX_KEY_OK, 'centralbox accepted the key.'
-    return UserProfile.CENTRALBOX_KEY_REJECTED, 'This key has no lookup scope on centralbox.'

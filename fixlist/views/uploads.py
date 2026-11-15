@@ -31,7 +31,7 @@ from ..upload_utils import (
     soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
     schedule_analysis_stats_recalc, get_fresh_cached_analysis, schedule_cached_analysis_refresh,
 )
-from .centralbox import add_fixlog_hash_summary, page_correlation_context, page_hash_context
+from .centralbox import add_hash_summary, page_correlation_context, page_hash_context
 from .guest import deny_guests
 from .upload_actions import (
     handle_delete_action, handle_assign_to_me_action, handle_unassign_to_general_action,
@@ -525,8 +525,8 @@ def view_uploaded_log(request, upload_id):
     centralbox_context = {}
     if highlight is not None and uploaded_log.log_type in HASH_LOG_TYPES:
         centralbox_context = page_hash_context(uploaded_log, request.user)
-        if uploaded_log.log_type == 'Fixlog':
-            add_fixlog_hash_summary(highlight, uploaded_log, centralbox_context)
+        if uploaded_log.log_type in ('Fixlog', 'MAU'):
+            add_hash_summary(highlight, uploaded_log, centralbox_context)
 
     return render(request, 'view_uploaded_log.html', {
         'uploaded_log': uploaded_log,
