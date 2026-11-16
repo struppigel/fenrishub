@@ -148,11 +148,10 @@
         pointer-events: none;
     }
 
-    /* Related logs tab (partials/related_logs.html): case-page rows, scrolling
-       inside the pane when there are many. */
-    .related-logs-pane {
-        max-height: 420px;
-        overflow-y: auto;
+    /* Related logs tab (partials/related_logs.html): case-page rows. While it
+       is open the log itself is hidden and the list uses the whole page. */
+    .uploaded-log-page.related-open > .form-group {
+        display: none;
     }
 
     /* Like the case page's log rows (.fixlist-item), without its hover border. */
@@ -281,7 +280,7 @@
 </div>
 {% endif %}
 {% if related_count %}
-{# Loaded when the tab is first opened (views/uploads.py related_logs_fragment). #}
+{# Loaded in the background after the page (views/uploads.py related_logs_fragment). #}
 <div class="log-info-pane related-logs-pane" id="relatedLogs" data-info-pane="related" data-url="{% url 'uploaded_log_related' uploaded_log.upload_id %}" role="tabpanel" aria-labelledby="infoTabRelated" hidden><div class="related-logs-empty">loading...</div></div>
 {% endif %}
 <div class="meta-grid log-info-pane" id="logMetadata" data-info-pane="metadata"{% if has_info_tabs %} role="tabpanel" aria-labelledby="infoTabMetadata"{% if has_summary %} hidden{% endif %}{% endif %}>
@@ -424,7 +423,9 @@ function toggleLogMaximized(force) {
     if (!tabs.length) return;
     const STORAGE_KEY = 'uploadedLogInfoTab';
 
-    // The related logs load the first time their tab is shown.
+    // The related logs load in the background once the page is up (see the
+    // end of this block), so the tab is ready when it is opened; a failed
+    // load is retried when the tab is opened.
     let relatedLoaded = false;
     function loadRelated() {
         const pane = document.getElementById('relatedLogs');
@@ -447,6 +448,9 @@ function toggleLogMaximized(force) {
 
     function selectTab(name, remember) {
         if (name === 'related') loadRelated();
+        // The related logs take the whole page: the log is hidden meanwhile.
+        const page = document.querySelector('.uploaded-log-page');
+        if (page) page.classList.toggle('related-open', name === 'related');
         tabs.forEach((tab) => {
             const active = tab.dataset.infoTab === name;
             tab.classList.toggle('tab-active', active);
@@ -462,10 +466,22 @@ function toggleLogMaximized(force) {
 
     let saved = null;
     try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
-    // "related logs" is not reopened by itself: it would load the list (and
-    // maybe compute correlations) on every page view.
+    // "related logs" is not reopened by itself: it hides the log.
     if (saved && saved !== 'related' && tabs.some((tab) => tab.dataset.infoTab === saved)) selectTab(saved, false);
     tabs.forEach((tab) => tab.addEventListener('click', () => selectTab(tab.dataset.infoTab, true)));
+
+    // Preload the related logs after the page. When the stored correlations
+    // are outdated, wait for the page's own refresh (CaseCorrelations.ready):
+    // it computes and caches them, so the list does not compute them again.
+    if (document.getElementById('relatedLogs')) {
+        window.addEventListener('load', () => {
+            let ready = Promise.resolve();
+            try {
+                if (typeof CaseCorrelations === 'object' && CaseCorrelations.ready) ready = CaseCorrelations.ready;
+            } catch (e) {}
+            ready.then(loadRelated, loadRelated);
+        });
+    }
 })();
 
 // One click collapses every section of the highlighted log, the next one
@@ -1086,6 +1102,7 @@ const Centralbox = (function () {
 const CaseCorrelations = (function () {
     const none = {
         has: () => false, canLookup: () => false, hashes: () => [], reposition: () => {}, header: () => '', menuItems: () => [], statusClass: () => '',
+        ready: Promise.resolve(),
     };
     let data = null;
     try {
@@ -1500,7 +1517,8 @@ const CaseCorrelations = (function () {
     } catch (error) {
         // Markers are a nicety; never let them break the page.
     }
-    if (data.fresh === false) refresh();
+    // Settles when the startup refresh is done (the related logs tab waits for it).
+    const ready = data.fresh === false ? refresh() : Promise.resolve();
 
     function statusClass(line) {
         const no = line && line.dataset ? line.dataset.n : '';
@@ -1512,6 +1530,7 @@ const CaseCorrelations = (function () {
         has: line => entriesFor(line).length > 0,
         canLookup: line => lookupPossible(entriesFor(line)),
         hashes: line => correlatedHashes(entriesFor(line)),
+        ready,
         // The hover icons cover a line's marker: both are placed in one layout.
         reposition: () => place(),
         header, menuItems, statusClass,
