@@ -48,7 +48,8 @@ TARGET_MAX_CHARS = 200
 # Sent on every response. Raised when the API gains parameters an older
 # deployment would silently ignore, so a newer MCP client can refuse to use
 # them against an older server instead of getting unfiltered results.
-API_VERSION = 2
+# Version 3: case correlations in the analysis (correlations / correlated).
+API_VERSION = 3
 API_VERSION_HEADER = 'X-FenrisHub-Api-Version'
 
 

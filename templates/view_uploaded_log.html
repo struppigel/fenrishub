@@ -1085,7 +1085,7 @@ const Centralbox = (function () {
 // without data nothing changes, and a failed refresh keeps the stored view.
 const CaseCorrelations = (function () {
     const none = {
-        has: () => false, canLookup: () => false, hashes: () => [], header: () => '', menuItems: () => [], statusClass: () => '',
+        has: () => false, canLookup: () => false, hashes: () => [], reposition: () => {}, header: () => '', menuItems: () => [], statusClass: () => '',
     };
     let data = null;
     try {
@@ -1356,7 +1356,13 @@ const CaseCorrelations = (function () {
         place();
         if (listening) return;
         listening = true;
-        root.addEventListener('scroll', place, { passive: true });
+        // Lines are laid out lazily in chunks (content-visibility): a chunk's
+        // real height replaces its estimate only when it is drawn, after the
+        // scroll event. Place again on the next frame so markers match it.
+        root.addEventListener('scroll', () => {
+            place();
+            requestAnimationFrame(place);
+        }, { passive: true });
         root.addEventListener('toggle', place, true);
         window.addEventListener('resize', place);
         if (window.ResizeObserver) new ResizeObserver(place).observe(root);
@@ -1506,6 +1512,8 @@ const CaseCorrelations = (function () {
         has: line => entriesFor(line).length > 0,
         canLookup: line => lookupPossible(entriesFor(line)),
         hashes: line => correlatedHashes(entriesFor(line)),
+        // The hover icons cover a line's marker: both are placed in one layout.
+        reposition: () => place(),
         header, menuItems, statusClass,
     };
 })();
@@ -1722,6 +1730,9 @@ function openTokenMenu(token) {
         if (cor) actions.dataset.cor = cor;
         else delete actions.dataset.cor;
         actions.hidden = false;
+        // Markers may still sit where the line was before its chunk got its
+        // real height: place them in this same layout, so the icons line up.
+        CaseCorrelations.reposition();
         const lineRect = line.getBoundingClientRect();
         const rootRect = root.getBoundingClientRect();
         actions.style.top = `${lineRect.top - rootRect.top - root.clientTop + root.scrollTop}px`;

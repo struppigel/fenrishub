@@ -40,6 +40,7 @@ from ..api_line_search import (
     parse_components,
     serialize_hit,
 )
+from ..case_correlations import cached_correlations, correlations_for_upload, entry_status
 from ..api_params import (
     ParamError,
     apply_upload_scope,
@@ -80,6 +81,7 @@ from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
 from ..upload_utils import get_fresh_cached_analysis, get_or_compute_upload_analysis
 from .api_auth import api_token_required, charge_api_units, rate_limited_response
 from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE, effective_analyzer_fixlist_template
+from .centralbox import _tags_by_sha
 from .guest import is_moderator
 from .infection_cases import _build_case_timeline
 from .log_search import _build_matcher, _logs_in_id_order
@@ -113,6 +115,8 @@ SLICE_MAX_CONTEXT = 5
 SLICE_PARAMS = ('start_line', 'max_lines', 'match', 'context')
 # A stale or missing cache means a full analyzer run; charge it like a search.
 ANALYSIS_RECOMPUTE_EXTRA_UNITS = 9
+# Outdated or missing correlations mean reading every related log again.
+CORRELATION_RECOMPUTE_EXTRA_UNITS = 9
 # Filtering the upload list by tag reads every candidate's cached analysis.
 TAG_FILTER_EXTRA_UNITS = 9
 TAGS_PARAM_MAX_ITEMS = 20
@@ -375,7 +379,7 @@ _non_blank_line_numbers = non_blank_line_numbers
 # The keys of a line in get_analysis (_compact_line); `fields` picks among them.
 LINE_FIELDS = (
     'n', 'text', 'status', 'status_label', 'status_codes', 'entry_type', 'matcher', 'reasons',
-    'components', 'dates', 'fixlist_replacement', 'rule_ids', 'tag_ids', 'tags',
+    'components', 'dates', 'fixlist_replacement', 'rule_ids', 'tag_ids', 'tags', 'correlation',
 )
 
 
@@ -421,6 +425,103 @@ def _served_analysis(request, uploaded_log):
     return analysis, rule_set_key, None
 
 
+CORRELATION_MODES = ('compact', 'full', 'off')
+_CORRELATION_MODE_ALIASES = {'': 'compact', '1': 'compact', 'true': 'compact', '0': 'off', 'false': 'off'}
+
+
+def _correlation_mode_param(params):
+    """'compact' (the default), 'full' or 'off' from `correlations`; None when invalid."""
+    value = (params.get('correlations') or '').strip().lower()
+    value = _CORRELATION_MODE_ALIASES.get(value, value)
+    return value if value in CORRELATION_MODES else None
+
+
+def _served_correlations(request, uploaded_log, refresh=False):
+    """``(correlations, fresh, error_response)``: what the related logs say
+    about the upload's lines (case_correlations), the caller's own cases with
+    the log first, else the forum user's other logs - the same logs as the log
+    page, so another helper's case never counts.
+
+    Like the log page, the stored answer is served even when outdated (`fresh`
+    False), at no cost. One never stored is computed now, and an outdated one
+    with `refresh`; both cost extra units. Never a centralbox call. Run after
+    _served_analysis: the computation reads the upload's cached analysis.
+    """
+    result, fresh = cached_correlations(uploaded_log, request.user)
+    if result is None or (refresh and not fresh):
+        if not charge_api_units(request, CORRELATION_RECOMPUTE_EXTRA_UNITS):
+            return None, False, rate_limited_response(60)
+        result, fresh = correlations_for_upload(uploaded_log, request.user), True
+    return result, bool(fresh), None
+
+
+def _correlation_text(line):
+    return (line.get('text') or '').strip()
+
+
+def _add_correlations(page, correlations, full=False):
+    """Give the page's lines that related logs say something about
+    `correlation`: {status, note, entry_count}, and with `full` the entries,
+    each with its own status letter and, for a hash, the tags its centralbox
+    family / malware type matches. Other lines get no key."""
+    by_text = correlations.get('lines') or {}
+    statuses = correlations.get('statuses') or {}
+    notes = correlations.get('notes') or {}
+    tags_by_sha = {}
+    if full:
+        shas = {
+            entry['sha256']
+            for line in page for entry in by_text.get(_correlation_text(line), ())
+            if entry.get('sha256')
+        }
+        tags_by_sha = _tags_by_sha(shas) if shas else {}
+    for line in page:
+        text = _correlation_text(line)
+        entries = by_text.get(text)
+        if not entries:
+            continue
+        correlation = {'status': statuses.get(text, ''), 'note': notes.get(text, ''), 'entry_count': len(entries)}
+        if full:
+            rows = []
+            for entry in entries:
+                row = {**entry, 'status': entry_status(entry)}
+                if entry.get('sha256'):
+                    row['tags'] = tags_by_sha.get(entry['sha256'], [])
+                rows.append(row)
+            correlation['entries'] = rows
+        line['correlation'] = correlation
+
+
+def _correlated_findings(request, uploaded_log):
+    """``(findings, error_response)``: the upload's lines whose related logs
+    gave them a correlation status, [{n, text, status, correlation_status,
+    note}], for get_case. None for logs the correlations do not cover."""
+    if uploaded_log.log_type not in UploadedLog.ANALYZED_LOG_TYPES:
+        return None, None
+    analysis, _rule_set_key, error = _served_analysis(request, uploaded_log)
+    if error:
+        return None, error
+    correlations, _fresh, error = _served_correlations(request, uploaded_log)
+    if error:
+        return None, error
+    statuses = correlations.get('statuses') or {}
+    notes = correlations.get('notes') or {}
+    findings = []
+    for number, entry in _numbered_entries(uploaded_log, analysis):
+        text = (entry.get('line') or '').strip()
+        status = statuses.get(text)
+        if not status:
+            continue
+        findings.append({
+            'n': number,
+            'text': text,
+            'status': entry.get('dominant_status', '?'),
+            'correlation_status': status,
+            'note': notes.get(text, ''),
+        })
+    return findings, None
+
+
 def _numbered_entries(uploaded_log, analysis):
     """``[(line number, entry)]`` for the analysis lines, numbered as in the log text."""
     entries = analysis.get('lines', [])
@@ -439,6 +540,20 @@ def api_upload_analysis(request, upload_id):
     (comma-separated, see LINE_FIELDS) keeps only those keys of each line, and
     `summary=0` leaves out the summary, warnings, tags found and status legend,
     for reading many logs or paging through one.
+
+    Lines whose file the other logs of the caller's own cases with this log
+    (else the forum user's other logs; `correlation_scope` says which) say
+    something about carry `correlation`: {status, note, entry_count}. `status`
+    is the worst finding's verdict letter, apart from the rule verdict and
+    never counting logs from another machine; '' when no finding has one.
+    `correlations=full` adds the entries: hash rows (detection, sha256 / md5,
+    stored centralbox result, tags), scanner or Defender detections and
+    Fixlog results, each with its own `status` and `system` (same /
+    different / unknown machine); `correlations=0` leaves it all out. The
+    stored answer is served even when outdated (`correlation_scope.fresh`
+    false) at no cost; `correlations_fresh=1` recomputes it then, and one
+    never stored is computed at once, both for extra units. Centralbox is
+    never asked. `correlated=1` keeps only the lines that have entries.
     """
     limit = _int_param(request, 'limit', LINES_DEFAULT_LIMIT, 1, LINES_MAX_LIMIT)
     offset = _int_param(request, 'offset', 0, 0, LINES_MAX_OFFSET)
@@ -458,11 +573,20 @@ def api_upload_analysis(request, upload_id):
     try:
         fields = list_param(request.GET, 'fields')
         with_summary = flag_param(request.GET, 'summary', default=True)
+        only_correlated = flag_param(request.GET, 'correlated')
+        refresh_correlations = flag_param(request.GET, 'correlations_fresh')
     except ParamError as exc:
         return _error(str(exc))
     unknown_fields = [field for field in fields if field not in LINE_FIELDS]
     if unknown_fields:
         return _error(f"Unknown field(s): {', '.join(unknown_fields)}. Valid: {', '.join(LINE_FIELDS)}.")
+    correlation_mode = _correlation_mode_param(request.GET)
+    if correlation_mode is None:
+        return _error(f"correlations must be one of: {', '.join(CORRELATION_MODES)} (or 1 / 0).")
+    if only_correlated and correlation_mode == 'off':
+        return _error('correlated=1 needs correlations.')
+    # Not looked up when `fields` leaves the correlation out (unless it filters).
+    with_correlations = correlation_mode != 'off' and (not fields or 'correlation' in fields or only_correlated)
 
     uploaded_log = _get_live_upload(upload_id, with_content=True)
     if uploaded_log is None:
@@ -471,6 +595,16 @@ def api_upload_analysis(request, upload_id):
     analysis, rule_set_key, error = _served_analysis(request, uploaded_log)
     if error:
         return error
+    correlations = None
+    correlations_fresh = True
+    if with_correlations:
+        # After the analysis: correlations read the upload's cached analysis.
+        correlations, correlations_fresh, error = _served_correlations(
+            request, uploaded_log, refresh=refresh_correlations,
+        )
+        if error:
+            return error
+    correlated_texts = (correlations or {}).get('lines') or {}
 
     tag_names = {tag['id']: tag['name'] for tag in analysis.get('rule_tags', [])}
     wanted_tags = set(tag_ids)
@@ -479,13 +613,26 @@ def api_upload_analysis(request, upload_id):
         for number, entry in _numbered_entries(uploaded_log, analysis)
         if (not statuses or entry.get('dominant_status') in statuses)
         and (not wanted_tags or wanted_tags.intersection(entry.get('tag_ids', [])))
+        and (not only_correlated or (entry.get('line') or '').strip() in correlated_texts)
     ]
     page = lines[offset:offset + limit]
+    if correlations is not None:
+        _add_correlations(page, correlations, full=correlation_mode == 'full')
     if fields:
-        page = [{key: line[key] for key in fields} for line in page]
+        # `correlation` is only on lines related logs say something about.
+        page = [{key: line[key] for key in fields if key in line} for line in page]
 
     payload = _uploads_metadata(request.user, [uploaded_log])[0]
     payload['rule_set'] = 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private'
+    if correlations is not None:
+        # Which logs were read: 'case' (the caller's own cases with this log),
+        # 'user' (the forum user's other logs, the name) or '' (none); fresh
+        # false when the stored answer is outdated (correlations_fresh=1).
+        payload['correlation_scope'] = {
+            'scope': correlations.get('scope', ''),
+            'untrusted_forum_username': correlations.get('name', ''),
+            'fresh': correlations_fresh,
+        }
     if with_summary:
         payload.update({
             'status_legend': STATUS_LABELS,
@@ -875,11 +1022,15 @@ def api_user(request, forum_username):
     })
 
 
-def _timeline_entry(item, user, case_ids, duplicates=None):
+def _timeline_entry(item, user, case_ids, duplicates=None, findings=None):
+    """`findings` maps upload pk -> its correlated findings (_correlated_findings)."""
     item_type = item['item_type']
     entry = {'type': item_type, 'created_at': _iso(item['created_at'])}
     if item_type == 'log':
-        entry['upload'] = _upload_metadata(item['uploaded_log'], case_ids, duplicates)
+        uploaded_log = item['uploaded_log']
+        entry['upload'] = _upload_metadata(uploaded_log, case_ids, duplicates)
+        if findings and findings.get(uploaded_log.pk) is not None:
+            entry['correlated_findings'] = findings[uploaded_log.pk]
     elif item_type == 'fixlist':
         # Same text the share link serves to any logged-in helper. The owner's
         # internal note is never included.
@@ -900,7 +1051,13 @@ def _timeline_entry(item, user, case_ids, duplicates=None):
 
 @api_token_required('api_v1_case')
 def api_case(request, case_id):
-    """One infection case and its timeline: logs, fixlists, responses, notes."""
+    """One infection case and its timeline: logs, fixlists, responses, notes.
+
+    Every FRST / Addition log comes with `correlated_findings`: its lines that
+    related logs gave a correlation status (see api_upload_analysis), read for
+    the caller like the log page - their own cases with the log, else the
+    forum user's other logs; another helper's case never counts.
+    """
     if not CASE_ID_RE.fullmatch(case_id or ''):
         return _not_found()
     infection_case = (
@@ -915,12 +1072,19 @@ def api_case(request, case_id):
     case_uploads = [item['uploaded_log'] for item in timeline if item['item_type'] == 'log']
     case_ids = _own_case_ids_by_upload(request.user, [uploaded_log.pk for uploaded_log in case_uploads])
     duplicates = duplicate_info_for(case_uploads, _live_upload_rows())
+    findings = {}
+    for uploaded_log in case_uploads:
+        if uploaded_log.pk in findings:
+            continue
+        findings[uploaded_log.pk], error = _correlated_findings(request, uploaded_log)
+        if error:
+            return error
 
     payload = _case_summary(infection_case, request.user)
     payload.update({
         'untrusted_symptom_description': infection_case.symptom_description,
         'reference_url': infection_case.reference_url,
-        'timeline': [_timeline_entry(item, request.user, case_ids, duplicates) for item in timeline],
+        'timeline': [_timeline_entry(item, request.user, case_ids, duplicates, findings) for item in timeline],
     })
     return JsonResponse(payload)
 
