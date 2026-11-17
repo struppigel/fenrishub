@@ -219,7 +219,45 @@ class KeyCorrelationTests(TestCase):
         result = self.correlations()
         self.assertEqual(self.matches(result, TASK_LINE), {('eset-log', 'argument')})
         self.assertEqual(result['statuses'][TASK_LINE], 'B')
-        self.assertIn('file in command line', result['notes'][TASK_LINE])
+        # The line names powershell.exe and the script: the entry says which file it is about.
+        self.assertEqual(result['lines'][TASK_LINE][0]['file'], 'a.ps1')
+        self.assertIn('file in command line: a.ps1', result['notes'][TASK_LINE])
+
+    def test_a_merged_log_without_related_logs_uses_its_own_addition_part(self):
+        merged = make_uploaded_log('alone-log', log_type='FRST&Addition',
+                                   content='\n'.join([ADDITION, HEADER, *FRST_LINES]), forum_username='alone')
+        payload = analyze_log_text(merged.content, 'shared')
+        UploadedLogAnalysis.objects.create(upload=merged, rule_set_key='shared', payload=payload,
+                                           source_content_hash=merged.content_hash)
+        result = correlations_for_upload(merged, self.user)
+        self.assertEqual(result['scope'], 'user')
+        entry = result['lines'][TASK_LINE][0]
+        self.assertEqual((entry['upload_id'], entry['source'], entry['file']), ('alone-log', 'defender', 'a.ps1'))
+        self.assertEqual(result['statuses'][TASK_LINE], 'B')
+        # Not "another Addition log": the log's own part.
+        self.assertIn("this log's Addition part", result['notes'][TASK_LINE])
+        self.assertNotIn('· Addition', result['notes'][TASK_LINE])
+        # A plain FRST log without related logs still has nothing.
+        self.assertEqual(correlations_for_upload(
+            make_uploaded_log('plain-log', log_type='FRST', content=HEADER, forum_username='alone2'), self.user,
+        )['lines'], {})
+
+    def test_hash_entries_name_their_file(self):
+        bat = r'C:\Program Files (x86)\Google\Cloud SDK\cloud_env.bat'
+        shortcut = (r'ShortcutWithArgument: C:\Users\Public\Desktop\Google Cloud SDK Shell.lnk -> '
+                    r'C:\Windows\System32\cmd.exe (Microsoft Corporation) -> /k ""' + bat + '""')
+        frst = make_uploaded_log('lnk-log', log_type='FRST', content='\n'.join([HEADER, shortcut]),
+                                 forum_username='nobody')
+        payload = analyze_log_text(frst.content, 'shared')
+        UploadedLogAnalysis.objects.create(upload=frst, rule_set_key='shared', payload=payload,
+                                           source_content_hash=frst.content_hash)
+        self.link(frst)
+        self.add_log('fix-log', 'Fixlog', '\n'.join([
+            'Fix result of Farbar Recovery Scan Tool (x64) Version: 01-11-2026',
+            f'  [{"96" * 32}] 23-11-2023 01:32:45 - 23-11-2023 01:32:45 -      251 B - Signer: N/A (not PE) - {bat}',
+        ]))
+        entry = correlations_for_upload(frst, self.user)['lines'][shortcut][0]
+        self.assertEqual((entry['kind'], entry['match'], entry['file']), ('hash', 'argument', 'cloud_env.bat'))
 
     def test_defender_events_of_a_related_addition_log(self):
         self.add_log('add-log', 'Addition', ADDITION)

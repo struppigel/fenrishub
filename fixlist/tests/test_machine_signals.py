@@ -135,3 +135,37 @@ class SameMachineLogsTests(TestCase):
         self.assertIn('same machine SID, disk ID', html)
         self.assertNotIn(SID, html)
         self.assertNotIn('3CB325E2', html)
+
+
+class OtherSystemTests(TestCase):
+    """The related-logs tab says why a log seems to come from another
+    machine, and says it before the list is read."""
+
+    def setUp(self):
+        from ..models import UploadedLog
+
+        self.user = make_user()
+        self.client.force_login(self.user)
+        self.frst = make_uploaded_log('frst-log', log_type='FRST', content=FRST, forum_username='a')
+        other = FRST.replace('DESKTOP-BOB', 'DESKTOP-EVE').replace('3694637330', '1111111111')
+        self.other = make_uploaded_log('other-log', log_type='FRST', content=other, forum_username='A')
+        self.same = make_uploaded_log('same-log', log_type='FRST', content=FRST, forum_username='a')
+        for upload in UploadedLog.objects.all():
+            UploadedLogMachineSignal.rebuild_for(upload)
+
+    def test_reason_and_warning_in_the_tab(self):
+        html = self.client.get(reverse('uploaded_log_related', args=['frst-log'])).content.decode()
+        self.assertIn('other system? <span class="related-system-reason">(other computer: desktop-eve)</span>', html)
+        self.assertIn('title="same computer name">same system</span>', html)
+        self.assertIn('>⚠ 1 of these logs seems to come from another machine</div>', html)
+
+    def test_the_tab_label_stays_plain(self):
+        html = self.client.get(reverse('view_uploaded_log', args=['frst-log'])).content.decode()
+        self.assertIn('>related logs (2)</button>', html)
+
+    def test_no_warning_when_all_logs_are_the_same_machine(self):
+        html = self.client.get(reverse('uploaded_log_related', args=['same-log'])).content.decode()
+        self.assertIn('other system?', html)  # other-log still is
+        self.other.delete()
+        html = self.client.get(reverse('uploaded_log_related', args=['same-log'])).content.decode()
+        self.assertNotIn('related-logs-warning', html)

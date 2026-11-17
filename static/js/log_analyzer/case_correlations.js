@@ -62,12 +62,15 @@ function correlationFinding(item) {
     const source = item.source === 'defender' ? 'Defender' : '';
     // Matched through something else than the line's own file.
     const how = CORRELATION_MATCH_NOTES[item.match] || '';
-    return [name, verdict, source, how, where].filter(Boolean).join(CORRELATION_DOT) || (item.kind === 'hash' ? 'file hash' : 'detection');
+    // Which file the finding is about (the line's own, one in its command line, ...).
+    const file = typeof item.file === 'string' ? item.file : '';
+    return [file, name, verdict, source, how, where].filter(Boolean).join(CORRELATION_DOT) || (item.kind === 'hash' ? 'file hash' : 'detection');
 }
 
 // The log type a finding comes from, flagged when that log seems to come
 // from another system.
 function correlationSource(item) {
+    if (isOwnCorrelation(item)) return 'this log';
     return String(item.log_type || 'log') + (item.system === 'different' ? CORRELATION_DOT + 'other system?' : '');
 }
 
@@ -211,8 +214,9 @@ async function freshLookupCorrelatedHash(target, spot) {
     await finishCorrelationLookup(spot, result.message, result.refresh);
 }
 
-// Distinct file hashes of the entries (SHA-256, else the MD5 alone), for the
-// line's search menu (analysis.js: VirusTotal).
+// Distinct file hashes of the entries (SHA-256, else the MD5 alone) with the
+// file each belongs to, for the line's copy and search menus (analysis.js):
+// [{hash, file}].
 function correlationHashValues(items) {
     const hashes = [];
     (Array.isArray(items) ? items : []).forEach((item) => {
@@ -220,19 +224,41 @@ function correlationHashValues(items) {
         const sha = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/.test(item.sha256) ? item.sha256 : '';
         const md5 = typeof item.md5 === 'string' && /^[0-9a-f]{32}$/.test(item.md5) ? item.md5 : '';
         const hash = sha || md5;
-        if (hash && !hashes.includes(hash)) hashes.push(hash);
+        if (hash && !hashes.some((known) => known.hash === hash)) {
+            hashes.push({ hash, file: typeof item.file === 'string' ? item.file : '' });
+        }
     });
     return hashes;
+}
+
+// How a correlated hash is shown in a menu: its file first, so a line that
+// names several files says which one the hash is of. Only the hash is
+// copied or looked up.
+function correlationHashLabel({ hash, file }) {
+    return file ? `${file} · ${hash}` : hash;
 }
 
 function correlationSummary(items) {
     return correlationRows(items).map((item) => `${correlationSource(item)}: ${correlationFinding(item)}`).join('\n');
 }
 
-function correlationHeader() {
-    return caseCorrelationsScope === 'user'
-        ? `same file in other logs of user ${caseCorrelationsName} (no case of yours)`
-        : 'same file in other logs of this case';
+// An entry of the loaded log itself (Defender events of its Addition part).
+function isOwnCorrelation(item) {
+    return Boolean(item) && Boolean(caseCorrelationsUploadId) && item.upload_id === caseCorrelationsUploadId;
+}
+
+// Where the line's findings come from: other logs, the log's own Addition
+// part, or both.
+function correlationHeader(items) {
+    const list = Array.isArray(items) ? items : [];
+    const own = list.some(isOwnCorrelation);
+    const others = list.some((item) => !isOwnCorrelation(item));
+    const scope = caseCorrelationsScope === 'user'
+        ? `other logs of user ${caseCorrelationsName} (no case of yours)`
+        : 'other logs of this case';
+    if (own && !others) return "same file in this log's Addition part";
+    if (own) return `same file in this log's Addition part and in ${scope}`;
+    return `same file in ${scope}`;
 }
 
 const CORRELATION_STATUS_CLASS = {
@@ -272,9 +298,9 @@ function buildCaseCorrelationButton(entry) {
         button.setAttribute('aria-haspopup', 'menu');
         button.setAttribute('aria-expanded', 'false');
         button.setAttribute('aria-label', lookup
-            ? 'what other logs of this case say about this file; a hash can be looked up on centralbox'
-            : 'what other logs of this case say about this file');
-        button.title = correlationHeader() + ':\n' + correlationSummary(items)
+            ? 'what logs say about this file; a hash can be looked up on centralbox'
+            : 'what logs say about this file');
+        button.title = correlationHeader(items) + ':\n' + correlationSummary(items)
             + (lookup ? '\n(a hash without centralbox verdict: look it up from this menu)' : '');
         button.addEventListener('click', (event) => {
             event.stopPropagation();
@@ -341,6 +367,58 @@ function addCorrelationMenuItem(menu, key, value, run, extraClass) {
     menu.appendChild(item);
 }
 
+// The analyzer row (index into analyzedLines) of a line of the loaded log,
+// numbered like the server and the log page (content.split('\n') from 1),
+// or -1. The analyzer leaves out blank lines (see computeBlankLineGaps).
+function analyzerIndexForLogLine(lineNo) {
+    const input = document.getElementById('logInput');
+    const lines = (input ? input.value : '').split('\n');
+    if (!Number.isInteger(lineNo) || lineNo < 1 || lineNo > lines.length) return -1;
+    const text = (lines[lineNo - 1].split(SPLITLINES_BOUNDARY)[0] || '').trim();
+    if (!text) return -1;
+    let index = 0;
+    lines.slice(0, lineNo - 1).join('\n').split(SPLITLINES_BOUNDARY).forEach((piece) => {
+        if (piece.trim()) index += 1;
+    });
+    if (analyzedLines[index] && analyzedLines[index].line === text) return index;
+    // The textarea no longer matches the analysis exactly: the first row with the text.
+    return analyzedLines.findIndex((entry) => entry && entry.line === text);
+}
+
+// Scroll the analyzer to a line of the loaded log and mark it for a moment
+// (the mark fades out, as on the log page).
+const CORRELATION_FLASH_MS = 2500;
+let correlationFlashTimer = null;
+
+function jumpToAnalyzerLine(lineNo, trigger, fromLine = '') {
+    const index = analyzerIndexForLogLine(lineNo);
+    const badge = index >= 0 ? document.querySelector(`#logLines .status-badge[data-line-index="${index}"]`) : null;
+    const row = badge ? badge.closest('.log-line') : null;
+    // Hints go next to the ⓘ icon of the line the jump started from.
+    const spot = { anchor: trigger || null, line: trigger ? trigger.correlationLine || '' : fromLine };
+    if (!row) {
+        correlationHint(spot, 'line not found in the analyzer', true);
+        return;
+    }
+    if (row.offsetParent === null) {
+        correlationHint(spot, 'that line is hidden by the legend filter', true);
+        return;
+    }
+    row.scrollIntoView({ block: 'center' });
+    document.querySelectorAll('#logLines .correlation-flash, #logLines .correlation-flash-fade').forEach((el) => {
+        el.classList.remove('correlation-flash', 'correlation-flash-fade');
+    });
+    void row.offsetWidth;
+    row.classList.add('correlation-flash');
+    if (correlationFlashTimer) clearTimeout(correlationFlashTimer);
+    correlationFlashTimer = setTimeout(() => {
+        // Fade out only now: the mark comes on at once.
+        row.classList.add('correlation-flash-fade');
+        row.classList.remove('correlation-flash');
+        correlationFlashTimer = setTimeout(() => row.classList.remove('correlation-flash-fade'), 900);
+    }, CORRELATION_FLASH_MS);
+}
+
 function openNewTab(url) {
     if (url) window.open(url, '_blank', 'noopener,noreferrer');
 }
@@ -356,16 +434,19 @@ function openCaseCorrelationMenu(trigger, items) {
     menu.innerHTML = '';
     const header = document.createElement('div');
     header.className = 'line-copy-menu-header';
-    header.textContent = correlationHeader();
+    header.textContent = correlationHeader(items);
     menu.appendChild(header);
 
-    // Clicking a row opens that log at the line (its id is never shown).
+    // Clicking a row opens that log at the line (its id is never shown); a
+    // row of the loaded log itself goes to the line here instead.
     correlationRows(items).forEach((item) => {
         const classes = ['line-correlation-source', `line-correlation-system-${item.system || 'unknown'}`];
         if (['b', 'p', 'g', 'w'].includes(item.severity)) classes.push(`line-correlation-sev-${item.severity}`);
         if (item.centralbox && item.centralbox.verdict === 'malicious') classes.push('line-correlation-bad');
-        addCorrelationMenuItem(menu, correlationSource(item), correlationFinding(item),
-            () => openNewTab(correlationLogUrl(item)), classes.join(' '));
+        const run = isOwnCorrelation(item)
+            ? () => jumpToAnalyzerLine(Number(item.anchor_line_no || item.line_no), trigger)
+            : () => openNewTab(correlationLogUrl(item));
+        addCorrelationMenuItem(menu, correlationSource(item), correlationFinding(item), run, classes.join(' '));
     });
     // The centralbox report of each correlated hash, shown as its URL like
     // the hash menus' VirusTotal entry.
@@ -377,7 +458,7 @@ function openCaseCorrelationMenu(trigger, items) {
     const targets = CENTRALBOX_LOOKUPS_ON ? correlationLookupTargets(items) : [];
     const spot = () => ({ anchor: trigger, line: trigger.correlationLine || '' });
     targets.forEach((target) => {
-        const which = targets.length > 1 ? ' ' + target.short : '';
+        const which = targets.length > 1 ? ' ' + target.short : (target.file ? ' of ' + target.file : '');
         if (CENTRALBOX_CHECK_URL) {
             addCorrelationMenuItem(menu, 'centralbox', 'check this hash' + which,
                 () => checkCorrelatedHash(target, spot()));
@@ -407,6 +488,73 @@ function openCaseCorrelationMenu(trigger, items) {
     menu.style.top = `${top + window.scrollY}px`;
 }
 
+// The "correlations" section of the line inspector (the ? mode's box): the
+// same findings as the line's ⓘ menu, each opening that log at the line (or,
+// for the loaded log itself, jumping to the line here).
+function renderLineInspectorCorrelations(entry) {
+    const section = document.getElementById('lineInspectorCorrelationsSection');
+    const summary = document.getElementById('lineInspectorCorrelationsSummary');
+    const list = document.getElementById('lineInspectorCorrelations');
+    if (!section || !summary || !list) return;
+    const items = caseCorrelationsFor(entry);
+    list.innerHTML = '';
+    summary.innerHTML = '';
+    section.hidden = items.length === 0;
+    if (!items.length) return;
+
+    const status = caseCorrelationStatusFor(entry);
+    summary.appendChild(document.createTextNode(correlationHeader(items)));
+    if (status && typeof buildStatusSymbolNode === 'function') {
+        summary.appendChild(document.createTextNode(' - worst finding: '));
+        summary.appendChild(buildStatusSymbolNode(status));
+    }
+
+    const fromLine = typeof entry.line === 'string' ? entry.line.trim() : '';
+    correlationRows(items).forEach((item) => {
+        const row = document.createElement('li');
+        const classes = [`line-correlation-system-${item.system || 'unknown'}`];
+        if (['b', 'p', 'g', 'w'].includes(item.severity)) classes.push(`line-correlation-sev-${item.severity}`);
+        if (item.centralbox && item.centralbox.verdict === 'malicious') classes.push('line-correlation-bad');
+        row.className = classes.join(' ');
+        const link = document.createElement('a');
+        link.className = 'line-inspector-correlation-source';
+        link.textContent = correlationSource(item);
+        if (isOwnCorrelation(item)) {
+            link.href = '#';
+            link.title = 'go to the line in this log';
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                closeLineInspectorModal({ restoreFocus: false });
+                jumpToAnalyzerLine(Number(item.anchor_line_no || item.line_no), null, fromLine);
+            });
+        } else {
+            const url = correlationLogUrl(item);
+            if (url) {
+                link.href = url;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.title = 'open that log at the line';
+            }
+        }
+        const finding = document.createElement('span');
+        finding.className = 'line-inspector-correlation-finding';
+        finding.textContent = correlationFinding(item);
+        row.append(link, document.createTextNode(': '), finding);
+        list.appendChild(row);
+    });
+    correlationReportUrls(items).forEach((url) => {
+        const row = document.createElement('li');
+        row.appendChild(document.createTextNode('centralbox: '));
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = url;
+        row.appendChild(link);
+        list.appendChild(row);
+    });
+}
+
 function isValidCorrelation(item) {
     return item && typeof item === 'object'
         && ['hash', 'detection', 'fixlog'].includes(item.kind)
@@ -431,7 +579,7 @@ async function refreshCaseCorrelations(uploadId) {
         return;
     }
     if (!body || typeof body !== 'object' || id !== caseCorrelationsUploadId) return;
-    caseCorrelationsScope = body.scope === 'user' ? 'user' : 'case';
+    caseCorrelationsScope = body.scope === 'user' || body.scope === 'case' ? body.scope : '';
     caseCorrelationsName = typeof body.name === 'string' ? body.name : '';
     const raw = body.correlations && typeof body.correlations === 'object' ? body.correlations : {};
     const rawStatuses = body.statuses && typeof body.statuses === 'object' ? body.statuses : {};

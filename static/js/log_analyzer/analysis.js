@@ -488,6 +488,9 @@ function renderLineInspector(detailsPayload, entry) {
     }
 
     renderLineInspectorTags(entry);
+    if (typeof renderLineInspectorCorrelations === 'function') {
+        renderLineInspectorCorrelations(entry);
+    }
 
     if (detailsEl) {
         detailsEl.innerHTML = '';
@@ -1141,14 +1144,17 @@ function openLineCopyMenu(trigger, index) {
     menu.appendChild(header);
 
     const items = buildLineLookupItems(entry);
-    // Hashes of the line's file found in related logs (case_correlations.js).
+    // Hashes of the line's files found in related logs (case_correlations.js),
+    // shown with the file each belongs to; only the hash is copied.
     if (typeof correlationHashValues === 'function') {
-        correlationHashValues(caseCorrelationsFor(entry)).forEach((hash) => {
-            items.push({ key: hash.length === 64 ? 'sha256' : 'md5', value: hash });
+        correlationHashValues(caseCorrelationsFor(entry)).forEach((found) => {
+            items.push({
+                key: found.hash.length === 64 ? 'sha256' : 'md5', value: found.hash, label: correlationHashLabel(found),
+            });
         });
     }
 
-    items.forEach(({ key, value }) => {
+    items.forEach(({ key, value, label: shown }) => {
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'line-copy-menu-item';
@@ -1160,7 +1166,7 @@ function openLineCopyMenu(trigger, index) {
 
         const preview = document.createElement('span');
         preview.className = 'line-copy-menu-value';
-        preview.textContent = value;
+        preview.textContent = shown || value;
 
         item.appendChild(label);
         item.appendChild(preview);
@@ -1262,10 +1268,12 @@ function openLineSearchMenu(trigger, index) {
     const items = buildLineLookupItems(entry).map(({ key, value }) => ({
         key, value, url: 'https://www.google.com/search?q=' + encodeURIComponent(value),
     }));
-    correlatedHashes.forEach((hash) => {
-        items.push({ key: 'virustotal', value: hash, url: 'https://www.virustotal.com/gui/file/' + hash });
+    correlatedHashes.forEach((found) => {
+        const { hash } = found;
+        const value = correlationHashLabel(found);
+        items.push({ key: 'virustotal', value, url: 'https://www.virustotal.com/gui/file/' + hash });
         // centralbox reports exist for SHA-256 only (as in the log view's search menu).
-        if (hash.length === 64) items.push({ key: 'centralbox', value: hash, url: 'https://centralbox.dev/analysis/' + hash });
+        if (hash.length === 64) items.push({ key: 'centralbox', value, url: 'https://centralbox.dev/analysis/' + hash });
     });
 
     items.forEach(({ key, value, url }) => {

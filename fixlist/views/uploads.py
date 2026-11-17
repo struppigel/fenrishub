@@ -15,6 +15,7 @@ from django.core.paginator import Paginator
 from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from django.db.models import Count, Q
+from django.db.models.functions import Substr
 from urllib.parse import urlencode
 
 from ..file_hashes import HASH_LOG_TYPES
@@ -24,8 +25,10 @@ from ..log_highlighting import (
     HighlightResult, Stat, apply_analysis_statuses, highlight_log, render_highlighted_html,
 )
 from ..case_correlations import (
-    correlations_for_upload, related_upload_ids, same_machine_logs, same_system, stored_signals,
+    SYSTEM_DIFFERENT, SYSTEM_SIGNAL_CHARS, SYSTEM_UNKNOWN, correlations_for_upload, related_upload_ids,
+    same_machine_logs, system_verdicts,
 )
+from ..machine_signals import KIND_COMPUTER, KIND_PROFILE, extract_signals, system_reason
 from ..models import LOG_TYPE_UNKNOWN, CorrelationCache, InfectionCaseLog, RuleTag, UploadedLog
 from ..permissions import user_can_delete_uploaded_log
 from ..rule_sets import SHARED_RULE_SET_KEY, resolve_effective_rule_set_key, resolve_user_rule_set_key
@@ -638,10 +641,19 @@ def related_logs_fragment(request, upload_id):
                 log.machine_match = ', '.join(labels)
                 machine_logs.append(log)
     shown = logs + machine_logs
+    other_system = 0
     if shown:
         tags_by_upload = found_tags_by_upload([log.pk for log in shown], resolve_user_rule_set_key(request.user))
-        signals = stored_signals([uploaded_log.pk] + [log.pk for log in shown])
-        own = signals.get(uploaded_log.pk) or {}
+        verdicts = system_verdicts(uploaded_log, [log.pk for log in shown])
+        # Names for the reasons of "other computer / profile" (never SIDs or disks).
+        named = [pk for pk, (verdict, kind) in verdicts.items()
+                 if verdict == SYSTEM_DIFFERENT and kind in (KIND_COMPUTER, KIND_PROFILE)]
+        raw = {}
+        if named:
+            heads = UploadedLog.objects.filter(pk__in=named).annotate(
+                head=Substr('content', 1, SYSTEM_SIGNAL_CHARS),
+            ).values_list('pk', 'head')
+            raw = {pk: extract_signals(head or '') for pk, head in heads}
         correlated = {}
         if logs:
             try:
@@ -650,14 +662,17 @@ def related_logs_fragment(request, upload_id):
                 logger.exception('Counting correlated lines failed for %s', upload_id)
         for log in shown:
             log.rule_tags = tags_for_listing(tags_by_upload.get(log.pk, []))
-            log.system = same_system(own, signals.get(log.pk) or {})
+            log.system, kind = verdicts.get(log.pk, (SYSTEM_UNKNOWN, ''))
+            log.system_reason = system_reason(log.system, kind, raw.get(log.pk))
             log.correlated_lines, log.correlated_title = correlated.get(log.pk, (0, ''))
+        other_system = sum(1 for log in logs if log.system == SYSTEM_DIFFERENT)
     return render(request, 'partials/related_logs.html', {
         'logs': logs,
         'machine_logs': machine_logs,
         'scope': scope,
         'name': name,
         'more_count': max(0, total - len(logs)),
+        'other_system': other_system,
     })
 
 

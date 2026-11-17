@@ -423,6 +423,8 @@ def page_correlation_context(uploaded_log, user, highlight):
             'fresh': bool(fresh),
             'refresh_url': f"{reverse('case_correlations_api')}?upload_id={uploaded_log.upload_id}",
             'scope': '', 'name': '', 'lines': {},
+            # The log itself: its own entries (Addition part) jump within the page.
+            'upload_id': uploaded_log.upload_id,
             # Lookups of correlated hashes from the info panel (each with the
             # related log that holds the hash, as the analyzer does).
             'can_lookup': centralbox.is_available(),
@@ -454,7 +456,7 @@ def page_correlation_context(uploaded_log, user, highlight):
                 severity = _CORRELATION_SUMMARY_SEVERITY.get(data['status'])
                 if not severity:
                     continue
-                note = notes.get(data['text']) or summary_note(data['entries'], data['status'])
+                note = notes.get(data['text']) or summary_note(data['entries'], data['status'], uploaded_log.upload_id)
                 note = f'correlated: {note}'
                 existing = listed.get(int(no))
                 if existing is not None:

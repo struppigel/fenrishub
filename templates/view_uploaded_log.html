@@ -178,7 +178,20 @@
     }
 
     .related-system-same { color: var(--la-success); }
-    .related-system-different { color: var(--la-text-disabled); }
+    .related-system-different { color: var(--la-status-w); font-weight: 600; }
+    .related-system-reason { font-weight: normal; }
+
+    /* Logs of another machine among the related ones: said above the list,
+       so it is seen before the list is read. */
+    .related-logs-warning {
+        margin-bottom: 8px;
+        padding: 6px 8px;
+        font-size: 12px;
+        color: var(--la-text-primary);
+        border-left: 3px solid var(--la-status-w);
+        background-color: color-mix(in srgb, var(--la-status-w) 10%, transparent);
+    }
+
     .related-correlated { color: var(--la-info); }
 
 
@@ -580,12 +593,16 @@ function buildLineCopyItems(line) {
             add('folder', parentFolder(value));
         }
     });
-    // Hashes of the line's file found in related logs (correlations), as in
-    // the analyzer: copied like the line's own, looked up from the search menu.
-    CaseCorrelations.hashes(line).forEach(hash => {
+    // Hashes of the line's files found in related logs (correlations), as in
+    // the analyzer: copied like the line's own, looked up from the search
+    // menu, and shown with the file each belongs to (`label`).
+    CaseCorrelations.hashes(line).forEach(({ hash, file }) => {
         const before = items.length;
         add(hash.length === 64 ? 'sha256' : 'md5', hash);
-        if (items.length > before) items[items.length - 1].hash = hash;
+        if (items.length > before) {
+            items[items.length - 1].hash = hash;
+            items[items.length - 1].label = file ? `${file} · ${hash}` : hash;
+        }
     });
     return items;
 }
@@ -670,7 +687,7 @@ const TokenMenu = (function () {
         header.className = 'line-copy-menu-header';
         header.textContent = headerText;
         menu.appendChild(header);
-        items.forEach(({ key, value, run }) => {
+        items.forEach(({ key, value, label: shown, run }) => {
             const item = document.createElement('button');
             item.type = 'button';
             item.className = 'line-copy-menu-item';
@@ -680,7 +697,9 @@ const TokenMenu = (function () {
             label.textContent = key;
             const preview = document.createElement('span');
             preview.className = 'line-copy-menu-value';
-            preview.textContent = value;
+            // `label`: what is shown when it is not just the value (a
+            // correlated hash with its file name).
+            preview.textContent = shown || value;
             item.append(label, preview);
             item.addEventListener('click', function () {
                 close();
@@ -1155,10 +1174,23 @@ const CaseCorrelations = (function () {
         return `/uploads/${encodeURIComponent(id)}/` + (Number.isInteger(line) && line > 0 ? `#L${line}` : '');
     }
 
-    function header() {
-        return data.scope === 'user'
-            ? `same file in other logs of user ${data.name} (no case of yours)`
-            : 'same file in other logs of this case';
+    // An entry of this log itself (Defender events of its Addition part).
+    function isOwn(entry) {
+        return Boolean(entry) && Boolean(data.upload_id) && entry.upload_id === data.upload_id;
+    }
+
+    // Where the line's findings come from: other logs, this log's own
+    // Addition part, or both.
+    function header(line) {
+        const entries = line ? entriesFor(line) : [];
+        const own = entries.some(isOwn);
+        const others = entries.some(entry => !isOwn(entry));
+        const scope = data.scope === 'user'
+            ? `other logs of user ${data.name} (no case of yours)`
+            : 'other logs of this case';
+        if (own && !others) return "same file in this log's Addition part";
+        if (own) return `same file in this log's Addition part and in ${scope}`;
+        return `same file in ${scope}`;
     }
 
     function bareHash(entry) {
@@ -1183,7 +1215,9 @@ const CaseCorrelations = (function () {
         const source = entry.source === 'defender' ? 'Defender' : '';
         // Matched through something else than the line's own file.
         const how = MATCH_NOTES[entry.match] || '';
-        return [name, verdict, source, how, where].filter(Boolean).join(DOT) || (entry.kind === 'hash' ? 'file hash' : 'detection');
+        // Which file the finding is about (the line's own, one in its command line, ...).
+        const file = typeof entry.file === 'string' ? entry.file : '';
+        return [file, name, verdict, source, how, where].filter(Boolean).join(DOT) || (entry.kind === 'hash' ? 'file hash' : 'detection');
     }
 
     // One row per finding: the log type it was found in (and a warning when
@@ -1194,10 +1228,17 @@ const CaseCorrelations = (function () {
         const seen = new Set();
         entriesFor(line).forEach(entry => {
             if (!entry || typeof entry !== 'object') return;
-            const key = String(entry.log_type || 'log') + (entry.system === 'different' ? DOT + 'other system?' : '');
+            const key = isOwn(entry) ? 'this log'
+                : String(entry.log_type || 'log') + (entry.system === 'different' ? DOT + 'other system?' : '');
             const value = finding(entry);
             if (seen.has(key + '\n' + value)) return;
             seen.add(key + '\n' + value);
+            if (isOwn(entry)) {
+                // This log: jump to the line on this page.
+                const no = Number(entry.anchor_line_no || entry.line_no);
+                items.push({ key, value, run: () => LineJump.jump(no, 4000) });
+                return;
+            }
             const url = logUrl(entry);
             items.push({ key, value, run: () => { if (url) openUrl(url); } });
         });
@@ -1215,7 +1256,7 @@ const CaseCorrelations = (function () {
             ? CentralboxLookup.targets(entriesFor(line)) : [];
         if (targets.length) {
             targets.forEach(target => {
-                const which = targets.length > 1 ? ' ' + target.short : '';
+                const which = targets.length > 1 ? ' ' + target.short : (target.file ? ' of ' + target.file : '');
                 if (lookupConfig.hash_url) {
                     items.push({ key: 'centralbox', value: 'check this hash' + which, run: () => checkHash(target, line) });
                 }
@@ -1234,7 +1275,8 @@ const CaseCorrelations = (function () {
             && CentralboxLookup.targets(Array.isArray(entries) ? entries : []).length > 0;
     }
 
-    // Distinct file hashes of the line's correlations (SHA-256, else the MD5 alone).
+    // Distinct file hashes of the line's correlations (SHA-256, else the MD5
+    // alone) with the file each belongs to: [{hash, file}].
     function correlatedHashes(entries) {
         const hashes = [];
         (Array.isArray(entries) ? entries : []).forEach(entry => {
@@ -1242,7 +1284,9 @@ const CaseCorrelations = (function () {
             const sha = typeof entry.sha256 === 'string' && /^[0-9a-f]{64}$/.test(entry.sha256) ? entry.sha256 : '';
             const md5 = typeof entry.md5 === 'string' && /^[0-9a-f]{32}$/.test(entry.md5) ? entry.md5 : '';
             const hash = sha || md5;
-            if (hash && !hashes.includes(hash)) hashes.push(hash);
+            if (hash && !hashes.some(known => known.hash === hash)) {
+                hashes.push({ hash, file: typeof entry.file === 'string' ? entry.file : '' });
+            }
         });
         return hashes;
     }
@@ -1652,12 +1696,12 @@ function openEntryPointMenu(token) {
 // VirusTotal lookup for hashes and a CyberChef disassembly for entry points.
 function buildLineSearchItems(line) {
     const items = [];
-    buildLineCopyItems(line).forEach(({ key, value, token, hash: correlated }) => {
+    buildLineCopyItems(line).forEach(({ key, value, token, hash: correlated, label }) => {
         if (correlated) {
             // A correlated hash: VirusTotal (and centralbox for a SHA-256), like a hash on the line.
-            items.push({ key: 'virustotal', value, run: () => openUrl(virusTotalHashUrl(correlated, false)) });
+            items.push({ key: 'virustotal', value, label, run: () => openUrl(virusTotalHashUrl(correlated, false)) });
             if (correlated.length === 64) {
-                items.push({ key: 'centralbox', value, run: () => openUrl(centralboxReportUrl(correlated)) });
+                items.push({ key: 'centralbox', value, label, run: () => openUrl(centralboxReportUrl(correlated)) });
             }
             return;
         }
@@ -1794,8 +1838,8 @@ function openTokenMenu(token) {
     copyButton.addEventListener('click', function (event) {
         event.preventDefault();
         event.stopPropagation();
-        openLineMenu(copyButton, 'copy to clipboard', line => buildLineCopyItems(line).map(({ key, value }) => ({
-            key, value, run: () => copyAndFlash(value, line),
+        openLineMenu(copyButton, 'copy to clipboard', line => buildLineCopyItems(line).map(({ key, value, label }) => ({
+            key, value, label, run: () => copyAndFlash(value, line),
         })));
     });
     searchButton.addEventListener('click', function (event) {
@@ -1806,7 +1850,7 @@ function openTokenMenu(token) {
     infoButton.addEventListener('click', function (event) {
         event.preventDefault();
         event.stopPropagation();
-        openLineMenu(infoButton, CaseCorrelations.header(), CaseCorrelations.menuItems);
+        openLineMenu(infoButton, CaseCorrelations.header(currentLine), CaseCorrelations.menuItems);
     });
 })();
 

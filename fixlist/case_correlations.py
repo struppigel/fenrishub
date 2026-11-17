@@ -30,7 +30,7 @@ from django.db.models.functions import Substr
 
 from .machine_signals import (  # noqa: F401 (re-exported)
     KIND_COMPUTER, KIND_DISK, KIND_HW, KIND_PROFILE, KIND_SID, STRONG_KINDS, SYSTEM_DIFFERENT, SYSTEM_LIKELY, SYSTEM_SAME, SYSTEM_SIGNAL_CHARS,
-    SYSTEM_UNKNOWN, compare, extract_signals, log_signals,
+    SYSTEM_UNKNOWN, compare, compare_with_reason, extract_signals, log_signals,
 )
 from .models import (
     CorrelationCache, HashAlias, HashVerdict, InfectionCaseLog, UploadedLog, UploadedLogAnalysis,
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ENTRIES_PER_LINE = 20
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 8
+CORRELATION_VERSION = 10
 # Detections are read from these logs' summary boxes (log_highlighting).
 DETECTION_LOG_TYPES = ('ESET', 'Emsisoft', 'AdwCleaner', 'Malwarebytes', 'HitmanPro', 'Trojan Killer')
 # Defender events are read from these logs' "Windows Defender:" section.
@@ -112,6 +112,14 @@ def same_system(a, b):
     return compare(as_dict(a), as_dict(b))
 
 
+def system_verdicts(uploaded_log, upload_pks):
+    """{upload pk: (verdict, deciding kind)} of these logs against the
+    upload (stored signals, see stored_signals)."""
+    signals = stored_signals({uploaded_log.pk, *upload_pks})
+    own = signals.get(uploaded_log.pk) or {}
+    return {pk: compare_with_reason(own, signals.get(pk) or {}) for pk in upload_pks}
+
+
 def stored_signals(upload_pks):
     """{upload pk: {kind: hashed values}}: the stored machine signals, or for
     a log without any (stats not rebuilt since, or nothing found) the ones in
@@ -158,7 +166,7 @@ def _hash_entries(upload_ids, index):
     rows = list(
         UploadedLogFileHash.objects.filter(upload_id__in=upload_ids).exclude(normalized_path='')
         .select_related('upload')
-        .only('sha256', 'md5', 'line_no', 'anchor_line_no', 'detection', 'source', 'normalized_path',
+        .only('sha256', 'md5', 'line_no', 'anchor_line_no', 'detection', 'source', 'normalized_path', 'path',
               'upload__upload_id', 'upload__log_type')
     )
     md5_map = resolve_md5s({row.md5 for row in rows if row.md5 and not row.sha256})
@@ -186,6 +194,7 @@ def _hash_entries(upload_ids, index):
             'sha256': sha,
             'md5': row.md5,
             'centralbox': result,
+            'file': file_name(row.path),
         })
     return covered
 
@@ -211,6 +220,9 @@ def _detection_entries(upload_ids, index, covered):
                 'action': item.action,
                 'severity': item.severity,
             }
+            name = file_name(_as_path(item.target))
+            if name:
+                entry['file'] = name
             for key in target_keys(item.target):
                 index.setdefault(key, []).append(entry)
 
@@ -317,12 +329,22 @@ def _fixlog_entries(upload_ids, index):
                 'line_no': line_no,
                 'result': result.strip()[:200],
             }
+            name = file_name(_as_path(target.strip().strip('"')))
+            if name:
+                entry['file'] = name
             for key in target_keys(target, result):
                 index.setdefault(key, []).append(entry)
         if 'Threat' not in content:
             continue
         # Windows Defender events in the Fixlog: detections like a scanner's.
         _add_defender_entries(index, upload.upload_id, 'Fixlog', iter_defender_detections(content))
+
+
+def file_name(path):
+    """The last part of a path as the log spells it ('' for none): which
+    file an entry is about, as a line can name several (its own file, files
+    in its command line, a detected folder above it)."""
+    return ntpath.basename((path or '').strip().strip('"').rstrip('\\'))[:120]
 
 
 def _add_defender_entries(index, upload_id, log_type, detections):
@@ -339,6 +361,7 @@ def _add_defender_entries(index, upload_id, log_type, detections):
             'action': action[:100],
             'severity': defender_severity(threat),
             'source': 'defender',
+            'file': file_name(path),
         })
 
 
@@ -545,7 +568,7 @@ MATCH_NOTES = {
 }
 
 
-def summary_note(entries, status):
+def summary_note(entries, status, own_upload_id=''):
     """What the entry that gave a line its correlation status says, for the
     log page's summary box: the detection name or family, the centralbox
     verdict if any, and the log type it was found in (never log ids)."""
@@ -557,11 +580,14 @@ def summary_note(entries, status):
         verdict = result.get('verdict') or ''
         where = 'in detected folder' if entry.get('in_folder') else ''
         how = MATCH_NOTES.get(entry.get('match') or '', '')
+        if entry.get('match') == 'argument' and entry.get('file'):
+            how = f"{how}: {entry['file']}"
         source = 'Defender' if entry.get('source') == 'defender' else ''
+        # An entry of the log itself (Defender events of its Addition part).
+        found_in = "this log's Addition part" if own_upload_id and entry.get('upload_id') == own_upload_id \
+            else entry.get('log_type', '')
         parts = [
-            part for part in (
-                name, f'centralbox: {verdict}' if verdict else '', source, how, where, entry.get('log_type', ''),
-            )
+            part for part in (name, f'centralbox: {verdict}' if verdict else '', source, how, where, found_in)
             if part
         ]
         return ' · '.join(parts) or 'finding'
@@ -572,15 +598,28 @@ def _empty(scope='', name=''):
     return {'scope': scope, 'name': name, 'lines': {}, 'statuses': {}, 'notes': {}}
 
 
+def _own_defender_detections(uploaded_log):
+    """True when a merged FRST&Addition log's own Addition part lists a
+    Defender detection of a file."""
+    if uploaded_log.log_type != LOG_TYPE_FRST_AND_ADDITION:
+        return False
+    return bool(iter_addition_defender_detections(uploaded_log.content or ''))
+
+
 def _lookup(uploaded_log, user):
     """(answer, None) when there is nothing to correlate, else (None, (upload
     ids, scope, name, scope_key, signature, cache row or None))."""
     if uploaded_log.log_type not in UploadedLog.ANALYZED_LOG_TYPES:
         return _empty(), None
     upload_ids, scope, name = related_upload_ids(uploaded_log, user)
-    if not upload_ids:
+    # A merged FRST&Addition log speaks for itself through the Defender
+    # events of its Addition part, with or without related logs.
+    if not upload_ids and not _own_defender_detections(uploaded_log):
         return _empty(scope, name), None
-    scope_key = f'case:{user.pk}' if scope == SCOPE_CASE and user is not None else 'user'
+    if scope == SCOPE_CASE and user is not None:
+        scope_key = f'case:{user.pk}'
+    else:
+        scope_key = 'user' if scope == SCOPE_USER else 'self'
     signature = _signature(uploaded_log, upload_ids, scope, name)
     cached = CorrelationCache.objects.filter(upload=uploaded_log, scope_key=scope_key).first()
     if cached is not None and not isinstance(cached.payload, dict):
@@ -628,7 +667,8 @@ def correlations_for_upload(uploaded_log, user=None):
         answer = {
             'scope': scope, 'name': name, 'lines': result, 'statuses': statuses,
             'notes': {
-                text: summary_note(result[text], status) for text, status in statuses.items() if status
+                text: summary_note(result[text], status, uploaded_log.upload_id)
+                for text, status in statuses.items() if status
             },
         }
         _store(uploaded_log, scope_key, signature, answer)

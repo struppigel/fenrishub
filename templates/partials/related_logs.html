@@ -4,6 +4,7 @@ the logs correlations use, newest first, with chips, tags, a same-system
 badge and how many lines the two logs share a correlation for; then logs
 outside those that look like the same machine (machine_logs).
 {% endcomment %}<div class="related-logs-head">{% if scope == 'user' %}other logs of forum user {{ name }} (no case of yours){% else %}logs of your cases with this log{% endif %}</div>
+{% if other_system %}<div class="related-logs-warning">⚠ {{ other_system }} of these log{{ logs|length|pluralize }} seem{{ other_system|pluralize:"s," }} to come from another machine</div>{% endif %}
 {% for uploaded_log in logs %}
 {% include "partials/related_log_row.html" %}
 {% empty %}

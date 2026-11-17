@@ -126,14 +126,46 @@ def log_signals(content, head_only=False):
 _DECIDING = (KIND_SID, KIND_COMPUTER, KIND_USERSID, KIND_PROFILE, KIND_DISK)
 
 
+def compare_with_reason(a, b):
+    """(verdict, kind that decided or ''): see compare."""
+    a, b = a or {}, b or {}
+    for kind in _DECIDING:
+        if a.get(kind) and b.get(kind):
+            return (SYSTEM_SAME if a[kind] & b[kind] else SYSTEM_DIFFERENT), kind
+    if a.get(KIND_HW) and b.get(KIND_HW) and a[KIND_HW] & b[KIND_HW]:
+        return SYSTEM_LIKELY, KIND_HW
+    return SYSTEM_UNKNOWN, ''
+
+
 def compare(a, b):
     """'same', 'likely', 'different' or 'unknown' for two {kind: values}:
     the first kind in _DECIDING both have decides (shared value or not);
     else matching hardware says 'likely'."""
-    a, b = a or {}, b or {}
-    for kind in _DECIDING:
-        if a.get(kind) and b.get(kind):
-            return SYSTEM_SAME if a[kind] & b[kind] else SYSTEM_DIFFERENT
-    if a.get(KIND_HW) and b.get(KIND_HW) and a[KIND_HW] & b[KIND_HW]:
-        return SYSTEM_LIKELY
-    return SYSTEM_UNKNOWN
+    return compare_with_reason(a, b)[0]
+
+
+# A verdict's reason in a few words, by the kind that decided it. Computer
+# and profile names are shown (they are in the logs anyway); SIDs and Disk
+# IDs never are.
+_REASON_SAME = {
+    KIND_SID: 'same machine SID', KIND_COMPUTER: 'same computer name', KIND_USERSID: 'same user SIDs',
+    KIND_PROFILE: 'same Windows profile', KIND_DISK: 'same disk', KIND_HW: 'same hardware, nothing else to compare',
+}
+_REASON_DIFFERENT = {
+    KIND_SID: 'other Windows install', KIND_COMPUTER: 'other computer', KIND_USERSID: 'other user SIDs',
+    KIND_PROFILE: 'other Windows profile', KIND_DISK: 'other disks',
+}
+
+
+def system_reason(verdict, kind, their_raw=None):
+    """Short reason for a verdict of compare_with_reason. `their_raw`
+    (extract_signals of the other log) adds the names for computer and
+    profile: "other computer: desktop-2"."""
+    if verdict in (SYSTEM_SAME, SYSTEM_LIKELY):
+        return _REASON_SAME.get(kind, '')
+    if verdict != SYSTEM_DIFFERENT:
+        return ''
+    text = _REASON_DIFFERENT.get(kind, '')
+    if kind in (KIND_COMPUTER, KIND_PROFILE) and their_raw and their_raw.get(kind):
+        text += ': ' + ', '.join(sorted(their_raw[kind])[:2])
+    return text

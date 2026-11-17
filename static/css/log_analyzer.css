@@ -1562,3 +1562,24 @@ body:not(.no-word-wrap) #logLines .log-line:has(.line-tag-chips, .centralbox-sug
 body:not(.no-word-wrap) #logLines .log-line:has(.line-tag-chips, .centralbox-suggestion-chip):not(:hover) .line-correlation-trigger {
     margin-left: -11px;
 }
+
+/* The line a correlation of the loaded log itself jumped to
+   (case_correlations.js jumpToAnalyzerLine): on at once, then fading out,
+   like the log page's .hl-flash. */
+#logLines .log-line.correlation-flash {
+    background-color: color-mix(in srgb, var(--la-status-w) 25%, transparent);
+}
+
+#logLines .log-line.correlation-flash-fade {
+    transition: background-color 0.8s ease-out;
+}
+
+/* Correlations in the line inspector (case_correlations.js
+   renderLineInspectorCorrelations): coloured like the line's ⓘ menu. */
+.line-inspector-correlations .line-correlation-sev-b .line-inspector-correlation-finding { color: var(--la-status-b); }
+.line-inspector-correlations .line-correlation-sev-p .line-inspector-correlation-finding { color: var(--la-status-p); }
+.line-inspector-correlations .line-correlation-sev-g .line-inspector-correlation-finding { color: var(--la-status-g); }
+.line-inspector-correlations .line-correlation-sev-w .line-inspector-correlation-finding { color: var(--la-status-w); }
+.line-inspector-correlations .line-correlation-bad .line-inspector-correlation-finding { color: var(--la-status-b); }
+.line-inspector-correlations .line-correlation-system-different { color: var(--la-text-disabled); }
+.line-inspector-correlations .line-inspector-correlation-finding { overflow-wrap: anywhere; }

@@ -11,7 +11,7 @@ const CentralboxLookup = (function () {
     const FRESH_POLL_TRIES = 30;
 
     // Correlated hashes without a centralbox verdict (never checked, or not in
-    // centralbox): [{hash, uploadId, short}]. Known hashes have a report entry.
+    // centralbox): [{hash, uploadId, file, short}]. Known hashes have a report entry.
     function targets(items) {
         const found = [];
         const seen = new Set();
@@ -25,7 +25,11 @@ const CentralboxLookup = (function () {
             const uploadId = String(item.upload_id || '');
             if (!hash || seen.has(hash) || !/^[A-Za-z0-9_-]+$/.test(uploadId)) return;
             seen.add(hash);
-            found.push({ hash, uploadId, short: (sha ? 'SHA-256 ' : 'MD5 ') + hash.slice(0, 12) + '…' });
+            // The file the hash belongs to: a line can name several (its own
+            // file, a script in its command line, ...).
+            const file = typeof item.file === 'string' ? item.file : '';
+            const short = (sha ? 'SHA-256 ' : 'MD5 ') + hash.slice(0, 12) + '…';
+            found.push({ hash, uploadId, file, short: file ? `of ${file} (${short})` : short });
         });
         return found;
     }
