@@ -1128,6 +1128,12 @@ const CaseCorrelations = (function () {
         fresh_status_url: typeof data.fresh_status_url === 'string' ? data.fresh_status_url : '',
     };
     const DOT = ' · ';
+    // How an entry was matched when not through the line's own file
+    // (case_correlations.MATCH_NOTES).
+    const MATCH_NOTES = {
+        argument: 'file in command line', registry: 'same registry value', service: 'same service',
+        task: 'same task', extension: 'same extension', clsid: 'same CLSID', firewall: 'same firewall rule',
+    };
     const STATUS_CLASS = { B: 'b', P: 'p', C: 'c', A: 'a', '!': 'w', G: 'g', S: 's', I: 'i', J: 'j' };
     // Summary severity per status, as views/centralbox.py _CORRELATION_SUMMARY_SEVERITY.
     const SUMMARY_SEVERITY = { B: 'b', P: 'p', C: 'c', A: 'w', '!': 'w', G: 'g', S: 'i', I: 'i', J: 'j' };
@@ -1175,7 +1181,9 @@ const CaseCorrelations = (function () {
         const where = entry.in_folder ? 'in detected folder' : '';
         // A Windows Defender event in a Fixlog, not a scanner's detection.
         const source = entry.source === 'defender' ? 'Defender' : '';
-        return [name, verdict, source, where].filter(Boolean).join(DOT) || (entry.kind === 'hash' ? 'file hash' : 'detection');
+        // Matched through something else than the line's own file.
+        const how = MATCH_NOTES[entry.match] || '';
+        return [name, verdict, source, how, where].filter(Boolean).join(DOT) || (entry.kind === 'hash' ? 'file hash' : 'detection');
     }
 
     // One row per finding: the log type it was found in (and a warning when

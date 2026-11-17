@@ -37,6 +37,18 @@ function correlationHash(item) {
     return sha ? 'SHA-256 ' + sha : md5 ? 'MD5 ' + md5 : '';
 }
 
+// How an entry was matched when not through the line's own file
+// (case_correlations.MATCH_NOTES).
+const CORRELATION_MATCH_NOTES = {
+    argument: 'file in command line',
+    registry: 'same registry value',
+    service: 'same service',
+    task: 'same task',
+    extension: 'same extension',
+    clsid: 'same CLSID',
+    firewall: 'same firewall rule',
+};
+
 function correlationFinding(item) {
     if (item.kind === 'fixlog') return item.result || 'fixlist result';
     const result = item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
@@ -48,7 +60,9 @@ function correlationFinding(item) {
     const where = item.in_folder ? 'in detected folder' : '';
     // A Windows Defender event in a Fixlog, not a scanner's detection.
     const source = item.source === 'defender' ? 'Defender' : '';
-    return [name, verdict, source, where].filter(Boolean).join(CORRELATION_DOT) || (item.kind === 'hash' ? 'file hash' : 'detection');
+    // Matched through something else than the line's own file.
+    const how = CORRELATION_MATCH_NOTES[item.match] || '';
+    return [name, verdict, source, how, where].filter(Boolean).join(CORRELATION_DOT) || (item.kind === 'hash' ? 'file hash' : 'detection');
 }
 
 // The log type a finding comes from, flagged when that log seems to come

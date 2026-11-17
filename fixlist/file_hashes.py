@@ -108,15 +108,6 @@ def normalized_path(path):
         return ''
 
 
-def line_path_key(line):
-    """The normalized_path key of the file an FRST / Addition line names, or ''."""
-    try:
-        path = frst_extractors.extract_any_frst_path(line)
-        return frst_extractors.normalize_path(path).lower().strip() if path else ''
-    except Exception:
-        return ''
-
-
 def is_sha256(value):
     return bool(_SHA256_FULL_RE.match((value or '').strip().lower()))
 

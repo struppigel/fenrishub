@@ -1181,6 +1181,8 @@ class UploadedLog(models.Model):
         self.save(update_fields=[*self.analysis_stat_update_fields(), 'is_incomplete', 'tool_stats'])
         # SHA256s for the centralbox markers; local parsing only, never raises.
         UploadedLogFileHash.rebuild_for(self)
+        # Machine fingerprint for the same-system checks; never raises.
+        UploadedLogMachineSignal.rebuild_for(self)
 
         from .tagging import compute_line_tags, current_line_tags
 
@@ -1346,6 +1348,45 @@ class UploadedLogFileHash(models.Model):
                 ], batch_size=1000)
         except Exception:
             logger.exception('Storing file hashes failed for upload_id=%s', upload.upload_id)
+
+
+class UploadedLogMachineSignal(models.Model):
+    """One machine signal of an uploaded log (machine_signals.py: machine SID,
+    computer name, profile, Disk ID, hardware, ...), stored as a sha1 of the
+    value: only compared, never shown. Rebuilt with the analysis stats."""
+
+    upload = models.ForeignKey(UploadedLog, on_delete=models.CASCADE, related_name='machine_signals')
+    kind = models.CharField(max_length=16)
+    value = models.CharField(max_length=40)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['upload', 'kind', 'value'], name='machine_signal_unique'),
+        ]
+        indexes = [models.Index(fields=['kind', 'value'], name='fixlist_machsig_kind_value')]
+
+    def __str__(self):
+        return f'{self.kind} of {self.upload_id}'
+
+    @classmethod
+    def rows_for(cls, upload_pk, content):
+        from .machine_signals import log_signals
+
+        return [
+            cls(upload_id=upload_pk, kind=kind, value=value)
+            for kind, values in log_signals(content).items() for value in sorted(values)
+        ]
+
+    @classmethod
+    def rebuild_for(cls, upload):
+        """Replace the upload's rows from its current content. Never raises."""
+        try:
+            rows = cls.rows_for(upload.pk, upload.content or '')
+            with transaction.atomic():
+                cls.objects.filter(upload=upload).delete()
+                cls.objects.bulk_create(rows, batch_size=1000)
+        except Exception:
+            logger.exception('Storing machine signals failed for upload_id=%s', upload.upload_id)
 
 
 class HashVerdict(models.Model):

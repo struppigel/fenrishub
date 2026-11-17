@@ -15,7 +15,6 @@ from django.core.paginator import Paginator
 from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from django.db.models import Count, Q
-from django.db.models.functions import Substr
 from urllib.parse import urlencode
 
 from ..file_hashes import HASH_LOG_TYPES
@@ -25,7 +24,7 @@ from ..log_highlighting import (
     HighlightResult, Stat, apply_analysis_statuses, highlight_log, render_highlighted_html,
 )
 from ..case_correlations import (
-    SYSTEM_SIGNAL_CHARS, correlations_for_upload, related_upload_ids, same_system, system_signals,
+    correlations_for_upload, related_upload_ids, same_machine_logs, same_system, stored_signals,
 )
 from ..models import LOG_TYPE_UNKNOWN, CorrelationCache, InfectionCaseLog, RuleTag, UploadedLog
 from ..permissions import user_can_delete_uploaded_log
@@ -627,24 +626,35 @@ def related_logs_fragment(request, upload_id):
     related = UploadedLog.objects.filter(pk__in=ids).defer('content').order_by('-created_at', '-pk')
     total = related.count()
     logs = list(related[:RELATED_LOGS_LIMIT])
-    if logs:
-        tags_by_upload = found_tags_by_upload([log.pk for log in logs], resolve_user_rule_set_key(request.user))
-        starts = dict(
-            UploadedLog.objects.filter(pk__in=[uploaded_log.pk] + [log.pk for log in logs])
-            .annotate(head=Substr('content', 1, SYSTEM_SIGNAL_CHARS)).values_list('pk', 'head')
-        )
-        own = system_signals(starts.get(uploaded_log.pk) or '')
-        try:
-            correlated = _correlated_line_counts(uploaded_log, request.user, logs)
-        except Exception:
-            logger.exception('Counting correlated lines failed for %s', upload_id)
-            correlated = {}
-        for log in logs:
+    # Logs outside the scope that look like the same machine (machine SID,
+    # Disk ID, computer name + hardware), e.g. under another forum name.
+    machine_matches = same_machine_logs(uploaded_log, exclude_pks=ids)
+    machine_logs = []
+    if machine_matches:
+        by_pk = UploadedLog.objects.filter(pk__in=[pk for pk, _labels in machine_matches]).defer('content').in_bulk()
+        for pk, labels in machine_matches:
+            if pk in by_pk:
+                log = by_pk[pk]
+                log.machine_match = ', '.join(labels)
+                machine_logs.append(log)
+    shown = logs + machine_logs
+    if shown:
+        tags_by_upload = found_tags_by_upload([log.pk for log in shown], resolve_user_rule_set_key(request.user))
+        signals = stored_signals([uploaded_log.pk] + [log.pk for log in shown])
+        own = signals.get(uploaded_log.pk) or {}
+        correlated = {}
+        if logs:
+            try:
+                correlated = _correlated_line_counts(uploaded_log, request.user, logs)
+            except Exception:
+                logger.exception('Counting correlated lines failed for %s', upload_id)
+        for log in shown:
             log.rule_tags = tags_for_listing(tags_by_upload.get(log.pk, []))
-            log.system = same_system(own, system_signals(starts.get(log.pk) or ''))
+            log.system = same_system(own, signals.get(log.pk) or {})
             log.correlated_lines, log.correlated_title = correlated.get(log.pk, (0, ''))
     return render(request, 'partials/related_logs.html', {
         'logs': logs,
+        'machine_logs': machine_logs,
         'scope': scope,
         'name': name,
         'more_count': max(0, total - len(logs)),

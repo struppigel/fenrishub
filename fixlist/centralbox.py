@@ -551,6 +551,27 @@ def resolve_md5s(md5s):
         return {}
 
 
+def hash_forms(value):
+    """{value} plus the other hashes known to stand for the same file: an
+    MD5's SHA256, or a SHA256's MD5s (pairs seen in logs, centralbox's MD5
+    answers). DB only, never raises."""
+    value = (value or '').strip().lower()
+    forms = {value} if value else set()
+    try:
+        if is_md5(value):
+            sha = resolve_md5s([value]).get(value)
+            if sha:
+                forms.add(sha)
+        elif is_sha256(value):
+            forms.update(
+                UploadedLogFileHash.objects.filter(sha256=value).exclude(md5='').values_list('md5', flat=True)
+            )
+            forms.update(HashAlias.objects.filter(sha256=value).values_list('md5', flat=True))
+    except Exception:
+        logger.exception('Resolving the forms of a hash failed')
+    return forms
+
+
 def unknown_md5s(md5s):
     """{md5: checked date} for MD5s centralbox did not know when last asked."""
     try:
@@ -783,7 +804,8 @@ def start_fresh_lookup(sha, user, auto=False):
                 return _result(False, message=f'centralbox is rate limiting; try again in {seconds} s.', status=429)
             return _result(False, message='centralbox could not be reached; try again later.', status=503)
         # Started (by hand or automatically): no automatic lookup is needed any more.
-        CentralboxAutoQueue.objects.filter(hash=sha).delete()
+        # Whichever form (MD5 / SHA256) of the file is queued.
+        CentralboxAutoQueue.objects.filter(hash__in=hash_forms(sha)).delete()
         status = data.get('status')
         if status == 'not_found':
             verdict = _store_unknown(sha)

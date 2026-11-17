@@ -20,15 +20,21 @@ import logging
 import ntpath
 import re
 
-from . import frst_extractors as ex
 from .analyzer import ANALYSIS_PAYLOAD_FORMAT
+from .correlation_keys import MATCH_PATH, argument_paths, is_path_key, line_keys, target_keys
 from .file_hashes import _as_path, normalized_path
 from .log_highlighting import highlight_log, threat_severity
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Max, Q
+from django.db.models.functions import Substr
 
+from .machine_signals import (  # noqa: F401 (re-exported)
+    KIND_COMPUTER, KIND_DISK, KIND_HW, KIND_PROFILE, KIND_SID, STRONG_KINDS, SYSTEM_DIFFERENT, SYSTEM_LIKELY, SYSTEM_SAME, SYSTEM_SIGNAL_CHARS,
+    SYSTEM_UNKNOWN, compare, extract_signals, log_signals,
+)
 from .models import (
     CorrelationCache, HashAlias, HashVerdict, InfectionCaseLog, UploadedLog, UploadedLogAnalysis,
-    UploadedLogFileHash, iter_fixlog_results,
+    UploadedLogFileHash, UploadedLogMachineSignal, iter_fixlog_results,
 )
 from .status_types import STATUS_PRECEDENCE
 
@@ -36,9 +42,12 @@ logger = logging.getLogger(__name__)
 
 MAX_ENTRIES_PER_LINE = 20
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 7
+CORRELATION_VERSION = 8
 # Detections are read from these logs' summary boxes (log_highlighting).
 DETECTION_LOG_TYPES = ('ESET', 'Emsisoft', 'AdwCleaner', 'Malwarebytes', 'HitmanPro', 'Trojan Killer')
+# Defender events are read from these logs' "Windows Defender:" section.
+ADDITION_LOG_TYPES = ('Addition', 'FRST&Addition')
+LOG_TYPE_FRST_AND_ADDITION = 'FRST&Addition'
 
 
 SCOPE_CASE = 'case'
@@ -51,7 +60,10 @@ def related_upload_ids(uploaded_log, user):
     The other live logs of the viewer's own live cases that contain the
     upload (scope 'case'); if there are none, every other live log of the same
     forum user, any age, case-insensitive (scope 'user', name = the forum
-    username); else nothing."""
+    username); else nothing.
+
+    The forum username is whatever the uploader typed (anonymous uploads
+    included), so the 'user' scope trusts it; accepted as a known risk."""
     owner_id = getattr(user, 'pk', None)
     if owner_id is not None:
         case_ids = list(
@@ -77,49 +89,48 @@ def related_upload_ids(uploaded_log, user):
     return [], '', ''
 
 
-# --- Same system? Computer names printed in log headers, and the Windows
-# profile names in C:\Users\<name>\ paths.
-_RAN_BY_RE = re.compile(r'^Ran by (.+?) \(.*?\) on (\S+) \(', re.MULTILINE)
-_COMPUTER_NAME_RE = re.compile(r'^\s*Computer name(?: \.)*\s*:\s*(\S+)', re.MULTILINE | re.IGNORECASE)
-_PROFILE_RE = re.compile(r'[A-Za-z]:\\Users\\([^\\"\r\n]{1,64})\\', re.IGNORECASE)
-_SHARED_PROFILES = frozenset({'public', 'default', 'default user', 'all users', 'defaultuser0', 'username'})
-
-SYSTEM_SAME = 'same'
-SYSTEM_DIFFERENT = 'different'
-SYSTEM_UNKNOWN = 'unknown'
-
-
-# Computer names sit in a log's header and profile paths turn up early: only
-# the start of a log is read (the same everywhere, see views/uploads.py).
-SYSTEM_SIGNAL_CHARS = 200_000
+# --- Same system? machine_signals.py extracts and compares the signals; they
+# are stored per log (UploadedLogMachineSignal) when its stats are rebuilt.
 
 
 def system_signals(content):
-    """(computer names, profile names), lowercased, from the start of a log's text."""
-    content = (content or '')[:SYSTEM_SIGNAL_CHARS]
-    computers = set()
-    profiles = set()
-    for user_name, computer in _RAN_BY_RE.findall(content):
-        computers.add(computer.lower())
-        profiles.add(user_name.strip().lower())
-    for computer in _COMPUTER_NAME_RE.findall(content):
-        computers.add(computer.lower())
-    for profile in _PROFILE_RE.findall(content):
-        profile = profile.strip().lower()
-        if profile and profile not in _SHARED_PROFILES:
-            profiles.add(profile)
-    return computers, profiles
+    """(computer names, profile names), lowercased, from the start of a log's
+    text (the head-only reading; the stored signals have more kinds)."""
+    signals = extract_signals(content, head_only=True)
+    return signals.get(KIND_COMPUTER, set()), signals.get(KIND_PROFILE, set())
 
 
 def same_system(a, b):
-    """'same', 'different' or 'unknown' for two (computers, profiles) pairs:
-    computer names decide when both logs print one, else profile names."""
-    (computers_a, profiles_a), (computers_b, profiles_b) = a, b
-    if computers_a and computers_b:
-        return SYSTEM_SAME if computers_a & computers_b else SYSTEM_DIFFERENT
-    if profiles_a and profiles_b:
-        return SYSTEM_SAME if profiles_a & profiles_b else SYSTEM_DIFFERENT
-    return SYSTEM_UNKNOWN
+    """'same', 'likely', 'different' or 'unknown' for two logs' signals:
+    {kind: values} (machine_signals.compare), or (computers, profiles) pairs
+    from system_signals."""
+    def as_dict(signals):
+        if isinstance(signals, tuple):
+            computers, profiles = signals
+            return {KIND_COMPUTER: set(computers), KIND_PROFILE: set(profiles)}
+        return signals or {}
+    return compare(as_dict(a), as_dict(b))
+
+
+def stored_signals(upload_pks):
+    """{upload pk: {kind: hashed values}}: the stored machine signals, or for
+    a log without any (stats not rebuilt since, or nothing found) the ones in
+    the start of its text."""
+    result = {pk: {} for pk in upload_pks}
+    if not result:
+        return result
+    for upload_pk, kind, value in UploadedLogMachineSignal.objects.filter(upload_id__in=list(result)).values_list(
+        'upload_id', 'kind', 'value',
+    ):
+        result[upload_pk].setdefault(kind, set()).add(value)
+    missing = [pk for pk, signals in result.items() if not signals]
+    if missing:
+        heads = UploadedLog.objects.filter(pk__in=missing).annotate(
+            head=Substr('content', 1, SYSTEM_SIGNAL_CHARS),
+        ).values_list('pk', 'head')
+        for pk, head in heads:
+            result[pk] = log_signals(head or '')
+    return result
 
 
 def _fresh_payload(uploaded_log):
@@ -189,10 +200,9 @@ def _detection_entries(upload_ids, index, covered):
         for item in highlight.summary:
             if (upload.pk, item.line_no) in covered:
                 continue
-            key = normalized_path(_as_path(item.target))
-            if not key:
-                continue
-            index.setdefault(key, []).append({
+            # A file path, or the typed keys of a registry value, service,
+            # task, browser extension, ... (correlation_keys).
+            entry = {
                 'kind': 'detection',
                 'upload_id': upload.upload_id,
                 'log_type': upload.log_type,
@@ -200,7 +210,9 @@ def _detection_entries(upload_ids, index, covered):
                 'detection': item.name,
                 'action': item.action,
                 'severity': item.severity,
-            })
+            }
+            for key in target_keys(item.target):
+                index.setdefault(key, []).append(entry)
 
 
 # Windows Defender events in a Fixlog: a fixlist's PowerShell
@@ -298,46 +310,145 @@ def _fixlog_entries(upload_ids, index):
     for upload in UploadedLog.objects.filter(pk__in=upload_ids, log_type='Fixlog').only('pk', 'upload_id', 'content'):
         content = upload.content or ''
         for line_no, target, result in iter_fixlog_results(content):
-            key = normalized_path(_as_path(target))
-            if not key:
-                continue
-            index.setdefault(key, []).append({
+            entry = {
                 'kind': 'fixlog',
                 'upload_id': upload.upload_id,
                 'log_type': 'Fixlog',
                 'line_no': line_no,
                 'result': result.strip()[:200],
-            })
+            }
+            for key in target_keys(target, result):
+                index.setdefault(key, []).append(entry)
         if 'Threat' not in content:
             continue
         # Windows Defender events in the Fixlog: detections like a scanner's.
-        for line_no, threat, action, path in iter_defender_detections(content):
-            index.setdefault(normalized_path(path), []).append({
-                'kind': 'detection',
-                'upload_id': upload.upload_id,
-                'log_type': 'Fixlog',
-                'line_no': line_no,
-                'detection': threat[:255],
-                'action': action[:100],
-                'severity': defender_severity(threat),
-                'source': 'defender',
-            })
+        _add_defender_entries(index, upload.upload_id, 'Fixlog', iter_defender_detections(content))
 
 
-def _line_key(line):
-    components = line.get('components') if isinstance(line.get('components'), dict) else {}
-    path = components.get('filepath') or ''
-    text = line.get('line') or ''
-    if not path and ':\\' in text:
-        try:
-            path = ex.extract_any_frst_path(text) or ''
-        except Exception:
-            path = ''
-        if not path and '|' in text:
-            # "<registry key>|<path>", e.g. a Windows Defender exclusion
-            # ("HKLM\...\Exclusions\Paths|C:\Kaizen v92\Client.dll").
-            path = _as_path(text.rsplit('|', 1)[1])
-    return normalized_path(path)
+def _add_defender_entries(index, upload_id, log_type, detections):
+    for line_no, threat, action, path in detections:
+        key = normalized_path(path)
+        if not key:
+            continue
+        index.setdefault(key, []).append({
+            'kind': 'detection',
+            'upload_id': upload_id,
+            'log_type': log_type,
+            'line_no': line_no,
+            'detection': threat[:255],
+            'action': action[:100],
+            'severity': defender_severity(threat),
+            'source': 'defender',
+        })
+
+
+# Windows Defender events in an Addition log ("Windows Defender:" section):
+# blocks start with "TimeCreated : <date>"; "Name: <threat>", "Path: <entries>"
+# and, for an action taken, "Action: <action>". Long values wrap at a fixed
+# width without an indent, even mid-word, so continuation lines are glued back
+# on as they are, up to the next known field.
+_ADDITION_DEFENDER_HEADER = 'Windows Defender:'
+_ADDITION_DEFENDER_FIELDS = frozenset({
+    'timecreated', 'message', 'name', 'id', 'severity', 'category', 'path', 'detection origin',
+    'detection type', 'detection source', 'user', 'process name', 'security intelligence version',
+    'engine version', 'action', 'action status', 'error code', 'error description', 'remediation user',
+    'status', 'scan id', 'scan type', 'scan parameters', 'stop reason',
+})
+_ADDITION_FIELD_RE = re.compile(r'^([A-Za-z][A-Za-z ]{0,40}?)\s*:\s?(.*)$')
+# The section ends at the next banner: a "==== ... ====" line, or the "===="
+# underline of the next "Xyz:" header (whose line is then glued onto nothing:
+# it follows a blank line).
+_ADDITION_SECTION_END_RE = re.compile(r'^={5,}')
+_DEFENDER_CMDLINE_RE = re.compile(r'^cmdline:_(.+)$', re.IGNORECASE)
+
+
+def _addition_defender_events(content):
+    """[(fields, line numbers)] for the event blocks of an Addition log's
+    "Windows Defender:" section; [] when there is none."""
+    if content.startswith(_ADDITION_DEFENDER_HEADER):
+        start = 0
+    else:
+        start = content.find('\n' + _ADDITION_DEFENDER_HEADER)
+        if start < 0:
+            return []
+        start += 1
+    # Line numbers count content.split('\n') from 1, like the log page.
+    first_line_no = content.count('\n', 0, start) + 1
+    lines = content[start:].split('\n')
+    events = []
+    current = None
+    last_key = None
+    # lines[0] is the header, lines[1] its "====" underline.
+    for offset in range(2, len(lines)):
+        raw = lines[offset]
+        line = raw[:-1] if raw.endswith('\r') else raw
+        if _ADDITION_SECTION_END_RE.match(line):
+            break
+        match = _ADDITION_FIELD_RE.match(line)
+        key = match.group(1).strip().lower() if match else ''
+        if key in _ADDITION_DEFENDER_FIELDS:
+            if key == 'timecreated':
+                current = ({}, {})
+                events.append(current)
+            if current is not None:
+                current[0][key] = match.group(2)
+                current[1][key] = first_line_no + offset
+                last_key = key
+            continue
+        if not line.strip():
+            last_key = None
+            continue
+        if current is not None and last_key in ('path', 'name', 'action'):
+            current[0][last_key] += line
+    return events
+
+
+def iter_addition_defender_detections(content):
+    """(line_no of the Name line, threat, action, path) for every file a
+    Defender event of an Addition log names, one per (path, threat); an event
+    with a real action wins. A "CmdLine:_" entry names the program it ran."""
+    content = content or ''
+    if _ADDITION_DEFENDER_HEADER not in content:
+        return []
+    found = {}
+    for fields, line_nos in _addition_defender_events(content):
+        threat = (fields.get('name') or '').strip()
+        if not threat or 'path' not in fields:
+            continue
+        action = (fields.get('action') or '').strip()
+        for item in fields['path'].split(';'):
+            item = item.strip()
+            match = _DEFENDER_FILE_ENTRY_RE.match(item)
+            if match:
+                path = _as_path(match.group(1).split('|', 1)[0].split('->', 1)[0].strip())
+            else:
+                cmdline = _DEFENDER_CMDLINE_RE.match(item)
+                keys = argument_paths(cmdline.group(1)) if cmdline else []
+                path = keys[0] if keys else ''
+            key = normalized_path(path)
+            if not key:
+                continue
+            slot = (key, threat.lower())
+            known = found.get(slot)
+            if known is not None and (not _defender_real_action(action) or _defender_real_action(known[2])):
+                continue
+            found[slot] = (line_nos.get('name', line_nos.get('timecreated', 0)), threat, action, path)
+    return list(found.values())
+
+
+def _addition_entries(upload_ids, index, own=None):
+    """Defender detections of the related Addition logs, and of the
+    upload's own Addition part (`own`, a merged FRST&Addition log)."""
+    uploads = list(
+        UploadedLog.objects.filter(pk__in=upload_ids, log_type__in=ADDITION_LOG_TYPES)
+        .only('pk', 'upload_id', 'content')
+    )
+    if own is not None and own.log_type == LOG_TYPE_FRST_AND_ADDITION:
+        uploads.append(own)
+    for upload in uploads:
+        _add_defender_entries(
+            index, upload.upload_id, 'Addition', iter_addition_defender_detections(upload.content or ''),
+        )
 
 
 def _add_system_badges(uploaded_log, index):
@@ -345,11 +456,10 @@ def _add_system_badges(uploaded_log, index):
     upload_ids = {entry['upload_id'] for entries in index.values() for entry in entries}
     if not upload_ids:
         return
-    own = system_signals(uploaded_log.content)
-    verdict_by_upload = {
-        upload_id: same_system(own, system_signals(content))
-        for upload_id, content in UploadedLog.objects.filter(upload_id__in=upload_ids).values_list('upload_id', 'content')
-    }
+    pks = dict(UploadedLog.objects.filter(upload_id__in=upload_ids).values_list('upload_id', 'pk'))
+    signals = stored_signals({uploaded_log.pk, *pks.values()})
+    own = signals.get(uploaded_log.pk) or {}
+    verdict_by_upload = {upload_id: compare(own, signals.get(pk) or {}) for upload_id, pk in pks.items()}
     for entries in index.values():
         for entry in entries:
             entry['system'] = verdict_by_upload.get(entry['upload_id'], SYSTEM_UNKNOWN)
@@ -407,14 +517,32 @@ def _signature(uploaded_log, upload_ids, scope, name):
     pairs_changed = UploadedLogFileHash.objects.filter(md5__in=md5s).exclude(sha256='').aggregate(
         latest=Max('pk'),
     )['latest']
+    # The machine signals of the upload and its related logs (same-system
+    # badges): rebuilt with the stats, like the hash rows.
+    signals_state = UploadedLogMachineSignal.objects.filter(
+        upload_id__in=[uploaded_log.pk, *upload_ids],
+    ).aggregate(n=Count('pk'), latest=Max('pk'))
     raw = json.dumps([
         CORRELATION_VERSION, uploaded_log.content_hash, scope, name, related,
+        signals_state['n'] or 0, signals_state['latest'] or 0,
         verdicts_changed.isoformat() if verdicts_changed else '',
         aliases_changed.isoformat() if aliases_changed else '',
         pairs_changed or 0,
         rows_state['n'] or 0, rows_state['latest'] or 0,
     ], default=str)
     return hashlib.sha1(raw.encode('utf-8')).hexdigest()
+
+
+# How an entry was matched when not through the line's own file (correlation_keys).
+MATCH_NOTES = {
+    'argument': 'file in command line',
+    'registry': 'same registry value',
+    'service': 'same service',
+    'task': 'same task',
+    'extension': 'same extension',
+    'clsid': 'same CLSID',
+    'firewall': 'same firewall rule',
+}
 
 
 def summary_note(entries, status):
@@ -428,9 +556,12 @@ def summary_note(entries, status):
         name = result.get('family') or result.get('malware_type') or entry.get('detection') or ''
         verdict = result.get('verdict') or ''
         where = 'in detected folder' if entry.get('in_folder') else ''
+        how = MATCH_NOTES.get(entry.get('match') or '', '')
         source = 'Defender' if entry.get('source') == 'defender' else ''
         parts = [
-            part for part in (name, f'centralbox: {verdict}' if verdict else '', source, where, entry.get('log_type', ''))
+            part for part in (
+                name, f'centralbox: {verdict}' if verdict else '', source, how, where, entry.get('log_type', ''),
+            )
             if part
         ]
         return ' · '.join(parts) or 'finding'
@@ -500,14 +631,27 @@ def correlations_for_upload(uploaded_log, user=None):
                 text: summary_note(result[text], status) for text, status in statuses.items() if status
             },
         }
-        CorrelationCache.objects.update_or_create(
-            upload=uploaded_log, scope_key=scope_key,
-            defaults={'signature': signature, 'payload': answer},
-        )
+        _store(uploaded_log, scope_key, signature, answer)
         return answer
     except Exception:
         logger.exception('Case correlations failed for %s', getattr(uploaded_log, 'upload_id', '?'))
         return _empty()
+
+
+def _store(uploaded_log, scope_key, signature, answer):
+    """Cache a computed answer. Two requests computing it at once (the log
+    page's refresh and its related-logs tab) race to create the row; the
+    loser's answer is just as good, so a failed write is only logged."""
+    try:
+        with transaction.atomic():
+            CorrelationCache.objects.update_or_create(
+                upload=uploaded_log, scope_key=scope_key,
+                defaults={'signature': signature, 'payload': answer},
+            )
+    except IntegrityError:
+        pass
+    except Exception:
+        logger.exception('Storing correlations failed for %s', getattr(uploaded_log, 'upload_id', '?'))
 
 
 def _compute(uploaded_log, upload_ids, payload):
@@ -516,6 +660,7 @@ def _compute(uploaded_log, upload_ids, payload):
     covered = _hash_entries(upload_ids, index)
     _detection_entries(upload_ids, index, covered)
     _fixlog_entries(upload_ids, index)
+    _addition_entries(upload_ids, index, own=uploaded_log)
     if not index:
         return {}
     # A scanner that detected a whole folder (e.g. AdwCleaner's Folders
@@ -532,16 +677,92 @@ def _compute(uploaded_log, upload_ids, payload):
         text = (line.get('line') or '').strip()
         if not text or text in result:
             continue
-        key = _line_key(line)
-        if not key:
-            continue
-        entries = list(index.get(key) or [])
-        parent, previous = ntpath.dirname(key), key
-        while detections and parent and parent != previous and len(entries) < MAX_ENTRIES_PER_LINE:
-            entries.extend({**entry, 'in_folder': True} for entry in detections.get(parent, ()))
-            parent, previous = ntpath.dirname(parent), parent
+        entries = []
+        seen = set()
+
+        def add(entry, match, in_folder=False):
+            slot = (entry.get('upload_id'), entry.get('line_no'), entry.get('kind'))
+            if slot in seen:
+                return
+            seen.add(slot)
+            extra = {}
+            if match != MATCH_PATH:
+                extra['match'] = match
+            if in_folder:
+                extra['in_folder'] = True
+            entries.append({**entry, **extra} if extra else entry)
+
+        for key, match in line_keys(line):
+            for entry in index.get(key) or ():
+                add(entry, match)
+            if not is_path_key(key):
+                continue  # typed keys have no folders
+            parent, previous = ntpath.dirname(key), key
+            while detections and parent and parent != previous and len(entries) < MAX_ENTRIES_PER_LINE:
+                for entry in detections.get(parent, ()):
+                    add(entry, match, in_folder=True)
+                parent, previous = ntpath.dirname(parent), parent
         if entries:
             result[text] = entries[:MAX_ENTRIES_PER_LINE]
     if result:
         _add_system_badges(uploaded_log, result)
     return result
+
+
+# What a same-machine suggestion matched on, for the related-logs tab (the
+# values themselves are never shown).
+SAME_MACHINE_LABELS = {
+    KIND_SID: 'machine SID',
+    KIND_DISK: 'disk ID',
+    'computer+hw': 'computer name and hardware',
+}
+
+
+def same_machine_logs(uploaded_log, exclude_pks=(), limit=20):
+    """[(upload pk, [labels])] of live logs outside `exclude_pks` that look
+    like they come from the upload's machine, newest first: a shared machine
+    SID or Disk ID, or the same computer name together with the same
+    hardware; never one the full comparison calls a different system. For
+    logs uploaded under another forum name (or none). Never raises."""
+    try:
+        own = {}
+        for kind, value in UploadedLogMachineSignal.objects.filter(upload=uploaded_log).values_list('kind', 'value'):
+            own.setdefault(kind, set()).add(value)
+        query = Q()
+        for kind in STRONG_KINDS:
+            if own.get(kind):
+                query |= Q(kind=kind, value__in=own[kind])
+        pair = own.get(KIND_COMPUTER) and own.get(KIND_HW)
+        if pair:
+            query |= Q(kind=KIND_COMPUTER, value__in=own[KIND_COMPUTER]) | Q(kind=KIND_HW, value__in=own[KIND_HW])
+        if not query:
+            return []
+        excluded = {uploaded_log.pk, *exclude_pks}
+        found = {}
+        for upload_pk, kind in (
+            UploadedLogMachineSignal.objects.filter(query, upload__deleted_at__isnull=True)
+            .exclude(upload_id__in=excluded).values_list('upload_id', 'kind').distinct()
+        ):
+            found.setdefault(upload_pk, set()).add(kind)
+        matched = {}
+        for upload_pk, kinds in found.items():
+            labels = [SAME_MACHINE_LABELS[kind] for kind in STRONG_KINDS if kind in kinds]
+            if KIND_COMPUTER in kinds and KIND_HW in kinds:
+                labels.append(SAME_MACHINE_LABELS['computer+hw'])
+            if labels:
+                matched[upload_pk] = labels
+        if not matched:
+            return []
+        newest = list(
+            UploadedLog.objects.filter(pk__in=list(matched)).order_by('-created_at', '-pk')
+            .values_list('pk', flat=True)[:limit * 2]
+        )
+        theirs = stored_signals(newest)
+        own_all = stored_signals([uploaded_log.pk])[uploaded_log.pk]
+        result = [
+            (pk, matched[pk]) for pk in newest if compare(own_all, theirs.get(pk) or {}) != SYSTEM_DIFFERENT
+        ]
+        return result[:limit]
+    except Exception:
+        logger.exception('Finding same-machine logs failed for %s', getattr(uploaded_log, 'upload_id', '?'))
+        return []

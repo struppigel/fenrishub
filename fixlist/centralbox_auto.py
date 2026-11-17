@@ -46,7 +46,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from . import centralbox
-from .file_hashes import is_md5, is_sha256, line_path_key
+from .correlation_keys import line_path_keys
+from .file_hashes import is_md5, is_sha256
 from .models import (
     CentralboxAutoQueue, CentralboxFreshLookup, HashVerdict, SiteConfig, UploadedLog, UploadedLogFileHash,
 )
@@ -153,12 +154,12 @@ def flagged_frst_paths(uploads, user=None):
             status = entry.get('dominant_status')
             if status not in FRST_PRIORITIES:
                 continue
-            path = line_path_key(entry.get('line') or '')
-            if not path:
-                continue
-            known = result.get(path)
-            if known is None or FRST_PRIORITIES[status] < FRST_PRIORITIES[known]:
-                result[path] = status
+            # The line's file and the files in its command line (a script
+            # run by powershell, a DLL run by rundll32).
+            for path in line_path_keys(entry.get('line') or '', entry.get('components')):
+                known = result.get(path)
+                if known is None or FRST_PRIORITIES[status] < FRST_PRIORITIES[known]:
+                    result[path] = status
     return result
 
 
@@ -297,7 +298,11 @@ def related_group(upload):
 
 def enqueue_for_upload(upload):
     """After an upload (in the background thread): queue the likely malicious
-    hashes of the upload and its forum user's recent logs. Never raises."""
+    hashes of the upload and its forum user's recent logs. Never raises.
+
+    Anonymous uploads count too, under whatever forum name the uploader
+    typed; the per-log candidate cap and the daily cap bound what one log
+    can spend (accepted as a known risk)."""
     try:
         if not auto_enabled():
             return 0
@@ -311,13 +316,21 @@ def enqueue_for_upload(upload):
         return 0
 
 
+def queue_moving(now=None):
+    """True while queued items can be worked off: automatic lookups are on,
+    centralbox is available and today's automatic lookups are not used up."""
+    return auto_enabled() and centralbox.is_available() and _started_last_day(now or timezone.now()) < per_day()
+
+
 def queue_state(hashes):
-    """(queued, running) counts among these hashes. Database only."""
+    """(queued, running) counts among these hashes. Database only. Queued
+    items only count while the queue moves (queue_moving), so the analyzer
+    does not keep asking about lookups that will not start."""
     hashes = [h for h in set(hashes or []) if h]
     if not hashes:
         return 0, 0
     since = timezone.now() - centralbox.FRESH_LOOKUP_TIMEOUT
-    queued = CentralboxAutoQueue.objects.filter(hash__in=hashes).count()
+    queued = CentralboxAutoQueue.objects.filter(hash__in=hashes).count() if queue_moving() else 0
     running = CentralboxFreshLookup.objects.filter(
         sha256__in=hashes, state=CentralboxFreshLookup.STATE_RUNNING, requested_at__gt=since,
     ).count()
@@ -460,7 +473,11 @@ def drain_round():
             item = CentralboxAutoQueue.objects.exclude(pk__in=skipped).order_by('priority', 'enqueued_at', 'pk').first()
             if item is None:
                 break
-            if CentralboxFreshLookup.objects.filter(sha256=item.hash).exists():
+            # A lookup of the file's other form (its SHA256 for a queued MD5,
+            # or the reverse) counts too, and so does a known SHA256.
+            forms = centralbox.hash_forms(item.hash)
+            if (CentralboxFreshLookup.objects.filter(sha256__in=forms).exists()
+                    or HashVerdict.objects.filter(sha256__in=forms, state=HashVerdict.STATE_KNOWN).exists()):
                 item.delete()
                 continue
             if (centralbox.budget_used(centralbox.BUDGET_FRESH) >= centralbox.auto_fresh_lookups_per_minute()

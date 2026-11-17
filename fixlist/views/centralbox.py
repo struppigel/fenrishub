@@ -20,7 +20,8 @@ from ..log_highlighting import SummaryItem
 
 from .. import centralbox, centralbox_auto
 from ..case_correlations import cached_correlations, correlations_for_upload, related_upload_ids, summary_note
-from ..file_hashes import is_md5, is_sha256, line_path_key
+from ..correlation_keys import line_path_keys
+from ..file_hashes import is_md5, is_sha256
 from ..models import HashVerdict, RuleTag, UploadedLog, UploadedLogFileHash
 from ..tagging import centralbox_tags_by_sha
 from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
@@ -314,8 +315,9 @@ def centralbox_suggestions_api(request):
         for r in rows:
             if not r.sha256 and r.md5 in md5_map:
                 r.sha256 = md5_map[r.md5]
+        # Both forms: an MD5 may wait in the queue though its SHA256 is now known.
         queued, running = centralbox_auto.queue_state(
-            {r.sha256 or r.md5 for r in rows} | set(md5_map.values())
+            {r.sha256 for r in rows} | {r.md5 for r in rows} | set(md5_map.values())
         )
         rows = [r for r in rows if r.sha256]
         verdicts = {
@@ -347,7 +349,10 @@ def centralbox_suggestions_api(request):
             lowered = line.lower()
             if not any(name in lowered for name in names):
                 continue
-            match = by_path.get(line_path_key(line))
+            # The line's file, else a file in its command line.
+            match = next(
+                (by_path[key] for key in line_path_keys(line) if key in by_path), None,
+            )
             if match is None:
                 continue
             seen_lines.add(line)

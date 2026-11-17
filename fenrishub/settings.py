@@ -58,6 +58,28 @@ TESTING = 'test' in sys.argv
 # under the test runner, whatever the shell has: tests opt in explicitly.
 CENTRALBOX_API_KEY = '' if TESTING else os.getenv('CENTRALBOX_API_KEY', '').strip()
 
+
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# centralbox budgets, sized for the partner account (per key: 120 report reads
+# and 20 fresh lookups per minute), with some headroom. Automatic fresh
+# lookups (fixlist/centralbox_auto.py) take part of the shared budget and
+# leave the rest to the helpers. Not set under the test runner: tests use the
+# defaults in the code or override them.
+if not TESTING:
+    CENTRALBOX_CALLS_PER_MINUTE = _env_int('CENTRALBOX_CALLS_PER_MINUTE', 110)
+    CENTRALBOX_FRESH_LOOKUPS_PER_MINUTE = _env_int('CENTRALBOX_FRESH_LOOKUPS_PER_MINUTE', 20)
+    CENTRALBOX_AUTO_FRESH_LOOKUPS_PER_MINUTE = _env_int('CENTRALBOX_AUTO_FRESH_LOOKUPS_PER_MINUTE', 8)
+    CENTRALBOX_AUTO_READS_PER_MINUTE = _env_int('CENTRALBOX_AUTO_READS_PER_MINUTE', 60)
+    CENTRALBOX_AUTO_FRESH_PER_DAY = _env_int('CENTRALBOX_AUTO_FRESH_PER_DAY', 1000)
+    CENTRALBOX_AUTO_FRESH_MAX_RUNNING = _env_int('CENTRALBOX_AUTO_FRESH_MAX_RUNNING', 5)
+    CENTRALBOX_AUTO_FRESH_MAX_CANDIDATES_PER_LOG = _env_int('CENTRALBOX_AUTO_FRESH_MAX_CANDIDATES_PER_LOG', 100)
+
 ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', ['localhost', '127.0.0.1'])
 CSRF_TRUSTED_ORIGINS = _env_list('CSRF_TRUSTED_ORIGINS', [])
 
