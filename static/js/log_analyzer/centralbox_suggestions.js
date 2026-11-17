@@ -93,7 +93,11 @@ function isValidCentralboxSuggestion(item) {
 }
 
 // Fetch the suggestions for the loaded upload, then redraw the rows. A second
-// request follows once if some of the case's hashes were still being looked up.
+// request follows once if some of the case's hashes were still being looked up,
+// and every 30 s (for up to 15 minutes) while some wait for, or run, an
+// automatic fresh lookup.
+const CENTRALBOX_AUTO_RETRY_MS = 30000;
+const CENTRALBOX_AUTO_RETRY_MAX = 30;
 async function refreshCentralboxSuggestions(uploadId, attempt = 0) {
     if (centralboxSuggestionsRetry) {
         clearTimeout(centralboxSuggestionsRetry);
@@ -129,7 +133,11 @@ async function refreshCentralboxSuggestions(uploadId, attempt = 0) {
             // Never let suggestions break the analyzer.
         }
     }
-    if (body.available === true && Number(body.pending) > 0 && attempt < 1) {
+    if (body.available !== true) return;
+    const waiting = (Number(body.queued) || 0) + (Number(body.running) || 0) > 0;
+    if (waiting && attempt < CENTRALBOX_AUTO_RETRY_MAX) {
+        centralboxSuggestionsRetry = setTimeout(() => refreshCentralboxSuggestions(id, attempt + 1), CENTRALBOX_AUTO_RETRY_MS);
+    } else if (Number(body.pending) > 0 && attempt < 1) {
         centralboxSuggestionsRetry = setTimeout(() => refreshCentralboxSuggestions(id, attempt + 1), 20000);
     }
 }

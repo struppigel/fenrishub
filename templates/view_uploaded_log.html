@@ -763,6 +763,8 @@ const Centralbox = (function () {
     const verdicts = (data.verdicts && typeof data.verdicts === 'object') ? data.verdicts : {};
     const tags = (data.tags && typeof data.tags === 'object') ? data.tags : {};
     const fresh = (data.fresh && typeof data.fresh === 'object') ? data.fresh : {};
+    // Hashes waiting for an automatic fresh lookup (centralbox_auto.py).
+    const queued = new Set(Array.isArray(data.queued) ? data.queued : []);
     const auto = Array.isArray(data.auto) ? data.auto : [];
     // Trojan Killer file MD5s: shown through the SHA256 they stand for
     // (md5_map), or as "not in centralbox" once centralbox said so.
@@ -1053,14 +1055,18 @@ const Centralbox = (function () {
         if (!data.fresh_url || !data.can_fresh_lookup) return null;
         const info = fresh[hash];
         if (info && info.state === 'running' && inCooldown(info)) {
-            return { key: 'centralbox', value: 'fresh lookup running…',
+            return { key: 'centralbox', value: info.auto ? 'automatic fresh lookup running…' : 'fresh lookup running…',
                      run: () => { if (!busy.has(hash)) { showBusy(hash, 'centralbox: looking up…'); followFresh(hash, FRESH_POLL_TRIES); } } };
         }
         if (inCooldown(info)) {
             const when = localTime(info.next_at);
-            const who = info.requested_by ? ` by ${info.requested_by}` : '';
+            const who = info.auto ? ' automatically' : (info.requested_by ? ` by ${info.requested_by}` : '');
             const message = `Looked up ${localTime(info.requested_at)}${who}. A new lookup is possible after ${when}.`;
             return { key: 'centralbox', value: `fresh lookup: next possible ${when}`, run: () => window.alert(message) };
+        }
+        if (queued.has(hash) && !known) {
+            // Queued: Fenris will run it by itself; a helper may still start it now.
+            return { key: 'centralbox', value: 'queued for automatic lookup (run now)', run: () => { queued.delete(hash); startFresh(hash); } };
         }
         return { key: 'centralbox', value: known ? 're-run lookup' : 'run fresh lookup', run: () => startFresh(hash) };
     }

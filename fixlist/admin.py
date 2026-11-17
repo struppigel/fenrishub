@@ -32,6 +32,7 @@ from .models import (
     AccessLog,
     ApiRequestLog,
     ApiToken,
+    CentralboxAutoQueue,
     CentralboxFreshLookup,
     ClassificationRule,
     Fixlist,
@@ -217,10 +218,27 @@ class CentralboxFreshLookupAdmin(admin.ModelAdmin):
     """Fresh centralbox lookups helpers started; a row blocks new lookups of
     the hash until the cooldown ends. Deleting a row lifts the cooldown."""
 
-    list_display = ('sha256', 'state', 'requested_by', 'requested_at', 'finished_at')
-    list_filter = ('state',)
+    list_display = ('sha256', 'state', 'auto', 'requested_by', 'requested_at', 'finished_at')
+    list_filter = ('state', 'auto')
     search_fields = ('sha256', 'requested_by__username')
-    readonly_fields = ('sha256', 'state', 'requested_by', 'requested_at', 'finished_at')
+    readonly_fields = ('sha256', 'state', 'auto', 'requested_by', 'requested_at', 'finished_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(CentralboxAutoQueue)
+class CentralboxAutoQueueAdmin(admin.ModelAdmin):
+    """Likely malicious hashes waiting for an automatic fresh centralbox
+    lookup (centralbox_auto.py), next first. Deleting a row skips the hash."""
+
+    list_display = ('hash', 'priority', 'reason', 'enqueued_at')
+    list_filter = ('priority',)
+    search_fields = ('hash', 'reason')
+    readonly_fields = ('hash', 'priority', 'reason', 'enqueued_at')
 
     def has_add_permission(self, request):
         return False
@@ -1071,6 +1089,7 @@ class SiteConfigAdmin(admin.ModelAdmin):
     fields = (
         'guest_token', 'api_enabled',
         'centralbox_enabled', 'centralbox_paused_until', 'centralbox_pause_reason',
+        'centralbox_auto_fresh_enabled', 'centralbox_auto_drainer_until',
         'updated_at',
     )
     change_list_template = 'admin/fixlist/siteconfig/change_list.html'

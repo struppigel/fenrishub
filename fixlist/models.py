@@ -194,6 +194,17 @@ class SiteConfig(models.Model):
     # limited): no calls until then, from any worker. Clear it to retry at once.
     centralbox_paused_until = models.DateTimeField(null=True, blank=True)
     centralbox_pause_reason = models.CharField(max_length=200, blank=True, default='')
+    centralbox_auto_fresh_enabled = models.BooleanField(
+        default=True,
+        help_text=(
+            'Automatic fresh centralbox lookups for likely malicious hashes (scanner detections, '
+            'MAU removals, files of FRST lines at B / ! / P). Off: they are only started by hand; '
+            'the queue is kept.'
+        ),
+    )
+    # Lease of the one thread that works through CentralboxAutoQueue (see
+    # centralbox_auto.py), shared by every worker. Clear it to let a new one start.
+    centralbox_auto_drainer_until = models.DateTimeField(null=True, blank=True)
     # Bumped whenever the analyzer's in-memory rule buckets are invalidated, so
     # every worker process (not just the one that saved the rule) reloads them.
     # See analyzer.invalidate_rule_buckets_cache.
@@ -1469,12 +1480,38 @@ class CentralboxFreshLookup(models.Model):
     requested_at = models.DateTimeField()
     state = models.CharField(max_length=16, choices=STATE_CHOICES, default=STATE_RUNNING)
     finished_at = models.DateTimeField(null=True, blank=True)
+    # Started by Fenris itself (centralbox_auto.py), not by a helper's click.
+    auto = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['-requested_at']
 
     def __str__(self):
         return f'{self.sha256} {self.state} ({self.requested_at:%Y-%m-%d %H:%M})'
+
+
+class CentralboxAutoQueue(models.Model):
+    """A likely malicious hash waiting for an automatic fresh centralbox
+    lookup (centralbox_auto.py). One row per hash; deleted when its lookup
+    starts, when it turns out not to need one, or when it gets too old."""
+
+    PRIORITY_SCANNER = 0
+    PRIORITY_FRST_B = 1
+    PRIORITY_MAU = 2
+    PRIORITY_FRST_FLAGGED = 3
+
+    # A SHA256, or an MD5 (Trojan Killer, Fixlog folder listings).
+    hash = models.CharField(max_length=64, unique=True)
+    priority = models.PositiveSmallIntegerField(default=PRIORITY_FRST_FLAGGED)
+    reason = models.CharField(max_length=200, blank=True, default='')
+    enqueued_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ['priority', 'enqueued_at']
+        indexes = [models.Index(fields=['priority', 'enqueued_at'], name='fixlist_cbqueue_order')]
+
+    def __str__(self):
+        return f'{self.hash} (priority {self.priority}: {self.reason})'
 
 
 class FixlistSnippet(models.Model):

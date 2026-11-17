@@ -37,7 +37,7 @@ from django.utils import timezone
 
 from .file_hashes import is_md5, is_sha256
 from .models import (
-    CentralboxFreshLookup, CentralboxUsageMinute, HashAlias, HashVerdict, SiteConfig, UploadedLog,
+    CentralboxAutoQueue, CentralboxFreshLookup, CentralboxUsageMinute, HashAlias, HashVerdict, SiteConfig, UploadedLog,
     UploadedLogFileHash,
 )
 
@@ -171,6 +171,12 @@ def take_budget(key_id=BUDGET_READS, limit=None):
         minute=minute, key_id=key_id, calls__lt=limit,
     ).update(calls=F('calls') + 1)
     return updated == 1
+
+
+def budget_used(key_id=BUDGET_READS):
+    """Calls counted in this minute's bucket so far."""
+    minute = int(time.time()) // 60
+    return CentralboxUsageMinute.objects.filter(minute=minute, key_id=key_id).values_list('calls', flat=True).first() or 0
 
 
 def _pause(until, reason):
@@ -656,6 +662,7 @@ def _fresh_info(row):
         'requested_at': row.requested_at.isoformat() if row.requested_at else '',
         'requested_by': row.requested_by.username if row.requested_by_id else '',
         'next_at': (row.requested_at + fresh_lookup_cooldown()).isoformat() if row.requested_at else '',
+        'auto': bool(row.auto),
     }
 
 
@@ -674,19 +681,21 @@ def fresh_lookup_info(sha256s):
         return {}
 
 
-def _claim(sha, user):
+def _claim(sha, user, auto=False):
     """Take the hash's cooldown slot. None when taken, else the claimed row."""
     now = timezone.now()
     try:
         with transaction.atomic():
             return CentralboxFreshLookup.objects.create(
                 sha256=sha, requested_by=user, requested_at=now, state=CentralboxFreshLookup.STATE_RUNNING,
+                auto=auto,
             )
     except IntegrityError:
         pass
     updated = CentralboxFreshLookup.objects.filter(
         sha256=sha, requested_at__lte=now - fresh_lookup_cooldown(),
-    ).update(requested_by=user, requested_at=now, state=CentralboxFreshLookup.STATE_RUNNING, finished_at=None)
+    ).update(requested_by=user, requested_at=now, state=CentralboxFreshLookup.STATE_RUNNING, finished_at=None,
+             auto=auto)
     return CentralboxFreshLookup.objects.get(sha256=sha) if updated else None
 
 
@@ -728,9 +737,17 @@ def fresh_lookups_per_minute():
     return max(1, int(_setting('CENTRALBOX_FRESH_LOOKUPS_PER_MINUTE', 15)))
 
 
-def start_fresh_lookup(sha, user):
+def auto_fresh_lookups_per_minute():
+    """The ceiling of the shared fresh bucket for automatic lookups: they stop
+    once this many fresh lookups (by anyone) were started this minute, so the
+    rest of the minute's budget stays with the helpers."""
+    return max(1, min(fresh_lookups_per_minute(), int(_setting('CENTRALBOX_AUTO_FRESH_LOOKUPS_PER_MINUTE', 5))))
+
+
+def start_fresh_lookup(sha, user, auto=False):
     """Ask centralbox for a fresh analysis of `sha` (a SHA256, or an MD5) with
-    the server key, for any logged-in helper.
+    the server key, for any logged-in helper, or for Fenris itself (`auto`,
+    no user, see centralbox_auto.py) under a lower per-minute ceiling.
 
     Returns a dict {ok, state, message, verdict, fresh, http_status}. Never raises."""
     try:
@@ -739,14 +756,15 @@ def start_fresh_lookup(sha, user):
             return _result(False, message='Not a SHA-256 or MD5 hash.', status=400)
         if not is_available():
             return _result(False, message='centralbox lookups are switched off or paused right now.', status=503)
-        row = _claim(sha, user)
+        row = _claim(sha, user, auto=auto)
         if row is None:
             existing = CentralboxFreshLookup.objects.select_related('requested_by').get(sha256=sha)
             info = _fresh_info(existing)
             who = info['requested_by'] or 'someone'
             return _result(False, state=existing.state, info=info, status=429,
                            message=f'Already looked up by {who}; a new lookup is possible after {info["next_at"][:16].replace("T", " ")} UTC.')
-        if not take_budget(BUDGET_FRESH, fresh_lookups_per_minute()):
+        limit = auto_fresh_lookups_per_minute() if auto else fresh_lookups_per_minute()
+        if not take_budget(BUDGET_FRESH, limit):
             _release(row)
             return _result(False, message='Too many fresh lookups this minute; try again shortly.', status=429)
         known_sha = resolve_md5s([sha]).get(sha, '') if is_md5(sha) else sha
@@ -764,6 +782,8 @@ def start_fresh_lookup(sha, user):
                 seconds = _retry_after_seconds(failure.retry_after)
                 return _result(False, message=f'centralbox is rate limiting; try again in {seconds} s.', status=429)
             return _result(False, message='centralbox could not be reached; try again later.', status=503)
+        # Started (by hand or automatically): no automatic lookup is needed any more.
+        CentralboxAutoQueue.objects.filter(hash=sha).delete()
         status = data.get('status')
         if status == 'not_found':
             verdict = _store_unknown(sha)
@@ -792,10 +812,11 @@ def _stored_for(hash_value):
     return HashVerdict.objects.filter(sha256=sha).first() if sha else None
 
 
-def poll_fresh_lookup(sha):
+def poll_fresh_lookup(sha, reads_limit=None):
     """Progress of a fresh lookup: {ok, state, verdict, fresh}. While it runs,
     asks centralbox at most every FRESH_POLL_MIN_SECONDS and stores the
-    answer once centralbox is done. Never raises."""
+    answer once centralbox is done. `reads_limit` lowers the reads budget for
+    this call (automatic polling leaves the rest to the helpers). Never raises."""
     try:
         from django.core.cache import cache
 
@@ -813,7 +834,7 @@ def poll_fresh_lookup(sha):
         running = _result(True, state=row.state, info=_fresh_info(row))
         if not cache.add(f'centralbox-fresh-poll:{sha}', 1, timeout=FRESH_POLL_MIN_SECONDS):
             return running
-        if not is_available() or not take_budget():
+        if not is_available() or not take_budget(BUDGET_READS, reads_limit):
             return running
         try:
             data = _http_get(f'/status/{sha}')

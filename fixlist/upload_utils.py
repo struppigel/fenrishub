@@ -115,6 +115,14 @@ def _recalculate_analysis_stats_in_thread(upload_pk: int) -> None:
             check_upload_hashes(upload)
     except Exception:
         logger.exception('Background centralbox check failed (upload_pk=%s)', upload_pk)
+    try:
+        # Queue fresh lookups for the likely malicious hashes of this log and
+        # its forum user's recent logs (worked off slowly, see centralbox_auto.py).
+        from .centralbox_auto import enqueue_for_upload
+
+        enqueue_for_upload(upload)
+    except Exception:
+        logger.exception('Queueing automatic fresh lookups failed (upload_pk=%s)', upload_pk)
     finally:
         connections.close_all()
 

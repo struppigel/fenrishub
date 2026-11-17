@@ -35,6 +35,7 @@ from ..upload_utils import (
     soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
     schedule_analysis_stats_recalc, get_fresh_cached_analysis, schedule_cached_analysis_refresh,
 )
+from .. import centralbox_auto
 from .centralbox import add_hash_summary, page_correlation_context, page_hash_context
 from .guest import deny_guests
 from .upload_actions import (
@@ -537,6 +538,9 @@ def view_uploaded_log(request, upload_id):
         centralbox_context = page_hash_context(uploaded_log, request.user)
         if uploaded_log.log_type in ('Fixlog', 'MAU'):
             add_hash_summary(highlight, uploaded_log, centralbox_context)
+    if request.user.is_authenticated:
+        # Resumes queued automatic fresh lookups after a restart (cheap when idle).
+        centralbox_auto.ensure_auto_drainer()
 
     # The "related logs" tab: only how many there are now (one query); the
     # list itself loads when the tab is opened (related_logs_fragment).

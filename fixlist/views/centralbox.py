@@ -18,10 +18,9 @@ from django.views.decorators.http import require_http_methods
 
 from ..log_highlighting import SummaryItem
 
-from .. import centralbox
-from .. import frst_extractors as ex
+from .. import centralbox, centralbox_auto
 from ..case_correlations import cached_correlations, correlations_for_upload, related_upload_ids, summary_note
-from ..file_hashes import is_md5, is_sha256
+from ..file_hashes import is_md5, is_sha256, line_path_key
 from ..models import HashVerdict, RuleTag, UploadedLog, UploadedLogFileHash
 from ..tagging import centralbox_tags_by_sha
 from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
@@ -99,6 +98,8 @@ def page_hash_context(uploaded_log, user=None):
             'md5_unknown': centralbox.unknown_md5s(md5s - set(md5_map)),
             'tags': _tags_by_sha(shas),
             'fresh': centralbox.fresh_lookup_info(shas | md5s),
+            # Waiting for an automatic fresh lookup (centralbox_auto.py).
+            'queued': centralbox_auto.queued_hashes(shas | md5s),
             # Any helper, with the server key (once per hash per cooldown).
             'can_fresh_lookup': available,
             'upload_id': uploaded_log.upload_id,
@@ -256,12 +257,22 @@ def centralbox_fresh_status_api(request, sha256):
     return _fresh_response(centralbox.poll_fresh_lookup(sha256))
 
 
-def _line_path_key(line):
+AUTO_QUEUE_DEBOUNCE_SECONDS = 60
+
+
+def _queue_auto_fresh(uploaded_log, other_ids, user):
+    """Queue fresh lookups for the case's likely malicious hashes, with the
+    viewer's B / ! / P lines of this FRST log; at most once a minute per log
+    and viewer, as the analyzer asks for suggestions repeatedly."""
+    from django.core.cache import cache
+
     try:
-        path = ex.extract_any_frst_path(line)
-        return ex.normalize_path(path).lower().strip() if path else ''
+        if not cache.add(f'centralbox-auto-queue:{uploaded_log.pk}:{user.pk}', 1, timeout=AUTO_QUEUE_DEBOUNCE_SECONDS):
+            return
+        flagged = centralbox_auto.flagged_frst_paths([uploaded_log], user=user)
+        centralbox_auto.enqueue_auto_fresh(list(other_ids) + [uploaded_log.pk], flagged)
     except Exception:
-        return ''
+        logger.exception('Queueing automatic fresh lookups failed for %s', uploaded_log.upload_id)
 
 
 @login_required
@@ -270,8 +281,13 @@ def centralbox_suggestions_api(request):
     """FRST lines whose file has a malicious SHA256 in another log of the same
     infection case. Database only: never calls centralbox. Each suggestion is
     keyed by the line's stripped text, as the analyzer identifies lines; the
-    analyzer decides whether to show it (not on B lines) and how (conflict)."""
-    empty = {'available': False, 'suggestions': [], 'pending': 0}
+    analyzer decides whether to show it (not on B lines) and how (conflict).
+
+    Also queues automatic fresh lookups for the case's likely malicious hashes
+    (centralbox_auto.py), and tells how many of the case's hashes wait in that
+    queue (`queued`) or have a fresh lookup running (`running`), so the
+    analyzer asks again until they are done."""
+    empty = {'available': False, 'suggestions': [], 'pending': 0, 'queued': 0, 'running': 0}
     upload_id = (request.GET.get('upload_id') or '').strip()
     if not upload_id:
         return JsonResponse(empty)
@@ -283,6 +299,7 @@ def centralbox_suggestions_api(request):
         other_ids, _scope, _name = related_upload_ids(uploaded_log, request.user)
         if not other_ids:
             return JsonResponse(empty)
+        _queue_auto_fresh(uploaded_log, other_ids, request.user)
         # Manual-only rows (e.g. a Fixlog folder listing) count too once an
         # analyst has checked them; only automatic ones are ever pending.
         rows = list(
@@ -297,6 +314,9 @@ def centralbox_suggestions_api(request):
         for r in rows:
             if not r.sha256 and r.md5 in md5_map:
                 r.sha256 = md5_map[r.md5]
+        queued, running = centralbox_auto.queue_state(
+            {r.sha256 or r.md5 for r in rows} | set(md5_map.values())
+        )
         rows = [r for r in rows if r.sha256]
         verdicts = {
             row.sha256: row for row in HashVerdict.objects.filter(sha256__in={r.sha256 for r in rows})
@@ -313,7 +333,8 @@ def centralbox_suggestions_api(request):
                 continue
             by_path.setdefault(row.normalized_path, (row, verdict))
         if not by_path:
-            return JsonResponse({'available': available, 'suggestions': [], 'pending': pending})
+            return JsonResponse({'available': available, 'suggestions': [], 'pending': pending,
+                                 'queued': queued, 'running': running})
 
         # Only lines naming one of the files are parsed (cheap substring test first).
         names = {ntpath.basename(key) for key in by_path if ntpath.basename(key)}
@@ -326,7 +347,7 @@ def centralbox_suggestions_api(request):
             lowered = line.lower()
             if not any(name in lowered for name in names):
                 continue
-            match = by_path.get(_line_path_key(line))
+            match = by_path.get(line_path_key(line))
             if match is None:
                 continue
             seen_lines.add(line)
@@ -350,7 +371,8 @@ def centralbox_suggestions_api(request):
                     'path': row.path,
                 },
             })
-        return JsonResponse({'available': available, 'suggestions': suggestions, 'pending': pending})
+        return JsonResponse({'available': available, 'suggestions': suggestions, 'pending': pending,
+                             'queued': queued, 'running': running})
     except Exception:
         logger.exception('centralbox suggestions failed for %s', upload_id)
         return JsonResponse(empty)
