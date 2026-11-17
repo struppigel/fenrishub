@@ -98,6 +98,22 @@ class RuleDryRunTests(RuleApiBase):
         self.assertEqual(body['summary']['unchanged_lines'], 1)
         self.assertFalse(body['summary']['existing_rules'][0]['redundant_on_all_sample_lines'])
 
+    def test_parsed_rule_matches_its_one_month_line(self):
+        # Regression: the dry run reported 0 matches for a parsed rule copied
+        # from a One month line, though the saved rule matched it.
+        line = (
+            r'2026-04-18 14:32:18 - 2026-04-15 09:00:00 - 0001234 _____ '
+            r'(Microsoft Corporation) C:\Windows\System32\foo.exe'
+        )
+        make_uploaded_log('log-one', content=f'header\n{line}\n', log_type='FRST')
+
+        body = self.dry_run(source_text=line, match_type='parsed', status='B')
+
+        self.assertEqual(body['line_hits'], 1)
+        [row] = body['untrusted_sample']
+        self.assertEqual(row['untrusted_line'], line)
+        self.assertEqual(row['parsed']['attributes'], '_____')
+
     def test_line_nobody_decided_yet(self):
         make_uploaded_log('log-one', content='brand new threat\n', log_type='FRST')
         body = self.dry_run(source_text='new threat', match_type='substring', status='B')

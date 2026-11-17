@@ -13,6 +13,7 @@ from .analyzer import (
     find_substring_ranges,
     inspect_line_matches,
     parse_rule_line,
+    rule_frst_entry,
 )
 from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
 from .rule_sets import SHARED_RULE_SET_KEY
@@ -101,16 +102,7 @@ def _compile_pattern(source_text: str, status: str, match_type: str) -> dict:
     rule_norm_path = ''
     if match_type == 'parsed':
         if parsed_rule and parsed_rule.get('match_type') == ClassificationRule.MATCH_PARSED_ENTRY:
-            rule_entry = ex.FrstEntry(
-                entry_type=parsed_rule.get('entry_type', ''),
-                clsid=parsed_rule.get('clsid', ''),
-                name=parsed_rule.get('name', ''),
-                filepath=parsed_rule.get('filepath', ''),
-                filename=parsed_rule.get('filename', ''),
-                company=parsed_rule.get('company', ''),
-                arguments=parsed_rule.get('arguments', ''),
-                file_not_signed=parsed_rule.get('file_not_signed', False),
-            )
+            rule_entry = rule_frst_entry(parsed_rule)
     elif match_type == 'filepath':
         if parsed_rule and parsed_rule.get('normalized_filepath'):
             rule_norm_path = parsed_rule['normalized_filepath']
@@ -167,6 +159,8 @@ def _match_line(pattern: dict, match_type: str, line: str) -> dict:
                     'filename': line_entry.filename,
                     'company': line_entry.company,
                     'arguments': line_entry.arguments,
+                    'attributes': line_entry.attributes,
+                    'is_hidden': line_entry.is_hidden,
                 }
             rule_entry = pattern['rule_entry']
             outcome['matched'] = bool(rule_entry and line_entry and line_entry == rule_entry)

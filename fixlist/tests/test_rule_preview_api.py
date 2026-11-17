@@ -168,6 +168,57 @@ class RulePreviewApiTests(TestCase):
         self.assertEqual(result["parsed"]["name"], "Virtual Pet")
         self.assertIn("Virtual Pet.exe", result["parsed"]["filepath"])
 
+    def _parsed_matches(self, source_text, lines):
+        response = self._post({
+            "source_text": source_text,
+            "match_type": "parsed",
+            "status": "B",
+            "lines": lines,
+        })
+        self.assertEqual(response.status_code, 200, response.content)
+        return [result["matched"] for result in response.json()["results"]]
+
+    def test_parsed_onemonth_file_line_matches_itself(self):
+        # Regression: the dry run left `attributes` off the rule's entry, so a
+        # One month line (which always carries them) never matched its own rule.
+        line = (
+            r"2026-04-18 14:32:18 - 2026-04-15 09:00:00 - 0001234 _____ "
+            r"(Microsoft Corporation) C:\Windows\System32\foo.exe"
+        )
+        self.assertEqual(self._parsed_matches(line, [line]), [True])
+
+    def test_parsed_onemonth_directory_line_matches_only_same_attributes(self):
+        directory = r"2026-03-18 13:45 - 2026-03-18 13:45 - 000000000 ____D C:\Program Files\Proton\VPN"
+        other_dates = r"2026-05-01 08:00 - 2026-05-01 08:00 - 000000000 ____D C:\Program Files\Proton\VPN"
+        as_file = r"2026-03-18 13:45 - 2026-03-18 13:45 - 000000000 _____ C:\Program Files\Proton\VPN"
+        self.assertEqual(
+            self._parsed_matches(directory, [directory, other_dates, as_file]),
+            [True, True, False],
+        )
+
+    def test_parsed_hidden_installed_program_matches_itself(self):
+        line = (
+            r"Adobe AIR (HKLM-x32\...\{10E33ABF-D7FB-4F47-900A-7973854AB45A}) "
+            r"(Version: 32.0.0.144 - Adobe) Hidden"
+        )
+        self.assertEqual(self._parsed_matches(line, [line]), [True])
+
+    def test_rule_entry_equals_the_line_entry_it_came_from(self):
+        # The analyzer and the preview both build a parsed rule's entry with
+        # rule_frst_entry. A rule made from a line must equal that line's own
+        # entry; a FrstEntry field missing from RULE_ENTRY_FIELDS breaks this.
+        from ..analyzer import parse_rule_line, rule_frst_entry
+        from ..frst_extractors import get_frst_entry
+
+        lines = [
+            r"HKLM\...\Run: [Virtual Pet] => C:\Program Files\ASUS\Virtual Pet\Virtual Pet.exe [33712544 2026-01-17] (ASUSTeK COMPUTER INC. -> ASUSTeK Computer Inc.)",
+            r"2026-03-18 13:45 - 2026-03-18 13:45 - 000000000 ____D C:\Program Files\Proton\VPN",
+            r"Adobe AIR (HKLM-x32\...\{10E33ABF-D7FB-4F47-900A-7973854AB45A}) (Version: 32.0.0.144 - Adobe) Hidden",
+        ]
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertEqual(rule_frst_entry(parse_rule_line(line, "B")), get_frst_entry(line))
+
     def test_parsed_non_parseable_line(self):
         response = self._post({
             "source_text": r"HKLM\...\Run: [Virtual Pet] => C:\Program Files\ASUS\Virtual Pet\Virtual Pet.exe [33712544 2026-01-17] (ASUSTeK COMPUTER INC. -> ASUSTeK Computer Inc.)",

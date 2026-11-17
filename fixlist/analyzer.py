@@ -979,6 +979,35 @@ def _get_cached_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
     return buckets
 
 
+# The FrstEntry fields a parsed_entry rule stores and matches lines on.
+RULE_ENTRY_FIELDS = (
+    "entry_type",
+    "clsid",
+    "name",
+    "filepath",
+    "filename",
+    "company",
+    "arguments",
+    "file_not_signed",
+    "attributes",
+    "is_hidden",
+)
+
+
+def rule_frst_entry(rule) -> ex.FrstEntry:
+    """The FrstEntry a parsed_entry rule matches lines against.
+
+    `rule` is a saved ClassificationRule or a `parse_rule_line` dict. The analyzer
+    and the rule dry run both build their entry here, so they cannot disagree on
+    which fields take part in a match.
+    """
+    if isinstance(rule, dict):
+        values = {field: rule.get(field) for field in RULE_ENTRY_FIELDS}
+    else:
+        values = {field: getattr(rule, field) for field in RULE_ENTRY_FIELDS}
+    return ex.FrstEntry(**{field: value for field, value in values.items() if value is not None})
+
+
 def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
     qs = ClassificationRule.objects.filter(is_enabled=True).select_related('owner')
     scope, scope_user_id = parse_rule_set_key(rule_set_key)
@@ -1069,19 +1098,7 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
             continue
 
         if rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
-            parsed_entry = ex.FrstEntry(
-                clsid=rule.clsid,
-                name=rule.name,
-                filepath=rule.filepath,
-                filename=rule.filename,
-                company=rule.company,
-                arguments=rule.arguments,
-                file_not_signed=rule.file_not_signed,
-                entry_type=rule.entry_type,
-                attributes=rule.attributes,
-                is_hidden=rule.is_hidden,
-            )
-            buckets[ClassificationRule.MATCH_PARSED_ENTRY].append((rule, parsed_entry))
+            buckets[ClassificationRule.MATCH_PARSED_ENTRY].append((rule, rule_frst_entry(rule)))
             continue
 
         buckets[rule.match_type].append(rule)
