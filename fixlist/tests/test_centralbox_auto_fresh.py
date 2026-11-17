@@ -54,12 +54,35 @@ def store_frst_statuses(log, statuses, key='shared'):
     )
 
 
-def add_rows(upload, hashes, source='mau', detection=''):
+def add_rows(upload, hashes, source='mau', detection='', path=r'C:\Users\Bob\AppData\Local\x\f{i}.exe'):
     UploadedLogFileHash.objects.bulk_create([
         UploadedLogFileHash(upload=upload, sha256=value, line_no=i + 1, anchor_line_no=i + 1,
-                            source=source, detection=detection, auto=True)
+                            source=source, detection=detection, auto=True, path=path.format(i=i))
         for i, value in enumerate(hashes)
     ])
+
+
+# MAU's FILES section: only the executable files count.
+_VIA = '  c:\\users\\muhammad ayan\\appdata\\local\\via\\via chrome runtime\\'
+MAU_FILES_SECTION = '\n'.join([
+    '----------------------------------------------------------------------------------------------',
+    '                                            FILES',
+    '----------------------------------------------------------------------------------------------',
+    '',
+    _VIA + '.gitattributes', f'  SHA256: {sha(1).upper()}',
+    _VIA + 'app.config', f'  SHA256: {sha(2).upper()}',
+    _VIA + 'assemblyinfo.cs', f'  SHA256: {sha(3).upper()}',
+    _VIA + 'license', f'  SHA256: {sha(4).upper()}',
+    _VIA + 'msbuild.exe', f'  SHA256: {sha(5).upper()}',
+    _VIA + 'settings_5d8.tmp', f'  SHA256: {sha(6).upper()}',
+    _VIA + 'run.bat', f'  SHA256: {sha(7).upper()}',
+    _VIA + 'loader.JS', f'  SHA256: {sha(8).upper()}',
+    _VIA + 'resources\\app.asar', f'  SHA256: {sha(10).upper()}',
+    _VIA + 'moonsharpinterpreter.lnk', f'  SHA256: {sha(11).upper()}',
+    'Cached MSI:',
+    r'  Path: C:\WINDOWS\Installer\cc4676.msi',
+    f'  SHA256: {sha(9).upper()}',
+])
 
 
 class FakeCentralbox:
@@ -106,6 +129,21 @@ class CandidateTests(TestCase):
         add_rows(hmp, [sha(1)], source='hitmanpro', detection='')
         add_rows(hmp, [sha(2)], source='hitmanpro', detection='Trojan.Generic')
         self.assertEqual(list(centralbox_auto.auto_fresh_candidates([hmp.pk])), [sha(2)])
+
+    def test_only_executable_mau_files_are_candidates(self):
+        mau = make_uploaded_log('mau', log_type='MAU', content=MAU_FILES_SECTION)
+        UploadedLogFileHash.rebuild_for(mau)
+        self.assertEqual(UploadedLogFileHash.objects.filter(upload=mau).count(), 11)
+        found = centralbox_auto.auto_fresh_candidates([mau.pk])
+        self.assertEqual(set(found), {sha(5), sha(7), sha(8), sha(9), sha(10), sha(11)})
+
+    def test_non_executable_mau_files_still_count_through_a_flagged_frst_line(self):
+        mau = make_uploaded_log('mau', log_type='MAU')
+        add_rows(mau, [sha(1)], path='C:\\x\\settings.cfg')
+        UploadedLogFileHash.objects.filter(upload=mau).update(normalized_path='c:\\x\\settings.cfg')
+        self.assertEqual(centralbox_auto.auto_fresh_candidates([mau.pk]), {})
+        found = centralbox_auto.auto_fresh_candidates([mau.pk], {'c:\\x\\settings.cfg': 'B'})
+        self.assertEqual(found, {sha(1): (CentralboxAutoQueue.PRIORITY_FRST_B, 'FRST line at B')})
 
     def test_mau_rows_are_candidates(self):
         mau = make_uploaded_log('mau', log_type='MAU')

@@ -6,7 +6,8 @@ module starts them by itself for hashes that are likely malicious:
 
 - a scanner detected the file as malware (Malwarebytes, HitmanPro, Trojan
   Killer, HitmanPro output in a Fixlog; PUP and grayware detections do not count),
-- MAU removed it (its files and the cached MSI of the offending program),
+- MAU removed it and it is executable (EXECUTABLE_EXTENSIONS: the FILES
+  section lists config, source and text files too; the cached MSI counts),
 - an FRST / Addition line of a related log names the file and has status B, ! or P.
 
 Only hashes centralbox does not know get one, and never a hash that already
@@ -34,6 +35,7 @@ thread under the test runner (tests call drain_round() directly).
 """
 
 import logging
+import ntpath
 import threading
 import time
 from datetime import timedelta
@@ -64,6 +66,26 @@ SCANNER_SOURCES = {
     'trojan_killer': 'Trojan Killer',
     'fixlog_hitmanpro': 'HitmanPro (Fixlog)',
 }
+# MAU files worth a fresh lookup: programs, libraries, drivers, installers,
+# scripts and shortcuts-to-code. Anything else in MAU's FILES section
+# (.gitignore, .config, .cs, .md, .tmp, ...) is not.
+EXECUTABLE_EXTENSIONS = frozenset({
+    '.exe', '.dll', '.sys', '.drv', '.ocx', '.cpl', '.scr', '.com', '.pif', '.efi', '.msc',
+    '.msi', '.msp', '.mst', '.appx', '.msix',
+    '.bat', '.cmd', '.ps1', '.psm1', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.hta',
+    '.jar', '.py', '.pyw', '.lua', '.au3', '.a3x', '.ahk',
+    # Electron app archives (app.asar): the code of the app.
+    '.asar',
+    # Shortcuts: malicious ones run scripts or downloaders through their arguments.
+    '.lnk',
+})
+
+
+def is_executable_path(path):
+    """True when the file name ends in one of EXECUTABLE_EXTENSIONS."""
+    return ntpath.splitext((path or '').strip().strip('"').lower())[1] in EXECUTABLE_EXTENSIONS
+
+
 FRST_PRIORITIES = {
     'B': CentralboxAutoQueue.PRIORITY_FRST_B,
     '!': CentralboxAutoQueue.PRIORITY_FRST_FLAGGED,
@@ -140,7 +162,7 @@ def flagged_frst_paths(uploads, user=None):
     return result
 
 
-def _row_candidate(source, detection, normalized_path, flagged_paths):
+def _row_candidate(source, detection, path, normalized_path, flagged_paths):
     """(priority, reason) of one hash row, or None when it is not a candidate."""
     from .log_highlighting import threat_severity
 
@@ -148,7 +170,7 @@ def _row_candidate(source, detection, normalized_path, flagged_paths):
     detection = (detection or '').strip()
     if source in SCANNER_SOURCES and detection and threat_severity(detection) == 'b':
         best = (CentralboxAutoQueue.PRIORITY_SCANNER, f'{SCANNER_SOURCES[source]}: {detection}')
-    if source == 'mau':
+    if source == 'mau' and is_executable_path(path):
         option = (CentralboxAutoQueue.PRIORITY_MAU, 'removed by MAU')
         best = option if best is None or option[0] < best[0] else best
     status = flagged_paths.get(normalized_path) if normalized_path else None
@@ -173,13 +195,13 @@ def auto_fresh_candidates(upload_ids, flagged_paths=None):
     rows = (
         UploadedLogFileHash.objects.filter(upload_id__in=list(upload_ids or []))
         .filter(query)
-        .values_list('upload_id', 'sha256', 'md5', 'source', 'detection', 'normalized_path')
+        .values_list('upload_id', 'sha256', 'md5', 'source', 'detection', 'path', 'normalized_path')
     )
-    for upload_id, sha, md5, source, detection, normalized_path in rows.iterator():
+    for upload_id, sha, md5, source, detection, path, normalized_path in rows.iterator():
         value = sha or md5
         if not value:
             continue
-        candidate = _row_candidate(source, detection, normalized_path, flagged_paths)
+        candidate = _row_candidate(source, detection, path, normalized_path, flagged_paths)
         if candidate is None:
             continue
         found = per_upload.setdefault(upload_id, {})
