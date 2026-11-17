@@ -24,7 +24,7 @@ from ..correlation_keys import line_path_keys
 from ..file_hashes import is_md5, is_sha256
 from ..models import HashVerdict, RuleTag, UploadedLog, UploadedLogFileHash
 from ..tagging import centralbox_tags_by_sha
-from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
+from ..validators import PayloadValidator
 
 logger = logging.getLogger(__name__)
 
@@ -220,12 +220,9 @@ def _hash_in_log(uploaded_log, value):
 
 def _json_hash_and_log(request):
     """(sha, uploaded_log, error_response) from a {sha256, upload_id} body."""
-    try:
-        data = PayloadValidator.json_payload(request)
-    except (BadJsonError, PayloadTooLargeError) as exc:
-        return None, None, PayloadValidator.error_response(str(exc))
-    if not isinstance(data, dict):
-        return None, None, PayloadValidator.error_response('Invalid JSON payload.')
+    data, error = PayloadValidator.json_object(request)
+    if error:
+        return None, None, error
     sha = str(data.get('sha256') or '').strip().lower()
     if not (is_sha256(sha) or is_md5(sha)):
         return None, None, PayloadValidator.error_response('sha256 must be a SHA-256 (64 hex) or MD5 (32 hex) hash.')

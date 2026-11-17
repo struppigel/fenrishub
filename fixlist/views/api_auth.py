@@ -31,6 +31,7 @@ from django.db.models import F, Sum
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
+from ..api_params import ParamError
 from ..models import ApiRequestLog, ApiToken, SiteConfig
 from ..validators import PayloadValidator
 from .utils import get_valid_client_ip
@@ -251,6 +252,9 @@ def api_token_required(endpoint, *, cost=1, write=False, methods=None):
             if response is None:
                 try:
                     response = view_func(request, *args, **kwargs)
+                except ParamError as exc:
+                    # A malformed parameter is the caller's mistake: a 400 naming it.
+                    response = _error(str(exc), 400)
                 except Exception:
                     _log_request(request, token, endpoint, kwargs, 500, 0, started, ip, user_agent)
                     raise

@@ -43,6 +43,22 @@ class PayloadValidator:
         except json.JSONDecodeError:
             raise BadJsonError('Invalid JSON payload.')
 
+    @classmethod
+    def json_object(cls, request) -> tuple[dict | None, JsonResponse | None]:
+        """The request body as a JSON object, or ``(None, error response)``.
+
+        Too large -> 413; invalid JSON or a body that is not an object -> 400.
+        """
+        try:
+            payload = cls.json_payload(request)
+        except PayloadTooLargeError as exc:
+            return None, cls.error_response(str(exc), status=413)
+        except BadJsonError:
+            return None, cls.error_response('Invalid JSON payload.')
+        if not isinstance(payload, dict):
+            return None, cls.error_response('Invalid JSON payload.')
+        return payload, None
+
     @staticmethod
     def check_field_type(obj: dict, field: str, expected_type) -> bool:
         """Check if field exists in obj and is of expected_type. Return True if valid."""

@@ -137,6 +137,25 @@ class ChangeRuleOwnerForm(forms.Form):
     )
 
 
+def _admin_page_context(model_admin, request, title) -> dict:
+    """The context every custom admin page of `model_admin` starts from."""
+    return {
+        **model_admin.admin_site.each_context(request),
+        'opts': model_admin.model._meta,
+        'title': title,
+    }
+
+
+class ReadOnlyAdminMixin:
+    """Admin for rows only the app writes: they can be viewed and deleted, never added or edited."""
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(Fixlist)
 class FixlistAdmin(admin.ModelAdmin):
     list_display = ('username', 'owner', 'download_count', 'is_protected', 'created_at', 'share_token')
@@ -154,7 +173,7 @@ class AccessLogAdmin(admin.ModelAdmin):
 
 
 @admin.register(ApiToken)
-class ApiTokenAdmin(admin.ModelAdmin):
+class ApiTokenAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     """Read-only: tokens are issued on the api tokens page, where the raw value is shown once."""
 
     list_display = ('prefix', 'user', 'name', 'created_at', 'expires_at', 'last_used_at', 'revoked_at', 'revoked_by')
@@ -164,12 +183,6 @@ class ApiTokenAdmin(admin.ModelAdmin):
     fields = list_display
     actions = ['revoke_tokens']
 
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
     @admin.action(description='Revoke selected tokens')
     def revoke_tokens(self, request, queryset):
         revoked = sum(int(token.revoke(by=request.user)) for token in queryset)
@@ -177,7 +190,7 @@ class ApiTokenAdmin(admin.ModelAdmin):
 
 
 @admin.register(ApiRequestLog)
-class ApiRequestLogAdmin(admin.ModelAdmin):
+class ApiRequestLogAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = ('created_at', 'user', 'endpoint', 'target', 'status_code', 'count', 'response_bytes', 'duration_ms', 'ip_address')
     list_filter = ('endpoint', 'status_code', 'created_at')
     search_fields = ('user__username', 'target', 'ip_address')
@@ -186,15 +199,9 @@ class ApiRequestLogAdmin(admin.ModelAdmin):
         'response_bytes', 'duration_ms', 'ip_address', 'user_agent',
     )
 
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
 
 @admin.register(HashVerdict)
-class HashVerdictAdmin(admin.ModelAdmin):
+class HashVerdictAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     """centralbox answers cached per SHA256; written only by fixlist/centralbox.py.
     Deleting a row makes the hash be looked up again."""
 
@@ -206,15 +213,9 @@ class HashVerdictAdmin(admin.ModelAdmin):
         'provider_counts', 'links', 'checked_at', 'next_check_at',
     )
 
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
 
 @admin.register(CentralboxFreshLookup)
-class CentralboxFreshLookupAdmin(admin.ModelAdmin):
+class CentralboxFreshLookupAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     """Fresh centralbox lookups helpers started; a row blocks new lookups of
     the hash until the cooldown ends. Deleting a row lifts the cooldown."""
 
@@ -223,15 +224,9 @@ class CentralboxFreshLookupAdmin(admin.ModelAdmin):
     search_fields = ('sha256', 'requested_by__username')
     readonly_fields = ('sha256', 'state', 'auto', 'requested_by', 'requested_at', 'finished_at')
 
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
 
 @admin.register(CentralboxAutoQueue)
-class CentralboxAutoQueueAdmin(admin.ModelAdmin):
+class CentralboxAutoQueueAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     """Likely malicious hashes waiting for an automatic fresh centralbox
     lookup (centralbox_auto.py), next first. Deleting a row skips the hash."""
 
@@ -239,12 +234,6 @@ class CentralboxAutoQueueAdmin(admin.ModelAdmin):
     list_filter = ('priority',)
     search_fields = ('hash', 'reason')
     readonly_fields = ('hash', 'priority', 'reason', 'enqueued_at')
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
 
 
 @admin.register(ClassificationRule)
@@ -444,9 +433,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             form = ChangeRuleOwnerForm()
 
         context = {
-            **self.admin_site.each_context(request),
-            'opts': self.model._meta,
-            'title': 'Change owner of selected rules',
+            **_admin_page_context(self, request, 'Change owner of selected rules'),
             'form': form,
             'rule_count': queryset.count(),
             'selected_ids': list(queryset.values_list('pk', flat=True)),
@@ -490,12 +477,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         return custom_urls + urls
 
     def reparse_all_view(self, request):
-        qs = ClassificationRule.objects.filter(
-            match_type__in=(
-                ClassificationRule.MATCH_PARSED_ENTRY,
-                ClassificationRule.MATCH_FILEPATH,
-            )
-        )
+        qs = ClassificationRule.objects.reparseable()
         scanned = qs.count()
 
         if request.method == 'POST':
@@ -532,9 +514,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             for diff in page_obj.object_list
         ]
         context = {
-            **self.admin_site.each_context(request),
-            'opts': self.model._meta,
-            'title': 'Re-parse all rules from source_text',
+            **_admin_page_context(self, request, 'Re-parse all rules from source_text'),
             'scanned': scanned,
             'changed': preview['changed'],
             'unchanged': preview['unchanged'],
@@ -551,12 +531,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         )
 
     def duplicates_view(self, request):
-        qs = ClassificationRule.objects.filter(
-            match_type__in=(
-                ClassificationRule.MATCH_PARSED_ENTRY,
-                ClassificationRule.MATCH_FILEPATH,
-            )
-        ).select_related('owner')
+        qs = ClassificationRule.objects.reparseable().select_related('owner')
 
         if request.method == 'POST':
             raw_ids = request.POST.getlist('disable')
@@ -600,9 +575,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         page_obj = paginator.get_page(request.GET.get('page') or 1)
 
         context = {
-            **self.admin_site.each_context(request),
-            'opts': self.model._meta,
-            'title': 'Find duplicate rules',
+            **_admin_page_context(self, request, 'Find duplicate rules'),
             'scanned': qs.count(),
             'group_count': len(groups),
             'rule_count': total_rules,
@@ -617,30 +590,15 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         )
 
     def bad_regex_view(self, request):
-        import time
         from . import analyzer as _analyzer
+        from . import regex_bench
         from .rule_sets import SHARED_RULE_SET_KEY
-
-        # Short adversarial inputs. Catastrophic patterns blow up at small
-        # sizes, so bounding the input bounds the worst-case wall time of
-        # this view (important since it runs in-request).
-        adversarial_inputs = [
-            ('a200',     'a' * 200),
-            ('a200_X',   'a' * 200 + 'X'),
-            ('ab100',    'ab' * 100),
-            ('ab100_X',  'ab' * 100 + 'X'),
-            ('slash200', ('\\' + 'a') * 100),
-            ('space200', 'a ' * 100),
-            ('digit200', '1' * 200),
-            ('path200',  'C:\\Users\\' + 'a' * 180 + '\\file.exe'),
-            ('mixed200', 'aA1\\ ' * 50),
-        ]
 
         threshold_ms_raw = request.GET.get('threshold_ms')
         try:
-            threshold_ms = float(threshold_ms_raw) if threshold_ms_raw else 50.0
+            threshold_ms = float(threshold_ms_raw) if threshold_ms_raw else regex_bench.SLOW_THRESHOLD_MS
         except (TypeError, ValueError):
-            threshold_ms = 50.0
+            threshold_ms = regex_bench.SLOW_THRESHOLD_MS
         threshold_s = threshold_ms / 1000.0
 
         buckets = _analyzer._get_cached_rule_buckets(SHARED_RULE_SET_KEY)
@@ -653,20 +611,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
 
         results = []
         for rule, compiled in fallback:
-            worst_label = ''
-            worst_time = 0.0
-            total_time = 0.0
-            for label, payload in adversarial_inputs:
-                start = time.perf_counter()
-                try:
-                    compiled.search(payload)
-                except re.error:
-                    pass
-                elapsed = time.perf_counter() - start
-                total_time += elapsed
-                if elapsed > worst_time:
-                    worst_time = elapsed
-                    worst_label = label
+            worst_time, worst_label, total_time = regex_bench.worst_input(compiled, threshold_s)
             results.append({
                 'rule': rule,
                 'worst_ms': worst_time * 1000.0,
@@ -688,27 +633,10 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             except UploadedLog.DoesNotExist:
                 upload_error = f'No upload with upload_id "{upload_id}".'
             else:
-                lines = [
-                    ln.strip()
-                    for ln in (upload_log.content or '').splitlines()
-                    if ln.strip()
-                ]
+                lines = regex_bench.non_empty_lines(upload_log.content)
                 upload_line_count = len(lines)
                 for rule, compiled in fallback:
-                    start_total = time.perf_counter()
-                    worst_line_time = 0.0
-                    worst_line = ''
-                    for ln in lines:
-                        start = time.perf_counter()
-                        try:
-                            compiled.search(ln)
-                        except re.error:
-                            pass
-                        elapsed = time.perf_counter() - start
-                        if elapsed > worst_line_time:
-                            worst_line_time = elapsed
-                            worst_line = ln
-                    total_elapsed = time.perf_counter() - start_total
+                    total_elapsed, worst_line_time, worst_line = regex_bench.replay_lines(compiled, lines)
                     upload_results.append({
                         'rule': rule,
                         'total_ms': total_elapsed * 1000.0,
@@ -720,9 +648,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
 
         slow_count = sum(1 for r in results if r['is_slow'])
         context = {
-            **self.admin_site.each_context(request),
-            'opts': self.model._meta,
-            'title': 'Bad regex rules (catastrophic backtracking candidates)',
+            **_admin_page_context(self, request, 'Bad regex rules (catastrophic backtracking candidates)'),
             'total_regex_rules': total_regex_rules,
             're2_count': len(re2_rules),
             'fallback_count': len(fallback),
@@ -793,9 +719,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             form = RuleImportForm()
 
         context = {
-            **self.admin_site.each_context(request),
-            'opts': self.model._meta,
-            'title': 'Import classification rules',
+            **_admin_page_context(self, request, 'Import classification rules'),
             'form': form,
         }
         return TemplateResponse(request, 'admin/fixlist/classificationrule/import_rules.html', context)
@@ -891,9 +815,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             form = MalextBulkUploadForm()
 
         context = {
-            **self.admin_site.each_context(request),
-            'opts': self.model._meta,
-            'title': 'Import malext.io extension IDs',
+            **_admin_page_context(self, request, 'Import malext.io extension IDs'),
             'form': form,
         }
         return TemplateResponse(
@@ -964,7 +886,7 @@ class UploadedLogAdmin(admin.ModelAdmin):
         if not self.has_change_permission(request):
             raise PermissionDenied
         log_types = list(
-            UploadedLog.objects.filter(deleted_at__isnull=True)
+            UploadedLog.objects.live()
             .values('log_type').annotate(count=Count('pk')).order_by('log_type')
         )
 
@@ -985,9 +907,7 @@ class UploadedLogAdmin(admin.ModelAdmin):
             return HttpResponseRedirect(reverse('admin:fixlist_uploadedlog_changelist'))
 
         context = {
-            **self.admin_site.each_context(request),
-            'opts': self.model._meta,
-            'title': 'Reanalyze logs by type',
+            **_admin_page_context(self, request, 'Reanalyze logs by type'),
             'log_types': log_types,
         }
         return TemplateResponse(request, 'admin/fixlist/uploadedlog/reanalyze.html', context)

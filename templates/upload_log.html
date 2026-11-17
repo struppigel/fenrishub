@@ -67,12 +67,7 @@
 
 <script>
 function copyUploadId(button) {
-    const id = document.getElementById('uploadedLogId').textContent;
-    navigator.clipboard.writeText(id).then(function() {
-        const original = button.textContent;
-        button.textContent = 'copied';
-        setTimeout(() => { button.textContent = original; }, 1200);
-    });
+    Fenris.copyWithFeedback(document.getElementById('uploadedLogId').textContent, button);
 }
 </script>
 

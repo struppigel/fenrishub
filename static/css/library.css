@@ -1,0 +1,124 @@
+/* The snippets and speeches list pages (templates/library_list.html). */
+
+.library-item {
+    padding: 10px;
+    margin-bottom: 8px;
+    background-color: var(--la-bg-1);
+    border: 1px solid var(--la-border);
+}
+
+.library-item:hover {
+    border-color: var(--la-border-strong);
+}
+
+.library-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.library-name {
+    font-size: 13px;
+    color: var(--la-text-neutral);
+    font-weight: 600;
+}
+
+.library-content-preview {
+    font-size: 12px;
+    color: var(--la-text-muted);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    display: -webkit-box;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+body.library-compact .library-content-preview {
+    display: none;
+}
+
+body.library-compact .library-item {
+    padding: 4px 10px;
+    margin-bottom: 4px;
+}
+
+body.library-compact .library-header {
+    margin-bottom: 0;
+}
+
+.library-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.library-actions .analyzer-btn {
+    font-size: 11px;
+    width: 72px;
+    text-align: center;
+}
+
+.library-actions .analyzer-btn.active {
+    background-color: color-mix(in srgb, var(--la-status-c) 15%, var(--la-bg-1));
+    border-color: var(--la-status-c);
+    color: var(--la-status-c);
+}
+
+.shared-badge, .category-badge {
+    font-size: 10px;
+    color: var(--la-text-muted);
+    font-weight: normal;
+}
+
+.library-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    align-items: center;
+}
+
+.library-owner {
+    font-size: 11px;
+    color: var(--la-text-muted);
+    font-weight: normal;
+}
+
+/* "view" dialog showing an item's full text (on a .modal-backdrop). */
+.library-modal-card {
+    width: min(900px, 100%);
+    max-height: 90vh;
+    background-color: var(--la-bg-1);
+    border: 1px solid var(--la-border-strong);
+    display: flex;
+    flex-direction: column;
+}
+
+.library-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px;
+    border-bottom: 1px solid var(--la-border);
+}
+
+.library-modal-title {
+    font-size: 13px;
+    color: var(--la-text-primary);
+    font-weight: 600;
+}
+
+.library-modal-body {
+    padding: 10px;
+    overflow: auto;
+}
+
+.library-modal-content {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+    color: var(--la-text-primary);
+}

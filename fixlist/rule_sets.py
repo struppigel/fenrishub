@@ -33,6 +33,11 @@ def resolve_effective_rule_set_key(uploaded_log) -> str:
     return resolve_user_rule_set_key(uploaded_log.recipient_user)
 
 
+def rule_set_label(key: str) -> str:
+    """'shared' or 'private': how a rule set key is named to users and API clients."""
+    return 'shared' if key == SHARED_RULE_SET_KEY else 'private'
+
+
 def parse_rule_set_key(key: str):
     """Parse a key string into (scope, user_id). Unknown shapes fall back to shared."""
     if not key or key == SHARED_RULE_SET_KEY:

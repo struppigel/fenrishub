@@ -71,7 +71,6 @@ from .infection_cases import (
 from .utils import (
     custom_404_view,
     get_action_scoped_uploads,
-    get_updatable_uploads,
     get_client_ip,
     _purge_old_trash,
     redirect_preserving_filters,

@@ -41,32 +41,8 @@ const CentralboxLookup = (function () {
         return verdict.verdict ? 'centralbox: ' + verdict.verdict : '';
     }
 
-    // Django's CSRF cookie (readable by scripts), else a form's hidden field.
-    function csrfToken() {
-        const match = /(?:^|;\s*)csrftoken=([^;]+)/.exec(document.cookie || '');
-        if (match) return decodeURIComponent(match[1]);
-        const field = document.querySelector('input[name="csrfmiddlewaretoken"]');
-        return field ? field.value : '';
-    }
-
-    async function post(url, payload) {
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRFToken': csrfToken() },
-                body: JSON.stringify(payload),
-            });
-            let body = null;
-            try {
-                body = await response.json();
-            } catch (error) {
-                body = null;
-            }
-            return { status: response.status, body };
-        } catch (error) {
-            return { status: 0, body: null };
-        }
+    function post(url, payload) {
+        return Fenris.requestJson(url, { body: payload });
     }
 
     // "check this hash": the stored or cached answer. urls: {check}.

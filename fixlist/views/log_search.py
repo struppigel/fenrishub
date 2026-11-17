@@ -20,7 +20,8 @@ from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 from urllib.parse import urlencode
 
-from ..analyzer import _re2, evaluate_regex_pattern
+from .. import regex_engine
+from ..analyzer import evaluate_regex_pattern
 from ..models import UploadedLog
 from ..rule_sets import SHARED_RULE_SET_KEY, resolve_user_rule_set_key
 from ..tagging import (
@@ -73,14 +74,14 @@ def _build_matcher(query, use_regex, case_sensitive=False):
     if not evaluation['stdlib_ok']:
         return None, f"invalid regex: {evaluation['stdlib_error']}"
 
-    if _re2 is not None:
+    if regex_engine.RE2_AVAILABLE:
         if not evaluation['re2_ok']:
             return None, (
                 'this regex uses constructs the fast engine does not support '
                 '(lookahead, lookbehind or backreferences). rewrite it without them, '
                 f"or use substring search. details: {evaluation['re2_error']}"
             )
-        compiled = _re2.compile(query if case_sensitive else f'(?i){query}')
+        compiled = regex_engine.compile(query, ignore_case=not case_sensitive, fallback=False)
     else:
         # No re2 binding: stdlib re is the only option, so refuse patterns that
         # benchmark slow on adversarial input rather than risk stalling a worker.
@@ -135,7 +136,7 @@ def _first_hit(content, matcher):
 
 
 def _base_queryset():
-    return UploadedLog.objects.filter(deleted_at__isnull=True)
+    return UploadedLog.objects.live()
 
 
 def _search_cache_key(query, use_regex, case_sensitive, log_type, limit, tag_ids=(), rule_set_key=''):

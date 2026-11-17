@@ -1,0 +1,1 @@
+{% load rule_tags %}{# An upload's id linking to its page, in its log type's colour; `log`: the UploadedLog. #}<a class="upload-id-link log-type-{{ log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' log.upload_id %}">{{ log.upload_id }}</a>

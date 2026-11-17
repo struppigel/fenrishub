@@ -4,16 +4,14 @@ import time
 from datetime import datetime
 from typing import Iterable
 
-try:
-    import re2 as _re2
-except ImportError:
-    _re2 = None
-
 from django.db import transaction
 from django.db.models import F, Q
 
 from . import frst_extractors as ex
-from . import script_matcher
+from . import regex_bench, regex_engine, script_matcher
+from .regex_engine import _re2  # noqa: F401 - re-exported: tests check whether re2 is installed
+from .machine_signals import SYSTEM_PROFILE_NAMES
+from .log_types import ANALYZED_LOG_TYPES
 from .models import ClassificationRule, ParsedFilepathExclusion, SiteConfig, get_default_rule_owner_id, detect_log_type
 from .rule_sets import SHARED_RULE_SET_KEY, parse_rule_set_key
 from .status_types import (
@@ -21,6 +19,8 @@ from .status_types import (
     VALID_STATUSES,
     STATUS_LABELS,
     STATUS_CSS_CLASS,
+    dominant_status,
+    precedence_rank,
 )
 
 FRST_END_OF_ADDITION = "==================== End of Addition.txt ======================="
@@ -36,30 +36,9 @@ FRST_CONTEXT_MARKERS = (
     "Loaded Profiles:",
 )
 
-PARSER_ORDER = [
-    ex.extract_frst_runkey,
-    ex.extract_print_monitors,
-    ex.extract_custom_appcompatflags,
-    ex.extract_custom_appcompatsdb,
-    ex.extract_frst_activesetup,
-    ex.extract_frst_service,
-    ex.extract_frst_shortcut,
-    ex.extract_frst_scheduled_task_command,
-    ex.extract_frst_scheduled_task,
-    ex.extract_frst_scheduled_task_job,
-    ex.extract_frst_startup,
-    ex.extract_frst_startup_dir,
-    ex.extract_firewall_rule,
-    ex.extract_onemonth,
-    ex.extract_process,
-    ex.extract_installed_software,
-    ex.extract_bho,
-    ex.extract_browser_extension,
-    ex.extract_custom_clsid,
-    ex.extract_shelliconoverlayidentifiers,
-    ex.extract_package,
-    ex.extract_context_menu_handler,
-]
+# The extractors a line is parsed with: the one list in frst_extractors, so the
+# analyzer and get_frst_entry() can never cover different entry types.
+PARSER_ORDER = ex._ALL_EXTRACTORS
 
 
 def _ordered_status_codes(statuses: Iterable[str]) -> str:
@@ -69,13 +48,16 @@ def _ordered_status_codes(statuses: Iterable[str]) -> str:
     return "".join(s for s in STATUS_PRECEDENCE if s in available)
 
 
-def _dominant_status(status_codes: str) -> str:
-    if not status_codes:
-        return "?"
-    for status in STATUS_PRECEDENCE:
-        if status in status_codes:
-            return status
-    return "?"
+_dominant_status = dominant_status
+
+
+def _when_text(moment: datetime, days_ago: int) -> str:
+    """'today at 10:00:00', 'yesterday at ...' or 'N days ago on <date time>' for a warning."""
+    if days_ago == 0:
+        return f"today at {moment.strftime('%H:%M:%S')}"
+    if days_ago == 1:
+        return f"yesterday at {moment.strftime('%H:%M:%S')}"
+    return f"{days_ago} days ago on {moment.strftime('%Y-%m-%d %H:%M:%S')}"
 
 
 def _dedupe(items: Iterable[str]) -> list[str]:
@@ -177,7 +159,7 @@ def _build_wholelog_alert_warnings(raw_log_text: str, buckets) -> tuple[list[dic
 
 def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
     detected_type = detect_log_type(raw_log_text or "")
-    if detected_type not in {"FRST", "Addition", "FRST&Addition"}:
+    if detected_type not in ANALYZED_LOG_TYPES:
         return None
 
     end_of_addition_found = bool(FRST_END_OF_ADDITION_RE.search(raw_log_text))
@@ -380,19 +362,12 @@ def _detect_recent_restore_operation_warning(raw_log_text: str) -> dict | None:
     
     # Calculate fractional days for more precise messaging
     total_hours = time_diff.total_seconds() / 3600
-    formatted_time = latest_restore.strftime("%Y-%m-%d %H:%M:%S")
-    
     # Build warning message
-    if days_ago == 0:
-        time_str = f"today at {latest_restore.strftime('%H:%M:%S')}"
-    elif days_ago == 1:
-        time_str = f"yesterday at {latest_restore.strftime('%H:%M:%S')}"
-    else:
-        time_str = f"{days_ago} days ago on {formatted_time}"
+    time_str = _when_text(latest_restore, days_ago)
     
     message = f"System restore operation detected {time_str}. This could indicate malware removal attempts."
     details = [
-        f"Restore date/time: {formatted_time}",
+        f"Restore date/time: {latest_restore.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Days ago: {days_ago}",
         f"Total restore operations detected: {len(restore_operations)}",
     ]
@@ -427,10 +402,6 @@ _USER_PROFILE_CREATE_RE = re.compile(
     r"C:\\Users\\([^\\\s]+)\s*$",
     re.IGNORECASE,
 )
-_SYSTEM_USER_PROFILES = frozenset({
-    "public", "default", "default user", "all users",
-    "defaultaccount", "wdagutilityaccount",
-})
 
 _ONE_MONTH_CREATED_HEADER = "One month (created)"
 _ONE_MONTH_ENTRY_RE = re.compile(
@@ -452,7 +423,7 @@ def _find_user_profile_created_near_install(raw_log_text: str, install_dt: datet
         except (ValueError, TypeError):
             continue
         username = match.group(6)
-        if username.lower() in _SYSTEM_USER_PROFILES:
+        if username.lower() in SYSTEM_PROFILE_NAMES:
             continue
         if abs((created - install_dt).total_seconds()) <= 24 * 3600:
             return username
@@ -516,13 +487,7 @@ def _detect_recent_os_install_warning(raw_log_text: str) -> dict | None:
     if days_ago > 7:
         return None
 
-    formatted_time = install_dt.strftime("%Y-%m-%d %H:%M:%S")
-    if days_ago == 0:
-        time_str = f"today at {install_dt.strftime('%H:%M:%S')}"
-    elif days_ago == 1:
-        time_str = f"yesterday at {install_dt.strftime('%H:%M:%S')}"
-    else:
-        time_str = f"{days_ago} days ago on {formatted_time}"
+    time_str = _when_text(install_dt, days_ago)
 
     haystack = (raw_log_text or "").lower()
     corroborating = [
@@ -576,6 +541,58 @@ def _build_log_warnings(raw_log_text: str) -> list[dict]:
 _BARE_PATH_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/])")
 
 
+# The FrstEntry fields a parsed_entry rule stores and matches lines on.
+RULE_ENTRY_FIELDS = (
+    "entry_type",
+    "clsid",
+    "name",
+    "filepath",
+    "filename",
+    "company",
+    "arguments",
+    "file_not_signed",
+    "attributes",
+    "is_hidden",
+)
+# Every field parse_rule_line derives from a rule's source text: the entry
+# fields plus the normalized path filepath rules match on. Re-parsing a rule
+# rewrites exactly these.
+REPARSE_FIELDS = (*RULE_ENTRY_FIELDS[:4], "normalized_filepath", *RULE_ENTRY_FIELDS[4:])
+_BOOLEAN_RULE_FIELDS = frozenset({"file_not_signed", "is_hidden"})
+EMPTY_RULE_FIELDS = {field: (False if field in _BOOLEAN_RULE_FIELDS else "") for field in REPARSE_FIELDS}
+
+
+def rule_fields_from_entry(entry: ex.FrstEntry) -> dict:
+    """The REPARSE_FIELDS values for a parsed FRST entry."""
+    fields = {field: getattr(entry, field) for field in RULE_ENTRY_FIELDS}
+    fields["normalized_filepath"] = ex.path_key(entry.filepath)
+    return fields
+
+
+def rule_defaults(parsed: dict) -> dict:
+    """update_or_create() defaults for a rule from a parse_rule_line dict."""
+    return {
+        "description": parsed["description"],
+        "source_name": parsed["source_name"],
+        **{field: parsed[field] for field in REPARSE_FIELDS},
+        "is_enabled": True,
+    }
+
+
+def upsert_parsed_rule(parsed: dict, owner_id) -> tuple:
+    """Create or update the rule a parse_rule_line dict describes: ``(rule, created)``.
+
+    A new rule gets its match type's default priority (ClassificationRule.save).
+    """
+    return ClassificationRule.objects.update_or_create(
+        owner_id=owner_id,
+        status=parsed["status"],
+        match_type=parsed["match_type"],
+        source_text=parsed["source_text"],
+        defaults=rule_defaults(parsed),
+    )
+
+
 def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict | None:
     line = (raw_line or "").strip()
     if not line:
@@ -597,17 +614,7 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         "source_text": source_text,
         "description": description,
         "source_name": source_name,
-        "entry_type": "",
-        "clsid": "",
-        "name": "",
-        "filepath": "",
-        "normalized_filepath": "",
-        "filename": "",
-        "company": "",
-        "arguments": "",
-        "file_not_signed": False,
-        "attributes": "",
-        "is_hidden": False,
+        **EMPTY_RULE_FIELDS,
     }
 
     if core.startswith("EXACT:"):
@@ -630,26 +637,14 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         rule_data["match_type"] = ClassificationRule.MATCH_FILEPATH
         rule_data["source_text"] = path
         rule_data["filepath"] = path
-        rule_data["normalized_filepath"] = ex.normalize_path(path).lower().strip() if path else ""
+        rule_data["normalized_filepath"] = ex.path_key(path)
         return rule_data
 
     parsed_entry = ex.get_frst_entry(core)
     if parsed_entry:
         rule_data["match_type"] = ClassificationRule.MATCH_PARSED_ENTRY
         rule_data["source_text"] = core
-        rule_data["entry_type"] = parsed_entry.entry_type
-        rule_data["clsid"] = parsed_entry.clsid
-        rule_data["name"] = parsed_entry.name
-        rule_data["filepath"] = parsed_entry.filepath
-        rule_data["normalized_filepath"] = (
-            ex.normalize_path(parsed_entry.filepath).lower().strip() if parsed_entry.filepath else ""
-        )
-        rule_data["filename"] = parsed_entry.filename
-        rule_data["company"] = parsed_entry.company
-        rule_data["arguments"] = parsed_entry.arguments
-        rule_data["file_not_signed"] = parsed_entry.file_not_signed
-        rule_data["attributes"] = parsed_entry.attributes
-        rule_data["is_hidden"] = parsed_entry.is_hidden
+        rule_data.update(rule_fields_from_entry(parsed_entry))
         if not rule_data["description"]:
             rule_data["description"] = parsed_entry.description
         return rule_data
@@ -659,7 +654,7 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         rule_data["match_type"] = ClassificationRule.MATCH_FILEPATH
         rule_data["source_text"] = fallback_path
         rule_data["filepath"] = fallback_path
-        rule_data["normalized_filepath"] = ex.normalize_path(fallback_path).lower().strip()
+        rule_data["normalized_filepath"] = ex.path_key(fallback_path)
         return rule_data
 
     # Bare path (no FRST line shape): `C:\foo\bar` or `\\server\share\foo` — treat
@@ -669,7 +664,7 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         rule_data["match_type"] = ClassificationRule.MATCH_FILEPATH
         rule_data["source_text"] = core
         rule_data["filepath"] = core
-        rule_data["normalized_filepath"] = ex.normalize_path(core).lower().strip()
+        rule_data["normalized_filepath"] = ex.path_key(core)
 
     return rule_data
 
@@ -689,35 +684,9 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
                 skipped += 1
                 continue
 
-            lookup = {
-                "owner_id": owner_id,
-                "status": parsed["status"],
-                "match_type": parsed["match_type"],
-                "source_text": parsed["source_text"],
-            }
-            defaults = {
-                "description": parsed["description"],
-                "source_name": parsed["source_name"],
-                "entry_type": parsed["entry_type"],
-                "clsid": parsed["clsid"],
-                "name": parsed["name"],
-                "filepath": parsed["filepath"],
-                "normalized_filepath": parsed["normalized_filepath"],
-                "filename": parsed["filename"],
-                "company": parsed["company"],
-                "arguments": parsed["arguments"],
-                "file_not_signed": parsed["file_not_signed"],
-                "attributes": parsed["attributes"],
-                "is_hidden": parsed["is_hidden"],
-                "is_enabled": True,
-            }
-            rule, is_created = ClassificationRule.objects.update_or_create(**lookup, defaults=defaults)
+            _rule, is_created = upsert_parsed_rule(parsed, owner_id)
             if is_created:
                 created += 1
-                default_priority = ClassificationRule.default_priority_for(parsed["match_type"])
-                if rule.priority != default_priority:
-                    rule.priority = default_priority
-                    rule.save(update_fields=["priority", "updated_at"])
             else:
                 updated += 1
         except Exception as exc:  # pragma: no cover - defensive for admin uploads
@@ -758,9 +727,7 @@ def _bump_rules_version() -> None:
     """
     try:
         with transaction.atomic():
-            if not SiteConfig.objects.filter(pk=1).update(rules_version=F('rules_version') + 1):
-                SiteConfig.objects.get_or_create(pk=1)
-                SiteConfig.objects.filter(pk=1).update(rules_version=F('rules_version') + 1)
+            SiteConfig.update_solo(rules_version=F('rules_version') + 1)
     except Exception:
         logger.warning('Could not bump rules_version; other workers keep their rule buckets up to %ss.',
                        _RULE_BUCKETS_CACHE_TTL, exc_info=True)
@@ -779,21 +746,6 @@ def invalidate_rule_buckets_cache(rule_set_key: str | None = None) -> None:
     else:
         _rule_buckets_cache.pop(rule_set_key, None)
     _bump_rules_version()
-
-
-REPARSE_FIELDS = (
-    "entry_type",
-    "clsid",
-    "name",
-    "filepath",
-    "normalized_filepath",
-    "filename",
-    "company",
-    "arguments",
-    "file_not_signed",
-    "attributes",
-    "is_hidden",
-)
 
 
 def reparse_rules(queryset, *, apply: bool = False):
@@ -979,21 +931,6 @@ def _get_cached_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
     return buckets
 
 
-# The FrstEntry fields a parsed_entry rule stores and matches lines on.
-RULE_ENTRY_FIELDS = (
-    "entry_type",
-    "clsid",
-    "name",
-    "filepath",
-    "filename",
-    "company",
-    "arguments",
-    "file_not_signed",
-    "attributes",
-    "is_hidden",
-)
-
-
 def rule_frst_entry(rule) -> ex.FrstEntry:
     """The FrstEntry a parsed_entry rule matches lines against.
 
@@ -1074,11 +1011,11 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
 
         rule_path = (rule.normalized_filepath or "").strip().lower()
         if not rule_path and rule.filepath:
-            rule_path = ex.normalize_path(rule.filepath).lower().strip()
+            rule_path = ex.path_key(rule.filepath)
         if not rule_path and rule.source_text:
             source_path = ex.extract_any_frst_path(rule.source_text)
             if source_path:
-                rule_path = ex.normalize_path(source_path).lower().strip()
+                rule_path = ex.path_key(source_path)
         if rule_path:
             buckets["__filepath_any"].append(
                 (rule, rule_path, rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY)
@@ -1127,36 +1064,11 @@ def _build_parsed_entry_index(buckets):
     buckets["__parsed_entry_index"] = index
 
 
-REGEX_ADVERSARIAL_INPUTS = (
-    ('a200',     'a' * 200),
-    ('a200_X',   'a' * 200 + 'X'),
-    ('ab100',    'ab' * 100),
-    ('ab100_X',  'ab' * 100 + 'X'),
-    ('slash200', ('\\' + 'a') * 100),
-    ('space200', 'a ' * 100),
-    ('digit200', '1' * 200),
-    ('path200',  'C:\\Users\\' + 'a' * 180 + '\\file.exe'),
-    ('mixed200', 'aA1\\ ' * 50),
-)
-
-REGEX_SLOW_THRESHOLD_MS = 5.0
-
-# A single wall-clock sample can be inflated by the OS descheduling us mid-run
-# (CI runs the suite with --parallel on shared CPUs), so a sample that lands
-# over the threshold gets re-run and the fastest reading wins -- noise only
-# ever adds time. Readings far past the threshold are genuine backtracking
-# blowups rather than jitter, so those are not re-run.
-REGEX_BENCH_RETRIES = 4
-REGEX_BENCH_RETRY_CEILING = 10.0
-
-
-def _time_regex_search(compiled, payload: str) -> float:
-    start = time.perf_counter()
-    try:
-        compiled.search(payload)
-    except re.error:
-        pass
-    return time.perf_counter() - start
+REGEX_ADVERSARIAL_INPUTS = regex_bench.ADVERSARIAL_INPUTS
+REGEX_SLOW_THRESHOLD_MS = regex_bench.SLOW_THRESHOLD_MS
+REGEX_BENCH_RETRIES = regex_bench.RETRIES
+REGEX_BENCH_RETRY_CEILING = regex_bench.RETRY_CEILING
+_time_regex_search = regex_bench.time_search
 
 
 def evaluate_regex_pattern(pattern: str, slow_threshold_ms: float = REGEX_SLOW_THRESHOLD_MS) -> dict:
@@ -1191,14 +1103,8 @@ def evaluate_regex_pattern(pattern: str, slow_threshold_ms: float = REGEX_SLOW_T
         'is_slow': False,
     }
 
-    if _re2 is not None:
-        try:
-            _re2.compile(pattern)
-            result['re2_ok'] = True
-        except Exception as exc:
-            result['re2_error'] = str(exc)
-    else:
-        result['re2_error'] = 're2 binding unavailable'
+    result['re2_error'] = regex_engine.re2_error(pattern)
+    result['re2_ok'] = result['re2_error'] is None
 
     try:
         compiled = re.compile(pattern)
@@ -1207,19 +1113,9 @@ def evaluate_regex_pattern(pattern: str, slow_threshold_ms: float = REGEX_SLOW_T
         result['stdlib_error'] = str(exc)
         return result
 
-    worst = 0.0
-    worst_label = ''
     threshold_s = slow_threshold_ms / 1000.0
-    for label, payload in REGEX_ADVERSARIAL_INPUTS:
-        elapsed = _time_regex_search(compiled, payload)
-        if threshold_s <= elapsed < threshold_s * REGEX_BENCH_RETRY_CEILING:
-            for _ in range(REGEX_BENCH_RETRIES):
-                elapsed = min(elapsed, _time_regex_search(compiled, payload))
-                if elapsed < threshold_s:
-                    break
-        if elapsed > worst:
-            worst = elapsed
-            worst_label = label
+    # The timer is looked up at call time so tests can patch it on this module.
+    worst, worst_label, _total = regex_bench.worst_input(compiled, threshold_s, timer=_time_regex_search)
     result['worst_ms'] = worst * 1000.0
     result['worst_input'] = worst_label
     result['is_slow'] = worst >= threshold_s
@@ -1247,41 +1143,16 @@ def _build_regex_matchers(buckets, regex_rules):
         # Painting locates the match with the same engine that found it.
         patterns_by_rule_id[rule.pk] = compiled
 
-    if _re2 is None:
-        for rule in regex_rules:
+    regex_set, positions = regex_engine.build_set([rule.source_text for rule in regex_rules])
+    in_set = set(positions)
+    for index, rule in enumerate(regex_rules):
+        if index not in in_set:
             _add_to_fallback(rule)
-        return
-
-    try:
-        options = _re2.Options()
-        options.max_mem = 64 * 1024 * 1024
-        regex_set = _re2.Set(_re2._Anchor.UNANCHORED, options)
-    except Exception:
-        for rule in regex_rules:
-            _add_to_fallback(rule)
-        return
-
-    set_rules = []
-    for rule in regex_rules:
-        try:
-            regex_set.Add(rule.source_text)
-        except Exception:
-            _add_to_fallback(rule)
-            continue
-        set_rules.append(rule)
-
-    if not set_rules:
-        return
-
-    try:
-        regex_set.Compile()
-    except Exception:
-        for rule in set_rules:
-            _add_to_fallback(rule)
+    if regex_set is None:
         return
 
     buckets["__regex_set"] = regex_set
-    buckets["__regex_set_rules"] = set_rules
+    buckets["__regex_set_rules"] = [regex_rules[index] for index in positions]
 
 
 def _owner_suffix(rule) -> str:
@@ -1461,24 +1332,11 @@ def _regex_match_ranges(line: str, rule, regex_patterns) -> list[list[int]]:
         return []
     compiled = regex_patterns.get(rule.pk, _REGEX_NOT_COMPILED)
     if compiled is _REGEX_NOT_COMPILED:
-        compiled = None
-        if _re2 is not None:
-            try:
-                compiled = _re2.compile(rule.source_text)
-            except Exception:
-                compiled = None
-        if compiled is None:
-            try:
-                compiled = re.compile(rule.source_text)
-            except re.error:
-                compiled = None
+        compiled = regex_engine.compile(rule.source_text)
         regex_patterns[rule.pk] = compiled
     if compiled is None:
         return []
-    try:
-        return [[m.start(), m.end()] for m in compiled.finditer(line) if m.end() > m.start()]
-    except Exception:
-        return []
+    return regex_engine.match_ranges(compiled, line)
 
 
 # How a matching rule colours its line in the analyzer.
@@ -1714,11 +1572,7 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
         if rule.source_text.strip() == line.strip():
             groups["exact"].append((rule, "found exact match", "exact"))
 
-    parsed_entries = []
-    for extractor in PARSER_ORDER:
-        entry = extractor(line)
-        if entry:
-            parsed_entries.append(entry)
+    parsed_entries = list(ex.iter_frst_entries(line))
 
     if parsed_entries:
         parsed_entry_index = buckets["__parsed_entry_index"]
@@ -1733,7 +1587,7 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
 
     filepath = ex.extract_any_frst_path(line)
     if filepath:
-        normalized = ex.normalize_path(filepath).lower().strip()
+        normalized = ex.path_key(filepath)
         for rule, rule_path, parsed_fallback in buckets["__filepath_any"]:
             if parsed_fallback and rule_path in buckets["__parsed_filepath_exclusions"]:
                 continue
@@ -1752,12 +1606,7 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
     regex_set = buckets.get("__regex_set")
     if regex_set is not None:
         set_rules = buckets["__regex_set_rules"]
-        try:
-            matched_indices = regex_set.Match(line)
-        except Exception:
-            matched_indices = ()
-        # google-re2's Set.Match returns None (not []) when nothing matched.
-        for idx in matched_indices or ():
+        for idx in regex_engine.set_match(regex_set, line):
             rule = set_rules[idx]
             groups["regex"].append((rule, f'found regex match for "{rule.source_text}"', "regex"))
 
@@ -1817,7 +1666,7 @@ def _match_precedence_sort_key(entry):
     C...), rule.id asc as a stable tiebreaker.
     """
     rule, _reason, matcher = entry
-    status_rank = STATUS_PRECEDENCE.index(rule.status) if rule.status in STATUS_PRECEDENCE else len(STATUS_PRECEDENCE)
+    status_rank = precedence_rank(rule.status)
     return (-_effective_match_priority(rule, matcher), status_rank, rule.id)
 
 
@@ -1872,15 +1721,7 @@ def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]
                 "description": rule.description,
                 "source_name": rule.source_name,
                 "is_enabled": rule.is_enabled,
-                "entry_type": rule.entry_type,
-                "clsid": rule.clsid,
-                "name": rule.name,
-                "filepath": rule.filepath,
-                "normalized_filepath": rule.normalized_filepath,
-                "filename": rule.filename,
-                "company": rule.company,
-                "arguments": rule.arguments,
-                "file_not_signed": rule.file_not_signed,
+                **{field: getattr(rule, field) for field in REPARSE_FIELDS},
                 "matcher": matcher,
                 "reason": reason_value,
                 "owner_username": rule.owner.username if rule.owner_id else "",

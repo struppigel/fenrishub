@@ -60,17 +60,11 @@ function fillSpeechCaptureCategories() {
 }
 
 function readStoredPlaceholderPreference() {
-    try {
-        return localStorage.getItem(SPEECH_CAPTURE_PLACEHOLDERS_KEY) === '1';
-    } catch (e) {
-        return false;
-    }
+    return Fenris.storage.flag(SPEECH_CAPTURE_PLACEHOLDERS_KEY);
 }
 
 function storePlaceholderPreference(enabled) {
-    try {
-        localStorage.setItem(SPEECH_CAPTURE_PLACEHOLDERS_KEY, enabled ? '1' : '0');
-    } catch (e) { /* quota or disabled storage */ }
+    Fenris.storage.setFlag(SPEECH_CAPTURE_PLACEHOLDERS_KEY, enabled);
 }
 
 function openSpeechCaptureModal(text) {
@@ -169,28 +163,14 @@ async function saveSpeechCapture() {
     setSpeechCaptureError('');
 
     try {
-        const response = await fetch(createUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': getCookie('csrftoken'),
-            },
-            body: JSON.stringify({
-                name,
-                content,
-                category: categoryInput ? categoryInput.value.trim() : '',
-                is_shared: Boolean(sharedInput && sharedInput.checked),
-            }),
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            // The modal stays open with the text intact. A duplicate name must
-            // never cost the analyst the paragraph they just wrote.
-            throw new Error(errorData.error || 'Failed to save the speech.');
-        }
-
-        const data = await response.json();
+        // On failure the modal stays open with the text intact. A duplicate name
+        // must never cost the analyst the paragraph they just wrote.
+        const data = await Fenris.postJson(createUrl, {
+            name,
+            content,
+            category: categoryInput ? categoryInput.value.trim() : '',
+            is_shared: Boolean(sharedInput && sharedInput.checked),
+        }, { errorMessage: 'Failed to save the speech.' });
         const config = window.logAnalyzerConfig || {};
         if (data.speech) {
             if (!Array.isArray(config.speeches)) {

@@ -51,8 +51,9 @@ from ..api_params import (
     scope_cache_part,
     text_param,
 )
+from ..log_types import ANALYZED_LOG_TYPES
 from ..models import ClassificationRule, FixlistSnippet, InfectionCase, InfectionCaseLog, RuleTag, Speech, UploadedLog
-from ..rule_sets import SHARED_RULE_SET_KEY, resolve_user_rule_set_key
+from ..rule_sets import resolve_user_rule_set_key, rule_set_label
 from ..status_types import STATUS_LABELS, VALID_STATUSES
 from ..rule_test_service import (
     build_rule_test_results,
@@ -77,7 +78,7 @@ from ..tagging import (
     unmatched_tagged_rule_ids,
 )
 from ..upload_duplicates import duplicate_info_for, duplicate_metadata, non_canonical_pks
-from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
+from ..validators import PayloadValidator
 from ..upload_utils import get_fresh_cached_analysis, get_or_compute_upload_analysis
 from .api_auth import api_token_required, charge_api_units, rate_limited_response
 from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE, effective_analyzer_fixlist_template
@@ -92,8 +93,8 @@ from .rules import (
     _rule_form_from_rule,
     create_rules,
 )
-from .snippets import _validate_snippet_form
-from .speeches import _speech_validation_error, speeches_for_tags
+from .library_items import library_validation_error
+from .speeches import speeches_for_tags
 from .uploads import filter_uploads_by_text
 
 UPLOAD_ID_RE = re.compile(r'[A-Za-z0-9_.-]{1,64}')
@@ -122,24 +123,21 @@ TAG_FILTER_EXTRA_UNITS = 9
 TAGS_PARAM_MAX_ITEMS = 20
 
 
-def _error(message, status=400):
-    return JsonResponse({'error': message}, status=status)
+_error = PayloadValidator.error_response
 
 
 def _not_found():
     return _error('Not found.', 404)
 
 
-def _int_param(request, name, default, minimum, maximum):
-    """Read an int query param clamped to [minimum, maximum]; None when malformed."""
-    raw = (request.GET.get(name) or '').strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        return None
-    return max(minimum, min(maximum, value))
+def _require_known_statuses(statuses) -> None:
+    """Raise ParamError (a 400 via api_token_required) naming unknown status codes."""
+    invalid = set(statuses) - VALID_STATUSES
+    if invalid:
+        raise ParamError(
+            f"Unknown status code(s): {', '.join(sorted(invalid))}. "
+            f"Valid: {' '.join(sorted(VALID_STATUSES))}."
+        )
 
 
 def _iso(value):
@@ -149,7 +147,7 @@ def _iso(value):
 def _params(request):
     """``(params, error_response)``: the query string of a GET, the JSON object of a POST."""
     if request.method == 'POST':
-        return _write_payload(request)
+        return PayloadValidator.json_object(request)
     return request.GET, None
 
 
@@ -184,7 +182,7 @@ def _tag_ids_param(params):
 
 def _live_uploads():
     return (
-        UploadedLog.objects.filter(deleted_at__isnull=True)
+        UploadedLog.objects.live()
         .select_related('recipient_user')
         .defer('content')
     )
@@ -212,7 +210,7 @@ def _own_case_ids_by_upload(user, upload_pks):
 
 
 def _live_upload_rows():
-    return UploadedLog.objects.filter(deleted_at__isnull=True)
+    return UploadedLog.objects.live()
 
 
 def _upload_metadata(uploaded_log, case_ids, duplicates=None):
@@ -248,7 +246,7 @@ def _uploads_metadata(user, uploads):
 def _get_live_upload(upload_id, *, with_content):
     if not UPLOAD_ID_RE.fullmatch(upload_id or ''):
         return None
-    uploads = UploadedLog.objects.filter(deleted_at__isnull=True).select_related('recipient_user')
+    uploads = UploadedLog.objects.live().select_related('recipient_user')
     if not with_content:
         uploads = uploads.defer('content')
     return uploads.filter(upload_id=upload_id).first()
@@ -261,10 +259,8 @@ def api_uploads(request):
     (ISO dates, inclusive), tags (every one found in the upload's cached analysis
     under the caller's rule set), dedupe (hide copies of a more complete upload of
     the same scan, see upload_duplicates)."""
-    limit = _int_param(request, 'limit', LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT)
-    offset = _int_param(request, 'offset', 0, 0, LIST_MAX_OFFSET)
-    if limit is None or offset is None:
-        return _error('limit and offset must be integers.')
+    limit = int_param(request.GET, 'limit', LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT)
+    offset = int_param(request.GET, 'offset', 0, 0, LIST_MAX_OFFSET)
     tag_ids, error = _tag_ids_param(request.GET)
     if error:
         return error
@@ -555,18 +551,11 @@ def api_upload_analysis(request, upload_id):
     never stored is computed at once, both for extra units. Centralbox is
     never asked. `correlated=1` keeps only the lines that have entries.
     """
-    limit = _int_param(request, 'limit', LINES_DEFAULT_LIMIT, 1, LINES_MAX_LIMIT)
-    offset = _int_param(request, 'offset', 0, 0, LINES_MAX_OFFSET)
-    if limit is None or offset is None:
-        return _error('limit and offset must be integers.')
+    limit = int_param(request.GET, 'limit', LINES_DEFAULT_LIMIT, 1, LINES_MAX_LIMIT)
+    offset = int_param(request.GET, 'offset', 0, 0, LINES_MAX_OFFSET)
     status_param = (request.GET.get('status') or '').strip()
     statuses = {code.strip() for code in status_param.split(',') if code.strip()}
-    invalid = statuses - VALID_STATUSES
-    if invalid:
-        return _error(
-            f"Unknown status code(s): {', '.join(sorted(invalid))}. "
-            f"Valid: {' '.join(sorted(VALID_STATUSES))}."
-        )
+    _require_known_statuses(statuses)
     tag_ids, error = _tag_ids_param(request.GET)
     if error:
         return error
@@ -623,7 +612,7 @@ def api_upload_analysis(request, upload_id):
         page = [{key: line[key] for key in fields if key in line} for line in page]
 
     payload = _uploads_metadata(request.user, [uploaded_log])[0]
-    payload['rule_set'] = 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private'
+    payload['rule_set'] = rule_set_label(rule_set_key)
     if correlations is not None:
         # Which logs were read: 'case' (the caller's own cases with this log),
         # 'user' (the forum user's other logs, the name) or '' (none); fresh
@@ -698,12 +687,7 @@ def api_search(request):
         scope_part = scope_cache_part(params)
     except ParamError as exc:
         return _error(str(exc))
-    invalid = set(statuses) - VALID_STATUSES
-    if invalid:
-        return _error(
-            f"Unknown status code(s): {', '.join(sorted(invalid))}. "
-            f"Valid: {' '.join(sorted(VALID_STATUSES))}."
-        )
+    _require_known_statuses(statuses)
 
     rule_set_key = resolve_user_rule_set_key(request.user)
     search = LineSearch(
@@ -814,10 +798,8 @@ def _library_item_payload(item, user, id_key):
 
 def _library_list_response(request, model, id_key, list_key, extra=None):
     """Paged list of own and shared items. q matches name, content or owner; category filters exactly."""
-    limit = _int_param(request, 'limit', LIBRARY_DEFAULT_LIMIT, 1, LIBRARY_MAX_LIMIT)
-    offset = _int_param(request, 'offset', 0, 0, LIST_MAX_OFFSET)
-    if limit is None or offset is None:
-        return _error('limit and offset must be integers.')
+    limit = int_param(request.GET, 'limit', LIBRARY_DEFAULT_LIMIT, 1, LIBRARY_MAX_LIMIT)
+    offset = int_param(request.GET, 'offset', 0, 0, LIST_MAX_OFFSET)
 
     items = _visible_library_items(model, request.user)
     search_query = (request.GET.get('q') or '').strip()[:QUERY_MAX_CHARS]
@@ -918,9 +900,7 @@ def api_upload_speeches(request, upload_id):
     none of the caller's selected speeches names - for a line only when
     nothing of the caller's own fits, as a click on the line in the analyzer.
     """
-    line_number = _int_param(request, 'line', 0, 0, LINES_MAX_OFFSET)
-    if line_number is None:
-        return _error('line must be an integer.')
+    line_number = int_param(request.GET, 'line', 0, 0, LINES_MAX_OFFSET)
 
     uploaded_log = _get_live_upload(upload_id, with_content=True)
     if uploaded_log is None:
@@ -951,7 +931,7 @@ def api_upload_speeches(request, upload_id):
 
     payload = {
         'upload_id': uploaded_log.upload_id,
-        'rule_set': 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private',
+        'rule_set': rule_set_label(rule_set_key),
         'line_number': line_number or None,
         'tags': [
             {
@@ -1000,9 +980,7 @@ def api_user(request, forum_username):
     forum_username = (forum_username or '').strip()
     if not forum_username or len(forum_username) > FORUM_USERNAME_MAX_CHARS:
         return _not_found()
-    limit = _int_param(request, 'limit', LIST_MAX_LIMIT, 1, LIST_MAX_LIMIT)
-    if limit is None:
-        return _error('limit must be an integer.')
+    limit = int_param(request.GET, 'limit', LIST_MAX_LIMIT, 1, LIST_MAX_LIMIT)
 
     uploads = _live_uploads().filter(forum_username__iexact=forum_username)
     own_cases = (
@@ -1061,7 +1039,7 @@ def api_case(request, case_id):
     if not CASE_ID_RE.fullmatch(case_id or ''):
         return _not_found()
     infection_case = (
-        InfectionCase.objects.filter(deleted_at__isnull=True, case_id=case_id)
+        InfectionCase.objects.live().filter(case_id=case_id)
         .select_related('owner')
         .first()
     )
@@ -1138,10 +1116,8 @@ def api_tag(request, tag_id):
     tag = RuleTag.objects.filter(pk=tag_id).first()
     if tag is None:
         return _not_found()
-    limit = _int_param(request, 'limit', TAG_RULES_DEFAULT_LIMIT, 1, TAG_RULES_MAX_LIMIT)
-    offset = _int_param(request, 'offset', 0, 0, LIST_MAX_OFFSET)
-    if limit is None or offset is None:
-        return _error('limit and offset must be integers.')
+    limit = int_param(request.GET, 'limit', TAG_RULES_DEFAULT_LIMIT, 1, TAG_RULES_MAX_LIMIT)
+    offset = int_param(request.GET, 'offset', 0, 0, LIST_MAX_OFFSET)
     rules = tag.rules.select_related('owner').order_by('pk')
     speeches = tag.speeches.filter(Q(owner=request.user) | Q(is_shared=True)).select_related('owner')
     snippets = tag.snippets.filter(Q(owner=request.user) | Q(is_shared=True)).select_related('owner')
@@ -1193,10 +1169,8 @@ def _visible_rules():
 @api_token_required('api_v1_rules')
 def api_rules(request):
     """Classification rules, filtered like the rules page and paged with limit/offset."""
-    limit = _int_param(request, 'limit', RULES_DEFAULT_LIMIT, 1, RULES_MAX_LIMIT)
-    offset = _int_param(request, 'offset', 0, 0, LIST_MAX_OFFSET)
-    if limit is None or offset is None:
-        return _error('limit and offset must be integers.')
+    limit = int_param(request.GET, 'limit', RULES_DEFAULT_LIMIT, 1, RULES_MAX_LIMIT)
+    offset = int_param(request.GET, 'offset', 0, 0, LIST_MAX_OFFSET)
 
     rules = _visible_rules()
     search_query = (request.GET.get('q') or '').strip()[:QUERY_MAX_CHARS]
@@ -1273,23 +1247,10 @@ def _rule_detail(rule):
     }
 
 
-def _write_payload(request):
-    """The JSON object of a write request, or (None, error response)."""
-    try:
-        payload = PayloadValidator.json_payload(request)
-    except PayloadTooLargeError as exc:
-        return None, _error(str(exc), 413)
-    except BadJsonError:
-        return None, _error('Invalid JSON payload.')
-    if not isinstance(payload, dict):
-        return None, _error('Invalid JSON payload.')
-    return payload, None
-
-
 @api_token_required('api_v1_tag_create', write=True)
 def api_tag_create(request):
     """Create a rule tag. Same fields and checks as the tag editor."""
-    payload, error = _write_payload(request)
+    payload, error = PayloadValidator.json_object(request)
     if error:
         return error
     tag, message = save_tag(request.user, None, payload)
@@ -1304,7 +1265,7 @@ def api_tag_update(request, tag_id):
     tag = RuleTag.objects.filter(pk=tag_id).first()
     if tag is None:
         return _not_found()
-    payload, error = _write_payload(request)
+    payload, error = PayloadValidator.json_object(request)
     if error:
         return error
     tag, message = save_tag(request.user, tag, payload)
@@ -1324,7 +1285,7 @@ def api_tag_apply(request, tag_id):
     tag = RuleTag.objects.filter(pk=tag_id).first()
     if tag is None:
         return _not_found()
-    payload, error = _write_payload(request)
+    payload, error = PayloadValidator.json_object(request)
     if error:
         return error
     mode = payload.get('mode')
@@ -1391,29 +1352,60 @@ def _own_library_item_payload(request, model, item, id_key):
     return _library_item_payload(item, request.user, id_key)
 
 
-def _own_speech_payload(request, speech):
-    return _own_library_item_payload(request, Speech, speech, 'speech_id')
+def _create_library_item(request, model, id_key):
+    """Create a snippet or speech owned by the caller from a write body.
+
+    As on the web pages, a new item is selected for the caller's analyzer.
+    """
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
+    fields, message = _library_fields(payload, model)
+    if not message:
+        message = library_validation_error(
+            model, request.user, fields['name'], fields['content'], fields['category'],
+        )
+    if message:
+        return _error(message)
+    item = model.objects.create(
+        owner=request.user, name=fields['name'], content=fields['content'],
+        category=fields['category'], is_shared=fields['is_shared'],
+    )
+    item.analyzer_users.add(request.user)
+    if fields['tag_ids'] is not None:
+        item.trigger_tags.set(fields['tag_ids'])
+    return JsonResponse(_own_library_item_payload(request, model, item, id_key), status=201)
+
+
+def _update_library_item(request, model, item_id, id_key):
+    """Change one of the caller's own snippets or speeches; fields left out keep their values."""
+    item = model.objects.filter(pk=item_id, owner=request.user).first()
+    if item is None:
+        return _not_found()
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
+    fields, message = _library_fields(payload, model, item)
+    if not message:
+        message = library_validation_error(
+            model, request.user, fields['name'], fields['content'], fields['category'], exclude_pk=item.pk,
+        )
+    if message:
+        return _error(message)
+    item.name = fields['name']
+    item.content = fields['content']
+    item.category = fields['category']
+    item.is_shared = fields['is_shared']
+    item.save(update_fields=['name', 'content', 'category', 'is_shared', 'updated_at'])
+    if fields['tag_ids'] is not None:
+        item.trigger_tags.set(fields['tag_ids'])
+    return JsonResponse(_own_library_item_payload(request, model, item, id_key))
 
 
 @api_token_required('api_v1_speech_create', write=True)
 def api_speech_create(request):
     """Create a speech owned by the caller. Body: {name, content, category?, is_shared?, trigger_tag_ids?}."""
-    payload, error = _write_payload(request)
-    if error:
-        return error
-    fields, message = _library_fields(payload, Speech)
-    if not message:
-        message = _speech_validation_error(request.user, fields['name'], fields['content'], fields['category'])
-    if message:
-        return _error(message)
-    speech = Speech.objects.create(
-        owner=request.user, name=fields['name'], content=fields['content'],
-        category=fields['category'], is_shared=fields['is_shared'],
-    )
-    speech.analyzer_users.add(request.user)
-    if fields['tag_ids'] is not None:
-        speech.trigger_tags.set(fields['tag_ids'])
-    return JsonResponse(_own_speech_payload(request, speech), status=201)
+    return _create_library_item(request, Speech, 'speech_id')
 
 
 @api_token_required('api_v1_speech_update', write=True)
@@ -1423,79 +1415,19 @@ def api_speech_update(request, speech_id):
     The FRST fix speech can be edited like any other - it is the profile's fix
     message too - and keeps its flag.
     """
-    speech = Speech.objects.filter(pk=speech_id, owner=request.user).first()
-    if speech is None:
-        return _not_found()
-    payload, error = _write_payload(request)
-    if error:
-        return error
-    fields, message = _library_fields(payload, Speech, speech)
-    if not message:
-        message = _speech_validation_error(
-            request.user, fields['name'], fields['content'], fields['category'], exclude_pk=speech.pk,
-        )
-    if message:
-        return _error(message)
-    speech.name = fields['name']
-    speech.content = fields['content']
-    speech.category = fields['category']
-    speech.is_shared = fields['is_shared']
-    speech.save(update_fields=['name', 'content', 'category', 'is_shared', 'updated_at'])
-    if fields['tag_ids'] is not None:
-        speech.trigger_tags.set(fields['tag_ids'])
-    return JsonResponse(_own_speech_payload(request, speech))
-
-
-def _snippet_validation_error(user, fields, exclude_pk=None):
-    """The snippet editor's checks, on a parsed write body."""
-    form = {key: fields[key] for key in ('name', 'content', 'category')}
-    return _validate_snippet_form(user, form, exclude_pk=exclude_pk)
+    return _update_library_item(request, Speech, speech_id, 'speech_id')
 
 
 @api_token_required('api_v1_snippet_create', write=True)
 def api_snippet_create(request):
     """Create a fixlist snippet owned by the caller. Body: {name, content, category?, is_shared?, trigger_tag_ids?}."""
-    payload, error = _write_payload(request)
-    if error:
-        return error
-    fields, message = _library_fields(payload, FixlistSnippet)
-    if not message:
-        message = _snippet_validation_error(request.user, fields)
-    if message:
-        return _error(message)
-    snippet = FixlistSnippet.objects.create(
-        owner=request.user, name=fields['name'], content=fields['content'],
-        category=fields['category'], is_shared=fields['is_shared'],
-    )
-    # As on the add-snippet page: a new snippet is selected for the analyzer.
-    snippet.analyzer_users.add(request.user)
-    if fields['tag_ids'] is not None:
-        snippet.trigger_tags.set(fields['tag_ids'])
-    return JsonResponse(_own_library_item_payload(request, FixlistSnippet, snippet, 'snippet_id'), status=201)
+    return _create_library_item(request, FixlistSnippet, 'snippet_id')
 
 
 @api_token_required('api_v1_snippet_update', write=True)
 def api_snippet_update(request, snippet_id):
     """Change one of the caller's own fixlist snippets; fields left out keep their values."""
-    snippet = FixlistSnippet.objects.filter(pk=snippet_id, owner=request.user).first()
-    if snippet is None:
-        return _not_found()
-    payload, error = _write_payload(request)
-    if error:
-        return error
-    fields, message = _library_fields(payload, FixlistSnippet, snippet)
-    if not message:
-        message = _snippet_validation_error(request.user, fields, exclude_pk=snippet.pk)
-    if message:
-        return _error(message)
-    snippet.name = fields['name']
-    snippet.content = fields['content']
-    snippet.category = fields['category']
-    snippet.is_shared = fields['is_shared']
-    snippet.save(update_fields=['name', 'content', 'category', 'is_shared', 'updated_at'])
-    if fields['tag_ids'] is not None:
-        snippet.trigger_tags.set(fields['tag_ids'])
-    return JsonResponse(_own_library_item_payload(request, FixlistSnippet, snippet, 'snippet_id'))
+    return _update_library_item(request, FixlistSnippet, snippet_id, 'snippet_id')
 
 
 RULE_STRING_FIELDS = ('status', 'match_type', 'source_text', 'description')
@@ -1561,7 +1493,7 @@ def api_rule_create(request):
     color_whole_line?, tag_ids?}. Without tag_ids the auto-apply tags decide.
     Patterns duplicating one of the caller's rules are skipped; 409 when all are.
     """
-    payload, error = _write_payload(request)
+    payload, error = PayloadValidator.json_object(request)
     if error:
         return error
     fields, message = _rule_write_fields(payload)
@@ -1617,7 +1549,7 @@ def api_rule_update(request, rule_id):
     rule = rules.select_related('owner').first()
     if rule is None:
         return _not_found()
-    payload, error = _write_payload(request)
+    payload, error = PayloadValidator.json_object(request)
     if error:
         return error
     fields, message = _rule_write_fields(payload)
@@ -1640,7 +1572,7 @@ def api_rule_update(request, rule_id):
 # multi-line rule text) does not fit a URL.
 # ---------------------------------------------------------------------------
 
-RULE_TEST_DEFAULT_TYPES = ('FRST', 'Addition', 'FRST&Addition')
+RULE_TEST_DEFAULT_TYPES = ANALYZED_LOG_TYPES
 RULE_TEST_DEFAULT_MAX_LOGS = 500
 RULE_TEST_MAX_LOGS = 3000
 RULE_TEST_DEFAULT_SAMPLE = 50
@@ -1770,7 +1702,7 @@ def api_rule_test(request):
             ),
             'whole_log': rule['whole_log'],
         },
-        'rule_set': 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private',
+        'rule_set': rule_set_label(rule_set_key),
         'logs_in_scope': logs_in_scope,
         'max_logs': max_logs,
     }
@@ -1881,7 +1813,7 @@ def api_rule_match(request):
     line's parsed FRST entry. Whole-log alert rules and disabled rules never
     match a line, so they are not listed.
     """
-    payload, error = _write_payload(request)
+    payload, error = PayloadValidator.json_object(request)
     if error:
         return error
     lines = payload.get('lines')
@@ -1927,7 +1859,7 @@ def api_rule_match(request):
         results.append(result)
 
     return JsonResponse({
-        'rule_set': 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private',
+        'rule_set': rule_set_label(rule_set_key),
         'status_legend': STATUS_LABELS,
         'results': results,
     })

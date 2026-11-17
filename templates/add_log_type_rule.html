@@ -157,11 +157,6 @@
     let debounceTimer = null;
     let controller = null;
 
-    function getCsrfToken() {
-        const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/);
-        return m ? decodeURIComponent(m[1]) : '';
-    }
-
     function setResult(cls, text, sample) {
         result.className = 'ltr-result ' + cls;
         result.textContent = text;
@@ -185,7 +180,7 @@
         try {
             const resp = await fetch(TEST_URL, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': Fenris.csrfToken() },
                 body: JSON.stringify({ pattern: pattern, content: content, scope: scopeInput.value }),
                 signal: controller.signal,
             });

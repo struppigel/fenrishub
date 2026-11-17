@@ -8,6 +8,8 @@
         <span class="current-page">{{ num }}</span>
         {% elif num == 1 or num == page_obj.paginator.num_pages or num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
         <a href="?page={{ num }}{% if pagination_query %}&amp;{{ pagination_query }}{% endif %}">{{ num }}</a>
+        {% elif num == 2 or num == page_obj.paginator.num_pages|add:"-1" %}
+        <span class="ellipsis">&hellip;</span>
         {% endif %}
     {% endfor %}
     {% if page_obj.has_next %}

@@ -1,34 +1,13 @@
 let analyzedLines = [];
 let copiedLineIndexes = new Set();
 const EDITABLE_STATUSES = ['B', 'P', 'C', '!', 'G', 'S', 'J', '?'];
-const STATUS_CLASS_MAP = {
-    B: 'status-b',
-    P: 'status-p',
-    C: 'status-c',
-    '!': 'status-w',
-    A: 'status-a',
-    G: 'status-g',
-    S: 'status-s',
-    I: 'status-i',
-    J: 'status-j',
-    '?': 'status-unknown',
-};
+// Status codes come from common.js (kept in step with fixlist/status_types.py).
+const STATUS_CLASS_MAP = Fenris.status.cssClass;
 const HIDE_CLASS_PREFIX = 'hide-';
 const hiddenStatuses = new Set();
 const ALL_LEGEND_STATUS_CLASSES = Object.values(STATUS_CLASS_MAP);
-const STATUS_LABEL_MAP = {
-    B: 'malware',
-    P: 'potentially unwanted',
-    C: 'clean',
-    '!': 'warning',
-    A: 'alert',
-    G: 'grayware',
-    S: 'security',
-    I: 'informational',
-    J: 'junk',
-    '?': 'unknown',
-};
-const STATUS_PRECEDENCE_ORDER = ['B', 'P', 'C', 'A', '!', 'G', 'S', 'I', 'J', '?'];
+const STATUS_LABEL_MAP = Fenris.status.label;
+const STATUS_PRECEDENCE_ORDER = Fenris.status.precedence;
 const MATCH_TYPE_LABEL_MAP = {
     exact: 'Exact line',
     parsed: 'Parsed',
@@ -301,15 +280,6 @@ function classifyDateAgainstClusters(parsed) {
         }
     }
     return null;
-}
-
-function getCookie(name) {
-    const value = `; ${document.cookie}`;
-    const parts = value.split(`; ${name}=`);
-    if (parts.length === 2) {
-        return parts.pop().split(';').shift();
-    }
-    return '';
 }
 
 function safeParseJson(input, fallback) {

@@ -10,35 +10,8 @@
         margin-right: 8px;
     }
 
-    .fixlist-actions .action-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        height: 32px;
-        padding: 0 10px;
-        background-color: var(--la-bg-1);
-        color: var(--la-text-primary);
-        border: 1px solid var(--la-border);
-        font-size: 12px;
-        font-family: inherit;
-        line-height: 1;
-        text-decoration: none;
-        cursor: pointer;
-        flex-shrink: 0;
-    }
-
-    .fixlist-actions .action-btn:hover {
-        text-decoration: underline;
-    }
-
     .fixlist-actions form {
         display: inline;
-    }
-
-    .fixlist-actions .delete-btn {
-        background-color: var(--la-error-bg);
-        color: var(--la-error-text);
-        border-color: var(--la-error-border);
     }
 
     .fixlist-actions .visibility-toggle-btn {
@@ -65,16 +38,6 @@
 
     .bulk-controls button {
         min-width: 0;
-    }
-
-    .bulk-controls .delete-btn {
-        background-color: var(--la-error-bg);
-        color: var(--la-error-text);
-        border-color: var(--la-error-border);
-    }
-
-    .protected-state {
-        color: var(--la-success-text);
     }
 
     .fixlists-count {
@@ -116,10 +79,7 @@
         {% else %}
         <button type="submit" form="bulkFixlistForm" name="action" value="delete_selected" class="delete-btn" onclick="return confirmDeleteSelected();" title="move the selected fixlists to trash">delete</button>
         {% endif %}
-        <span id="selectionIndicator" class="muted" hidden style="font-size: 12px;">
-            <span id="selectionCount">0</span> selected
-            <a href="#" id="clearSelectionLink" style="margin-left: 6px;">clear</a>
-        </span>
+        {% include 'partials/selection_indicator.html' %}
     </div>
     <div style="display: flex; gap: 8px;">
         {% if is_trash %}
@@ -215,41 +175,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
 {% if is_trash %}
 function confirmRestoreSelected() {
-    const count = fixlistSelection.getStored().size;
-    if (count === 0) {
-        alert('Select at least one fixlist to restore.');
-        return false;
-    }
-    return confirm('Restore ' + count + ' selected fixlist(s)?');
+    return fixlistSelection.confirmAction('Select at least one fixlist to restore.', 'Restore {n} selected fixlist(s)?');
 }
 
 function confirmDeletePermanentSelected() {
-    const count = fixlistSelection.getStored().size;
-    if (count === 0) {
-        alert('Select at least one fixlist to delete.');
-        return false;
-    }
-    return confirm('Permanently delete ' + count + ' selected fixlist(s)?');
+    return fixlistSelection.confirmAction('Select at least one fixlist to delete.', 'Permanently delete {n} selected fixlist(s)?');
 }
 {% else %}
 function confirmDeleteSelected() {
-    const count = fixlistSelection.getStored().size;
-    if (count === 0) {
-        alert('Select at least one fixlist to delete.');
-        return false;
-    }
-    return confirm('Move ' + count + ' selected fixlist(s) to trash?');
+    return fixlistSelection.confirmAction('Select at least one fixlist to delete.', 'Move {n} selected fixlist(s) to trash?');
 }
 
 function copyShareLink(path, button) {
-    const fullLink = `${window.location.origin}${path}`;
-    const originalText = button.textContent;
-    navigator.clipboard.writeText(fullLink).then(function() {
-        button.textContent = 'copied';
-        setTimeout(() => {
-            button.textContent = originalText;
-        }, 1200);
-    });
+    Fenris.copyWithFeedback(`${window.location.origin}${path}`, button);
 }
 {% endif %}
 </script>

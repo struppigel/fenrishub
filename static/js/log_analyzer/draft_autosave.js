@@ -49,28 +49,15 @@ function hashDraftText(text) {
 }
 
 function readDraftStorage(key) {
-    try {
-        return localStorage.getItem(key);
-    } catch (e) {
-        return null;
-    }
+    return Fenris.storage.get(key);
 }
 
 function writeDraftStorage(key, value) {
-    try {
-        localStorage.setItem(key, value);
-        return true;
-    } catch (e) {
-        return false;
-    }
+    return Fenris.storage.set(key, value);
 }
 
 function removeDraftStorage(key) {
-    try {
-        localStorage.removeItem(key);
-    } catch (e) {
-        // Storage disabled or full; nothing useful to do.
-    }
+    Fenris.storage.remove(key);
 }
 
 function readDraftIndex() {

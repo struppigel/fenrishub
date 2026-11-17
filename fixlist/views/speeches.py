@@ -2,74 +2,32 @@
 Speech management views.
 
 Handles: creating, editing, deleting, and listing canned speeches — the reusable
-prose blocks inserted into the analyzer's response panel. Mirrors views/snippets.py.
+prose blocks inserted into the analyzer's response panel. The list, selection and
+validation code is shared with fixlist snippets (views/library_items.py).
 """
-
-from urllib.parse import urlencode
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.paginator import Paginator
 from django.views.decorators.http import require_http_methods
 from django.http import JsonResponse
-from django.db.models import Q
-
-from django.contrib.auth.models import User
 
 from ..models import Speech
-from ..tagging import parse_tag_ids, serialize_tag
-from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
-
-# Matches the model's CharField(max_length=255) on name and category. The forms
-# on the speeches page are bounded by the widget, but a JSON client is not, and
-# an over-long value would surface as a database error instead of a 400.
-SPEECH_FIELD_MAX_LENGTH = 255
-
-
-def _trigger_tag_ids_from_post(request):
-    """The tag ids picked in the speech form, built-in tags included."""
-    return parse_tag_ids(request.POST.getlist('trigger_tag_ids'))
-
-
-def serialize_speech_for_analyzer(speech, user):
-    """The shape the analyzer's speeches picker reads.
-
-    One place for it, because the analyzer page, the speeches API and the
-    capture API all hand speeches to the same picker. Expects `trigger_tags`
-    prefetched when serializing many speeches.
-    """
-    return {
-        'id': speech.id,
-        'name': speech.name if speech.owner_id == user.id else f"{speech.name} ({speech.owner.username})",
-        'category': speech.category,
-        'content': speech.content,
-        'trigger_tag_ids': [tag.pk for tag in speech.trigger_tags.all()],
-    }
-
+from ..tagging import serialize_tag
+from ..validators import PayloadValidator
+from .library_items import (
+    analyzer_items_for, library_list_context, library_validation_error, serialize_for_analyzer,
+    shared_tag_items_for, toggle_analyzer_selection, trigger_tag_ids_from_post,
+)
 
 def analyzer_speeches_for(user):
     """Serialized speeches the user selected for the analyzer, in picker order."""
-    qs = Speech.objects.filter(
-        analyzer_users=user,
-    ).select_related('owner').prefetch_related('trigger_tags').order_by('category', 'name')
-    return [serialize_speech_for_analyzer(speech, user) for speech in qs]
+    return analyzer_items_for(Speech, user)
 
 
 def shared_tag_speeches_for(user):
-    """Other helpers' shared speeches that suggest at least one tag and that the
-    user has not selected - the analyzer's fallback when a tag found in a log
-    has no speech of the user's own."""
-    qs = (
-        Speech.objects.filter(is_shared=True, trigger_tags__isnull=False)
-        .exclude(owner=user)
-        .exclude(analyzer_users=user)
-        .distinct()
-        .select_related('owner')
-        .prefetch_related('trigger_tags')
-        .order_by('category', 'name')
-    )
-    return [serialize_speech_for_analyzer(speech, user) for speech in qs]
+    """Other helpers' shared speeches suggesting a tag (the analyzer's fallback)."""
+    return shared_tag_items_for(Speech, user)
 
 
 def speeches_for_tags(user, tag_ids):
@@ -115,24 +73,9 @@ def speeches_for_tags(user, tag_ids):
 def _speech_validation_error(owner, name, content, category='', exclude_pk=None):
     """Return an error message for invalid speech fields, or None if they are ok.
 
-    Shared by the speeches page and the analyzer's create API so the two can
-    never drift apart on what counts as a valid speech.
+    Shared by the speeches page, the analyzer's create API and the token API.
     """
-    if not name:
-        return 'Speech name is required.'
-    if not content:
-        return 'Speech content is required.'
-    if len(name) > SPEECH_FIELD_MAX_LENGTH:
-        return f'Speech name must be at most {SPEECH_FIELD_MAX_LENGTH} characters.'
-    if len(category) > SPEECH_FIELD_MAX_LENGTH:
-        return f'Speech category must be at most {SPEECH_FIELD_MAX_LENGTH} characters.'
-
-    duplicates = Speech.objects.filter(owner=owner, name=name)
-    if exclude_pk is not None:
-        duplicates = duplicates.exclude(pk=exclude_pk)
-    if duplicates.exists():
-        return f'A speech named "{name}" already exists.'
-    return None
+    return library_validation_error(Speech, owner, name, content, category, exclude_pk=exclude_pk)
 
 
 @login_required
@@ -155,7 +98,7 @@ def speeches_view(request):
                     owner=request.user, name=name, content=content,
                     is_shared=is_shared, category=category,
                 )
-                speech.trigger_tags.set(_trigger_tag_ids_from_post(request))
+                speech.trigger_tags.set(trigger_tag_ids_from_post(request))
                 speech.analyzer_users.add(request.user)
                 messages.success(request, f'Speech "{name}" created.')
             return redirect('speeches')
@@ -179,7 +122,7 @@ def speeches_view(request):
                 speech.save(update_fields=['name', 'content', 'is_shared', 'category', 'updated_at'])
                 # A form without the tag picker must not clear them.
                 if request.POST.get('tags_present'):
-                    speech.trigger_tags.set(_trigger_tag_ids_from_post(request))
+                    speech.trigger_tags.set(trigger_tag_ids_from_post(request))
                 messages.success(request, f'Speech "{name}" updated.')
             return redirect('speeches')
 
@@ -196,65 +139,12 @@ def speeches_view(request):
             messages.success(request, f'Speech "{name}" deleted.')
             return redirect('speeches')
 
-    shared_by = request.GET.get('shared_by', '').strip()
-    search_query = request.GET.get('q', '').strip()
-    category_filter = request.GET.get('category', '').strip()
-
-    # users who share speeches (excluding current user)
-    sharing_users = (
-        User.objects.filter(speeches__is_shared=True)
-        .exclude(pk=request.user.pk)
-        .distinct()
-        .order_by('username')
-    )
-
-    if shared_by:
-        speeches = Speech.objects.filter(
-            owner__username=shared_by, is_shared=True,
-        ).select_related('owner')
-    else:
-        speeches = Speech.objects.filter(owner=request.user).select_related('owner')
-
-    # collect categories before text search so all categories remain visible in the dropdown
-    categories = sorted(set(speeches.values_list('category', flat=True)))
-
-    if category_filter:
-        speeches = speeches.filter(category=category_filter)
-
-    if search_query:
-        speeches = speeches.filter(
-            Q(name__icontains=search_query)
-            | Q(content__icontains=search_query)
-            | Q(owner__username__icontains=search_query)
-        )
-
-    speeches = speeches.order_by('name').prefetch_related('trigger_tags__category')
-    compact_view = request.COOKIES.get('fenrishub_speeches_compact') == '1'
-    per_page = 14 if compact_view else 7
-    page_obj = Paginator(speeches, per_page).get_page(request.GET.get('page'))
-
-    pagination_params = {}
-    if search_query:
-        pagination_params['q'] = search_query
-    if shared_by:
-        pagination_params['shared_by'] = shared_by
-    if category_filter:
-        pagination_params['category'] = category_filter
-
-    analyzer_speech_ids = set(
-        request.user.analyzer_speeches.values_list('pk', flat=True)
-    )
-
+    context = library_list_context(request, Speech)
+    page_obj = context['page_obj']
     return render(request, 'speeches.html', {
+        **context,
         'speeches': page_obj,
-        'page_obj': page_obj,
-        'shared_by': shared_by,
-        'sharing_users': sharing_users,
-        'search_query': search_query,
-        'category_filter': category_filter,
-        'categories': categories,
-        'pagination_query': urlencode(pagination_params),
-        'analyzer_speech_ids': analyzer_speech_ids,
+        'analyzer_speech_ids': context['analyzer_item_ids'],
         'speech_triggers_json': {
             str(speech.pk): {'tags': [serialize_tag(tag) for tag in speech.trigger_tags.all()]}
             for speech in page_obj
@@ -266,19 +156,7 @@ def speeches_view(request):
 @require_http_methods(["POST"])
 def speeches_toggle_analyzer_api(request):
     """Toggle whether a speech is selected for the log analyzer."""
-    pk = request.POST.get('pk', '').strip()
-    speech = get_object_or_404(
-        Speech,
-        Q(owner=request.user) | Q(is_shared=True),
-        pk=pk,
-    )
-    if speech.analyzer_users.filter(pk=request.user.pk).exists():
-        speech.analyzer_users.remove(request.user)
-        selected = False
-    else:
-        speech.analyzer_users.add(request.user)
-        selected = True
-    return JsonResponse({'selected': selected})
+    return toggle_analyzer_selection(request, Speech)
 
 
 @login_required
@@ -290,15 +168,9 @@ def speech_create_api(request):
     The new speech is selected for the analyzer immediately, so it can be used
     in the very next reply.
     """
-    try:
-        payload = PayloadValidator.json_payload(request)
-    except PayloadTooLargeError as exc:
-        return PayloadValidator.error_response(str(exc), status=413)
-    except BadJsonError:
-        return PayloadValidator.error_response('Invalid JSON payload.')
-
-    if not isinstance(payload, dict):
-        return PayloadValidator.error_response('Invalid JSON payload.')
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
 
     for field in ('name', 'content', 'category'):
         if field in payload and not isinstance(payload[field], str):
@@ -324,7 +196,7 @@ def speech_create_api(request):
 
     # Same shape speeches_api returns, so the analyzer can drop it straight into
     # its speeches config and rebuild the dropdown without a refetch.
-    return JsonResponse({'speech': serialize_speech_for_analyzer(speech, request.user)})
+    return JsonResponse({'speech': serialize_for_analyzer(speech, request.user)})
 
 
 @login_required

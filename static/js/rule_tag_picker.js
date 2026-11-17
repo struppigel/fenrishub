@@ -24,12 +24,6 @@
     let tagListPromise = null;
     let tagCache = [];
 
-    function getCsrfToken(explicit) {
-        if (explicit) return explicit;
-        const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
-        return match ? decodeURIComponent(match[1]) : '';
-    }
-
     function loadTags(url) {
         if (!tagListPromise) {
             tagListPromise = fetch(url, { credentials: 'same-origin' })
@@ -44,23 +38,6 @@
                 });
         }
         return tagListPromise;
-    }
-
-    function postJson(url, body, csrfToken) {
-        return fetch(url, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': getCsrfToken(csrfToken),
-            },
-            body: JSON.stringify(body),
-        }).then((response) => response.json().catch(() => ({})).then((data) => {
-            if (!response.ok) {
-                throw new Error(data.error || 'Request failed.');
-            }
-            return data;
-        }));
     }
 
     // ' tag-cat-<id>' when the tag has a category, whose colour base.html
@@ -296,7 +273,7 @@
                 renderSuggestions();
                 return;
             }
-            postJson(urls.suggest, body, options.csrfToken).then((data) => {
+            Fenris.postJson(urls.suggest, body, { errorMessage: 'Request failed.' }).then((data) => {
                 // A slower earlier request must not overwrite a newer answer.
                 if (sequence !== suggestSequence) return;
                 suggestions = Array.isArray(data.tags) ? data.tags : [];

@@ -1,7 +1,7 @@
 """Moderator-managed regex rules that decide an UploadedLog's log_type."""
 
-import json
 import re
+from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
@@ -20,7 +20,9 @@ from ..models import (
     LogTypeDetectionRule,
     detect_log_type,
 )
+from ..validators import PayloadValidator
 from .guest import moderator_required
+from .utils import flash_validation_errors
 
 
 def _existing_log_type_names() -> list:
@@ -153,6 +155,7 @@ def log_type_rules_view(request):
         'rules': annotated,
         'page_obj': page_obj,
         'search_q': search_q,
+        'pagination_query': urlencode({'q': search_q}) if search_q else '',
         'scope_choices': LogTypeDetectionRule.SCOPE_CHOICES,
     }
     return render(request, 'log_type_rules.html', context)
@@ -174,9 +177,7 @@ def add_log_type_rule_view(request):
                 rule.save()
                 _upsert_badge(rule.log_type, form['color'])
             except ValidationError as exc:
-                for field_errors in exc.message_dict.values():
-                    for err in field_errors:
-                        messages.error(request, err)
+                flash_validation_errors(request, exc)
             else:
                 messages.success(request, f'Rule "{rule.name}" created.')
                 return redirect('log_type_rules')
@@ -208,9 +209,7 @@ def edit_log_type_rule_view(request, pk: int):
                 rule.save()
                 _upsert_badge(rule.log_type, form['color'])
             except ValidationError as exc:
-                for field_errors in exc.message_dict.values():
-                    for err in field_errors:
-                        messages.error(request, err)
+                flash_validation_errors(request, exc)
             else:
                 messages.success(request, f'Rule "{rule.name}" updated.')
                 return redirect('log_type_rules')
@@ -255,10 +254,9 @@ def test_log_type_api(request):
     Body JSON: { content: str, pattern: str, scope: 'full'|'start' }
     Response: { matches: bool, error?: str, detected_log_type: str, sample?: str }
     """
-    try:
-        payload = json.loads(request.body.decode('utf-8') or '{}')
-    except json.JSONDecodeError:
-        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
 
     content = payload.get('content') or ''
     if len(content) > 200000:

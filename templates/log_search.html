@@ -74,26 +74,6 @@
     }
 
 
-    .fixlist-actions .action-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        height: 32px;
-        padding: 0 10px;
-        background-color: var(--la-bg-1);
-        color: var(--la-text-primary);
-        border: 1px solid var(--la-border);
-        font-size: 12px;
-        font-family: inherit;
-        line-height: 1;
-        text-decoration: none;
-        cursor: pointer;
-        flex-shrink: 0;
-    }
-
-    .fixlist-actions .action-btn:hover {
-        text-decoration: underline;
-    }
 </style>
 {% endblock %}
 
@@ -145,10 +125,7 @@
 <div class="search-controls button-group">
     <button type="submit" form="downloadSelectedForm" onclick="return confirmDownloadSelected();" title="download the ticked logs as a zip archive">download selected</button>
     <a href="{% url 'log_search_download' %}?{{ download_query }}"><button type="button" title="download every matching log as a zip archive">download all</button></a>
-    <span id="selectionIndicator" class="muted" hidden style="font-size: 12px;">
-        <span id="selectionCount">0</span> selected
-        <a href="#" id="clearSelectionLink" style="margin-left: 6px;">clear</a>
-    </span>
+    {% include 'partials/selection_indicator.html' %}
 </div>
 
 <div class="search-results-count">
@@ -168,8 +145,8 @@
     <div style="flex: 1;">
         <div class="fixlist-title">
             <input class="upload-select" form="downloadSelectedForm" type="checkbox" name="selected_upload_ids" value="{{ result.log.upload_id }}" aria-label="select {{ result.log.upload_id }} for download">
-            <span class="timeline-type-badge log log-type-{{ result.log.log_type|log_type_css_slug }}">{% if result.log.log_type == 'Unknown' %}Unknown Log{% else %}{{ result.log.log_type }}{% endif %}</span>
-            <a class="upload-id-link log-type-{{ result.log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' result.log.upload_id %}">{{ result.log.upload_id }}</a>
+            {% include 'partials/log_type_badge.html' with log=result.log %}
+            {% include 'partials/upload_id_link.html' with log=result.log %}
             {% if result.log.recipient_user %}
             <span>({{ result.log.recipient_user.username }})</span>
             {% else %}
@@ -206,11 +183,7 @@ const searchSelection = createSelectionManager({
 });
 
 function confirmDownloadSelected() {
-    if (searchSelection.getStored().size === 0) {
-        alert('Tick at least one log to download.');
-        return false;
-    }
-    return true;
+    return searchSelection.confirmAction('Tick at least one log to download.');
 }
 
 // Scanning every log body can take a few seconds, and the browser gives no

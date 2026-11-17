@@ -18,23 +18,11 @@ from django.db.models import F, Q
 from django.urls import reverse
 from django.utils import timezone
 
+from .. import trash
 from ..fix_message import effective_fix_message
 from ..models import Fixlist, AccessLog, UploadedLog
 from .guest import deny_guests
-from .utils import _purge_old_trash, get_client_ip, redirect_preserving_filters, check_missing_ids
-
-
-def _collect_selected_pks(request):
-    """Pull and dedupe selected_pks from POST."""
-    selected = []
-    seen = set()
-    for raw in request.POST.getlist('selected_pks'):
-        normalized = str(raw).strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        selected.append(normalized)
-    return selected
+from .utils import _purge_old_trash, collect_selected_ids, get_client_ip, non_empty_params, redirect_preserving_filters, check_missing_ids
 
 
 def _build_fixlists_listing_context(request, *, deleted: bool) -> dict:
@@ -60,11 +48,10 @@ def _build_fixlists_listing_context(request, *, deleted: bool) -> dict:
 
     page_obj = Paginator(fixlists_qs, 10).get_page(request.GET.get('page'))
 
-    pagination_params = {}
-    if username_filter:
-        pagination_params['u'] = username_filter
-    if search_query:
-        pagination_params['q'] = search_query
+    pagination_params = non_empty_params(
+        u=username_filter,
+        q=search_query,
+    )
 
     all_usernames = (
         base_qs.values_list('username', flat=True).distinct().order_by('username')
@@ -82,14 +69,10 @@ def _build_fixlists_listing_context(request, *, deleted: bool) -> dict:
 
 def _check_protected_fixlists(request, qs, *, verb, target):
     """Return error redirect if any fixlist in `qs` is deletion-protected; else None."""
-    protected = sorted(qs.filter(is_protected=True).values_list('username', flat=True))
-    if not protected:
-        return None
-    messages.error(
-        request,
-        f'Deletion-protected, cannot {verb}: {", ".join(protected)}. Remove protection first.',
-    )
-    return redirect_preserving_filters(request, target)
+    protected = qs.filter(is_protected=True).values_list('username', flat=True)
+    if trash.protected_names_error(request, protected, verb=verb):
+        return redirect_preserving_filters(request, target)
+    return None
 
 
 def handle_fixlist_delete_selected_action(request, selected_pks: list) -> HttpResponse:
@@ -106,7 +89,7 @@ def handle_fixlist_delete_selected_action(request, selected_pks: list) -> HttpRe
     if resp := _check_protected_fixlists(request, qs, verb='delete', target='dashboard'):
         return resp
 
-    count = qs.update(deleted_at=timezone.now())
+    count = qs.move_to_trash()
     _purge_old_trash()
     messages.success(request, f'Moved {count} fixlist(s) to trash.')
     return redirect_preserving_filters(request, 'dashboard')
@@ -231,7 +214,7 @@ def dashboard_view(request):
     """List all fixlists for the logged-in user with search/filter/bulk actions."""
     if request.method == 'POST':
         action = request.POST.get('action', '')
-        selected_pks = _collect_selected_pks(request)
+        selected_pks = collect_selected_ids(request.POST, 'selected_pks')
 
         if action == 'delete_selected':
             return handle_fixlist_delete_selected_action(request, selected_pks)
@@ -339,13 +322,12 @@ def fixlists_trash_view(request):
     """Trash bin for soft-deleted fixlists."""
     if request.method == 'POST':
         action = request.POST.get('action', '')
-        selected_pks = _collect_selected_pks(request)
+        selected_pks = collect_selected_ids(request.POST, 'selected_pks')
 
         if action == 'restore':
             pk = request.POST.get('pk', '').strip()
             fixlist = get_object_or_404(Fixlist, pk=pk, owner=request.user, deleted_at__isnull=False)
-            fixlist.deleted_at = None
-            fixlist.save(update_fields=['deleted_at'])
+            trash.restore(fixlist)
             messages.success(request, f'Fixlist "{fixlist.username}" restored.')
             return redirect('fixlists_trash')
 
@@ -370,13 +352,7 @@ def fixlists_trash_view(request):
             return handle_fixlist_delete_permanent_selected_action(request, selected_pks)
 
         if action == 'empty_trash':
-            trashed_qs = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=False)
-            # Emptying the trash sweeps everything at once, so protected fixlists are
-            # kept back instead of aborting the whole action.
-            protected_count = trashed_qs.filter(is_protected=True).count()
-            qs = trashed_qs.filter(is_protected=False)
-            count = qs.count()
-            qs.delete()
+            count, protected_count = trash.empty_trash(Fixlist.objects.trashed().filter(owner=request.user))
             kept = f' {protected_count} protected fixlist(s) kept.' if protected_count else ''
             messages.success(request, f'Trash emptied ({count} fixlist(s) permanently deleted).{kept}')
             return redirect('fixlists_trash')
@@ -430,8 +406,7 @@ def view_fixlist(request, pk):
                 if request.POST.get('next') == 'dashboard':
                     return redirect('dashboard')
                 return redirect('view_fixlist', pk=fixlist.pk)
-            fixlist.deleted_at = timezone.now()
-            fixlist.save(update_fields=['deleted_at'])
+            trash.soft_delete(fixlist)
             _purge_old_trash()
             messages.success(request, f'Fixlist "{fixlist.username}" moved to trash.')
             return redirect('dashboard')

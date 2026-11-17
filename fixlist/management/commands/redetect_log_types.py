@@ -2,10 +2,11 @@ from collections import Counter
 
 from django.core.management.base import BaseCommand
 
+from fixlist.log_types import ANALYZED_LOG_TYPES
 from fixlist.models import UploadedLog, detect_log_type, _bump_logtype_rules_version
 
 
-ANALYZED = {'FRST', 'Addition', 'FRST&Addition'}
+ANALYZED = set(ANALYZED_LOG_TYPES)
 
 
 class Command(BaseCommand):

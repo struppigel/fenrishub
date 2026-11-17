@@ -29,7 +29,7 @@ from . import frst_extractors as ex
 from .models import UploadedLog
 from .tagging import attach_rule_tags
 from .upload_utils import get_fresh_cached_analysis
-from .rule_sets import SHARED_RULE_SET_KEY
+from .rule_sets import SHARED_RULE_SET_KEY, rule_set_label
 
 SEARCH_TIME_BUDGET_S = 10.0
 # Matching logs remembered per search; offsets past it are not served.
@@ -186,7 +186,7 @@ class LineSearch:
         for key in keys:
             payload = get_fresh_cached_analysis(upload, key)
             if payload is not None:
-                return payload, 'shared' if key == SHARED_RULE_SET_KEY else 'private'
+                return payload, rule_set_label(key)
         return None, None
 
     def evaluate(self, upload_pk, content, content_hash, *, max_hits, with_verdicts):

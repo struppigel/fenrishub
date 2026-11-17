@@ -8,7 +8,6 @@
 // the analyzer looks exactly as before.
 
 const CASE_CORRELATIONS_URL = analyzerConfig.caseCorrelationsUrl || '';
-const CORRELATION_DOT = ' · ';
 
 let caseCorrelations = new Map();
 // Line text -> the worst related finding as a line-verdict status letter
@@ -28,74 +27,22 @@ function caseCorrelationsFor(entry) {
     return caseCorrelations.get(entry.line.trim()) || [];
 }
 
-// What a related log says, without log ids: the detection name or family
-// and the centralbox verdict (or the fixlist result).
-function correlationHash(item) {
-    if (item.kind !== 'hash') return '';
-    const sha = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/.test(item.sha256) ? item.sha256 : '';
-    const md5 = typeof item.md5 === 'string' && /^[0-9a-f]{32}$/.test(item.md5) ? item.md5 : '';
-    return sha ? 'SHA-256 ' + sha : md5 ? 'MD5 ' + md5 : '';
-}
-
-// How an entry was matched when not through the line's own file
-// (case_correlations.MATCH_NOTES).
-const CORRELATION_MATCH_NOTES = {
-    argument: 'file in command line',
-    registry: 'same registry value',
-    service: 'same service',
-    task: 'same task',
-    extension: 'same extension',
-    clsid: 'same CLSID',
-    firewall: 'same firewall rule',
-};
-
+// The wording of findings, sources and links is shared with the uploaded log
+// page (static/js/correlation_format.js).
 function correlationFinding(item) {
-    if (item.kind === 'fixlog') return item.result || 'fixlist result';
-    const result = item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
-    // A bare hash (no detection, no centralbox result) shows the hash itself.
-    const name = (result && (result.family || result.malware_type)) || item.detection || correlationHash(item);
-    const verdict = result && result.verdict ? 'centralbox: ' + result.verdict
-        : result && result.state === 'unknown' ? 'not in centralbox' : '';
-    // A detection of a folder this line's file is in.
-    const where = item.in_folder ? 'in detected folder' : '';
-    // A Windows Defender event in a Fixlog, not a scanner's detection.
-    const source = item.source === 'defender' ? 'Defender' : '';
-    // Matched through something else than the line's own file.
-    const how = CORRELATION_MATCH_NOTES[item.match] || '';
-    // Which file the finding is about (the line's own, one in its command line, ...).
-    const file = typeof item.file === 'string' ? item.file : '';
-    return [file, name, verdict, source, how, where].filter(Boolean).join(CORRELATION_DOT) || (item.kind === 'hash' ? 'file hash' : 'detection');
+    return CorrelationFormat.finding(item);
 }
 
-// The log type a finding comes from, flagged when that log seems to come
-// from another system.
 function correlationSource(item) {
-    if (isOwnCorrelation(item)) return 'this log';
-    return String(item.log_type || 'log') + (item.system === 'different' ? CORRELATION_DOT + 'other system?' : '');
+    return CorrelationFormat.source(item, isOwnCorrelation);
 }
 
-// One row per distinct finding (same log type and finding listed once).
 function correlationRows(items) {
-    const seen = new Set();
-    return items.filter((item) => {
-        const key = correlationSource(item) + '\n' + correlationFinding(item);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
+    return CorrelationFormat.rows(items, isOwnCorrelation);
 }
 
-const CENTRALBOX_REPORT_URL_RE = /^https:\/\/centralbox\.dev\/analysis\/[0-9a-f]{64}$/;
-
-// Distinct centralbox report URLs of the entries (stored verdicts of known hashes).
 function correlationReportUrls(items) {
-    const urls = [];
-    items.forEach((item) => {
-        const result = item && item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
-        const url = result && typeof result.report_url === 'string' ? result.report_url : '';
-        if (CENTRALBOX_REPORT_URL_RE.test(url) && !urls.includes(url)) urls.push(url);
-    });
-    return urls;
+    return CorrelationFormat.reportUrls(items);
 }
 
 const CENTRALBOX_CHECK_URL = analyzerConfig.centralboxHashCheckUrl || '';
@@ -214,21 +161,10 @@ async function freshLookupCorrelatedHash(target, spot) {
     await finishCorrelationLookup(spot, result.message, result.refresh);
 }
 
-// Distinct file hashes of the entries (SHA-256, else the MD5 alone) with the
-// file each belongs to, for the line's copy and search menus (analysis.js):
-// [{hash, file}].
+// Distinct file hashes of the entries with the file each belongs to, for the
+// line's copy and search menus (analysis.js): [{hash, file}].
 function correlationHashValues(items) {
-    const hashes = [];
-    (Array.isArray(items) ? items : []).forEach((item) => {
-        if (!item || item.kind !== 'hash') return;
-        const sha = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/.test(item.sha256) ? item.sha256 : '';
-        const md5 = typeof item.md5 === 'string' && /^[0-9a-f]{32}$/.test(item.md5) ? item.md5 : '';
-        const hash = sha || md5;
-        if (hash && !hashes.some((known) => known.hash === hash)) {
-            hashes.push({ hash, file: typeof item.file === 'string' ? item.file : '' });
-        }
-    });
-    return hashes;
+    return CorrelationFormat.hashValues(items);
 }
 
 // How a correlated hash is shown in a menu: its file first, so a line that
@@ -250,20 +186,12 @@ function isOwnCorrelation(item) {
 // Where the line's findings come from: other logs, the log's own Addition
 // part, or both.
 function correlationHeader(items) {
-    const list = Array.isArray(items) ? items : [];
-    const own = list.some(isOwnCorrelation);
-    const others = list.some((item) => !isOwnCorrelation(item));
-    const scope = caseCorrelationsScope === 'user'
-        ? `other logs of user ${caseCorrelationsName} (no case of yours)`
-        : 'other logs of this case';
-    if (own && !others) return "same file in this log's Addition part";
-    if (own) return `same file in this log's Addition part and in ${scope}`;
-    return `same file in ${scope}`;
+    return CorrelationFormat.header(items, isOwnCorrelation, {
+        scope: caseCorrelationsScope, name: caseCorrelationsName,
+    });
 }
 
-const CORRELATION_STATUS_CLASS = {
-    B: 'b', P: 'p', C: 'c', A: 'a', '!': 'w', G: 'g', S: 's', I: 'i', J: 'j',
-};
+const CORRELATION_STATUS_CLASS = CorrelationFormat.STATUS_CLASS;
 
 function caseCorrelationStatusFor(entry) {
     if (!entry || typeof entry.line !== 'string') return '';
@@ -338,51 +266,36 @@ function ensureCaseCorrelationMenu() {
     return menu;
 }
 
-// That log at the entry's line, which its page scrolls to and marks. For a
-// hash: the file's entry (path line or detection header), not the hash line.
 function correlationLogUrl(item) {
-    const id = String(item.upload_id || '');
-    const line = Number(item.anchor_line_no || item.line_no);
-    if (!/^[A-Za-z0-9_-]+$/.test(id)) return '';
-    return `/uploads/${encodeURIComponent(id)}/` + (Number.isInteger(line) && line > 0 ? `#L${line}` : '');
-}
-
-function addCorrelationMenuItem(menu, key, value, run, extraClass) {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'line-copy-menu-item' + (extraClass ? ' ' + extraClass : '');
-    item.setAttribute('role', 'menuitem');
-    const label = document.createElement('span');
-    label.className = 'line-copy-menu-key';
-    label.textContent = key;
-    const preview = document.createElement('span');
-    preview.className = 'line-copy-menu-value';
-    preview.textContent = value;
-    item.append(label, preview);
-    item.addEventListener('click', (event) => {
-        event.stopPropagation();
-        closeCaseCorrelationMenu();
-        run();
-    });
-    menu.appendChild(item);
+    return CorrelationFormat.logUrl(item);
 }
 
 // The analyzer row (index into analyzedLines) of a line of the loaded log,
 // numbered like the server and the log page (content.split('\n') from 1),
 // or -1. The analyzer leaves out blank lines (see computeBlankLineGaps).
-function analyzerIndexForLogLine(lineNo) {
+function analyzerIndexForLogLine(lineNo, lineText = '') {
     const input = document.getElementById('logInput');
     const lines = (input ? input.value : '').split('\n');
-    if (!Number.isInteger(lineNo) || lineNo < 1 || lineNo > lines.length) return -1;
-    const text = (lines[lineNo - 1].split(SPLITLINES_BOUNDARY)[0] || '').trim();
+    // The textarea turns a lone CR into a line break, so its numbering can
+    // run ahead of the server's: the row is checked against the line's text
+    // (from the server when known) and else searched near the estimate.
+    let index = -1;
+    let text = typeof lineText === 'string' ? lineText.trim() : '';
+    if (Number.isInteger(lineNo) && lineNo >= 1 && lineNo <= lines.length) {
+        if (!text) text = (lines[lineNo - 1].split(SPLITLINES_BOUNDARY)[0] || '').trim();
+        index = 0;
+        lines.slice(0, lineNo - 1).join('\n').split(SPLITLINES_BOUNDARY).forEach((piece) => {
+            if (piece.trim()) index += 1;
+        });
+    }
     if (!text) return -1;
-    let index = 0;
-    lines.slice(0, lineNo - 1).join('\n').split(SPLITLINES_BOUNDARY).forEach((piece) => {
-        if (piece.trim()) index += 1;
+    if (index >= 0 && analyzedLines[index] && analyzedLines[index].line === text) return index;
+    let best = -1;
+    analyzedLines.forEach((entry, candidate) => {
+        if (!entry || entry.line !== text) return;
+        if (best < 0 || Math.abs(candidate - index) < Math.abs(best - index)) best = candidate;
     });
-    if (analyzedLines[index] && analyzedLines[index].line === text) return index;
-    // The textarea no longer matches the analysis exactly: the first row with the text.
-    return analyzedLines.findIndex((entry) => entry && entry.line === text);
+    return best;
 }
 
 // Scroll the analyzer to a line of the loaded log and mark it for a moment
@@ -390,8 +303,8 @@ function analyzerIndexForLogLine(lineNo) {
 const CORRELATION_FLASH_MS = 2500;
 let correlationFlashTimer = null;
 
-function jumpToAnalyzerLine(lineNo, trigger, fromLine = '') {
-    const index = analyzerIndexForLogLine(lineNo);
+function jumpToAnalyzerLine(lineNo, trigger, fromLine = '', lineText = '') {
+    const index = analyzerIndexForLogLine(lineNo, lineText);
     const badge = index >= 0 ? document.querySelector(`#logLines .status-badge[data-line-index="${index}"]`) : null;
     const row = badge ? badge.closest('.log-line') : null;
     // Hints go next to the ⓘ icon of the line the jump started from.
@@ -419,10 +332,6 @@ function jumpToAnalyzerLine(lineNo, trigger, fromLine = '') {
     }, CORRELATION_FLASH_MS);
 }
 
-function openNewTab(url) {
-    if (url) window.open(url, '_blank', 'noopener,noreferrer');
-}
-
 function openCaseCorrelationMenu(trigger, items) {
     if (correlationMenuTrigger === trigger && correlationMenuEl && !correlationMenuEl.hidden) {
         closeCaseCorrelationMenu();
@@ -431,11 +340,11 @@ function openCaseCorrelationMenu(trigger, items) {
     if (typeof closeLineCopyMenu === 'function') closeLineCopyMenu();
     if (typeof closeLineSearchMenu === 'function') closeLineSearchMenu();
     const menu = ensureCaseCorrelationMenu();
-    menu.innerHTML = '';
-    const header = document.createElement('div');
-    header.className = 'line-copy-menu-header';
-    header.textContent = correlationHeader(items);
-    menu.appendChild(header);
+    const entries = [];
+    // Each entry closes the menu before it runs.
+    const add = (key, value, run, className) => entries.push({
+        key, value, className, run: () => { closeCaseCorrelationMenu(); run(); },
+    });
 
     // Clicking a row opens that log at the line (its id is never shown); a
     // row of the loaded log itself goes to the line here instead.
@@ -444,14 +353,14 @@ function openCaseCorrelationMenu(trigger, items) {
         if (['b', 'p', 'g', 'w'].includes(item.severity)) classes.push(`line-correlation-sev-${item.severity}`);
         if (item.centralbox && item.centralbox.verdict === 'malicious') classes.push('line-correlation-bad');
         const run = isOwnCorrelation(item)
-            ? () => jumpToAnalyzerLine(Number(item.anchor_line_no || item.line_no), trigger)
-            : () => openNewTab(correlationLogUrl(item));
-        addCorrelationMenuItem(menu, correlationSource(item), correlationFinding(item), run, classes.join(' '));
+            ? () => jumpToAnalyzerLine(Number(item.anchor_line_no || item.line_no), trigger, '', item.line_text)
+            : () => Fenris.openUrl(correlationLogUrl(item));
+        add(correlationSource(item), correlationFinding(item), run, classes.join(' '));
     });
     // The centralbox report of each correlated hash, shown as its URL like
     // the hash menus' VirusTotal entry.
     correlationReportUrls(items).forEach((url) => {
-        addCorrelationMenuItem(menu, 'centralbox', url, () => openNewTab(url));
+        add('centralbox', url, () => Fenris.openUrl(url));
     });
     // Correlated hashes without a centralbox verdict: look them up from here,
     // like from the hash menu of the log they are in.
@@ -460,32 +369,21 @@ function openCaseCorrelationMenu(trigger, items) {
     targets.forEach((target) => {
         const which = targets.length > 1 ? ' ' + target.short : (target.file ? ' of ' + target.file : '');
         if (CENTRALBOX_CHECK_URL) {
-            addCorrelationMenuItem(menu, 'centralbox', 'check this hash' + which,
-                () => checkCorrelatedHash(target, spot()));
+            add('centralbox', 'check this hash' + which, () => checkCorrelatedHash(target, spot()));
         }
         if (CENTRALBOX_FRESH_URL && CENTRALBOX_FRESH_STATUS_URL) {
-            addCorrelationMenuItem(menu, 'centralbox', 'run fresh lookup' + which,
-                () => freshLookupCorrelatedHash(target, spot()));
+            add('centralbox', 'run fresh lookup' + which, () => freshLookupCorrelatedHash(target, spot()));
         }
     });
 
+    PopupMenu.fill(menu, correlationHeader(items), entries);
     menu.hidden = false;
     if (correlationMenuTrigger && correlationMenuTrigger !== trigger) {
         correlationMenuTrigger.setAttribute('aria-expanded', 'false');
     }
     correlationMenuTrigger = trigger;
     trigger.setAttribute('aria-expanded', 'true');
-
-    const rect = trigger.getBoundingClientRect();
-    const menuWidth = menu.offsetWidth || 320;
-    const menuHeight = menu.offsetHeight || 0;
-    let left = rect.right - menuWidth;
-    if (left < 8) left = Math.max(8, rect.left);
-    if (left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
-    let top = rect.bottom + 4;
-    if (top + menuHeight > window.innerHeight - 8) top = Math.max(8, rect.top - menuHeight - 4);
-    menu.style.left = `${left + window.scrollX}px`;
-    menu.style.top = `${top + window.scrollY}px`;
+    PopupMenu.place(menu, trigger, { fallbackWidth: 320 });
 }
 
 // The "correlations" section of the line inspector (the ? mode's box): the
@@ -525,7 +423,7 @@ function renderLineInspectorCorrelations(entry) {
             link.addEventListener('click', (event) => {
                 event.preventDefault();
                 closeLineInspectorModal({ restoreFocus: false });
-                jumpToAnalyzerLine(Number(item.anchor_line_no || item.line_no), null, fromLine);
+                jumpToAnalyzerLine(Number(item.anchor_line_no || item.line_no), null, fromLine, item.line_text);
             });
         } else {
             const url = correlationLogUrl(item);

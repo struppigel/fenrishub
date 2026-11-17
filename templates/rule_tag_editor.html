@@ -320,7 +320,6 @@
         list: "{% url 'rule_tags' %}",
         editBase: "{% url 'rule_tags' %}",
     };
-    const STATUS_VAR = { B: 'b', P: 'p', C: 'c', '!': 'w', A: 'a', G: 'g', S: 's', I: 'i', J: 'j' };
     const PAGE_SIZE = 100;
     const tag = JSON.parse(document.getElementById('tagData').textContent || 'null');
 
@@ -441,26 +440,13 @@
     let initial = new Map();
     let previewedPattern = null;
 
-    function csrf() {
-        const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
-        return match ? decodeURIComponent(match[1]) : '';
-    }
-
     function showError(message) {
         errorBox.textContent = message || '';
         errorBox.hidden = !message;
     }
 
     function postJson(url, body) {
-        return fetch(url, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
-            body: JSON.stringify(body),
-        }).then((response) => response.json().catch(() => ({})).then((data) => {
-            if (!response.ok) throw new Error(data.error || 'Request failed.');
-            return data;
-        }));
+        return Fenris.postJson(url, body, { errorMessage: 'Request failed.' });
     }
 
     function currentPattern() {
@@ -542,7 +528,7 @@
         const status = document.createElement('span');
         status.className = 'tag-preview-status';
         status.textContent = row.status;
-        status.style.color = `var(--la-status-${STATUS_VAR[row.status] || 'unknown'})`;
+        status.style.color = `var(--la-status-${Fenris.status.paint(row.status)})`;
         status.title = `${row.match_type} rule by ${row.owner}`;
         line.appendChild(status);
 

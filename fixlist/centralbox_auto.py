@@ -36,16 +36,14 @@ thread under the test runner (tests call drain_round() directly).
 
 import logging
 import ntpath
-import threading
 import time
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import connections
 from django.db.models import Q
 from django.utils import timezone
 
-from . import centralbox
+from . import background, centralbox
 from .correlation_keys import line_path_keys
 from .file_hashes import is_md5, is_sha256
 from .models import (
@@ -403,9 +401,7 @@ def ensure_auto_drainer():
         until = _take_lease()
         if until is None:
             return False
-        threading.Thread(
-            target=_drain_in_thread, args=(until,), name='centralbox-auto-fresh', daemon=True,
-        ).start()
+        background.start(_drain_in_thread, until, name='centralbox-auto-fresh')
         return True
     except Exception:
         logger.exception('Starting the automatic fresh lookup drainer failed')
@@ -422,11 +418,8 @@ def _drain_in_thread(until):
     except Exception:
         logger.exception('The automatic fresh lookup drainer failed')
     finally:
-        try:
-            if until is not None:
-                _release_lease(until)
-        finally:
-            connections.close_all()
+        if until is not None:
+            _release_lease(until)
 
 
 def _known_to_centralbox(value):

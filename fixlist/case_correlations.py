@@ -36,18 +36,17 @@ from .models import (
     CorrelationCache, HashAlias, HashVerdict, InfectionCaseLog, UploadedLog, UploadedLogAnalysis,
     UploadedLogFileHash, UploadedLogMachineSignal, iter_fixlog_results,
 )
-from .status_types import STATUS_PRECEDENCE
+from .log_types import ADDITION_LOG_TYPES, DETECTION_LOG_TYPES, LOG_TYPE_FRST_AND_ADDITION
+from .status_types import dominant_status
 
 logger = logging.getLogger(__name__)
 
 MAX_ENTRIES_PER_LINE = 20
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 10
-# Detections are read from these logs' summary boxes (log_highlighting).
-DETECTION_LOG_TYPES = ('ESET', 'Emsisoft', 'AdwCleaner', 'Malwarebytes', 'HitmanPro', 'Trojan Killer')
-# Defender events are read from these logs' "Windows Defender:" section.
-ADDITION_LOG_TYPES = ('Addition', 'FRST&Addition')
-LOG_TYPE_FRST_AND_ADDITION = 'FRST&Addition'
+CORRELATION_VERSION = 11
+# Detections are read from the summary boxes of DETECTION_LOG_TYPES logs
+# (log_highlighting); Defender events from the "Windows Defender:" section of
+# ADDITION_LOG_TYPES logs (both in log_types).
 
 
 SCOPE_CASE = 'case'
@@ -347,12 +346,14 @@ def file_name(path):
     return ntpath.basename((path or '').strip().strip('"').rstrip('\\'))[:120]
 
 
-def _add_defender_entries(index, upload_id, log_type, detections):
+def _add_defender_entries(index, upload_id, log_type, detections, lines=None):
+    """`lines` (the log's content.split('\\n')) adds each entry's line text:
+    for the log's own entries, which the analyzer finds by it."""
     for line_no, threat, action, path in detections:
         key = normalized_path(path)
         if not key:
             continue
-        index.setdefault(key, []).append({
+        entry = {
             'kind': 'detection',
             'upload_id': upload_id,
             'log_type': log_type,
@@ -362,7 +363,10 @@ def _add_defender_entries(index, upload_id, log_type, detections):
             'severity': defender_severity(threat),
             'source': 'defender',
             'file': file_name(path),
-        })
+        }
+        if lines is not None and 0 < line_no <= len(lines):
+            entry['line_text'] = lines[line_no - 1].strip()[:300]
+        index.setdefault(key, []).append(entry)
 
 
 # Windows Defender events in an Addition log ("Windows Defender:" section):
@@ -383,6 +387,26 @@ _ADDITION_FIELD_RE = re.compile(r'^([A-Za-z][A-Za-z ]{0,40}?)\s*:\s?(.*)$')
 # it follows a blank line).
 _ADDITION_SECTION_END_RE = re.compile(r'^={5,}')
 _DEFENDER_CMDLINE_RE = re.compile(r'^cmdline:_(.+)$', re.IGNORECASE)
+# Programs a detected command line runs through: the detection is about what
+# they run (a script, a DLL), not about them.
+_CMDLINE_HOSTS = frozenset({
+    'cmd.exe', 'powershell.exe', 'pwsh.exe', 'powershell_ise.exe', 'wscript.exe', 'cscript.exe', 'mshta.exe',
+    'rundll32.exe', 'regsvr32.exe', 'conhost.exe', 'explorer.exe', 'msiexec.exe', 'schtasks.exe',
+    'wmic.exe', 'certutil.exe', 'bitsadmin.exe', 'forfiles.exe', 'msbuild.exe', 'installutil.exe',
+    'regasm.exe', 'regsvcs.exe', 'svchost.exe', 'dllhost.exe', 'cmstp.exe', 'odbcconf.exe', 'pcalua.exe',
+})
+# Windows' own binaries: never what a command-line detection is about.
+_SYSTEM_DIR_PREFIXES = ('c:\\windows\\system32\\', 'c:\\windows\\syswow64\\', 'c:\\windows\\microsoft.net\\')
+
+
+def _cmdline_target(command_line):
+    """The file a Defender "CmdLine:_" detection is about: the first path in
+    the command line that is not a host program or a Windows binary, else ''."""
+    for key in argument_paths(command_line):
+        if ntpath.basename(key) in _CMDLINE_HOSTS or key.startswith(_SYSTEM_DIR_PREFIXES):
+            continue
+        return key
+    return ''
 
 
 def _addition_defender_events(content):
@@ -397,7 +421,10 @@ def _addition_defender_events(content):
         start += 1
     # Line numbers count content.split('\n') from 1, like the log page.
     first_line_no = content.count('\n', 0, start) + 1
-    lines = content[start:].split('\n')
+    # Only the section: it ends at the next "=====" line after its own underline.
+    underline_end = content.find('\n', content.find('\n', start) + 1)
+    end = content.find('\n=====', underline_end) if underline_end >= 0 else -1
+    lines = content[start:end if end >= 0 else len(content)].split('\n')
     events = []
     current = None
     last_key = None
@@ -414,7 +441,8 @@ def _addition_defender_events(content):
                 current = ({}, {})
                 events.append(current)
             if current is not None:
-                current[0][key] = match.group(2)
+                # Pieces, joined below: wrapped values can run for many lines.
+                current[0][key] = [match.group(2)]
                 current[1][key] = first_line_no + offset
                 last_key = key
             continue
@@ -422,8 +450,8 @@ def _addition_defender_events(content):
             last_key = None
             continue
         if current is not None and last_key in ('path', 'name', 'action'):
-            current[0][last_key] += line
-    return events
+            current[0][last_key].append(line)
+    return [({key: ''.join(pieces) for key, pieces in fields.items()}, line_nos) for fields, line_nos in events]
 
 
 def iter_addition_defender_detections(content):
@@ -446,8 +474,7 @@ def iter_addition_defender_detections(content):
                 path = _as_path(match.group(1).split('|', 1)[0].split('->', 1)[0].strip())
             else:
                 cmdline = _DEFENDER_CMDLINE_RE.match(item)
-                keys = argument_paths(cmdline.group(1)) if cmdline else []
-                path = keys[0] if keys else ''
+                path = _cmdline_target(cmdline.group(1)) if cmdline else ''
             key = normalized_path(path)
             if not key:
                 continue
@@ -466,12 +493,15 @@ def _addition_entries(upload_ids, index, own=None):
         UploadedLog.objects.filter(pk__in=upload_ids, log_type__in=ADDITION_LOG_TYPES)
         .only('pk', 'upload_id', 'content')
     )
-    if own is not None and own.log_type == LOG_TYPE_FRST_AND_ADDITION:
-        uploads.append(own)
     for upload in uploads:
         _add_defender_entries(
             index, upload.upload_id, 'Addition', iter_addition_defender_detections(upload.content or ''),
         )
+    if own is not None and own.log_type == LOG_TYPE_FRST_AND_ADDITION:
+        content = own.content or ''
+        detections = iter_addition_defender_detections(content)
+        if detections:
+            _add_defender_entries(index, own.upload_id, 'Addition', detections, lines=content.split('\n'))
 
 
 def _add_system_badges(uploaded_log, index):
@@ -504,7 +534,7 @@ def entry_status(entry):
     severity = _SEVERITY_STATUS.get(entry.get('severity') or '')
     if severity:
         candidates.append(severity)
-    return min(candidates, key=STATUS_PRECEDENCE.index) if candidates else ''
+    return dominant_status(candidates, default='')
 
 
 def correlation_status(entries):
@@ -515,7 +545,7 @@ def correlation_status(entries):
         status for status in (entry_status(entry) for entry in entries if entry.get('system') != SYSTEM_DIFFERENT)
         if status
     ]
-    return min(statuses, key=STATUS_PRECEDENCE.index) if statuses else ''
+    return dominant_status(statuses, default='')
 
 
 def _signature(uploaded_log, upload_ids, scope, name):
@@ -772,18 +802,26 @@ def same_machine_logs(uploaded_log, exclude_pks=(), limit=20):
         for kind in STRONG_KINDS:
             if own.get(kind):
                 query |= Q(kind=kind, value__in=own[kind])
-        pair = own.get(KIND_COMPUTER) and own.get(KIND_HW)
-        if pair:
-            query |= Q(kind=KIND_COMPUTER, value__in=own[KIND_COMPUTER]) | Q(kind=KIND_HW, value__in=own[KIND_HW])
-        if not query:
-            return []
         excluded = {uploaded_log.pk, *exclude_pks}
+        live = UploadedLogMachineSignal.objects.filter(upload__deleted_at__isnull=True).exclude(upload_id__in=excluded)
         found = {}
-        for upload_pk, kind in (
-            UploadedLogMachineSignal.objects.filter(query, upload__deleted_at__isnull=True)
-            .exclude(upload_id__in=excluded).values_list('upload_id', 'kind').distinct()
-        ):
-            found.setdefault(upload_pk, set()).add(kind)
+        if query:
+            for upload_pk, kind in live.filter(query).values_list('upload_id', 'kind').distinct():
+                found.setdefault(upload_pk, set()).add(kind)
+        if own.get(KIND_COMPUTER) and own.get(KIND_HW):
+            # Hardware alone is shared by many machines ("System Product
+            # Name"): only the logs with the same computer name are checked.
+            named = set(
+                live.filter(kind=KIND_COMPUTER, value__in=own[KIND_COMPUTER]).values_list('upload_id', flat=True)[:500]
+            )
+            if named:
+                for upload_pk in set(
+                    live.filter(upload_id__in=named, kind=KIND_HW, value__in=own[KIND_HW])
+                    .values_list('upload_id', flat=True)
+                ):
+                    found.setdefault(upload_pk, set()).update({KIND_COMPUTER, KIND_HW})
+        if not found:
+            return []
         matched = {}
         for upload_pk, kinds in found.items():
             labels = [SAME_MACHINE_LABELS[kind] for kind in STRONG_KINDS if kind in kinds]

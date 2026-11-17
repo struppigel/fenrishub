@@ -6,7 +6,7 @@ Handles: creating, editing, deleting, testing, and viewing classification rules.
 
 import json
 import time
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import urlencode
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -37,8 +37,9 @@ from ..rule_test_service import (
     scan_logs_for_rule_matches,
     scan_logs_for_wholelog_matches,
 )
+from ..validators import PayloadValidator
 from .guest import deny_guests, is_moderator
-from .utils import get_action_scoped_uploads
+from .utils import get_action_scoped_uploads, redirect_with_return_q, sanitize_return_q
 
 
 def _priority_choices():
@@ -144,24 +145,6 @@ def _split_patterns(source_text: str) -> list:
         seen.add(line)
         patterns.append(line)
     return patterns
-
-
-def _sanitize_return_q(raw) -> str:
-    """Re-encode a caller-supplied rules-list query string, dropping anything that
-    is not a valid key=value pair. A hostile value like `//evil.com` yields nothing,
-    so callers fall back to the plain rules URL."""
-    value = (raw or '').strip()
-    if not value:
-        return ''
-    return urlencode(parse_qsl(value, keep_blank_values=True), doseq=True)
-
-
-def _rules_redirect(return_q):
-    """Back to the rules list, keeping the filter/search the user came from."""
-    safe_query = _sanitize_return_q(return_q)
-    if safe_query:
-        return redirect(f"{reverse('rules')}?{safe_query}")
-    return redirect('rules')
 
 
 def _tag_ids_from_post(request):
@@ -425,70 +408,22 @@ def rules_view(request):
         action = request.POST.get('action', '')
 
         if action == 'create':
-            status = request.POST.get('status', '').strip()
-            match_type = request.POST.get('match_type', '').strip()
-            source_text = request.POST.get('source_text', '').strip()
-            description = request.POST.get('description', '').strip()
-            whole_log = request.POST.get('whole_log') == 'on'
-            color_whole_line = _color_whole_line_for(
-                request.POST.get('color_whole_line') == 'on', match_type
+            created, skipped, error = create_rules(
+                request.user,
+                status=request.POST.get('status', '').strip(),
+                match_type=request.POST.get('match_type', '').strip(),
+                source_text=request.POST.get('source_text', '').strip(),
+                description=request.POST.get('description', '').strip(),
+                raw_priority=request.POST.get('priority', '').strip(),
+                whole_log=request.POST.get('whole_log') == 'on',
+                color_whole_line=request.POST.get('color_whole_line') == 'on',
+                tag_ids=_tag_ids_from_post(request),
+                source_name=f'web-rules:{request.user.username}',
             )
-            priority = _coerce_priority(request.POST.get('priority'), match_type)
-            patterns = _patterns_for(match_type, source_text)
-            script_error = _script_rule_error(match_type, source_text, request.user, whole_log)
-            whole_log_error = _whole_log_error(whole_log, status, match_type)
-            if not patterns:
-                messages.error(request, 'Rule source text is required.')
-            elif status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
-                messages.error(request, 'Invalid status.')
-            elif match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
-                messages.error(request, 'Invalid match type.')
-            elif whole_log_error:
-                messages.error(request, whole_log_error)
-            elif script_error:
-                messages.error(request, script_error)
+            if error:
+                messages.error(request, error)
             else:
-                existing = set(
-                    ClassificationRule.objects.filter(
-                        owner=request.user,
-                        status=status,
-                        match_type=match_type,
-                        whole_log=whole_log,
-                        source_text__in=patterns,
-                    ).values_list('source_text', flat=True)
-                )
-                to_create = [
-                    ClassificationRule(
-                        owner=request.user,
-                        status=status,
-                        match_type=match_type,
-                        source_text=pattern,
-                        description=description,
-                        priority=priority,
-                        whole_log=whole_log,
-                        color_whole_line=color_whole_line,
-                    )
-                    for pattern in patterns if pattern not in existing
-                ]
-                skipped = [pattern for pattern in patterns if pattern in existing]
-                if to_create:
-                    # bulk_create sends no signals, so auto tags are added here.
-                    auto_tag_rules(ClassificationRule.objects.bulk_create(to_create))
-                    invalidate_for_rule_owner(request.user)
-                    n = len(to_create)
-                    messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
-                    if skipped:
-                        m = len(skipped)
-                        messages.warning(
-                            request,
-                            f'{m} duplicate{"" if m == 1 else "s"} skipped: {_format_skipped(skipped)}',
-                        )
-                else:
-                    m = len(skipped)
-                    messages.error(
-                        request,
-                        f'No rules created. {m} duplicate{"" if m == 1 else "s"} skipped: {_format_skipped(skipped)}',
-                    )
+                _report_created_rules(request, created, skipped)
             return redirect('rules')
 
         if action == 'edit':
@@ -499,7 +434,7 @@ def rules_view(request):
                 messages.error(request, error)
             else:
                 messages.success(request, 'Rule updated.')
-            return _rules_redirect(request.POST.get('return_q', ''))
+            return redirect_with_return_q('rules', request.POST.get('return_q', ''))
 
         if action == 'delete':
             pk = request.POST.get('pk', '').strip()
@@ -508,7 +443,7 @@ def rules_view(request):
             rule.delete()
             invalidate_for_rule_owner(owner)
             messages.success(request, 'Rule deleted.')
-            return _rules_redirect(request.POST.get('return_q', ''))
+            return redirect_with_return_q('rules', request.POST.get('return_q', ''))
 
         if action == 'toggle':
             pk = request.POST.get('pk', '').strip()
@@ -687,8 +622,7 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
             'color_whole_line': color_whole_line,
         }
         if parsed:
-            for field in ('entry_type', 'clsid', 'name', 'filepath', 'normalized_filepath',
-                          'filename', 'company', 'arguments', 'file_not_signed', 'source_name'):
+            for field in (*REPARSE_FIELDS, 'source_name'):
                 if parsed.get(field):
                     create_kwargs[field] = parsed[field]
         to_create.append(ClassificationRule(**create_kwargs))
@@ -704,6 +638,20 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
         _set_rule_tags(created, tag_ids)
     invalidate_for_rule_owner(user)
     return created, skipped, None
+
+
+def _report_created_rules(request, created, skipped) -> bool:
+    """Flash the outcome of `create_rules`; return True when any rule was created."""
+    m = len(skipped)
+    skipped_text = f'{m} duplicate{"" if m == 1 else "s"} skipped: {_format_skipped(skipped)}' if m else ''
+    if not created:
+        messages.error(request, f'No rules created. {skipped_text}')
+        return False
+    n = len(created)
+    messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
+    if skipped_text:
+        messages.warning(request, skipped_text)
+    return True
 
 
 @login_required
@@ -757,31 +705,13 @@ def add_rule_view(request):
         )
         if error:
             messages.error(request, error)
-        else:
-            if created:
-                n = len(created)
-                messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
-                if skipped:
-                    summary = _format_skipped(skipped)
-                    m = len(skipped)
-                    messages.warning(
-                        request,
-                        f'{m} duplicate{"" if m == 1 else "s"} skipped: {summary}',
-                    )
-                keep_params = {'status': status, 'match_type': match_type}
-                if whole_log:
-                    keep_params['whole_log'] = '1'
-                if color_whole_line:
-                    keep_params['color_whole_line'] = '1'
-                keep_qs = urlencode(keep_params)
-                return redirect(f"{reverse('add_rule')}?{keep_qs}")
-            else:
-                summary = _format_skipped(skipped)
-                m = len(skipped)
-                messages.error(
-                    request,
-                    f'No rules created. {m} duplicate{"" if m == 1 else "s"} skipped: {summary}',
-                )
+        elif _report_created_rules(request, created, skipped):
+            keep_params = {'status': status, 'match_type': match_type}
+            if whole_log:
+                keep_params['whole_log'] = '1'
+            if color_whole_line:
+                keep_params['color_whole_line'] = '1'
+            return redirect(f"{reverse('add_rule')}?{urlencode(keep_params)}")
 
     form = {
         'status': form_status,
@@ -824,7 +754,7 @@ def edit_rule_view(request, pk: int):
                 messages.error(request, error)
             else:
                 messages.success(request, 'Rule updated.')
-                return _rules_redirect(return_q)
+                return redirect_with_return_q('rules', return_q)
     else:
         return_q = request.GET.get('return_q', '')
         form = _rule_form_from_rule(rule)
@@ -832,7 +762,7 @@ def edit_rule_view(request, pk: int):
     _warn_about_unassignable_values(request, rule)
     return render(request, 'add_rule.html', _rule_form_context(
         request.user, form,
-        editing=True, return_q=_sanitize_return_q(return_q), rule=rule,
+        editing=True, return_q=sanitize_return_q(return_q), rule=rule,
     ))
 
 
@@ -873,10 +803,9 @@ def _read_rule_test_payload(request):
     rule fields with the source split into ``patterns``, and an error response
     that is set (and the other two None) when the request must be refused.
     """
-    try:
-        payload = json.loads(request.body.decode('utf-8') or '{}')
-    except json.JSONDecodeError:
-        return None, None, JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return None, None, error
 
     source_text = (payload.get('source_text') or '').strip()
     status = (payload.get('status') or '?').strip()
@@ -1021,7 +950,7 @@ def test_rule_logs_api(request):
 
     logs = (
         get_action_scoped_uploads(request.user)
-        .filter(deleted_at__isnull=True, log_type=LOG_PREVIEW_LOG_TYPE)
+        .live().filter(log_type=LOG_PREVIEW_LOG_TYPE)
         .order_by('-created_at')
         .values_list('upload_id', 'content')[:LOG_PREVIEW_MAX_LOGS]
         .iterator(chunk_size=10)

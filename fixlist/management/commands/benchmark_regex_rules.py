@@ -1,26 +1,8 @@
-import re
-import time
-
 from django.core.management.base import BaseCommand
 
-from fixlist import analyzer
+from fixlist import analyzer, regex_bench
 from fixlist.models import ClassificationRule, UploadedLog
 from fixlist.rule_sets import SHARED_RULE_SET_KEY
-
-
-# Short adversarial inputs. Catastrophic patterns blow up at small sizes;
-# keeping inputs small bounds the worst-case wall time of this command.
-ADVERSARIAL_INPUTS = [
-    ("a200",            "a" * 200),
-    ("a200_X",          "a" * 200 + "X"),
-    ("ab100",           "ab" * 100),
-    ("ab100_X",         "ab" * 100 + "X"),
-    ("slash200",        ("\\" + "a") * 100),
-    ("space200",        ("a " * 100)),
-    ("digit200",        "1" * 200),
-    ("path200",         "C:\\Users\\" + "a" * 180 + "\\file.exe"),
-    ("mixed200",        ("aA1\\ " * 50)),
-]
 
 
 class Command(BaseCommand):
@@ -40,9 +22,9 @@ class Command(BaseCommand):
         parser.add_argument(
             '--threshold-ms',
             type=float,
-            default=50.0,
+            default=regex_bench.SLOW_THRESHOLD_MS,
             help='Flag any single regex.search() call that exceeds this many milliseconds '
-                 '(default: 50).',
+                 f'(default: {regex_bench.SLOW_THRESHOLD_MS:g}, the limit new rules are held to).',
         )
         parser.add_argument(
             '--limit',
@@ -81,20 +63,12 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.MIGRATE_HEADING(
             f'Benchmarking {len(rules_to_benchmark)} fallback rule(s) against '
-            f'{len(ADVERSARIAL_INPUTS)} adversarial input(s)'
+            f'{len(regex_bench.ADVERSARIAL_INPUTS)} adversarial input(s)'
         ))
 
         results = []
         for rule, compiled in rules_to_benchmark:
-            worst_label = ''
-            worst_time = 0.0
-            total_time = 0.0
-            for label, payload in ADVERSARIAL_INPUTS:
-                elapsed = _time_search(compiled, payload)
-                total_time += elapsed
-                if elapsed > worst_time:
-                    worst_time = elapsed
-                    worst_label = label
+            worst_time, worst_label, total_time = regex_bench.worst_input(compiled, threshold_s)
             results.append({
                 'rule': rule,
                 'worst_time': worst_time,
@@ -135,20 +109,12 @@ class Command(BaseCommand):
             except UploadedLog.DoesNotExist:
                 self.stderr.write(f'  no upload with upload_id={upload_id}')
                 return
-            lines = [ln.strip() for ln in (log.content or '').splitlines() if ln.strip()]
+            lines = regex_bench.non_empty_lines(log.content)
             self.stdout.write(f'  log has {len(lines)} non-empty lines')
 
             per_rule_total = []
             for rule, compiled in rules_to_benchmark:
-                start = time.perf_counter()
-                worst_line_time = 0.0
-                worst_line = ''
-                for ln in lines:
-                    t = _time_search(compiled, ln)
-                    if t > worst_line_time:
-                        worst_line_time = t
-                        worst_line = ln
-                total = time.perf_counter() - start
+                total, worst_line_time, worst_line = regex_bench.replay_lines(compiled, lines)
                 per_rule_total.append({
                     'rule': rule,
                     'total': total,
@@ -167,15 +133,6 @@ class Command(BaseCommand):
                 )
                 if r['worst_line_time'] >= threshold_s:
                     self.stdout.write(f'      worst line: {_truncate(r["worst_line"], 200)!r}')
-
-
-def _time_search(compiled, payload):
-    start = time.perf_counter()
-    try:
-        compiled.search(payload)
-    except re.error:
-        pass
-    return time.perf_counter() - start
 
 
 def _truncate(s, n):

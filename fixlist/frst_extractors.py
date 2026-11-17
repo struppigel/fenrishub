@@ -112,6 +112,12 @@ def normalize_path(path):
     return CHROMIUM_PROFILE_RE.sub(r"\1profile", path)
 
 
+def path_key(path):
+    """The form filepath rules and cross-log lookups compare paths in: drive,
+    user and browser profile normalized, lowercased and stripped ('' for no path)."""
+    return normalize_path(path).lower().strip() if path else ""
+
+
 def _comparable_path(value):
     """A path stored in `name` (process parent, .job file), in the form compared
     across logs: drive, user and profile normalized like file paths, and lowercased
@@ -687,12 +693,17 @@ _ALL_EXTRACTORS = (
 _PATH_EXTRACTORS = tuple(fn for fn in _ALL_EXTRACTORS if fn not in _NON_PATH_EXTRACTORS)
 
 
-def get_frst_entry(line):
+def iter_frst_entries(line):
+    """Every FrstEntry an extractor reads from `line`, in _ALL_EXTRACTORS order."""
     for extractor in _ALL_EXTRACTORS:
         entry = extractor(line)
         if entry:
-            return entry
-    return None
+            yield entry
+
+
+def get_frst_entry(line):
+    """The first FrstEntry an extractor reads from `line`, or None."""
+    return next(iter_frst_entries(line), None)
 
 
 DEFENDER_EXCLUSION_PARAMS = {

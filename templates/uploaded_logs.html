@@ -12,40 +12,8 @@
         color: var(--la-warning-text);
     }
 
-    .protected-state {
-        color: var(--la-success-text);
-    }
-
-    .fixlist-actions .action-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        height: 32px;
-        padding: 0 10px;
-        background-color: var(--la-bg-1);
-        color: var(--la-text-primary);
-        border: 1px solid var(--la-border);
-        font-size: 12px;
-        font-family: inherit;
-        line-height: 1;
-        text-decoration: none;
-        cursor: pointer;
-        flex-shrink: 0;
-    }
-
-    .fixlist-actions .action-btn:hover {
-        text-decoration: underline;
-    }
-
     .fixlist-actions form {
         display: inline;
-    }
-
-    .fixlist-actions .delete-btn,
-    .merge-controls .delete-btn {
-        background-color: var(--la-error-bg);
-        color: var(--la-error-text);
-        border-color: var(--la-error-border);
     }
 
     .merge-controls {
@@ -121,11 +89,7 @@
 
 <form id="mergeUploadsForm" method="post" action="{% url submit_url_name %}">
     {% csrf_token %}
-    {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
-    {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
-    {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
-    {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-    {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
+    {% include 'partials/upload_filter_hidden_inputs.html' %}
 </form>
 
 {% if is_trash %}
@@ -179,10 +143,7 @@
         <button type="submit" form="mergeUploadsForm" name="action" value="delete_selected" class="delete-btn" onclick="return confirmDeleteSelected();" title="move the selected uploads to trash">delete</button>
         <button type="submit" form="mergeUploadsForm" name="action" value="rescan_selected" onclick="return confirmRescan();" title="re-run the analyzer on the selected uploads to refresh stats">rescan</button>
         {% endif %}
-        <span id="selectionIndicator" class="muted" hidden style="font-size: 12px;">
-            <span id="selectionCount">0</span> selected
-            <a href="#" id="clearSelectionLink" style="margin-left: 6px;">clear</a>
-        </span>
+        {% include 'partials/selection_indicator.html' %}
     </div>
     <div style="display: flex; gap: 8px;">
         {% if is_trash %}
@@ -204,8 +165,8 @@
             <div>
                 <div class="fixlist-title">
                     <input class="upload-select" form="mergeUploadsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">
-                    <span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|log_type_css_slug }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span>
-                    <a class="upload-id-link log-type-{{ uploaded_log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>
+                    {% include 'partials/log_type_badge.html' with log=uploaded_log %}
+                    {% include 'partials/upload_id_link.html' with log=uploaded_log %}
                     {% if uploaded_log.recipient_user %}
                     <span>({{ uploaded_log.recipient_user.username }})</span>
                     {% else %}
@@ -228,11 +189,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="restore">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
-                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
-                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
-                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
+                {% include 'partials/upload_filter_hidden_inputs.html' %}
                 <button type="submit" class="action-btn" title="restore this upload from trash">restore</button>
             </form>
             {% if not uploaded_log.is_protected %}
@@ -240,11 +197,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete_permanent">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
-                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
-                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
-                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
+                {% include 'partials/upload_filter_hidden_inputs.html' %}
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Permanently delete this upload?');" title="permanently delete this upload">delete</button>
             </form>
             {% endif %}
@@ -255,11 +208,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="assign_to_me">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
-                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
-                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
-                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
+                {% include 'partials/upload_filter_hidden_inputs.html' %}
                 <button type="submit" class="action-btn" title="assign this upload to you (take over)">assign</button>
             </form>
             {% elif uploaded_log.recipient_user == request.user %}
@@ -267,11 +216,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="unassign_to_general">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
-                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
-                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
-                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
+                {% include 'partials/upload_filter_hidden_inputs.html' %}
                 <button type="submit" class="action-btn" title="release this upload back to the general channel">unassign</button>
             </form>
             {% else %}
@@ -279,11 +224,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="copy_to_me">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
-                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
-                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
-                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
+                {% include 'partials/upload_filter_hidden_inputs.html' %}
                 <button type="submit" class="action-btn" title="copy this upload into your channel (original stays with the other helper)">copy</button>
             </form>
             {% endif %}
@@ -296,11 +237,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="upload_id" value="{{ uploaded_log.upload_id }}">
-                {% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
-                {% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
-                {% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
-                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
-                {% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}
+                {% include 'partials/upload_filter_hidden_inputs.html' %}
                 <button type="submit" class="action-btn delete-btn" onclick="return confirm('Move this upload to trash?');" title="move this upload to trash">delete</button>
             </form>
             {% endif %}
@@ -400,66 +337,31 @@ document.addEventListener('DOMContentLoaded', function() {
 
 {% if is_trash %}
 function confirmRestoreSelected() {
-    const count = uploadSelection.getStored().size;
-    if (count === 0) {
-        alert('Select at least one upload to restore.');
-        return false;
-    }
-    return confirm('Restore ' + count + ' selected upload(s)?');
+    return uploadSelection.confirmAction('Select at least one upload to restore.', 'Restore {n} selected upload(s)?');
 }
 
 function confirmDeletePermanentSelected() {
-    const count = uploadSelection.getStored().size;
-    if (count === 0) {
-        alert('Select at least one upload to delete.');
-        return false;
-    }
-    return confirm('Permanently delete ' + count + ' selected upload(s)?');
+    return uploadSelection.confirmAction('Select at least one upload to delete.', 'Permanently delete {n} selected upload(s)?');
 }
 {% else %}
 function copyUploadUrl(button) {
-    const value = button.dataset.url;
-    navigator.clipboard.writeText(value).then(function() {
-        const original = button.textContent;
-        button.textContent = 'copied';
-        setTimeout(() => { button.textContent = original; }, 1200);
-    });
+    Fenris.copyWithFeedback(button.dataset.url, button);
 }
 
 function confirmMerge() {
-    const count = uploadSelection.getStored().size;
-    if (count === 0) {
-        alert('Select at least one upload to merge.');
-        return false;
-    }
-    return confirm('Merge ' + count + ' selected upload(s)?');
+    return uploadSelection.confirmAction('Select at least one upload to merge.', 'Merge {n} selected upload(s)?');
 }
 
 function confirmMergealyze() {
-    const count = uploadSelection.getStored().size;
-    if (count === 0) {
-        alert('Select at least one upload to mergealyze.');
-        return false;
-    }
-    return confirm('Merge ' + count + ' selected upload(s) and open in analyzer?');
+    return uploadSelection.confirmAction('Select at least one upload to mergealyze.', 'Merge {n} selected upload(s) and open in analyzer?');
 }
 
 function confirmDeleteSelected() {
-    const count = uploadSelection.getStored().size;
-    if (count === 0) {
-        alert('Select at least one upload to delete.');
-        return false;
-    }
-    return confirm('Move ' + count + ' selected upload(s) to trash?');
+    return uploadSelection.confirmAction('Select at least one upload to delete.', 'Move {n} selected upload(s) to trash?');
 }
 
 function confirmRescan() {
-    const count = uploadSelection.getStored().size;
-    if (count === 0) {
-        alert('Select at least one upload to rescan.');
-        return false;
-    }
-    return true;
+    return uploadSelection.confirmAction('Select at least one upload to rescan.', null);
 }
 
 function confirmDiff() {

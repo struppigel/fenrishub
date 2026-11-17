@@ -103,7 +103,7 @@ def normalized_path(path):
     if not path:
         return ''
     try:
-        return frst_extractors.normalize_path(path).lower().strip()
+        return frst_extractors.path_key(path)
     except Exception:
         return ''
 

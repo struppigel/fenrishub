@@ -5,7 +5,10 @@ Rule management utilities and helpers for classification rule operations.
 from django.contrib.auth.models import User
 from django.db import transaction
 
-from .analyzer import parse_rule_line, inspect_line_matches, VALID_STATUSES, _load_rule_buckets
+from .analyzer import (
+    EMPTY_RULE_FIELDS, VALID_STATUSES, _load_rule_buckets, inspect_line_matches, parse_rule_line, rule_defaults,
+    upsert_parsed_rule,
+)
 from .models import ClassificationRule
 from .tagging import parse_tag_ids
 
@@ -24,36 +27,13 @@ VALID_CONFLICT_ACTIONS = {
 }
 
 
-def _rule_defaults_from_parsed(parsed: dict) -> dict:
-    """Extract default values for ClassificationRule from parsed rule data."""
-    return {
-        'description': parsed['description'],
-        'source_name': parsed['source_name'],
-        'entry_type': parsed['entry_type'],
-        'clsid': parsed['clsid'],
-        'name': parsed['name'],
-        'filepath': parsed['filepath'],
-        'normalized_filepath': parsed['normalized_filepath'],
-        'filename': parsed['filename'],
-        'company': parsed['company'],
-        'arguments': parsed['arguments'],
-        'file_not_signed': parsed['file_not_signed'],
-        'attributes': parsed['attributes'],
-        'is_hidden': parsed['is_hidden'],
-        'is_enabled': True,
-    }
+# Kept under its old name: tests import it from here.
+_rule_defaults_from_parsed = rule_defaults
 
 
 def _upsert_classification_rule(parsed: dict, owner: User) -> tuple[ClassificationRule, bool]:
     """Create or update a classification rule. Returns (rule, is_created)."""
-    lookup = {
-        'owner': owner,
-        'status': parsed['status'],
-        'match_type': parsed['match_type'],
-        'source_text': parsed['source_text'],
-    }
-    defaults = _rule_defaults_from_parsed(parsed)
-    return ClassificationRule.objects.update_or_create(**lookup, defaults=defaults)
+    return upsert_parsed_rule(parsed, owner.pk)
 
 
 def _normalize_pending_changes(raw_changes) -> tuple[list[dict], list[dict]]:
@@ -374,17 +354,7 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
                 'source_text': parsed['source_text'],
                 'description': parsed['description'],
                 'existing_rule_id': existing_rule.id if existing_rule else None,
-                'entry_type': parsed.get('entry_type', ''),
-                'clsid': parsed.get('clsid', ''),
-                'name': parsed.get('name', ''),
-                'filepath': parsed.get('filepath', ''),
-                'normalized_filepath': parsed.get('normalized_filepath', ''),
-                'filename': parsed.get('filename', ''),
-                'company': parsed.get('company', ''),
-                'arguments': parsed.get('arguments', ''),
-                'file_not_signed': parsed.get('file_not_signed', False),
-                'attributes': parsed.get('attributes', ''),
-                'is_hidden': parsed.get('is_hidden', False),
+                **{field: parsed.get(field, empty) for field, empty in EMPTY_RULE_FIELDS.items()},
             }
         )
 

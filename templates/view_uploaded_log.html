@@ -73,16 +73,6 @@
         margin: 0;
     }
 
-    .protected-state {
-        color: var(--la-success-text);
-    }
-
-    .uploaded-log-page .delete-btn {
-        background-color: var(--la-error-bg);
-        color: var(--la-error-text);
-        border-color: var(--la-error-border);
-    }
-
     /* "maximize": hide metadata and summary, let the log fill the window. */
     .uploaded-log-page.log-maximized > h3,
     .uploaded-log-page.log-maximized > .divider,
@@ -93,31 +83,7 @@
     /* Summary and metadata share one panel as tabs (same look as the
        fixlist / response tabs on the fixlist page). */
     .log-info-tabs {
-        display: flex;
-        gap: 2px;
-    }
-
-    .log-info-tabs .panel-tab {
-        position: relative;
-        padding: 4px 14px;
-        margin-bottom: -1px;
-        background-color: transparent;
-        color: var(--la-text-muted);
-        border: 1px solid var(--la-border-muted);
-        border-bottom-color: transparent;
-    }
-
-    .log-info-tabs .panel-tab.tab-active {
-        z-index: 1;
-        background-color: var(--la-bg-2);
-        color: var(--la-text-primary);
-        border-color: var(--la-border);
-        border-bottom-color: var(--la-bg-2);
-        cursor: default;
-    }
-
-    .log-info-tabs .panel-tab.tab-active:hover {
-        text-decoration: none;
+        --tab-bg: var(--la-bg-2);
     }
 
     .log-info-panel.has-tabs .log-info-pane {
@@ -303,7 +269,7 @@
     <div>{{ uploaded_log.original_filename }}</div>
     <div class="meta-key">log type</div>
     <div>
-        <span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|log_type_css_slug }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span>
+        {% include 'partials/log_type_badge.html' with log=uploaded_log %}
     </div>
     <div class="meta-key">forum user</div>
     <div style="display: flex; align-items: center; gap: 6px;">
@@ -382,6 +348,8 @@
 
 {# Lookups of correlated hashes, shared with the analyzer. #}
 <script src="{% static 'js/centralbox_lookup.js' %}"></script>
+<script src="{% static 'js/correlation_format.js' %}"></script>
+<script src="{% static 'js/popup_menu.js' %}"></script>
 <script>
 // The content is rendered as chunked .log-chunk blocks (see chunk_log filter)
 // so the browser can skip off-screen layout. Each chunk drops its trailing
@@ -412,14 +380,12 @@ function toggleLogMaximized(force) {
         toggle.setAttribute('aria-label', on ? 'restore log view' : 'maximize log view');
         toggle.title = label;
     }
-    try { localStorage.setItem(LOG_MAXIMIZED_KEY, on ? '1' : '0'); } catch (e) {}
+    Fenris.storage.setFlag(LOG_MAXIMIZED_KEY, on);
     if (on) page.querySelector('.log-action-bar').scrollIntoView({ block: 'start' });
 }
 
 (function () {
-    let saved = null;
-    try { saved = localStorage.getItem(LOG_MAXIMIZED_KEY); } catch (e) {}
-    if (saved === '1') toggleLogMaximized(true);
+    if (Fenris.storage.flag(LOG_MAXIMIZED_KEY)) toggleLogMaximized(true);
     document.addEventListener('keydown', function (event) {
         if (event.key !== 'Escape') return;
         const page = document.querySelector('.uploaded-log-page');
@@ -473,12 +439,11 @@ function toggleLogMaximized(force) {
             pane.hidden = pane.dataset.infoPane !== name;
         });
         if (remember && name !== 'related') {
-            try { localStorage.setItem(STORAGE_KEY, name); } catch (e) {}
+            Fenris.storage.set(STORAGE_KEY, name);
         }
     }
 
-    let saved = null;
-    try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
+    const saved = Fenris.storage.get(STORAGE_KEY);
     // "related logs" is not reopened by itself: it hides the log.
     if (saved && saved !== 'related' && tabs.some((tab) => tab.dataset.infoTab === saved)) selectTab(saved, false);
     tabs.forEach((tab) => tab.addEventListener('click', () => selectTab(tab.dataset.infoTab, true)));
@@ -538,13 +503,8 @@ function lastPathComponent(text) {
         const full = token.textContent.trim();
         const isPath = token.matches('.hl-path, .hl-reg');
         const text = event.altKey && isPath ? lastPathComponent(full) : full;
-        if (!text || !navigator.clipboard) return;
-        navigator.clipboard.writeText(text).then(function () {
-            token.classList.remove('hl-copied');
-            void token.offsetWidth;
-            token.classList.add('hl-copied');
-            setTimeout(() => token.classList.remove('hl-copied'), 900);
-        });
+        if (!text) return;
+        Fenris.copyText(text).then((ok) => { if (ok) Fenris.flashClass(token); });
     });
 })();
 
@@ -607,41 +567,9 @@ function buildLineCopyItems(line) {
     return items;
 }
 
-async function copyTextToClipboard(value) {
-    try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(value);
-            return true;
-        }
-    } catch (err) {
-        // fall through to the textarea fallback
-    }
-    try {
-        const ta = document.createElement('textarea');
-        ta.value = value;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
-        return ok;
-    } catch (err) {
-        return false;
-    }
-}
-
-function flashCopied(element) {
-    element.classList.remove('hl-copied');
-    void element.offsetWidth;
-    element.classList.add('hl-copied');
-    setTimeout(() => element.classList.remove('hl-copied'), 900);
-}
-
 async function copyAndFlash(value, element) {
-    if (await copyTextToClipboard(value)) {
-        flashCopied(element);
+    if (await Fenris.copyText(value)) {
+        Fenris.flashClass(element);
     } else {
         alert('Failed to copy to clipboard.');
     }
@@ -683,45 +611,16 @@ const TokenMenu = (function () {
             window.addEventListener('resize', close);
             document.addEventListener('scroll', close, true);
         }
-        const header = document.createElement('div');
-        header.className = 'line-copy-menu-header';
-        header.textContent = headerText;
-        menu.appendChild(header);
-        items.forEach(({ key, value, label: shown, run }) => {
-            const item = document.createElement('button');
-            item.type = 'button';
-            item.className = 'line-copy-menu-item';
-            item.setAttribute('role', 'menuitem');
-            const label = document.createElement('span');
-            label.className = 'line-copy-menu-key';
-            label.textContent = key;
-            const preview = document.createElement('span');
-            preview.className = 'line-copy-menu-value';
-            // `label`: what is shown when it is not just the value (a
-            // correlated hash with its file name).
-            preview.textContent = shown || value;
-            item.append(label, preview);
-            item.addEventListener('click', function () {
-                close();
-                run();
-            });
-            menu.appendChild(item);
-        });
+        // `label`: what is shown when it is not just the value (a correlated
+        // hash with its file name).
+        PopupMenu.fill(menu, headerText, items.map(({ key, value, label, run }) => ({
+            key, value, label, run: () => { close(); run(); },
+        })));
         menu.hidden = false;
         anchor = anchorEl;
         onClose = closeCallback || null;
         anchorEl.setAttribute('aria-expanded', 'true');
-
-        const rect = anchorEl.getBoundingClientRect();
-        const menuWidth = menu.offsetWidth || 240;
-        const menuHeight = menu.offsetHeight || 0;
-        let left = rect.right - menuWidth;
-        if (left < 8) left = Math.max(8, rect.left);
-        if (left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
-        let top = rect.bottom + 4;
-        if (top + menuHeight > window.innerHeight - 8) top = Math.max(8, rect.top - menuHeight - 4);
-        menu.style.left = `${left + window.scrollX}px`;
-        menu.style.top = `${top + window.scrollY}px`;
+        PopupMenu.place(menu, anchorEl);
     }
 
     function isOpenFor(anchorEl) {
@@ -761,9 +660,8 @@ function hashLookup(token) {
     };
 }
 
-function openUrl(url) {
-    window.open(url, '_blank', 'noopener,noreferrer');
-}
+// Short local name for the menus below.
+const openUrl = Fenris.openUrl;
 
 // centralbox verdicts for SHA-256 tokens (fixlist/centralbox.py). All of it is
 // optional: without data, on any error or with centralbox down the page just
@@ -798,11 +696,6 @@ const Centralbox = (function () {
     const FRESH_POLL_TRIES = 30;
     // Hashes whose label shows a running check; render() leaves them alone.
     const busy = new Set();
-
-    function csrfToken() {
-        const field = document.querySelector('input[name="csrfmiddlewaretoken"]');
-        return field ? field.value : '';
-    }
 
     function label(v) {
         if (!v || typeof v !== 'object') return null;
@@ -969,28 +862,8 @@ const Centralbox = (function () {
         Object.keys(incoming).forEach(hash => acceptVerdict(hash, incoming[hash]));
     }
 
-    // {status, body} of a JSON request; body is null when there is none.
-    async function request(url, options) {
-        try {
-            const response = await fetch(url, Object.assign({ credentials: 'same-origin' }, options));
-            let body = null;
-            try {
-                body = await response.json();
-            } catch (error) {
-                body = null;
-            }
-            return { status: response.status, body: body && typeof body === 'object' ? body : null };
-        } catch (error) {
-            return { status: 0, body: null };
-        }
-    }
-
     function postJson(url, payload) {
-        return request(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRFToken': csrfToken() },
-            body: JSON.stringify(payload || {}),
-        });
+        return Fenris.requestJson(url, { body: payload || {} });
     }
 
     async function poll(attempt) {
@@ -1038,7 +911,7 @@ const Centralbox = (function () {
         const url = data.fresh_status_url.replace('0'.repeat(64), hash);
         for (let attempt = 0; attempt < tries; attempt += 1) {
             await new Promise(resolve => setTimeout(resolve, FRESH_POLL_MS));
-            const { status, body } = await request(url, { headers: { 'Accept': 'application/json' } });
+            const { status, body } = await Fenris.requestJson(url, { method: 'GET' });
             if (status !== 200 || !body) continue;
             if (body.fresh && typeof body.fresh === 'object') fresh[hash] = body.fresh;
             if (body.state === 'running') continue;
@@ -1146,14 +1019,9 @@ const CaseCorrelations = (function () {
         fresh_url: typeof data.fresh_url === 'string' ? data.fresh_url : '',
         fresh_status_url: typeof data.fresh_status_url === 'string' ? data.fresh_status_url : '',
     };
-    const DOT = ' · ';
-    // How an entry was matched when not through the line's own file
-    // (case_correlations.MATCH_NOTES).
-    const MATCH_NOTES = {
-        argument: 'file in command line', registry: 'same registry value', service: 'same service',
-        task: 'same task', extension: 'same extension', clsid: 'same CLSID', firewall: 'same firewall rule',
-    };
-    const STATUS_CLASS = { B: 'b', P: 'p', C: 'c', A: 'a', '!': 'w', G: 'g', S: 's', I: 'i', J: 'j' };
+    // Findings are worded as in the analyzer (static/js/correlation_format.js).
+    const Format = window.CorrelationFormat;
+    const STATUS_CLASS = Format.STATUS_CLASS;
     // Summary severity per status, as views/centralbox.py _CORRELATION_SUMMARY_SEVERITY.
     const SUMMARY_SEVERITY = { B: 'b', P: 'p', C: 'c', A: 'w', '!': 'w', G: 'g', S: 'i', I: 'i', J: 'j' };
     const root = document.getElementById('uploadedContent');
@@ -1165,15 +1033,6 @@ const CaseCorrelations = (function () {
         return item && Array.isArray(item.entries) ? item.entries : [];
     }
 
-    // That log at the entry's line (the file's entry for a hash), which its
-    // page scrolls to and marks (LineJump).
-    function logUrl(entry) {
-        const id = String(entry.upload_id || '');
-        const line = Number(entry.anchor_line_no || entry.line_no);
-        if (!/^[A-Za-z0-9_-]+$/.test(id)) return '';
-        return `/uploads/${encodeURIComponent(id)}/` + (Number.isInteger(line) && line > 0 ? `#L${line}` : '');
-    }
-
     // An entry of this log itself (Defender events of its Addition part).
     function isOwn(entry) {
         return Boolean(entry) && Boolean(data.upload_id) && entry.upload_id === data.upload_id;
@@ -1182,74 +1041,27 @@ const CaseCorrelations = (function () {
     // Where the line's findings come from: other logs, this log's own
     // Addition part, or both.
     function header(line) {
-        const entries = line ? entriesFor(line) : [];
-        const own = entries.some(isOwn);
-        const others = entries.some(entry => !isOwn(entry));
-        const scope = data.scope === 'user'
-            ? `other logs of user ${data.name} (no case of yours)`
-            : 'other logs of this case';
-        if (own && !others) return "same file in this log's Addition part";
-        if (own) return `same file in this log's Addition part and in ${scope}`;
-        return `same file in ${scope}`;
-    }
-
-    function bareHash(entry) {
-        if (entry.kind !== 'hash') return '';
-        const sha = typeof entry.sha256 === 'string' && /^[0-9a-f]{64}$/.test(entry.sha256) ? entry.sha256 : '';
-        const md5 = typeof entry.md5 === 'string' && /^[0-9a-f]{32}$/.test(entry.md5) ? entry.md5 : '';
-        return sha ? 'SHA-256 ' + sha : md5 ? 'MD5 ' + md5 : '';
-    }
-
-    // What a related log says, without log ids: the detection name or family
-    // and the centralbox verdict (or the fixlist result).
-    function finding(entry) {
-        if (entry.kind === 'fixlog') return entry.result || 'fixlist result';
-        const result = entry.centralbox && typeof entry.centralbox === 'object' ? entry.centralbox : null;
-        // A bare hash (no detection, no centralbox result) shows the hash itself.
-        const name = (result && (result.family || result.malware_type)) || entry.detection || bareHash(entry);
-        const verdict = result && result.verdict ? 'centralbox: ' + result.verdict
-            : result && result.state === 'unknown' ? 'not in centralbox' : '';
-        // A detection of a folder this line's file is in.
-        const where = entry.in_folder ? 'in detected folder' : '';
-        // A Windows Defender event in a Fixlog, not a scanner's detection.
-        const source = entry.source === 'defender' ? 'Defender' : '';
-        // Matched through something else than the line's own file.
-        const how = MATCH_NOTES[entry.match] || '';
-        // Which file the finding is about (the line's own, one in its command line, ...).
-        const file = typeof entry.file === 'string' ? entry.file : '';
-        return [file, name, verdict, source, how, where].filter(Boolean).join(DOT) || (entry.kind === 'hash' ? 'file hash' : 'detection');
+        return Format.header(line ? entriesFor(line) : [], isOwn, { scope: data.scope, name: data.name });
     }
 
     // One row per finding: the log type it was found in (and a warning when
     // that log seems to come from another system). Clicking opens that log
-    // at the line.
+    // at the line (the file's entry for a hash), which its page scrolls to
+    // and marks (LineJump).
     function menuItems(line) {
-        const items = [];
-        const seen = new Set();
-        entriesFor(line).forEach(entry => {
-            if (!entry || typeof entry !== 'object') return;
-            const key = isOwn(entry) ? 'this log'
-                : String(entry.log_type || 'log') + (entry.system === 'different' ? DOT + 'other system?' : '');
-            const value = finding(entry);
-            if (seen.has(key + '\n' + value)) return;
-            seen.add(key + '\n' + value);
+        const items = Format.rows(entriesFor(line), isOwn).map(entry => {
+            const key = Format.source(entry, isOwn);
+            const value = Format.finding(entry);
             if (isOwn(entry)) {
                 // This log: jump to the line on this page.
                 const no = Number(entry.anchor_line_no || entry.line_no);
-                items.push({ key, value, run: () => LineJump.jump(no, 4000) });
-                return;
+                return { key, value, run: () => LineJump.jump(no, 4000) };
             }
-            const url = logUrl(entry);
-            items.push({ key, value, run: () => { if (url) openUrl(url); } });
+            const url = Format.logUrl(entry);
+            return { key, value, run: () => { if (url) openUrl(url); } };
         });
         // The centralbox report of each correlated hash, shown as its URL.
-        const reports = [];
-        entriesFor(line).forEach(entry => {
-            const result = entry && entry.centralbox && typeof entry.centralbox === 'object' ? entry.centralbox : null;
-            const url = result && typeof result.report_url === 'string' ? result.report_url : '';
-            if (/^https:\/\/centralbox\.dev\/analysis\/[0-9a-f]{64}$/.test(url) && !reports.includes(url)) reports.push(url);
-        });
-        reports.forEach(url => items.push({ key: 'centralbox', value: url, run: () => openUrl(url) }));
+        Format.reportUrls(entriesFor(line)).forEach(url => items.push({ key: 'centralbox', value: url, run: () => openUrl(url) }));
         // Correlated hashes without a centralbox verdict: look them up here,
         // as in the analyzer (with the related log that holds the hash).
         const targets = lookupConfig.can_lookup && typeof CentralboxLookup === 'object'
@@ -1275,21 +1087,9 @@ const CaseCorrelations = (function () {
             && CentralboxLookup.targets(Array.isArray(entries) ? entries : []).length > 0;
     }
 
-    // Distinct file hashes of the line's correlations (SHA-256, else the MD5
-    // alone) with the file each belongs to: [{hash, file}].
-    function correlatedHashes(entries) {
-        const hashes = [];
-        (Array.isArray(entries) ? entries : []).forEach(entry => {
-            if (!entry || entry.kind !== 'hash') return;
-            const sha = typeof entry.sha256 === 'string' && /^[0-9a-f]{64}$/.test(entry.sha256) ? entry.sha256 : '';
-            const md5 = typeof entry.md5 === 'string' && /^[0-9a-f]{32}$/.test(entry.md5) ? entry.md5 : '';
-            const hash = sha || md5;
-            if (hash && !hashes.some(known => known.hash === hash)) {
-                hashes.push({ hash, file: typeof entry.file === 'string' ? entry.file : '' });
-            }
-        });
-        return hashes;
-    }
+    // Distinct file hashes of the line's correlations with the file each
+    // belongs to: [{hash, file}].
+    const correlatedHashes = Format.hashValues;
 
     function setInfoIcon(button, lookup) {
         if (typeof CentralboxLookup === 'object') CentralboxLookup.setIcon(button, lookup);
@@ -1558,6 +1358,8 @@ const CaseCorrelations = (function () {
                 if (!answer || typeof answer !== 'object') return;
                 data = {
                     ...lookupConfig,
+                    // Tells this log's own entries apart (isOwn).
+                    upload_id: data.upload_id,
                     scope: answer.scope || '',
                     name: answer.name || '',
                     lines: byLineNumber(answer),
@@ -1613,7 +1415,7 @@ function googleSearchUrl(value) {
 }
 
 function openGoogleSearch(value) {
-    window.open(googleSearchUrl(value), '_blank', 'noopener,noreferrer');
+    openUrl(googleSearchUrl(value));
 }
 
 // "C:\a\b\file.bat" -> "C:\a\b"; a drive root keeps its backslash ("C:\").
@@ -1919,22 +1721,13 @@ function viewRawContent() {
 }
 
 function copyAllContent(button) {
-    const content = getFullContent();
-    const originalText = button.textContent;
-    navigator.clipboard.writeText(content).then(function() {
-        button.textContent = 'copied';
-        setTimeout(() => { button.textContent = originalText; }, 1200);
-    });
+    Fenris.copyWithFeedback(getFullContent(), button);
 }
 
 function copyConvertedResponse(button) {
     const el = document.getElementById('convertedResponse');
     if (!el) return;
-    const originalText = button.textContent;
-    navigator.clipboard.writeText(JSON.parse(el.textContent)).then(function() {
-        button.textContent = 'copied';
-        setTimeout(() => { button.textContent = originalText; }, 1200);
-    });
+    Fenris.copyWithFeedback(JSON.parse(el.textContent), button);
 }
 
 function downloadContent() {

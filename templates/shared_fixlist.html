@@ -19,18 +19,7 @@
     }
 
     .warning-modal-backdrop {
-        position: fixed;
-        inset: 0;
-        background-color: var(--la-overlay);
-        display: none;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
         z-index: 2000;
-    }
-
-    .warning-modal-backdrop.show {
-        display: flex;
     }
 
     .warning-modal {
@@ -111,7 +100,7 @@
     </div>
 
     {% if not is_owner %}
-    <div id="agreement-modal" class="warning-modal-backdrop show" role="dialog" aria-modal="true" aria-label="shared fixlist access warning">
+    <div id="agreement-modal" class="modal-backdrop warning-modal-backdrop show" role="dialog" aria-modal="true" aria-label="shared fixlist access warning">
         <div class="warning-modal">
             <div class="alert-strip">Warning</div>
             <div class="warning-modal-body">
@@ -160,7 +149,8 @@ function copyContent() {
         return;
     }
 
-    navigator.clipboard.writeText(contentEl.textContent).then(function() {
+    Fenris.copyText(contentEl.textContent).then(function(ok) {
+        if (!ok) return;
         const feedback = document.getElementById('copy-feedback');
         feedback.classList.add('show');
         setTimeout(() => feedback.classList.remove('show'), 2000);

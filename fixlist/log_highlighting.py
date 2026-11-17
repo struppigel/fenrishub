@@ -26,6 +26,9 @@ from html import escape as html_escape
 
 from django.utils.safestring import mark_safe
 
+from .log_types import ANALYZED_LOG_TYPES, DETECTION_LOG_TYPES
+from .status_types import STATUS_PAINT
+
 logger = logging.getLogger(__name__)
 
 LINES_PER_CHUNK = 100
@@ -1361,7 +1364,7 @@ def _highlight_frst(lines):
 
 
 _STATUS_SUMMARY_SEVERITY = {'B': 'b', 'P': 'p', '!': 'w'}
-_STATUS_PAINT = {'B': 'b', 'P': 'p', 'C': 'c', '!': 'w', 'A': 'a', 'G': 'g', 'S': 's', 'I': 'i', 'J': 'j'}
+_STATUS_PAINT = STATUS_PAINT
 
 
 def apply_analysis_statuses(result, content, payload):
@@ -1518,9 +1521,9 @@ def render_highlighted_html(result):
 # UploadedLog.tool_stats, so the uploads / cases lists never parse logs.
 # ---------------------------------------------------------------------------
 
-DETECTION_CHIP_TYPES = {'ESET', 'Malwarebytes', 'HitmanPro', 'Emsisoft', 'AdwCleaner', 'Trojan Killer'}
+DETECTION_CHIP_TYPES = frozenset(DETECTION_LOG_TYPES)
 # These keep their analyzer-based count_* fields (and chips) instead.
-FRST_TYPES = {'FRST', 'Addition', 'FRST&Addition'}
+FRST_TYPES = frozenset(ANALYZED_LOG_TYPES)
 
 
 def _chip(label, value, severity):

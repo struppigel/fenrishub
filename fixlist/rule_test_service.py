@@ -4,8 +4,9 @@ import re
 import time
 
 from . import frst_extractors as ex
-from . import script_matcher
+from . import regex_engine, script_matcher
 from .analyzer import (
+    RULE_ENTRY_FIELDS,
     STATUS_LABELS,
     STATUS_PRECEDENCE,
     _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY,
@@ -16,7 +17,19 @@ from .analyzer import (
     rule_frst_entry,
 )
 from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
+from .status_types import dominant_status
 from .rule_sets import SHARED_RULE_SET_KEY
+
+
+def _compile_regex(pattern: str):
+    """Compile a rule regex like the analyzer does (re2 first, stdlib re for what
+    re2 refuses), so the preview highlights the spans the analyzer paints.
+    Raises ValueError with stdlib re's message for an invalid pattern."""
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f'Invalid regex: {exc}') from exc
+    return regex_engine.compile(pattern)
 
 
 def _merge_ranges(ranges: list) -> list:
@@ -49,13 +62,7 @@ def build_wholelog_rule_test_result(
     if match_type == ClassificationRule.MATCH_REGEX:
         ranges = []
         for pattern in patterns:
-            try:
-                compiled = re.compile(pattern)
-            except re.error as exc:
-                raise ValueError(f'Invalid regex: {exc}') from exc
-            ranges.extend(
-                [m.start(), m.end()] for m in compiled.finditer(log_text) if m.end() > m.start()
-            )
+            ranges.extend(regex_engine.match_ranges(_compile_regex(pattern), log_text))
         merged = _merge_ranges(ranges)
         return {
             'whole_log': True,
@@ -85,13 +92,7 @@ def _compile_pattern(source_text: str, status: str, match_type: str) -> dict:
     """Pre-compute the per-pattern state needed to test lines against it."""
     parsed_rule = parse_rule_line(source_text, status=status)
 
-    if match_type == 'regex':
-        try:
-            compiled = re.compile(source_text)
-        except re.error as exc:
-            raise ValueError(f'Invalid regex: {exc}') from exc
-    else:
-        compiled = None
+    compiled = _compile_regex(source_text) if match_type == 'regex' else None
 
     script_code = None
     if match_type == 'script':
@@ -107,9 +108,9 @@ def _compile_pattern(source_text: str, status: str, match_type: str) -> dict:
         if parsed_rule and parsed_rule.get('normalized_filepath'):
             rule_norm_path = parsed_rule['normalized_filepath']
         elif parsed_rule and parsed_rule.get('filepath'):
-            rule_norm_path = ex.normalize_path(parsed_rule['filepath']).lower().strip()
+            rule_norm_path = ex.path_key(parsed_rule['filepath'])
         else:
-            rule_norm_path = ex.normalize_path(source_text).lower().strip()
+            rule_norm_path = ex.path_key(source_text)
     elif match_type not in ('exact', 'substring', 'regex', 'script'):
         raise ValueError(f'Unsupported match_type: {match_type}')
 
@@ -140,35 +141,21 @@ def _match_line(pattern: dict, match_type: str, line: str) -> dict:
         outcome['matched'] = bool(outcome['ranges'])
 
     elif match_type == 'regex':
-        outcome['ranges'] = [
-            [m.start(), m.end()]
-            for m in pattern['compiled'].finditer(line)
-            if m.end() > m.start()
-        ]
+        outcome['ranges'] = regex_engine.match_ranges(pattern['compiled'], line)
         outcome['matched'] = bool(outcome['ranges'])
 
     elif match_type == 'parsed':
         if line:
             line_entry = ex.get_frst_entry(line)
             if line_entry:
-                outcome['parsed'] = {
-                    'entry_type': line_entry.entry_type,
-                    'clsid': line_entry.clsid,
-                    'name': line_entry.name,
-                    'filepath': line_entry.filepath,
-                    'filename': line_entry.filename,
-                    'company': line_entry.company,
-                    'arguments': line_entry.arguments,
-                    'attributes': line_entry.attributes,
-                    'is_hidden': line_entry.is_hidden,
-                }
+                outcome['parsed'] = {field: getattr(line_entry, field) for field in RULE_ENTRY_FIELDS}
             rule_entry = pattern['rule_entry']
             outcome['matched'] = bool(rule_entry and line_entry and line_entry == rule_entry)
 
     elif match_type == 'filepath':
         line_path = ex.extract_any_frst_path(line)
         if line_path:
-            line_norm = ex.normalize_path(line_path).lower().strip()
+            line_norm = ex.path_key(line_path)
             rule_norm_path = pattern['rule_norm_path']
             outcome['matched'] = line_norm == rule_norm_path and bool(rule_norm_path)
             outcome['parsed'] = {'filepath': line_path, 'normalized_filepath': line_norm}
@@ -276,11 +263,7 @@ def build_rule_test_results(
                 f'priority {existing_priority}' if new_rule_shadowed else None
             )
 
-            combined = '?'
-            for status_code in STATUS_PRECEDENCE:
-                if status_code in effective_statuses:
-                    combined = status_code
-                    break
+            combined = dominant_status(effective_statuses)
             result['combined_status'] = combined
             result['combined_status_label'] = STATUS_LABELS.get(combined, 'unknown')
 
@@ -478,11 +461,7 @@ def _verdict_of(entries) -> str:
     if not entries:
         return '?'
     top = max(priority for priority, _status in entries)
-    statuses = {status for priority, status in entries if priority == top}
-    for status in STATUS_PRECEDENCE:
-        if status in statuses:
-            return status
-    return '?'
+    return dominant_status(status for priority, status in entries if priority == top)
 
 
 def line_outcome(result: dict) -> str:

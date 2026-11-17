@@ -42,3 +42,23 @@ STATUS_PRECEDENCE = ''.join(
     s.code for s in sorted(STATUS_TYPES, key=lambda s: s.precedence)
 )
 VALID_STATUSES = frozenset(s.code for s in STATUS_TYPES)
+# The one-letter paint class of a verdict on the log pages ('B' -> 'b', '!' -> 'w');
+# '?' has none.
+STATUS_PAINT = {
+    s.code: s.css_class.removeprefix('status-') for s in STATUS_TYPES if s.code != '?'
+}
+
+
+def precedence_rank(code: str) -> int:
+    """Position of ``code`` in STATUS_PRECEDENCE (0 = strongest); unknown codes rank last."""
+    index = STATUS_PRECEDENCE.find(code) if code else -1
+    return index if index >= 0 else len(STATUS_PRECEDENCE)
+
+
+def dominant_status(statuses, default: str = '?') -> str:
+    """The strongest code among ``statuses`` (codes, or a string of them), else ``default``."""
+    present = set(statuses or ())
+    for code in STATUS_PRECEDENCE:
+        if code in present:
+            return code
+    return default

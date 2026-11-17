@@ -161,6 +161,20 @@ class AdditionDefenderTests(TestCase):
         line_no = found[(r'c:\windows\installer\1284762.msi', 'Trojan:Win32/Posilod.EB!cl')]
         self.assertEqual(lines[line_no - 1], 'Name: Trojan:Win32/Posilod.EB!cl')
 
+    def test_a_command_line_detection_is_about_what_the_host_program_runs(self):
+        def detections(command_line):
+            text = '\n'.join(['Windows Defender:', '================', '', 'TimeCreated : 1/1/2026 1:00:00 AM',
+                              'Name: Trojan:PowerShell/X', 'Path: CmdLine:_' + command_line, 'User: x'])
+            return [path for _no, _threat, _action, path in iter_addition_defender_detections(text)]
+
+        self.assertEqual(detections(r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -ep bypass '
+                                    r'-f "C:\Users\Bob\AppData\Roaming\x.ps1"'),
+                         [r'c:\users\username\appdata\roaming\x.ps1'])
+        self.assertEqual(detections(r'C:\Windows\System32\cmd.exe /c C:\Windows\System32\rundll32.exe '
+                                    r'C:\ProgramData\q\z.dll,Run'), [r'c:\programdata\q\z.dll'])
+        # Only Windows' own programs: no file to blame.
+        self.assertEqual(detections(r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -enc AAAA'), [])
+
     def test_no_section_no_detections(self):
         self.assertEqual(iter_addition_defender_detections('Additional scan result\nName: x\nPath: file:_C:\\x.exe'), [])
 
@@ -277,3 +291,5 @@ class KeyCorrelationTests(TestCase):
         result = correlations_for_upload(merged, self.user)
         own = [entry for entry in result['lines'][TASK_LINE] if entry['upload_id'] == 'merged-log']
         self.assertEqual([(entry['source'], entry['match']) for entry in own], [('defender', 'argument')])
+        # The analyzer finds the row of the log's own entry by its text.
+        self.assertEqual(own[0]['line_text'], 'Name: Trojan:Win32/Posilod.EB!cl')

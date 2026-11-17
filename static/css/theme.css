@@ -8,6 +8,7 @@
     --la-bg-5: #151515;
     --la-bg-hover: #1a1a1a;
     --la-bg-copied: #171717;
+    --la-font-mono: monospace;
     --la-bg-copied-hover: #1c1c1c;
 
     --la-border-muted: #2a2a2a;
@@ -92,17 +93,18 @@
     background: var(--la-border-hover);
 }
 
-/* Status color utility classes */
-.status-b { color: var(--la-status-b); }
-.status-p { color: var(--la-status-p); }
-.status-c { color: var(--la-status-c); }
-.status-w { color: var(--la-status-w); }
-.status-a { color: var(--la-status-a); }
-.status-g { color: var(--la-status-g); }
-.status-s { color: var(--la-status-s); }
-.status-i { color: var(--la-status-i); }
-.status-j { color: var(--la-status-j); }
-.status-unknown { color: var(--la-status-unknown); }
+/* Status color utility classes. --status-color is the element's own status
+   colour, so a component can colour any property by it (log_analyzer.css). */
+.status-b { --status-color: var(--la-status-b); color: var(--status-color); }
+.status-p { --status-color: var(--la-status-p); color: var(--status-color); }
+.status-c { --status-color: var(--la-status-c); color: var(--status-color); }
+.status-w { --status-color: var(--la-status-w); color: var(--status-color); }
+.status-a { --status-color: var(--la-status-a); color: var(--status-color); }
+.status-g { --status-color: var(--la-status-g); color: var(--status-color); }
+.status-s { --status-color: var(--la-status-s); color: var(--status-color); }
+.status-i { --status-color: var(--la-status-i); color: var(--status-color); }
+.status-j { --status-color: var(--la-status-j); color: var(--status-color); }
+.status-unknown { --status-color: var(--la-status-unknown); color: var(--status-color); }
 
 /* Date-cluster highlights: dates that match a B/P/! seed line */
 .date-cluster-b,

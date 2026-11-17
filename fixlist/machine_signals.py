@@ -42,21 +42,31 @@ SYSTEM_SIGNAL_CHARS = 200_000
 
 # FRST's "Ran by" ($SCAN11) and "on" ($ON) in every language it writes (from
 # FRST's own source; Polish has no "on").
-_RAN_BY_WORDS = (
+RAN_BY_WORDS = (
     'Ran by', 'Gestart door', 'durchgeführt von', 'Uruchomiony przez', 'Exécuté par', 'Pokrenuo',
     'Executado por', 'Ejecutado por', 'Запущено с помощью', '通过...运行',
 )
 _ON_WORDS = ('on', 'op', 'auf', 'sur', 'na', 'em', 'sobre', 'на', '启动')
+# Every quantifier is bounded and none crosses a line: the whole text of
+# any upload is scanned (in the background), so a crafted huge line or a run
+# of blank lines must not make these quadratic.
 _RAN_BY_RE = re.compile(
-    r'^(?:' + '|'.join(re.escape(word) for word in _RAN_BY_WORDS) + r') (.+?) \(.*?\) +'
-    r'(?:(?:' + '|'.join(re.escape(word) for word in _ON_WORDS) + r') +)?(\S+) (\(.*)$',
+    r'^(?:' + '|'.join(re.escape(word) for word in RAN_BY_WORDS) + r') ([^\r\n]{1,100}?) \([^()\r\n]{0,60}\) {1,3}'
+    r'(?:(?:' + '|'.join(re.escape(word) for word in _ON_WORDS) + r') {1,3})?(\S{1,64}) (\([^\r\n]{0,300})',
     re.MULTILINE,
 )
-# What follows the computer name: "(<make model>) (<date>)" or just "(<date>)".
+# What follows the computer name: "(<make model>) (<date>)" or just "(<date>)"
+# (at most 300 characters, see _RAN_BY_RE).
 _MODEL_RE = re.compile(r'^\((.*)\) \([^()]*\)\s*$')
-_COMPUTER_NAME_RE = re.compile(r'^\s*Computer name(?: \.)*\s*:\s*(\S+)', re.MULTILINE | re.IGNORECASE)
+_COMPUTER_NAME_RE = re.compile(
+    r'^[ \t]{0,20}Computer name(?: \.){0,40}[ \t]{0,20}:[ \t]{0,20}(\S{1,64})', re.MULTILINE | re.IGNORECASE,
+)
 _PROFILE_RE = re.compile(r'[A-Za-z]:\\Users\\([^\\"\r\n]{1,64})\\', re.IGNORECASE)
-_SHARED_PROFILES = frozenset({'public', 'default', 'default user', 'all users', 'defaultuser0', 'username'})
+# Profile folders Windows creates itself (or placeholders): never a real user.
+SYSTEM_PROFILE_NAMES = frozenset({
+    'public', 'default', 'default user', 'all users', 'defaultuser0', 'username',
+    'defaultaccount', 'wdagutilityaccount',
+})
 # Addition "Accounts:": "Administrator (S-1-5-21-a-b-c-500 - Administrators - Disabled)".
 _ACCOUNT_SID_RE = re.compile(r'^.{1,100}? \((S-1-5-21-\d+-\d+-\d+)-\d+ - ', re.MULTILINE)
 _HKU_SID_RE = re.compile(r'^HKU\\(S-1-5-21-\d+-\d+-\d+)-\d+', re.MULTILINE)
@@ -64,8 +74,8 @@ _HKU_SID_RE = re.compile(r'^HKU\\(S-1-5-21-\d+-\d+-\d+)-\d+', re.MULTILINE)
 _DISK_ID_RE = re.compile(
     r'\(Disk ID: ([0-9A-Fa-f]{8})\)|^Disk ID\s*:\s*\{([0-9A-Fa-f-]{36})\}', re.MULTILINE,
 )
-_BOARD_RE = re.compile(r'^Motherboard: (.+?)\s*$', re.MULTILINE)
-_PROCESSOR_RE = re.compile(r'^Processor: (.+?)\s*$', re.MULTILINE)
+_BOARD_RE = re.compile(r'^Motherboard: ([^\r\n]{1,200})', re.MULTILINE)
+_PROCESSOR_RE = re.compile(r'^Processor: ([^\r\n]{1,200})', re.MULTILINE)
 _SPACES_RE = re.compile(r'\s+')
 _BLANK_DISK_IDS = frozenset({'00000000', '00000000-0000-0000-0000-000000000000'})
 
@@ -92,7 +102,7 @@ def extract_signals(content, head_only=False):
         signals[KIND_COMPUTER].add(computer.lower())
     for profile in _PROFILE_RE.findall(content):
         profile = profile.strip().lower()
-        if profile and profile not in _SHARED_PROFILES:
+        if profile and profile not in SYSTEM_PROFILE_NAMES:
             signals[KIND_PROFILE].add(profile)
     signals[KIND_SID].update(sid.lower() for sid in _ACCOUNT_SID_RE.findall(content))
     signals[KIND_USERSID].update(sid.lower() for sid in _HKU_SID_RE.findall(content))

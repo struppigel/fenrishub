@@ -437,16 +437,7 @@ body.panel-resizing * {
 /* Badge always reflects its own status colour so the verdict is visible even
    when the surrounding line is coloured differently (e.g. only a matched
    substring or path is coloured, or a lower-priority rule colours the line). */
-.log-line .status-badge.status-b { color: var(--la-status-b); }
-.log-line .status-badge.status-p { color: var(--la-status-p); }
-.log-line .status-badge.status-c { color: var(--la-status-c); }
-.log-line .status-badge.status-w { color: var(--la-status-w); }
-.log-line .status-badge.status-a { color: var(--la-status-a); }
-.log-line .status-badge.status-g { color: var(--la-status-g); }
-.log-line .status-badge.status-s { color: var(--la-status-s); }
-.log-line .status-badge.status-i { color: var(--la-status-i); }
-.log-line .status-badge.status-j { color: var(--la-status-j); }
-.log-line .status-badge.status-unknown { color: var(--la-status-unknown); }
+.log-line .status-badge:is(.status-b, .status-p, .status-c, .status-w, .status-a, .status-g, .status-s, .status-i, .status-j, .status-unknown) { color: var(--status-color); }
 
 .rule-review-content:focus {
     outline: none;
@@ -615,31 +606,13 @@ textarea.speech-capture-field {
     cursor: default;
 }
 
-.rule-candidate-item .status-badge.status-b { color: var(--la-status-b); }
-.rule-candidate-item .status-badge.status-p { color: var(--la-status-p); }
-.rule-candidate-item .status-badge.status-c { color: var(--la-status-c); }
-.rule-candidate-item .status-badge.status-w { color: var(--la-status-w); }
-.rule-candidate-item .status-badge.status-a { color: var(--la-status-a); }
-.rule-candidate-item .status-badge.status-g { color: var(--la-status-g); }
-.rule-candidate-item .status-badge.status-s { color: var(--la-status-s); }
-.rule-candidate-item .status-badge.status-i { color: var(--la-status-i); }
-.rule-candidate-item .status-badge.status-j { color: var(--la-status-j); }
-.rule-candidate-item .status-badge.status-unknown { color: var(--la-status-unknown); }
+.rule-candidate-item .status-badge:is(.status-b, .status-p, .status-c, .status-w, .status-a, .status-g, .status-s, .status-i, .status-j, .status-unknown) { color: var(--status-color); }
 
 .status-symbol {
     font-weight: bold;
 }
 
-.status-symbol.status-b { color: var(--la-status-b); }
-.status-symbol.status-p { color: var(--la-status-p); }
-.status-symbol.status-c { color: var(--la-status-c); }
-.status-symbol.status-w { color: var(--la-status-w); }
-.status-symbol.status-a { color: var(--la-status-a); }
-.status-symbol.status-g { color: var(--la-status-g); }
-.status-symbol.status-s { color: var(--la-status-s); }
-.status-symbol.status-i { color: var(--la-status-i); }
-.status-symbol.status-j { color: var(--la-status-j); }
-.status-symbol.status-unknown { color: var(--la-status-unknown); }
+.status-symbol:is(.status-b, .status-p, .status-c, .status-w, .status-a, .status-g, .status-s, .status-i, .status-j, .status-unknown) { color: var(--status-color); }
 
 .rule-candidate-meta {
     color: var(--la-text-muted);
@@ -999,29 +972,11 @@ textarea.speech-capture-field {
     cursor: wait;
 }
 
-.status-picker-option.status-b { color: var(--la-status-b); }
-.status-picker-option.status-p { color: var(--la-status-p); }
-.status-picker-option.status-c { color: var(--la-status-c); }
-.status-picker-option.status-w { color: var(--la-status-w); }
-.status-picker-option.status-a { color: var(--la-status-a); }
-.status-picker-option.status-g { color: var(--la-status-g); }
-.status-picker-option.status-s { color: var(--la-status-s); }
-.status-picker-option.status-i { color: var(--la-status-i); }
-.status-picker-option.status-j { color: var(--la-status-j); }
-.status-picker-option.status-unknown { color: var(--la-status-unknown); }
+.status-picker-option:is(.status-b, .status-p, .status-c, .status-w, .status-a, .status-g, .status-s, .status-i, .status-j, .status-unknown) { color: var(--status-color); }
 
 
 /* Override .log-line base color when a status class is applied */
-.log-line.status-b { color: var(--la-status-b); }
-.log-line.status-p { color: var(--la-status-p); }
-.log-line.status-c { color: var(--la-status-c); }
-.log-line.status-w { color: var(--la-status-w); }
-.log-line.status-a { color: var(--la-status-a); }
-.log-line.status-g { color: var(--la-status-g); }
-.log-line.status-s { color: var(--la-status-s); }
-.log-line.status-i { color: var(--la-status-i); }
-.log-line.status-j { color: var(--la-status-j); }
-.log-line.status-unknown { color: var(--la-status-unknown); }
+.log-line:is(.status-b, .status-p, .status-c, .status-w, .status-a, .status-g, .status-s, .status-i, .status-j, .status-unknown) { color: var(--status-color); }
 
 /* Legend toggle: hide log lines by status via container class.
    Matches on data-verdict-class (the verdict / dominant_status), NOT on the
@@ -1096,16 +1051,7 @@ textarea.speech-capture-field {
 /* Text coloured on its own, on top of the line's colour: matched substrings and
    file paths, and pending rules' tokens (see collectPartialHighlights). */
 .partial-highlight { color: inherit; }
-.partial-highlight.status-b { color: var(--la-status-b); }
-.partial-highlight.status-p { color: var(--la-status-p); }
-.partial-highlight.status-c { color: var(--la-status-c); }
-.partial-highlight.status-w { color: var(--la-status-w); }
-.partial-highlight.status-a { color: var(--la-status-a); }
-.partial-highlight.status-g { color: var(--la-status-g); }
-.partial-highlight.status-s { color: var(--la-status-s); }
-.partial-highlight.status-i { color: var(--la-status-i); }
-.partial-highlight.status-j { color: var(--la-status-j); }
-.partial-highlight.status-unknown { color: var(--la-status-unknown); }
+.partial-highlight:is(.status-b, .status-p, .status-c, .status-w, .status-a, .status-g, .status-s, .status-i, .status-j, .status-unknown) { color: var(--status-color); }
 /* Copied lines grey out entirely -- including the parts coloured on their own,
    which set an explicit colour and would otherwise ignore .line-text's. */
 .log-line.copied .partial-highlight { color: var(--la-text-disabled); }
@@ -1190,13 +1136,7 @@ button.lookup-menu-item {
     border-top: 1px solid var(--la-border);
 }
 
-.lookup-menu-item.status-b { color: var(--la-status-b); }
-.lookup-menu-item.status-p { color: var(--la-status-p); }
-.lookup-menu-item.status-c { color: var(--la-status-c); }
-.lookup-menu-item.status-w { color: var(--la-status-w); }
-.lookup-menu-item.status-g { color: var(--la-status-g); }
-.lookup-menu-item.status-s { color: var(--la-status-s); }
-.lookup-menu-item.status-j { color: var(--la-status-j); }
+.lookup-menu-item:is(.status-b, .status-p, .status-c, .status-w, .status-g, .status-s, .status-j) { color: var(--status-color); }
 
 @media (max-width: 980px) {
     .analyzer-toolbar-grid,

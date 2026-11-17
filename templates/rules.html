@@ -258,15 +258,6 @@
         flex-shrink: 0;
     }
 
-    .checkbox-label {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 12px;
-        color: var(--la-text-neutral);
-        cursor: pointer;
-    }
-
     .rule-count {
         font-size: 11px;
         color: var(--la-text-muted);
@@ -315,13 +306,9 @@
     .rule-source .parsed-arguments { color: var(--la-parsed-arguments); }
 
     .regex-warning {
-        font-size: 12px;
-        padding: 6px 10px;
         margin-top: 6px;
-        color: var(--la-warning-text);
-        background-color: var(--la-warning-bg);
-        border: 1px solid var(--la-warning-border);
     }
+
 </style>
 {% endblock %}
 
@@ -504,6 +491,7 @@
     {% endif %}
 </div>
 
+<script src="{% static 'js/rule_form.js' %}"></script>
 <script>
 const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
 const PRIORITY_MAX = {{ priority_max }};
@@ -520,57 +508,40 @@ function syncEditCaseInsensitiveWarning() {
 /* reverse('edit_rule', args=[0]) -> /rules/0/edit/; startEdit swaps in the real pk. */
 const EDIT_RULE_URL_TEMPLATE = "{% url 'edit_rule' 0 %}";
 
+/* The quick-edit panel's fields, for the logic shared with the rule editor (rule_form.js). */
+const EDIT_FORM = {
+    status: document.getElementById('editStatus'),
+    matchType: document.getElementById('editMatchType'),
+    wholeLog: document.getElementById('editWholeLog'),
+    wholeLogGroup: document.getElementById('editWholeLogGroup'),
+    priority: document.getElementById('editPriority'),
+    priorityGroup: document.getElementById('editPriority').closest('.form-group'),
+    colorWholeLine: document.getElementById('editColorWholeLine'),
+    colorWholeLineGroup: document.getElementById('editColorWholeLineGroup'),
+};
+
 function syncEditSourceTextMode() {
-    const isScript = document.getElementById('editMatchType').value === 'script';
-    const label = document.getElementById('editSourceTextLabel');
-    const textarea = document.getElementById('editSourceText');
-    const help = document.getElementById('editScriptHelp');
-    if (isScript) {
-        label.textContent = 'python script';
-        textarea.style.fontFamily = 'var(--la-font-mono, monospace)';
-        textarea.style.minHeight = '160px';
-        help.style.display = '';
-    } else {
-        label.textContent = 'source text';
-        textarea.style.fontFamily = '';
-        textarea.style.minHeight = '';
-        help.style.display = 'none';
-    }
+    const isScript = EDIT_FORM.matchType.value === 'script';
+    document.getElementById('editSourceTextLabel').textContent = isScript ? 'python script' : 'source text';
+    RuleForm.styleScriptTextarea(document.getElementById('editSourceText'), isScript);
+    document.getElementById('editScriptHelp').style.display = isScript ? '' : 'none';
 }
 
 function syncEditWholeLogMode() {
-    const status = document.getElementById('editStatus').value;
-    const matchType = document.getElementById('editMatchType').value;
-    const group = document.getElementById('editWholeLogGroup');
-    const checkbox = document.getElementById('editWholeLog');
-    const eligible = status === 'A' && (matchType === 'regex' || matchType === 'script');
-    if (eligible) {
-        group.style.display = '';
-    } else {
-        group.style.display = 'none';
-        checkbox.checked = false;
-    }
-    const wholeLog = checkbox.checked;
-    /* Priority has no effect on whole-log alerts -- hide the knob. */
-    document.getElementById('editPriority').closest('.form-group').style.display = wholeLog ? 'none' : '';
-    /* Whole-log scripts read the full log from `log`, not `line`. */
-    if (wholeLog && matchType === 'script') {
+    const wholeLog = RuleForm.syncWholeLog(EDIT_FORM);
+    /* Whole-log scripts read the full log from `log`, per-line scripts one line
+     * from `line`. Set both branches so unticking whole-log restores the text. */
+    if (EDIT_FORM.matchType.value === 'script') {
+        const variable = wholeLog
+            ? '<code>log</code> holds the entire log'
+            : '<code>line</code> holds the log line';
         document.getElementById('editScriptHelp').innerHTML =
-            'Python snippet. <code>log</code> holds the entire log and the <code>re</code> module is available; set <code>result</code> to truthy or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.';
+            'Python snippet. ' + variable + ' and the <code>re</code> module is available; set <code>result</code> to truthy or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.';
     }
 }
 
-/* Only substring, file path and regex rules colour just their match; every
- * other type already colours the whole line, so the choice is offered for
- * those. Whole-log rules colour no lines at all, so not for them either. */
-const COLOR_WHOLE_LINE_MATCH_TYPES = ['substring', 'filepath', 'regex'];
 function syncEditColorWholeLineMode() {
-    const offered = COLOR_WHOLE_LINE_MATCH_TYPES.includes(document.getElementById('editMatchType').value) &&
-        !document.getElementById('editWholeLog').checked;
-    document.getElementById('editColorWholeLineGroup').style.display = offered ? '' : 'none';
-    if (!offered) {
-        document.getElementById('editColorWholeLine').checked = false;
-    }
+    RuleForm.syncColorWholeLine(EDIT_FORM);
 }
 
 function startEdit(pk, status, matchType, sourceText, description, isEnabled, priority, wholeLog, colorWholeLine) {
@@ -596,14 +567,7 @@ function startEdit(pk, status, matchType, sourceText, description, isEnabled, pr
 }
 
 document.getElementById('editMatchType').addEventListener('change', function () {
-    const priorityInput = document.getElementById('editPriority');
-    if (priorityInput.dataset.userTouched !== 'true') {
-        const fallback = DEFAULT_PRIORITY_BY_MATCH_TYPE[this.value];
-        if (fallback !== undefined) {
-            priorityInput.value = String(fallback);
-            priorityInput.dataset.prevValue = priorityInput.value;
-        }
-    }
+    RuleForm.applyDefaultPriority(EDIT_FORM, DEFAULT_PRIORITY_BY_MATCH_TYPE);
     syncEditSourceTextMode();
     syncEditWholeLogMode();
     syncEditColorWholeLineMode();
@@ -622,14 +586,7 @@ document.getElementById('editWholeLog').addEventListener('change', function () {
     syncEditColorWholeLineMode();
 });
 
-document.getElementById('editPriority').addEventListener('change', function () {
-    if (parseInt(this.value, 10) === PRIORITY_MAX && !confirm(HIGHEST_PRIORITY_WARNING)) {
-        this.value = this.dataset.prevValue || '';
-        return;
-    }
-    this.dataset.prevValue = this.value;
-    this.dataset.userTouched = 'true';
-});
+RuleForm.bindPriorityConfirm(EDIT_FORM.priority, { max: PRIORITY_MAX, warning: HIGHEST_PRIORITY_WARNING });
 
 function cancelForm() {
     document.getElementById('editSection').style.display = 'none';

@@ -31,10 +31,11 @@ import urllib.request
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import IntegrityError, connections, transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils import timezone
 
+from . import background
 from .file_hashes import is_md5, is_sha256
 from .models import (
     CentralboxAutoQueue, CentralboxFreshLookup, CentralboxUsageMinute, HashAlias, HashVerdict, SiteConfig, UploadedLog,
@@ -180,8 +181,7 @@ def budget_used(key_id=BUDGET_READS):
 
 
 def _pause(until, reason):
-    SiteConfig.get_solo()
-    SiteConfig.objects.filter(pk=1).update(centralbox_paused_until=until, centralbox_pause_reason=reason[:200])
+    SiteConfig.update_solo(centralbox_paused_until=until, centralbox_pause_reason=reason[:200])
 
 
 def _record_success():
@@ -488,18 +488,13 @@ def check_upload_hashes(upload, max_calls=60, deadline_seconds=120.0):
 
 
 def _check_uploads_in_thread(upload_pks):
-    try:
-        for pk in upload_pks:
-            upload = UploadedLog.objects.filter(pk=pk).first()
-            if upload is None:
-                continue
-            result = check_upload_hashes(upload)
-            if not result.get('available'):
-                break
-    except Exception:
-        logger.exception('Background centralbox check failed')
-    finally:
-        connections.close_all()
+    for pk in upload_pks:
+        upload = UploadedLog.objects.filter(pk=pk).first()
+        if upload is None:
+            continue
+        result = check_upload_hashes(upload)
+        if not result.get('available'):
+            break
 
 
 def schedule_uploads_check(upload_pks):
@@ -517,10 +512,7 @@ def schedule_uploads_check(upload_pks):
         digest = hashlib.sha1(','.join(map(str, pks)).encode('ascii')).hexdigest()
         if not cache.add(f'centralbox-check:{digest}', 1, timeout=300):
             return False
-        threading.Thread(
-            target=_check_uploads_in_thread, args=(pks,),
-            name=f'centralbox-check-{pks[0]}', daemon=True,
-        ).start()
+        background.start(_check_uploads_in_thread, pks, name=f'centralbox-check-{pks[0]}')
         return True
     except Exception:
         logger.exception('Scheduling a centralbox check failed')

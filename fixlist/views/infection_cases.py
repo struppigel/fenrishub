@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.utils.http import urlencode
 from django.views.decorators.http import require_http_methods
 
+from ..api_params import is_truthy
 from ..models import (
     Fixlist,
     InfectionCase,
@@ -22,11 +23,14 @@ from ..models import (
 from ..permissions import user_can_delete_uploaded_log
 from ..rule_sets import resolve_user_rule_set_key
 from ..tagging import found_tags_by_upload, tags_for_listing
-from ..upload_utils import execute_merge, resolve_ordered_logs_for_merge
+from ..upload_utils import execute_merge
+from .upload_actions import run_merge_flow
 from .utils import (
     _autoclose_stale_cases,
     _purge_old_trash,
     build_uploaded_logs_zip,
+    collect_selected_ids,
+    flash_validation_errors,
     get_action_scoped_uploads,
 )
 
@@ -38,7 +42,7 @@ def _case_queryset_for_user(user):
 def _available_case_usernames_for_user(user):
     return list(
         get_action_scoped_uploads(user)
-        .filter(deleted_at__isnull=True)
+        .live()
         .values_list('forum_username', flat=True)
         .distinct()
         .order_by('forum_username')
@@ -255,9 +259,9 @@ def _seed_case_items(case, user):
     (logs, fixlists) linked, counted before linking (existing links are kept)."""
     names = case.all_usernames()
     if case.is_training:
-        log_scope = UploadedLog.objects.filter(deleted_at__isnull=True)
+        log_scope = UploadedLog.objects.live()
     else:
-        log_scope = get_action_scoped_uploads(user).filter(deleted_at__isnull=True)
+        log_scope = get_action_scoped_uploads(user).live()
     scoped_logs = list(log_scope.filter(forum_username__in=names).defer('content'))
     owned_fixlists = list(
         Fixlist.objects.filter(owner=user, deleted_at__isnull=True, username__in=names)
@@ -416,7 +420,7 @@ def infection_cases_view(request):
 def create_infection_case_view(request):
     username_choices = _available_case_usernames_for_user(request.user)
     all_username_choices = list(
-        UploadedLog.objects.filter(deleted_at__isnull=True)
+        UploadedLog.objects.live()
         .values_list('forum_username', flat=True)
         .distinct()
         .order_by('forum_username')
@@ -427,8 +431,8 @@ def create_infection_case_view(request):
         other_usernames = (request.POST.get('other_usernames') or '').strip()
         symptom_description = (request.POST.get('symptom_description') or '').strip()
         reference_url = (request.POST.get('reference_url') or '').strip()
-        auto_assign_new_items = (request.POST.get('auto_assign_new_items') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
-        is_training = (request.POST.get('is_training') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+        auto_assign_new_items = is_truthy(request.POST.get('auto_assign_new_items'))
+        is_training = is_truthy(request.POST.get('is_training'))
 
         infection_case = InfectionCase(
             owner=request.user,
@@ -442,9 +446,7 @@ def create_infection_case_view(request):
         try:
             infection_case.full_clean()
         except ValidationError as exc:
-            for field_errors in exc.message_dict.values():
-                for message in field_errors:
-                    messages.error(request, message)
+            flash_validation_errors(request, exc)
             return render(
                 request,
                 'create_infection_case.html',
@@ -492,11 +494,11 @@ def view_infection_case(request, case_id):
     # Any authenticated helper holding the link can read a case; only the owner
     # can mutate. Soft-deleted cases stay hidden from non-owners.
     infection_case = get_object_or_404(
-        InfectionCase.objects.filter(deleted_at__isnull=True),
+        InfectionCase.objects.live(),
         case_id=case_id,
     )
     can_edit = infection_case.owner_id == request.user.id
-    show_metadata_edit = can_edit and (request.GET.get('edit_meta') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+    show_metadata_edit = can_edit and is_truthy(request.GET.get('edit_meta'))
 
     if request.method == 'POST':
         if not can_edit:
@@ -508,14 +510,12 @@ def view_infection_case(request, case_id):
             infection_case.symptom_description = (request.POST.get('symptom_description') or '').strip()
             infection_case.reference_url = (request.POST.get('reference_url') or '').strip()
             requested_status = (request.POST.get('status') or '').strip()
-            infection_case.auto_assign_new_items = (request.POST.get('auto_assign_new_items') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+            infection_case.auto_assign_new_items = is_truthy(request.POST.get('auto_assign_new_items'))
             infection_case.set_status(requested_status)
             try:
                 infection_case.full_clean()
             except ValidationError as exc:
-                for field_errors in exc.message_dict.values():
-                    for message in field_errors:
-                        messages.error(request, message)
+                flash_validation_errors(request, exc)
             else:
                 infection_case.save()
                 if 'other_usernames' in request.POST:
@@ -660,57 +660,25 @@ def view_infection_case(request, case_id):
             return redirect('view_infection_case', case_id=infection_case.case_id)
 
         if action in {'merge_logs', 'confirm_merge_logs'}:
-            selected_ids = []
-            seen_ids = set()
-            for upload_id in request.POST.getlist('selected_upload_ids'):
-                normalized_id = str(upload_id).strip()
-                if not normalized_id or normalized_id in seen_ids:
-                    continue
-                seen_ids.add(normalized_id)
-                selected_ids.append(normalized_id)
-
-            case_logs_qs = _case_log_queryset(infection_case)
-            ordered_logs, error_message = resolve_ordered_logs_for_merge(selected_ids, case_logs_qs)
-            if error_message:
-                messages.error(request, error_message)
-                return redirect('view_infection_case', case_id=infection_case.case_id)
+            selected_ids = collect_selected_ids(request.POST, 'selected_upload_ids')
 
             case_url = reverse('view_infection_case', args=[infection_case.case_id])
 
-            if action == 'merge_logs':
-                usernames = sorted({log.forum_username for log in ordered_logs})
-                if len(usernames) > 1:
-                    return render(
-                        request,
-                        'merge_username_selection.html',
-                        {
-                            'selected_logs': ordered_logs,
-                            'selected_upload_ids': selected_ids,
-                            'usernames': usernames,
-                            'confirm_action': 'confirm_merge_logs',
-                            'submit_url': case_url,
-                            'cancel_url': case_url,
-                        },
-                    )
-                merged_log = _execute_case_merge(
-                    infection_case, ordered_logs, usernames[0], request.user,
-                )
+            def on_merged(merged_log):
                 messages.success(request, f'Merged log created with id {merged_log.upload_id}.')
-                return redirect('view_infection_case', case_id=infection_case.case_id)
+                return redirect(case_url)
 
-            selected_username = (request.POST.get('selected_username') or '').strip()
-            if not selected_username:
-                messages.error(request, 'Please select a username.')
-                return redirect('view_infection_case', case_id=infection_case.case_id)
-            available_usernames = {log.forum_username for log in ordered_logs}
-            if selected_username not in available_usernames:
-                messages.error(request, 'Invalid username selection.')
-                return redirect('view_infection_case', case_id=infection_case.case_id)
-            merged_log = _execute_case_merge(
-                infection_case, ordered_logs, selected_username, request.user,
+            return run_merge_flow(
+                request, selected_ids, _case_log_queryset(infection_case),
+                confirming=action == 'confirm_merge_logs',
+                confirm_action='confirm_merge_logs',
+                submit_url=case_url,
+                merge=lambda ordered_logs, username: _execute_case_merge(
+                    infection_case, ordered_logs, username, request.user,
+                ),
+                on_error=lambda: redirect(case_url),
+                on_done=on_merged,
             )
-            messages.success(request, f'Merged log created with id {merged_log.upload_id}.')
-            return redirect('view_infection_case', case_id=infection_case.case_id)
 
         if action == 'delete_note':
             note_id = (request.POST.get('note_id') or '').strip()
@@ -758,9 +726,9 @@ def view_infection_case(request, case_id):
     selectable_responses = Fixlist.objects.none()
     if can_edit:
         if infection_case.is_training:
-            available_uploads = UploadedLog.objects.filter(deleted_at__isnull=True).defer('content')
+            available_uploads = UploadedLog.objects.live().defer('content')
         else:
-            available_uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True).defer('content')
+            available_uploads = get_action_scoped_uploads(request.user).live().defer('content')
         available_fixlists = Fixlist.objects.filter(owner=request.user, deleted_at__isnull=True).defer('content')
 
         linked_upload_ids = {uploaded_log.upload_id for uploaded_log in linked_logs}
@@ -811,7 +779,7 @@ def view_infection_case(request, case_id):
 def infection_case_download_logs_view(request, case_id):
     """Download every log linked to a case bundled into a single zip archive."""
     infection_case = get_object_or_404(
-        InfectionCase.objects.filter(deleted_at__isnull=True),
+        InfectionCase.objects.live(),
         case_id=case_id,
     )
 
@@ -939,7 +907,7 @@ def infection_case_delete_view(request, case_id):
     )
 
     if request.method == 'POST':
-        move_linked_to_trash = (request.POST.get('move_linked_to_trash') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
+        move_linked_to_trash = is_truthy(request.POST.get('move_linked_to_trash'))
         deleted_at = timezone.now()
 
         trashed_logs = 0
@@ -947,12 +915,12 @@ def infection_case_delete_view(request, case_id):
         with transaction.atomic():
             if move_linked_to_trash:
                 # Deletion-protected items stay put; the case itself is still deleted.
-                trashed_logs = UploadedLog.objects.filter(
-                    pk__in=linked_log_ids, deleted_at__isnull=True, is_protected=False,
-                ).update(deleted_at=deleted_at)
-                trashed_fixlists = Fixlist.objects.filter(
-                    pk__in=linked_fixlist_ids, deleted_at__isnull=True, is_protected=False,
-                ).update(deleted_at=deleted_at)
+                trashed_logs = UploadedLog.objects.live().filter(
+                    pk__in=linked_log_ids, is_protected=False,
+                ).move_to_trash(deleted_at)
+                trashed_fixlists = Fixlist.objects.live().filter(
+                    pk__in=linked_fixlist_ids, is_protected=False,
+                ).move_to_trash(deleted_at)
 
             infection_case.deleted_at = deleted_at
             infection_case.save(update_fields=['deleted_at', 'updated_at'])

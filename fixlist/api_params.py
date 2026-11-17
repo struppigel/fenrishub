@@ -64,6 +64,11 @@ _TRUE = {'1', 'true', 'yes', 'on'}
 _FALSE = {'0', 'false', 'no', 'off', ''}
 
 
+def is_truthy(value) -> bool:
+    """Lenient form-field check: true/1/yes/on means True, anything else False."""
+    return str(value or '').strip().lower() in _TRUE
+
+
 def flag_param(params, name, default=False):
     """The parameter as a boolean: true/false, 1/0, yes/no or on/off."""
     value = params.get(name)

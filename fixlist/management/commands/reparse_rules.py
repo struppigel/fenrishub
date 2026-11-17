@@ -58,12 +58,7 @@ class Command(BaseCommand):
         if match_type_filter:
             qs = qs.filter(match_type=match_type_filter)
         else:
-            qs = qs.filter(
-                match_type__in=(
-                    ClassificationRule.MATCH_PARSED_ENTRY,
-                    ClassificationRule.MATCH_FILEPATH,
-                )
-            )
+            qs = qs.reparseable()
 
         total = qs.count()
         result = reparse_rules(qs, apply=apply_changes)

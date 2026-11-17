@@ -23,12 +23,7 @@ class Command(BaseCommand):
     help = "List parsed-entry and filepath rules with identical matching identity."
 
     def handle(self, *args, **options):
-        qs = ClassificationRule.objects.filter(
-            match_type__in=(
-                ClassificationRule.MATCH_PARSED_ENTRY,
-                ClassificationRule.MATCH_FILEPATH,
-            )
-        ).select_related('owner')
+        qs = ClassificationRule.objects.reparseable().select_related('owner')
         groups = find_rule_duplicates(qs)
         total = sum(len(g) for g in groups)
 

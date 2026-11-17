@@ -403,14 +403,7 @@ async function copyFrstPathFromLog() {
         return;
     }
 
-    try {
-        await navigator.clipboard.writeText(frstPath);
-        const originalText = copyButton.textContent;
-        copyButton.textContent = 'copied';
-        setTimeout(() => {
-            copyButton.textContent = originalText;
-        }, 1200);
-    } catch (error) {
+    if (!await Fenris.copyWithFeedback(frstPath, copyButton)) {
         alert('Unable to copy FRST path to clipboard.');
     }
 }

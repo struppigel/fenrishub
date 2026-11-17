@@ -19,12 +19,14 @@ then the oldest. Work is done on value rows, never on log content.
 
 from django.db.models import Q
 
+from .log_types import LOG_TYPE_ADDITION, LOG_TYPE_FRST, LOG_TYPE_FRST_AND_ADDITION
+
 DUPLICATE_ROW_FIELDS = (
     'pk', 'upload_id', 'content_hash', 'forum_username', 'scan_date',
     'log_type', 'total_line_count', 'created_at',
 )
-MERGED_LOG_TYPE = 'FRST&Addition'
-MERGED_PART_TYPES = {'FRST', 'Addition'}
+MERGED_LOG_TYPE = LOG_TYPE_FRST_AND_ADDITION
+MERGED_PART_TYPES = {LOG_TYPE_FRST, LOG_TYPE_ADDITION}
 REASON_SAME_CONTENT = 'same_content'
 REASON_SAME_SCAN = 'same_user_and_scan_date'
 

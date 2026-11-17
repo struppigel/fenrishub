@@ -196,7 +196,7 @@
     padding: 6px;
     min-height: 60px;
     resize: vertical;
-    background: var(--la-bg-secondary);
+    background: var(--la-bg-1);
     border: 1px solid var(--la-border);
     color: var(--la-text-primary);
     border-radius: 3px;
@@ -223,17 +223,7 @@
 }
 
 .add-items-backdrop {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 1000;
-    justify-content: center;
-    align-items: center;
-}
-
-.add-items-backdrop.show {
-    display: flex;
+    padding: 0;
 }
 
 .add-items-modal {
@@ -252,7 +242,7 @@
     padding: 6px 8px;
     margin-bottom: 10px;
     font-size: 13px;
-    background: var(--la-bg-secondary);
+    background: var(--la-bg-1);
     border: 1px solid var(--la-border);
     color: var(--la-text-primary);
     font-family: inherit;
@@ -431,7 +421,7 @@
         <div class="timeline-entry log">
         <div class="fixlist-item">
             <div style="flex: 1;">
-                <div class="fixlist-title">{% if can_edit %}<input class="log-merge-select" form="mergeCaseLogsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">{% endif %}<span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|log_type_css_slug }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span><a class="upload-id-link log-type-{{ uploaded_log.log_type|log_type_css_slug }}" href="{% url 'view_uploaded_log' uploaded_log.upload_id %}">{{ uploaded_log.upload_id }}</a>{% if uploaded_log.is_protected %}{% include "partials/protected_icon.html" with what="this log cannot be trashed, deleted, merged away or auto-purged" %}{% endif %}</div>
+                <div class="fixlist-title">{% if can_edit %}<input class="log-merge-select" form="mergeCaseLogsForm" type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}" aria-label="select {{ uploaded_log.upload_id }} for merge">{% endif %}{% include 'partials/log_type_badge.html' with log=uploaded_log %}{% include 'partials/upload_id_link.html' with log=uploaded_log %}{% if uploaded_log.is_protected %}{% include "partials/protected_icon.html" with what="this log cannot be trashed, deleted, merged away or auto-purged" %}{% endif %}</div>
                 <div class="fixlist-meta">
                     {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}
                 </div>
@@ -488,7 +478,7 @@
                         {% csrf_token %}
                         <input type="hidden" name="action" value="edit_note">
                         <input type="hidden" name="note_id" value="{{ note.pk }}">
-                        <textarea name="note_content" style="width: 100%; font-size: 0.85rem; padding: 6px; min-height: 60px; resize: vertical; background: var(--la-bg-secondary); border: 1px solid var(--la-border); color: var(--la-text-primary); border-radius: 3px; font-family: inherit;">{{ note.content }}</textarea>
+                        <textarea name="note_content" style="width: 100%; font-size: 0.85rem; padding: 6px; min-height: 60px; resize: vertical; background: var(--la-bg-1); border: 1px solid var(--la-border); color: var(--la-text-primary); border-radius: 3px; font-family: inherit;">{{ note.content }}</textarea>
                         <div class="note-form-buttons">
                             <button type="button" onclick="toggleEditNote('{{ note.pk }}')">cancel</button>
                             <button type="submit">save</button>
@@ -634,7 +624,7 @@
 </div>
 
 {% if can_edit %}
-<div id="addItemsModal" class="add-items-backdrop" role="dialog" aria-modal="true" aria-label="Add items">
+<div id="addItemsModal" class="modal-backdrop add-items-backdrop" role="dialog" aria-modal="true" aria-label="Add items">
     <div class="add-items-modal">
         <h3>add items to case</h3>
         <input type="text" class="add-items-search" id="addItemsSearch" placeholder="search by id, username, type..." autocomplete="off">
@@ -645,7 +635,7 @@
                 {% for uploaded_log in selectable_uploads %}
                 <label class="add-items-row" data-search="{{ uploaded_log.upload_id }} {{ uploaded_log.forum_username }} {{ uploaded_log.log_type }} {{ uploaded_log.original_filename }}">
                     <input type="checkbox" name="selected_upload_ids" value="{{ uploaded_log.upload_id }}">
-                    <span class="timeline-type-badge log log-type-{{ uploaded_log.log_type|log_type_css_slug }}">{% if uploaded_log.log_type == 'Unknown' %}Unknown Log{% else %}{{ uploaded_log.log_type }}{% endif %}</span>
+                    {% include 'partials/log_type_badge.html' with log=uploaded_log %}
                     <span class="add-items-row-details">{{ uploaded_log.upload_id }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}</span>
                 </label>
                 {% endfor %}
@@ -682,19 +672,11 @@ function copyResponseText(button) {
     if (!text.trim()) {
         return;
     }
-    navigator.clipboard.writeText(text).then(function() {
-        const original = button.textContent;
-        button.textContent = '✓';
-        setTimeout(() => { button.textContent = original; }, 1200);
-    });
+    Fenris.copyWithFeedback(text, button, '✓');
 }
 
 function copyUploadUrl(button) {
-    navigator.clipboard.writeText(button.dataset.url).then(function() {
-        const original = button.textContent;
-        button.textContent = 'copied';
-        setTimeout(() => { button.textContent = original; }, 1200);
-    });
+    Fenris.copyWithFeedback(button.dataset.url, button);
 }
 
 function confirmMergeCaseLogs() {

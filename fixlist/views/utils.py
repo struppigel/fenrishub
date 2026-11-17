@@ -17,7 +17,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Max, Q
 from django.urls import reverse
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 from datetime import timedelta
 from django.utils import timezone
 
@@ -32,8 +32,8 @@ def _purge_old_trash():
     now = timezone.now()
     trash_cutoff = now - timedelta(days=7)
     hard_cutoff = now - timedelta(days=30)
-    UploadedLog.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff, is_protected=False).delete()
-    Fixlist.objects.filter(deleted_at__isnull=False, deleted_at__lt=trash_cutoff, is_protected=False).delete()
+    UploadedLog.objects.trashed().filter(deleted_at__lt=trash_cutoff, is_protected=False).delete()
+    Fixlist.objects.trashed().filter(deleted_at__lt=trash_cutoff, is_protected=False).delete()
     UploadedLog.objects.filter(created_at__lt=hard_cutoff, is_protected=False).delete()
     Fixlist.objects.filter(created_at__lt=hard_cutoff, is_protected=False).delete()
     _purge_old_api_request_logs()
@@ -146,17 +146,6 @@ def get_action_scoped_uploads(user):
     )
 
 
-def get_updatable_uploads(user):
-    """
-    Logs a user can update analysis stats for.
-    
-    Returns: own channel plus general channel.
-    """
-    return UploadedLog.objects.filter(
-        Q(recipient_user=user) | Q(recipient_user__isnull=True)
-    )
-
-
 def default_upload_channel(user):
     """The uploads / trash channel shown when none is chosen: 'all' when the
     user's profile asks for it, otherwise 'mine'."""
@@ -207,6 +196,48 @@ def check_missing_ids(request, requested_ids, found_ids, *, item_label, target, 
     location = ' in trash' if in_trash else ''
     messages.error(request, f'Unable to find {item_label}(s){location}: {", ".join(missing)}.')
     return redirect_preserving_filters(request, target)
+
+
+def non_empty_params(**params) -> dict:
+    """The keyword arguments whose value is set, for building list-page query strings."""
+    return {key: value for key, value in params.items() if value}
+
+
+def flash_validation_errors(request, exc) -> None:
+    """Show every message of a model ValidationError as an error flash."""
+    for field_errors in exc.message_dict.values():
+        for message in field_errors:
+            messages.error(request, message)
+
+
+def sanitize_return_q(raw) -> str:
+    """Re-encode a caller-supplied list-page query string, dropping anything that
+    is not a valid key=value pair. A hostile value like `//evil.com` yields nothing,
+    so callers fall back to the plain list URL."""
+    value = (raw or '').strip()
+    if not value:
+        return ''
+    return urlencode(parse_qsl(value, keep_blank_values=True), doseq=True)
+
+
+def redirect_with_return_q(url_name: str, return_q):
+    """Back to a list page, keeping the filter/search the user came from."""
+    safe_query = sanitize_return_q(return_q)
+    if safe_query:
+        return redirect(f"{reverse(url_name)}?{safe_query}")
+    return redirect(url_name)
+
+
+def collect_selected_ids(querydict, key: str) -> list[str]:
+    """The non-blank values posted under ``key``, stripped and de-duplicated in order."""
+    selected = []
+    seen = set()
+    for raw in querydict.getlist(key):
+        normalized = str(raw).strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            selected.append(normalized)
+    return selected
 
 
 def safe_log_filename(uploaded_log) -> str:

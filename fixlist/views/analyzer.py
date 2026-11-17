@@ -33,7 +33,7 @@ from ..rule_sets import (
 )
 from ..tagging import attach_rule_tags, attach_tags_to_matches
 from ..upload_utils import get_fresh_cached_analysis, store_cached_analysis
-from ..validators import PayloadValidator, BadJsonError, PayloadTooLargeError
+from ..validators import PayloadValidator
 from ..rule_utils import (
     _normalize_pending_changes, _build_pending_rule_preview,
     _persist_selected_pending_rules,
@@ -42,7 +42,7 @@ from .auth import DEFAULT_ANALYZER_FIXLIST_TEMPLATE, effective_analyzer_fixlist_
 from .guest import deny_guests, guest_or_login_required, is_guest_request
 from .snippets import analyzer_snippets_for, shared_tag_snippets_for
 from .speeches import analyzer_speeches_for, shared_tag_speeches_for
-from .utils import get_action_scoped_uploads, get_updatable_uploads
+from .utils import get_action_scoped_uploads
 
 
 @guest_or_login_required
@@ -72,7 +72,7 @@ def log_analyzer_view(request):
             },
         )
 
-    uploads = get_action_scoped_uploads(request.user).filter(deleted_at__isnull=True).defer('content')[:200]
+    uploads = get_action_scoped_uploads(request.user).live().defer('content')[:200]
     requested_upload_id = (request.GET.get('upload_id') or '').strip()
     initial_upload_id = requested_upload_id if requested_upload_id else ''
     snippets_json = mark_safe(json.dumps(analyzer_snippets_for(request.user)))
@@ -142,12 +142,9 @@ def log_analyzer_view(request):
 @require_http_methods(["POST"])
 def analyze_log_api(request):
     """Analyze pasted FRST log content and return line-level classifications."""
-    try:
-        payload = PayloadValidator.json_payload(request)
-    except PayloadTooLargeError as exc:
-        return PayloadValidator.error_response(str(exc), status=413)
-    except BadJsonError:
-        return PayloadValidator.error_response('Invalid JSON payload.')
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
 
     log_text = payload.get('log', '')
     if not isinstance(log_text, str):
@@ -186,7 +183,7 @@ def analyze_log_api(request):
                 # viewer would overwrite the recipient's listing stats.
                 if (
                     viewer_key == resolve_effective_rule_set_key(uploaded_log)
-                    and get_updatable_uploads(request.user).filter(pk=uploaded_log.pk).exists()
+                    and get_action_scoped_uploads(request.user).filter(pk=uploaded_log.pk).exists()
                 ):
                     uploaded_log.apply_analysis_summary(analysis.get('summary', {}))
                     uploaded_log.save(update_fields=UploadedLog.analysis_stat_update_fields())
@@ -228,12 +225,9 @@ def uploaded_log_cached_analysis_api(request, upload_id):
 @require_http_methods(["POST"])
 def analyze_line_details_api(request):
     """Inspect a single line and return parsed metadata plus matching rule details."""
-    try:
-        payload = PayloadValidator.json_payload(request)
-    except PayloadTooLargeError as exc:
-        return PayloadValidator.error_response(str(exc), status=413)
-    except BadJsonError:
-        return PayloadValidator.error_response('Invalid JSON payload.')
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
 
     line = payload.get('line', '')
     requested_status = payload.get('status', ClassificationRule.STATUS_UNKNOWN)
@@ -274,12 +268,9 @@ def analyze_line_details_api(request):
 @require_http_methods(["POST"])
 def preview_pending_rule_changes_api(request):
     """Preview optional rule persistence before creating a fixlist."""
-    try:
-        payload = PayloadValidator.json_payload(request)
-    except PayloadTooLargeError as exc:
-        return PayloadValidator.error_response(str(exc), status=413)
-    except BadJsonError:
-        return PayloadValidator.error_response('Invalid JSON payload.')
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
 
     pending_changes = payload.get('pending_changes', [])
     normalized_changes, invalid_changes = _normalize_pending_changes(pending_changes)
@@ -296,12 +287,9 @@ def preview_pending_rule_changes_api(request):
 @require_http_methods(["POST"])
 def persist_pending_rule_changes_api(request):
     """Persist selected pending analyzer changes as classification rules immediately."""
-    try:
-        payload = PayloadValidator.json_payload(request)
-    except PayloadTooLargeError as exc:
-        return PayloadValidator.error_response(str(exc), status=413)
-    except BadJsonError:
-        return PayloadValidator.error_response('Invalid JSON payload.')
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
 
     pending_changes = payload.get('pending_changes', [])
     selected_ids = payload.get('selected_rule_change_ids', [])
@@ -333,12 +321,9 @@ def persist_pending_rule_changes_api(request):
 @require_http_methods(["POST"])
 def update_analyzed_line_status_api(request):
     """Validate a status override payload without persisting it to the database."""
-    try:
-        payload = PayloadValidator.json_payload(request)
-    except PayloadTooLargeError as exc:
-        return PayloadValidator.error_response(str(exc), status=413)
-    except BadJsonError:
-        return PayloadValidator.error_response('Invalid JSON payload.')
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
 
     line = payload.get('line', '')
     status = payload.get('status', '')

@@ -4,21 +4,7 @@ async function requestLogAnalysis(logText, uploadId = '') {
         payload.upload_id = uploadId;
     }
 
-    const response = await fetch(ANALYZE_LOG_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCookie('csrftoken'),
-        },
-        body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to analyze log.');
-    }
-
-    return response.json();
+    return Fenris.postJson(ANALYZE_LOG_URL, payload, { errorMessage: 'Failed to analyze log.' });
 }
 
 const _lineDetailsCache = new Map();
@@ -30,21 +16,7 @@ async function requestLineDetails(line, status) {
         return cached;
     }
 
-    const response = await fetch(LINE_DETAILS_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCookie('csrftoken'),
-        },
-        body: JSON.stringify({ line, status }),
-    });
-
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to inspect line details.');
-    }
-
-    const result = await response.json();
+    const result = await Fenris.postJson(LINE_DETAILS_URL, { line, status }, { errorMessage: 'Failed to inspect line details.' });
     _lineDetailsCache.set(cacheKey, result);
     return result;
 }
@@ -104,16 +76,11 @@ function applyLogPanelRatio(ratio) {
 }
 
 function saveLogPanelRatio() {
-    try {
-        localStorage.setItem(LOG_PANEL_RATIO_KEY, String(logPanelRatio));
-    } catch (e) {}
+    Fenris.storage.set(LOG_PANEL_RATIO_KEY, logPanelRatio);
 }
 
 function initPanelSplitter() {
-    let stored = null;
-    try {
-        stored = localStorage.getItem(LOG_PANEL_RATIO_KEY);
-    } catch (e) {}
+    const stored = Fenris.storage.get(LOG_PANEL_RATIO_KEY);
     applyLogPanelRatio(stored === null ? LOG_PANEL_RATIO_DEFAULT : parseFloat(stored));
 
     const splitter = document.getElementById('panelSplitter');
@@ -194,9 +161,7 @@ function setRightPanelClosed(closed) {
     const panel = document.getElementById('rightPanel');
     const focusWasInside = Boolean(panel && panel.contains(document.activeElement));
     applyRightPanelClosed(target);
-    try {
-        localStorage.setItem(RIGHT_PANEL_CLOSED_KEY, target ? '1' : '0');
-    } catch (e) {}
+    Fenris.storage.setFlag(RIGHT_PANEL_CLOSED_KEY, target);
     if (target) {
         if (focusWasInside) {
             const openButton = document.getElementById('rightPanelOpenButton');
@@ -209,11 +174,7 @@ function setRightPanelClosed(closed) {
 }
 
 function initRightPanelToggle() {
-    let stored = null;
-    try {
-        stored = localStorage.getItem(RIGHT_PANEL_CLOSED_KEY);
-    } catch (e) {}
-    applyRightPanelClosed(stored === '1');
+    applyRightPanelClosed(Fenris.storage.flag(RIGHT_PANEL_CLOSED_KEY));
 
     const openButton = document.getElementById('rightPanelOpenButton');
     if (openButton) openButton.addEventListener('click', () => setRightPanelClosed(false));
@@ -266,9 +227,7 @@ function initRightPanelState() {
     activeRightPanel = 'fix';
     // Clean up the tab choice older versions stored, which made a new log
     // open on the response.
-    try {
-        localStorage.removeItem(ACTIVE_RIGHT_PANEL_KEY);
-    } catch (e) {}
+    Fenris.storage.remove(ACTIVE_RIGHT_PANEL_KEY);
     applyRightPanelState();
 }
 
@@ -288,16 +247,9 @@ function ensureFixlistPanelActive() {
 function initIgnoreFirewallRulesState() {
     const checkbox = document.getElementById('bulkIgnoreFirewallRules');
     if (!checkbox) return;
-    try {
-        const stored = localStorage.getItem(IGNORE_FIREWALL_RULES_KEY);
-        if (stored !== null) {
-            checkbox.checked = stored === '1';
-        }
-    } catch (e) {}
+    checkbox.checked = Fenris.storage.flag(IGNORE_FIREWALL_RULES_KEY, checkbox.checked);
     checkbox.addEventListener('change', () => {
-        try {
-            localStorage.setItem(IGNORE_FIREWALL_RULES_KEY, checkbox.checked ? '1' : '0');
-        } catch (e) {}
+        Fenris.storage.setFlag(IGNORE_FIREWALL_RULES_KEY, checkbox.checked);
     });
 }
 
@@ -625,17 +577,11 @@ function applyAnalysisWarningsVisibility() {
 }
 
 function readStoredAnalysisWarningsHidden() {
-    try {
-        return localStorage.getItem(ANALYSIS_WARNINGS_HIDDEN_KEY) === '1';
-    } catch (e) {
-        return false;
-    }
+    return Fenris.storage.flag(ANALYSIS_WARNINGS_HIDDEN_KEY);
 }
 
 function setAllAnalysisWarningsHidden(hidden) {
-    try {
-        localStorage.setItem(ANALYSIS_WARNINGS_HIDDEN_KEY, hidden ? '1' : '0');
-    } catch (e) {}
+    Fenris.storage.setFlag(ANALYSIS_WARNINGS_HIDDEN_KEY, hidden);
     getAnalysisWarningElements().forEach((warning) => {
         warning.hidden = hidden;
     });
@@ -1098,30 +1044,9 @@ function closeLineCopyMenu() {
     }
 }
 
-async function copyToClipboard(value) {
-    if (typeof value !== 'string') return false;
-    try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(value);
-            return true;
-        }
-    } catch (err) {
-        // fall through to fallback
-    }
-    try {
-        const ta = document.createElement('textarea');
-        ta.value = value;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
-        return ok;
-    } catch (err) {
-        return false;
-    }
+// A named global (not Fenris.copyText directly) so tests can stub it.
+function copyToClipboard(value) {
+    return Fenris.copyText(value);
 }
 
 function openLineCopyMenu(trigger, index) {
@@ -1136,12 +1061,6 @@ function openLineCopyMenu(trigger, index) {
     }
 
     const menu = ensureLineCopyMenu();
-    menu.innerHTML = '';
-
-    const header = document.createElement('div');
-    header.className = 'line-copy-menu-header';
-    header.textContent = 'copy to clipboard';
-    menu.appendChild(header);
 
     const items = buildLineLookupItems(entry);
     // Hashes of the line's files found in related logs (case_correlations.js),
@@ -1154,32 +1073,16 @@ function openLineCopyMenu(trigger, index) {
         });
     }
 
-    items.forEach(({ key, value, label: shown }) => {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'line-copy-menu-item';
-        item.setAttribute('role', 'menuitem');
-
-        const label = document.createElement('span');
-        label.className = 'line-copy-menu-key';
-        label.textContent = key;
-
-        const preview = document.createElement('span');
-        preview.className = 'line-copy-menu-value';
-        preview.textContent = shown || value;
-
-        item.appendChild(label);
-        item.appendChild(preview);
-        item.addEventListener('click', async (event) => {
-            event.stopPropagation();
+    PopupMenu.fill(menu, 'copy to clipboard', items.map(({ key, value, label }) => ({
+        key, value, label,
+        run: async () => {
             const ok = await copyToClipboard(value);
             if (!ok) {
                 alert('Failed to copy to clipboard.');
             }
             closeLineCopyMenu();
-        });
-        menu.appendChild(item);
-    });
+        },
+    })));
 
     menu.hidden = false;
     if (lineCopyMenuTrigger && lineCopyMenuTrigger !== trigger) {
@@ -1187,21 +1090,7 @@ function openLineCopyMenu(trigger, index) {
     }
     lineCopyMenuTrigger = trigger;
     trigger.setAttribute('aria-expanded', 'true');
-
-    const rect = trigger.getBoundingClientRect();
-    const menuWidth = menu.offsetWidth || 240;
-    const menuHeight = menu.offsetHeight || 0;
-    let left = rect.right - menuWidth;
-    if (left < 8) left = Math.max(8, rect.left);
-    if (left + menuWidth > window.innerWidth - 8) {
-        left = window.innerWidth - menuWidth - 8;
-    }
-    let top = rect.bottom + 4;
-    if (top + menuHeight > window.innerHeight - 8) {
-        top = Math.max(8, rect.top - menuHeight - 4);
-    }
-    menu.style.left = `${left + window.scrollX}px`;
-    menu.style.top = `${top + window.scrollY}px`;
+    PopupMenu.place(menu, trigger);
 }
 
 function setupLineCopyMenu() {
@@ -1253,17 +1142,11 @@ function openLineSearchMenu(trigger, index) {
     }
 
     const menu = ensureLineSearchMenu();
-    menu.innerHTML = '';
 
     // Hashes of the line's file found in related logs (case_correlations.js):
     // looked up on VirusTotal, like the hash menus of the log page.
     const correlatedHashes = typeof correlationHashValues === 'function'
         ? correlationHashValues(caseCorrelationsFor(entry)) : [];
-
-    const header = document.createElement('div');
-    header.className = 'line-copy-menu-header';
-    header.textContent = correlatedHashes.length ? 'search' : 'search on google';
-    menu.appendChild(header);
 
     const items = buildLineLookupItems(entry).map(({ key, value }) => ({
         key, value, url: 'https://www.google.com/search?q=' + encodeURIComponent(value),
@@ -1276,29 +1159,13 @@ function openLineSearchMenu(trigger, index) {
         if (hash.length === 64) items.push({ key: 'centralbox', value, url: 'https://centralbox.dev/analysis/' + hash });
     });
 
-    items.forEach(({ key, value, url }) => {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'line-copy-menu-item';
-        item.setAttribute('role', 'menuitem');
-
-        const label = document.createElement('span');
-        label.className = 'line-copy-menu-key';
-        label.textContent = key;
-
-        const preview = document.createElement('span');
-        preview.className = 'line-copy-menu-value';
-        preview.textContent = value;
-
-        item.appendChild(label);
-        item.appendChild(preview);
-        item.addEventListener('click', (event) => {
-            event.stopPropagation();
-            window.open(url, '_blank', 'noopener');
+    PopupMenu.fill(menu, correlatedHashes.length ? 'search' : 'search on google', items.map(({ key, value, url }) => ({
+        key, value,
+        run: () => {
+            Fenris.openUrl(url);
             closeLineSearchMenu();
-        });
-        menu.appendChild(item);
-    });
+        },
+    })));
 
     menu.hidden = false;
     if (lineSearchMenuTrigger && lineSearchMenuTrigger !== trigger) {
@@ -1306,21 +1173,7 @@ function openLineSearchMenu(trigger, index) {
     }
     lineSearchMenuTrigger = trigger;
     trigger.setAttribute('aria-expanded', 'true');
-
-    const rect = trigger.getBoundingClientRect();
-    const menuWidth = menu.offsetWidth || 240;
-    const menuHeight = menu.offsetHeight || 0;
-    let left = rect.right - menuWidth;
-    if (left < 8) left = Math.max(8, rect.left);
-    if (left + menuWidth > window.innerWidth - 8) {
-        left = window.innerWidth - menuWidth - 8;
-    }
-    let top = rect.bottom + 4;
-    if (top + menuHeight > window.innerHeight - 8) {
-        top = Math.max(8, rect.top - menuHeight - 4);
-    }
-    menu.style.left = `${left + window.scrollX}px`;
-    menu.style.top = `${top + window.scrollY}px`;
+    PopupMenu.place(menu, trigger);
 }
 
 function setupLineSearchMenu() {
@@ -1744,20 +1597,7 @@ function closeLookupMenu() {
 }
 
 function positionLookupMenu(menu, trigger) {
-    const rect = trigger.getBoundingClientRect();
-    const menuWidth = menu.offsetWidth || 220;
-    const menuHeight = menu.offsetHeight || 0;
-    let left = rect.left;
-    if (left + menuWidth > window.innerWidth - 8) {
-        left = window.innerWidth - menuWidth - 8;
-    }
-    if (left < 8) left = 8;
-    let top = rect.bottom + 4;
-    if (top + menuHeight > window.innerHeight - 8) {
-        top = Math.max(8, rect.top - menuHeight - 4);
-    }
-    menu.style.left = `${left + window.scrollX}px`;
-    menu.style.top = `${top + window.scrollY}px`;
+    PopupMenu.place(menu, trigger, { align: 'left', fallbackWidth: 220 });
 }
 
 function appendLookupMenuHeader(menu, text) {
@@ -2299,7 +2139,7 @@ function submitFixlistDirectly({ content, sourceUploadId, fixlistId, responseTex
         form.appendChild(input);
     };
 
-    addField('csrfmiddlewaretoken', getCookie('csrftoken') || '');
+    addField('csrfmiddlewaretoken', Fenris.csrfToken());
     addField('content', content || '');
     // Always posted, even when empty: the server treats an absent field as
     // "preserve", so clearing the response has to send the empty string.

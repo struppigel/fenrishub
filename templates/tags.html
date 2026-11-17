@@ -132,7 +132,7 @@
                         <input type="hidden" name="action" value="delete">
                         <input type="hidden" name="pk" value="{{ tag.pk }}">
                         <input type="hidden" name="return_q" value="{{ current_query_string }}">
-                        <button type="submit" style="background-color: var(--la-error-bg); color: var(--la-error-text); border-color: var(--la-error-border);" onclick="return confirm('Delete tag &quot;{{ tag.name|escapejs }}&quot;? It is removed from {{ tag.rule_count }} rule(s), {{ tag.speech_count }} speech(es) and {{ tag.snippet_count }} snippet(s).');">delete</button>
+                        <button type="submit" class="delete-btn" onclick="return confirm('Delete tag &quot;{{ tag.name|escapejs }}&quot;? It is removed from {{ tag.rule_count }} rule(s), {{ tag.speech_count }} speech(es) and {{ tag.snippet_count }} snippet(s).');">delete</button>
                     </form>
                     {% endif %}
                 </div>

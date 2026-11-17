@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Fenris{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'css/theme.css' %}">
+    <script src="{% static 'js/common.js' %}"></script>
     <style>
         * {
             margin: 0;
@@ -749,6 +750,8 @@
     {% endfor %}
     </style>
     {% block extra_head %}{% endblock %}
+    {# After base.html's own styles, before the page's: shared components. #}
+    <link rel="stylesheet" href="{% static 'css/components.css' %}">
     {% block extra_css %}{% endblock %}
 </head>
 <body{% if not word_wrap %} class="no-word-wrap"{% endif %}>

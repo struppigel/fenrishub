@@ -41,6 +41,8 @@ from RestrictedPython.Guards import (
 )
 from RestrictedPython.Eval import default_guarded_getitem, default_guarded_getiter
 
+from . import regex_bench
+
 
 # Augmented-assignment ops (``x += 1``) are compiled to a ``_inplacevar_`` call.
 # Support the common, side-effect-free operators; reject anything exotic.
@@ -178,17 +180,8 @@ def _run_with_timeout(fn, timeout_ms: float):
 
 
 # Inputs designed to surface accidental blow-ups (long lines, many tokens) when a
-# snippet is validated at save time. Mirrors analyzer.REGEX_ADVERSARIAL_INPUTS but
-# kept local to avoid an import cycle.
-ADVERSARIAL_INPUTS = (
-    "a" * 200,
-    "ab" * 100,
-    ("\\" + "a") * 100,
-    "a " * 100,
-    "1" * 200,
-    "C:\\Users\\" + "a" * 180 + "\\file.exe",
-    "aA1\\ " * 50,
-)
+# snippet is validated at save time: the same probes the regex check uses.
+ADVERSARIAL_INPUTS = tuple(payload for _label, payload in regex_bench.ADVERSARIAL_INPUTS)
 
 
 def evaluate_script(source: str, sample_lines=(), timeout_ms: float = SCRIPT_TIMEOUT_MS, var_name: str = "line") -> dict:

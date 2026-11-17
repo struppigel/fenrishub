@@ -1,0 +1,107 @@
+{% extends 'base.html' %}
+{% load static rule_tags %}
+{% comment %}
+  The snippets and speeches list pages. The view passes `library` (noun, plural,
+  list_url, toggle_url, compact_key) plus library_list_context(); snippets.html
+  and speeches.html fill in the blocks where the two differ.
+{% endcomment %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
+<link rel="stylesheet" href="{% static 'css/library.css' %}">
+{% block library_css %}{% endblock %}
+{% endblock %}
+
+{% block content %}
+<div>
+    {% block library_forms %}{% endblock %}
+
+    <form method="get" action="{% url library.list_url %}" class="library-toolbar">
+        <select name="category" onchange="this.form.submit()" style="width: auto; padding: 4px 8px;">
+            <option value="">all categories</option>
+            {% for cat in categories %}
+            <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="q" value="{{ search_query }}" placeholder="search by name, content" style="padding: 4px 8px; background: var(--la-bg-1); color: var(--la-text-main); border: 1px solid var(--la-border); font-family: inherit; font-size: 12px; width: 220px;">
+        {# always rendered, disabled when nobody else shares yet, so the feature stays visible #}
+        <select name="shared_by" onchange="this.form.submit()" style="width: auto; padding: 4px 8px;"{% if not sharing_users %} disabled title="no other user has shared a {{ library.noun }} yet"{% endif %}>
+            {% if sharing_users %}
+            <option value="">my {{ library.plural }}</option>
+            {% for u in sharing_users %}
+            <option value="{{ u.username }}" {% if shared_by == u.username %}selected{% endif %}>+ {{ u.username }}</option>
+            {% endfor %}
+            {% else %}
+            <option value="">no shared {{ library.plural }} yet</option>
+            {% endif %}
+        </select>
+        <span style="flex: 1;"></span>
+        <button type="button" id="togglePreviewButton" aria-pressed="false">hide previews</button>
+        {% block add_button %}{% endblock %}
+    </form>
+
+    {% if page_obj %}
+        {% for item in page_obj %}
+        <div class="library-item">
+            <div class="library-header">
+                <span class="library-name">{{ item.name }} <span class="category-badge">[{{ item.category }}]</span>{% if item.is_shared %} <span class="shared-badge">shared</span>{% endif %}{% block item_badges %}{% endblock %}{% if shared_by %} <span class="library-owner">by {{ item.owner.username }}</span>{% endif %}</span>
+                <div class="library-actions">
+                    {% if item.pk in analyzer_item_ids %}
+                    <button type="button" class="action-btn analyzer-btn active" data-toggle-pk="{{ item.pk }}" title="deselect {{ library.noun }} from log analyzer">selected</button>
+                    {% else %}
+                    <button type="button" class="action-btn analyzer-btn" data-toggle-pk="{{ item.pk }}" title="select {{ library.noun }} to be available in log analyzer">select</button>
+                    {% endif %}
+                    <button type="button" class="action-btn view-btn" data-name="{{ item.name|escapejs }}" data-content-id="{{ library.noun }}-content-{{ item.pk }}">view</button>
+                    {% if item.owner_id == request.user.id %}{% block owner_actions %}{% endblock %}{% endif %}
+                </div>
+            </div>
+            {% if item.trigger_tags.all %}
+            <div class="tag-trigger-summary">suggested for:
+                {% for tag in item.trigger_tags.all %}<span class="tag-chip{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% endfor %}
+            </div>
+            {% endif %}
+            <div class="library-content-preview">{{ item.content }}</div>
+            <pre id="{{ library.noun }}-content-{{ item.pk }}" style="display:none;">{{ item.content }}</pre>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="info-box">
+            no {{ library.plural }} yet.
+        </div>
+    {% endif %}
+
+    {% if page_obj.paginator.num_pages > 1 %}
+    <div class="button-group" style="margin-top: 12px;">
+        {% if page_obj.has_previous %}
+        <a href="?{% if pagination_query %}{{ pagination_query }}&{% endif %}page={{ page_obj.previous_page_number }}"><button type="button">previous</button></a>
+        {% endif %}
+        <span style="padding: 8px 4px; font-size: 12px; color: var(--la-text-muted);">page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+        {% if page_obj.has_next %}
+        <a href="?{% if pagination_query %}{{ pagination_query }}&{% endif %}page={{ page_obj.next_page_number }}"><button type="button">next</button></a>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<div id="viewModal" class="modal-backdrop">
+    <div class="library-modal-card" role="dialog" aria-modal="true" aria-labelledby="viewModalTitle">
+        <div class="library-modal-header">
+            <span id="viewModalTitle" class="library-modal-title">{{ library.noun }}</span>
+            <button type="button" class="action-btn" id="viewModalClose">close</button>
+        </div>
+        <div class="library-modal-body">
+            <pre id="viewModalContent" class="library-modal-content"></pre>
+        </div>
+    </div>
+</div>
+
+<script src="{% static 'js/library_page.js' %}"></script>
+<script>
+initLibraryPage({
+    noun: '{{ library.noun|escapejs }}',
+    compactKey: '{{ library.compact_key|escapejs }}',
+    toggleUrl: '{% url library.toggle_url %}',
+});
+</script>
+{% block library_js %}{% endblock %}
+{% endblock %}

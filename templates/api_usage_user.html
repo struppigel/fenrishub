@@ -11,28 +11,6 @@
         font-size: 12px;
         margin-bottom: 10px;
     }
-    .api-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12px;
-        margin-bottom: 16px;
-    }
-    .api-table th,
-    .api-table td {
-        text-align: left;
-        padding: 6px 8px;
-        border-bottom: 1px solid var(--la-border-muted);
-        vertical-align: top;
-    }
-    .api-table th {
-        color: var(--la-text-muted);
-        font-weight: 600;
-    }
-    .api-table td.num,
-    .api-table th.num {
-        text-align: right;
-        font-variant-numeric: tabular-nums;
-    }
     .api-table td.target {
         word-break: break-all;
         max-width: 320px;
@@ -52,7 +30,7 @@
 <div class="api-help"><a href="{% url 'api_usage' %}">back to all users</a></div>
 
 <h3>tokens</h3>
-<table class="api-table">
+<table class="data-table">
     <thead>
         <tr><th>name</th><th>token</th><th>created</th><th>expires</th><th>last used</th><th>state</th><th></th></tr>
     </thead>
@@ -92,7 +70,7 @@
 </form>
 
 <h3>per day, last 30 days</h3>
-<table class="api-table">
+<table class="data-table">
     <thead>
         <tr><th>day</th><th class="num">requests</th><th class="num">distinct uploads</th><th class="num">served</th><th class="num">429s</th></tr>
     </thead>
@@ -112,7 +90,7 @@
 </table>
 
 <h3>last {{ recent_limit }} requests</h3>
-<table class="api-table">
+<table class="data-table">
     <thead>
         <tr><th>time</th><th>endpoint</th><th>target</th><th class="num">status</th><th class="num">bytes</th><th class="num">ms</th><th>token</th><th>ip</th><th>user agent</th></tr>
     </thead>

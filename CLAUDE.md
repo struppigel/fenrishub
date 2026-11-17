@@ -53,6 +53,18 @@ python manage.py runserver             # dev server
 python manage.py purge_old_trash       # cleanup soft-deleted records
 ```
 
+## Shared helpers (reuse instead of re-implementing)
+
+- `fixlist/regex_engine.py` — re2-first compile, re2 Sets, match ranges; `regex_bench.py` — slow-regex probes
+- `fixlist/status_types.py` — status codes, `dominant_status`, `precedence_rank`, `STATUS_PAINT`
+- `fixlist/log_types.py` — built-in log type names and groups; `trash.py` + `SoftDeleteQuerySet` (`.live()`, `.trashed()`, `.move_to_trash()`)
+- `fixlist/background.py` — `start()` for work off the request thread
+- `fixlist/views/utils.py`, `api_params.py`, `validators.PayloadValidator.json_object` — request parsing helpers
+- `fixlist/views/library_items.py` — snippets and speeches share list/validation/selection code
+- `static/js/common.js` (`Fenris.*`: CSRF, JSON requests, clipboard, storage, status maps) is loaded on every page;
+  also `popup_menu.js`, `correlation_format.js`, `rule_form.js`, `rule_highlight.js`, `library_page.js`
+- `static/css/components.css` — shared buttons, tabs, modal backdrop, tables
+
 ## Rule matching
 
 Matcher tiers (first match wins, lower tiers are shadowed):

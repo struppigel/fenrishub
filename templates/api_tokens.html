@@ -137,7 +137,7 @@
         <div class="api-new-token">
             <strong>new token "{{ new_token.name }}"</strong> - copy it now, it will not be shown again:
             <code id="newApiToken">{{ new_token_raw }}</code>
-            <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('newApiToken').textContent)">copy token</button>
+            <button type="button" onclick="Fenris.copyWithFeedback(document.getElementById('newApiToken').textContent, this)">copy token</button>
             <div class="api-help" style="margin-top: 8px;">The setup instructions below already contain this token.</div>
         </div>
     {% endif %}
@@ -179,7 +179,7 @@
       }
     }
   },</div>
-                <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('desktopConfig').textContent)">copy config block</button>
+                <button type="button" onclick="Fenris.copyWithFeedback(document.getElementById('desktopConfig').textContent, this)">copy config block</button>
                 <div class="api-help" style="margin-top: 6px;">
                     If the file already has an <code>"mcpServers"</code> section, add only the <code>"fenrishub"</code>
                     entry inside it, with a comma between entries. If the file was empty, it should read

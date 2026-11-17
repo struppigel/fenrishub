@@ -1,0 +1,1 @@
+{% load rule_tags %}{# The log type badge of an upload; `log`: the UploadedLog. #}<span class="timeline-type-badge log log-type-{{ log.log_type|log_type_css_slug }}">{% if log.log_type == 'Unknown' %}Unknown Log{% else %}{{ log.log_type }}{% endif %}</span>

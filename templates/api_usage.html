@@ -11,28 +11,6 @@
         font-size: 12px;
         margin-bottom: 10px;
     }
-    .api-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12px;
-        margin-bottom: 16px;
-    }
-    .api-table th,
-    .api-table td {
-        text-align: left;
-        padding: 6px 8px;
-        border-bottom: 1px solid var(--la-border-muted);
-        vertical-align: top;
-    }
-    .api-table th {
-        color: var(--la-text-muted);
-        font-weight: 600;
-    }
-    .api-table td.num,
-    .api-table th.num {
-        text-align: right;
-        font-variant-numeric: tabular-nums;
-    }
     .api-flag {
         color: var(--la-status-b);
     }
@@ -47,7 +25,7 @@
     and {{ limits.bytes_per_day|filesizeformat }} per 24 hours. Rows are sorted by requests in the last 24 hours.
 </div>
 
-<table class="api-table">
+<table class="data-table">
     <thead>
         <tr>
             <th>user</th>
@@ -86,7 +64,7 @@
 
 <h3>failed authentication, last 24 hours</h3>
 <div class="api-help">Requests with a missing, invalid, expired or revoked token, by client IP.</div>
-<table class="api-table">
+<table class="data-table">
     <thead>
         <tr><th>ip</th><th class="num">attempts</th><th>last attempt</th></tr>
     </thead>

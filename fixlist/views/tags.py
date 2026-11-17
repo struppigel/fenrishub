@@ -19,7 +19,6 @@ from django.db.models import Count, Q
 from django.db.models.functions import Lower
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from ..analyzer import parse_rule_line
@@ -49,8 +48,8 @@ from ..tagging import (
     tag_rule_counts,
     unmatched_tagged_rule_ids,
 )
-from ..validators import BadJsonError, PayloadTooLargeError, PayloadValidator
-from .rules import _sanitize_return_q
+from ..validators import PayloadValidator
+from .utils import non_empty_params, redirect_with_return_q
 
 TAGS_PER_PAGE = 12
 
@@ -60,19 +59,6 @@ TAG_USAGE_FILTERS = {
     'no_speech': ('without speech', {'speech_count': 0}),
     'no_rules': ('without rules', {'rule_count': 0}),
 }
-
-
-def _json_payload(request):
-    """The request's JSON object, or a JsonResponse error to return instead."""
-    try:
-        payload = PayloadValidator.json_payload(request)
-    except PayloadTooLargeError as exc:
-        return None, PayloadValidator.error_response(str(exc), status=413)
-    except BadJsonError:
-        return None, PayloadValidator.error_response('Invalid JSON payload.')
-    if not isinstance(payload, dict):
-        return None, PayloadValidator.error_response('Invalid JSON payload.')
-    return payload, None
 
 
 def _id_list(payload, field):
@@ -109,10 +95,7 @@ def rule_tags_view(request):
             schedule_line_tag_refresh(None)
             messages.success(request, 'Recomputing the log line tags of all logs in the background.')
         # Back to the page and filters the delete came from.
-        safe_query = _sanitize_return_q(request.POST.get('return_q'))
-        if safe_query:
-            return redirect(f"{reverse('rule_tags')}?{safe_query}")
-        return redirect('rule_tags')
+        return redirect_with_return_q('rule_tags', request.POST.get('return_q'))
 
     # Older ?edit=<id> links open the editor page.
     edit_id = request.GET.get('edit', '').strip()
@@ -153,13 +136,11 @@ def rule_tags_view(request):
     for tag in tags:
         tag.pending_count, tag.unmatched_count = counts.get(tag.pk, (0, 0))
 
-    pagination_params = {}
-    if search_query:
-        pagination_params['q'] = search_query
-    if category_filter:
-        pagination_params['category'] = category_filter
-    if usage_filter:
-        pagination_params['usage'] = usage_filter
+    pagination_params = non_empty_params(
+        q=search_query,
+        category=category_filter,
+        usage=usage_filter,
+    )
 
     return render(request, 'tags.html', {
         'tags': tags,
@@ -253,44 +234,42 @@ def _entry_type_choices():
     return [(value, value.replace('_', ' ')) for value in values]
 
 
+def _linkable_items_context(user, tag, related_items, linkable):
+    """The tag editor's picker data for snippets or speeches.
+
+    `linkable`: every item the user can link, for the search box (there can be
+    many, so the page shows only the linked ones and finds the rest by name or
+    category). `others`: items using the tag that the user cannot link, listed
+    read-only.
+    """
+    linked_ids = set(related_items.values_list('pk', flat=True)) if tag else set()
+    linkable_qs = linkable(user)
+    return {
+        'linkable': [
+            {
+                'id': item.pk,
+                'name': item.name if item.owner_id == user.id else f'{item.name} ({item.owner.username})',
+                'category': item.category,
+                'linked': item.pk in linked_ids,
+            }
+            for item in linkable_qs.select_related('owner').order_by('category', 'name')
+        ],
+        'others': (
+            related_items.exclude(pk__in=linkable_qs.values('pk')).select_related('owner').order_by('name')
+            if tag else []
+        ),
+    }
+
+
 def _tag_editor(request, tag, prefill=None):
     status_labels = dict(ClassificationRule.STATUS_CHOICES)
-    linked_ids = set(tag.speeches.values_list('pk', flat=True)) if tag else set()
-    linked_snippet_ids = set(tag.snippets.values_list('pk', flat=True)) if tag else set()
+    speeches = _linkable_items_context(request.user, tag, tag.speeches if tag else None, linkable_speeches)
+    snippets = _linkable_items_context(request.user, tag, tag.snippets if tag else None, linkable_snippets)
     return render(request, 'rule_tag_editor.html', {
-        # Every speech the user can link, for the search box; there can be
-        # many, so the page shows only the linked ones and finds the rest by
-        # name or category. Speeches using the tag that the user cannot link
-        # are listed read-only.
-        'linkable_speeches_json': [
-            {
-                'id': speech.pk,
-                'name': speech.name if speech.owner_id == request.user.id else f'{speech.name} ({speech.owner.username})',
-                'category': speech.category,
-                'linked': speech.pk in linked_ids,
-            }
-            for speech in linkable_speeches(request.user).select_related('owner').order_by('category', 'name')
-        ],
-        'others_speeches': (
-            tag.speeches.exclude(pk__in=linkable_speeches(request.user).values('pk'))
-            .select_related('owner').order_by('name')
-            if tag else []
-        ),
-        # The same for snippets.
-        'linkable_snippets_json': [
-            {
-                'id': snippet.pk,
-                'name': snippet.name if snippet.owner_id == request.user.id else f'{snippet.name} ({snippet.owner.username})',
-                'category': snippet.category,
-                'linked': snippet.pk in linked_snippet_ids,
-            }
-            for snippet in linkable_snippets(request.user).select_related('owner').order_by('category', 'name')
-        ],
-        'others_snippets': (
-            tag.snippets.exclude(pk__in=linkable_snippets(request.user).values('pk'))
-            .select_related('owner').order_by('name')
-            if tag else []
-        ),
+        'linkable_speeches_json': speeches['linkable'],
+        'others_speeches': speeches['others'],
+        'linkable_snippets_json': snippets['linkable'],
+        'others_snippets': snippets['others'],
         'tag': tag,
         'tag_json': serialize_tag(tag) if tag else None,
         # From the "centralbox names" page: what to fill in (nothing is saved).
@@ -377,7 +356,7 @@ def rule_tag_save_api(request):
     popover and the rule forms' "create tag" dialog, so all of them validate
     the same way.
     """
-    payload, error = _json_payload(request)
+    payload, error = PayloadValidator.json_object(request)
     if error:
         return error
 
@@ -417,7 +396,7 @@ def rule_tag_preview_api(request):
     Body: {pattern?, exclude_pattern?, match_scope?, match_statuses?,
     match_entry_types?, tag_id?}. `pattern` is the regex, as before.
     """
-    payload, error = _json_payload(request)
+    payload, error = PayloadValidator.json_object(request)
     if error:
         return error
 
@@ -456,7 +435,7 @@ def rule_tag_suggest_api(request):
     entry type is derived from the (first) source line the way rule creation
     does it.
     """
-    payload, error = _json_payload(request)
+    payload, error = PayloadValidator.json_object(request)
     if error:
         return error
 

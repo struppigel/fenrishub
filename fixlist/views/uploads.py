@@ -6,7 +6,6 @@ Handles: uploading logs, viewing, diffing, merging, trashing, restoring, and man
 
 import difflib
 import logging
-import re
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -18,6 +17,7 @@ from django.db.models import Count, Q
 from django.db.models.functions import Substr
 from urllib.parse import urlencode
 
+from .. import trash
 from ..file_hashes import HASH_LOG_TYPES
 from ..forms import UploadedLogForm
 from ..log_converters import convert_log_to_response
@@ -30,12 +30,12 @@ from ..case_correlations import (
 )
 from ..machine_signals import KIND_COMPUTER, KIND_PROFILE, extract_signals, system_reason
 from ..models import LOG_TYPE_UNKNOWN, CorrelationCache, InfectionCaseLog, RuleTag, UploadedLog
+from ..status_types import STATUS_PAINT
 from ..permissions import user_can_delete_uploaded_log
-from ..rule_sets import SHARED_RULE_SET_KEY, resolve_effective_rule_set_key, resolve_user_rule_set_key
+from ..rule_sets import resolve_effective_rule_set_key, resolve_user_rule_set_key, rule_set_label
 from ..tagging import found_tags_by_upload, logs_with_tags, tags_for_listing
 from ..upload_utils import (
-    soft_delete_uploaded_log, restore_uploaded_log, execute_merge,
-    schedule_analysis_stats_recalc, get_fresh_cached_analysis, schedule_cached_analysis_refresh,
+    execute_merge, schedule_analysis_stats_recalc, get_fresh_cached_analysis, schedule_cached_analysis_refresh,
 )
 from .. import centralbox_auto
 from .centralbox import add_hash_summary, page_correlation_context, page_hash_context
@@ -46,11 +46,12 @@ from .upload_actions import (
     handle_confirm_merge_action, handle_mergealyze_action, handle_confirm_mergealyze_action,
     handle_rescan_stats_selected_action, handle_restore_selected_action,
     handle_delete_permanent_selected_action,
+    _flash, assign_upload, restore_upload, trash_upload, unassign_upload,
 )
 from .utils import (
     _anonymous_upload_limit, _consume_anonymous_upload_slot, _resolve_upload_recipient_username,
-    get_action_scoped_uploads, get_updatable_uploads, get_client_ip, _purge_old_trash,
-    redirect_preserving_filters, default_upload_channel,
+    get_action_scoped_uploads, get_client_ip, safe_log_filename, collect_selected_ids,
+    redirect_preserving_filters, default_upload_channel, non_empty_params,
 )
 
 
@@ -178,14 +179,7 @@ def uploaded_logs_view(request):
     if request.method == 'POST':
         action = request.POST.get('action', '')
 
-        selected_ids = []
-        seen_ids = set()
-        for upload_id in request.POST.getlist('selected_upload_ids'):
-            normalized_id = str(upload_id).strip()
-            if not normalized_id or normalized_id in seen_ids:
-                continue
-            seen_ids.add(normalized_id)
-            selected_ids.append(normalized_id)
+        selected_ids = collect_selected_ids(request.POST, 'selected_upload_ids')
 
         # Dispatch to action handlers
         upload_id = request.POST.get('upload_id', '').strip()
@@ -232,7 +226,7 @@ def uploaded_logs_view(request):
     if page_content_hashes:
         duplicate_keys = set(
             UploadedLog.objects
-            .filter(deleted_at__isnull=True, content_hash__in=page_content_hashes)
+            .live().filter(content_hash__in=page_content_hashes)
             .values('content_hash', 'recipient_user_id')
             .annotate(cnt=Count('id'))
             .filter(cnt__gt=1)
@@ -360,15 +354,12 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     for uploaded_log in page_obj.object_list:
         uploaded_log.rule_tags = tags_for_listing(tags_by_upload.get(uploaded_log.pk, []))
 
-    pagination_params = {}
-    if username_filter:
-        pagination_params['u'] = username_filter
-    if channel != default_channel:
-        pagination_params['channel'] = channel
-    if log_type_filter:
-        pagination_params['type'] = log_type_filter
-    if search_query:
-        pagination_params['q'] = search_query
+    pagination_params = non_empty_params(
+        u=username_filter,
+        channel=channel if channel != default_channel else None,
+        type=log_type_filter,
+        q=search_query,
+    )
 
     all_usernames = (
         list_visible_uploads.filter(**deleted_filter)
@@ -393,11 +384,10 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
     }
 
 
-_FRST_STAT_FIELDS = (
-    ('B', 'count_malware', 'b'), ('P', 'count_pup', 'p'), ('C', 'count_clean', 'c'),
-    ('A', 'count_alert', 'a'), ('!', 'count_warning', 'w'), ('G', 'count_grayware', 'g'),
-    ('S', 'count_security', 's'), ('I', 'count_info', 'i'), ('J', 'count_junk', 'j'),
-    ('?', 'count_unknown', 'u'),
+# (status code, UploadedLog count field, paint class) per verdict; '?' paints as 'u'.
+_FRST_STAT_FIELDS = tuple(
+    (code, field_name, STATUS_PAINT.get(code, 'u'))
+    for code, field_name in UploadedLog.ANALYSIS_STATUS_FIELD_MAP.items()
 )
 
 
@@ -410,7 +400,7 @@ def _apply_frst_rule_statuses(uploaded_log, highlight):
     now and is refreshed in the background for the next page load.
     """
     rule_set_key = resolve_effective_rule_set_key(uploaded_log)
-    label = 'shared' if rule_set_key == SHARED_RULE_SET_KEY else 'private'
+    label = rule_set_label(rule_set_key)
     payload = get_fresh_cached_analysis(uploaded_log, rule_set_key)
     applied = payload is not None and apply_analysis_statuses(highlight, uploaded_log.content, payload)
     if applied:
@@ -450,29 +440,12 @@ def view_uploaded_log(request, upload_id):
             return redirect('view_uploaded_log', upload_id=upload_id)
 
         if action == 'delete':
-            if uploaded_log.deleted_at is not None:
-                messages.error(request, f'Upload {upload_id} is already in trash.')
-                return redirect('view_uploaded_log', upload_id=upload_id)
-            if not user_can_delete_uploaded_log(request.user, uploaded_log):
-                messages.error(request, f'Only the assigned helper can delete {upload_id}.')
-                return redirect('view_uploaded_log', upload_id=upload_id)
-            if uploaded_log.is_protected:
-                messages.error(request, f'Upload {upload_id} is deletion-protected. Remove protection first.')
-                return redirect('view_uploaded_log', upload_id=upload_id)
-            soft_delete_uploaded_log(uploaded_log)
-            _purge_old_trash()
-            messages.success(request, f'Upload {upload_id} moved to trash.')
-            return redirect('uploaded_logs')
+            ok, message = trash_upload(request.user, uploaded_log)
+            _flash(request, ok, message)
+            return redirect('uploaded_logs') if ok else redirect('view_uploaded_log', upload_id=upload_id)
 
         if action == 'restore':
-            if uploaded_log.deleted_at is None:
-                messages.error(request, f'Upload {upload_id} is not in trash.')
-                return redirect('view_uploaded_log', upload_id=upload_id)
-            if not user_can_delete_uploaded_log(request.user, uploaded_log):
-                messages.error(request, f'Only the assigned helper can restore {upload_id}.')
-                return redirect('view_uploaded_log', upload_id=upload_id)
-            restore_uploaded_log(uploaded_log)
-            messages.success(request, f'Upload {upload_id} restored.')
+            _flash(request, *restore_upload(request.user, uploaded_log))
             return redirect('view_uploaded_log', upload_id=upload_id)
 
         if action == 'rename_forum_username':
@@ -483,26 +456,11 @@ def view_uploaded_log(request, upload_id):
             return redirect('view_uploaded_log', upload_id=upload_id)
 
         if action == 'assign_to_me':
-            if uploaded_log.recipient_user_id is not None:
-                messages.error(request, f'Upload {upload_id} is already assigned.')
-                return redirect('view_uploaded_log', upload_id=upload_id)
-
-            uploaded_log.recipient_user = request.user
-            uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
-            messages.success(request, f'Upload {upload_id} assigned to {request.user.username}.')
+            _flash(request, *assign_upload(request.user, uploaded_log))
             return redirect('view_uploaded_log', upload_id=upload_id)
 
         if action == 'unassign_to_general':
-            if uploaded_log.recipient_user_id is None:
-                messages.error(request, f'Upload {upload_id} is already unassigned.')
-                return redirect('view_uploaded_log', upload_id=upload_id)
-            if not user_can_delete_uploaded_log(request.user, uploaded_log):
-                messages.error(request, f'Only the assigned helper can unassign {upload_id}.')
-                return redirect('view_uploaded_log', upload_id=upload_id)
-
-            uploaded_log.recipient_user = None
-            uploaded_log.save(update_fields=['recipient_user', 'updated_at'])
-            messages.success(request, f'{upload_id} was unassigned')
+            _flash(request, *unassign_upload(request.user, uploaded_log))
             return redirect('view_uploaded_log', upload_id=upload_id)
 
     # Detection rules are editable, so a stored type can be stale; refresh it on view.
@@ -748,23 +706,12 @@ def uploads_trash_view(request):
     if request.method == 'POST':
         action = request.POST.get('action', '')
 
-        selected_ids = []
-        seen_ids = set()
-        for upload_id in request.POST.getlist('selected_upload_ids'):
-            normalized_id = str(upload_id).strip()
-            if not normalized_id or normalized_id in seen_ids:
-                continue
-            seen_ids.add(normalized_id)
-            selected_ids.append(normalized_id)
+        selected_ids = collect_selected_ids(request.POST, 'selected_upload_ids')
 
         if action == 'restore':
             upload_id = request.POST.get('upload_id', '').strip()
             uploaded_log = get_object_or_404(action_scope_uploads, upload_id=upload_id, deleted_at__isnull=False)
-            if not user_can_delete_uploaded_log(request.user, uploaded_log):
-                messages.error(request, f'Only the assigned helper can restore {upload_id}.')
-                return redirect_preserving_filters(request, 'uploads_trash')
-            restore_uploaded_log(uploaded_log)
-            messages.success(request, f'Upload {upload_id} restored.')
+            _flash(request, *restore_upload(request.user, uploaded_log))
             return redirect_preserving_filters(request, 'uploads_trash')
 
         if action == 'delete_permanent':
@@ -787,13 +734,10 @@ def uploads_trash_view(request):
             return handle_delete_permanent_selected_action(request, selected_ids)
 
         if action == 'empty_trash':
-            trashed_logs = [log for log in action_scope_uploads.filter(deleted_at__isnull=False)
+            trashed_logs = [log for log in action_scope_uploads.trashed()
                             if user_can_delete_uploaded_log(request.user, log)]
-            # Emptying the trash sweeps everything at once, so protected uploads are
-            # kept back instead of aborting the whole action.
-            deletable_logs = [log for log in trashed_logs if not log.is_protected]
-            protected_count = len(trashed_logs) - len(deletable_logs)
-            if not deletable_logs:
+            count, protected_count = trash.empty_trash(trashed_logs)
+            if not count:
                 if protected_count:
                     messages.error(
                         request,
@@ -802,9 +746,6 @@ def uploads_trash_view(request):
                 else:
                     messages.error(request, 'You have no deleted uploads to clean from trash.')
                 return redirect('uploads_trash')
-            count = len(deletable_logs)
-            for log in deletable_logs:
-                log.delete()
             kept = f' {protected_count} protected upload(s) kept.' if protected_count else ''
             messages.success(request, f'Trash emptied ({count} upload(s) permanently deleted).{kept}')
             return redirect('uploads_trash')
@@ -828,8 +769,7 @@ def download_uploaded_log(request, upload_id):
     """Download the raw content of an uploaded log as a text attachment."""
     uploaded_log = get_object_or_404(UploadedLog, upload_id=upload_id)
 
-    raw_name = uploaded_log.original_filename or f'{uploaded_log.upload_id}.txt'
-    safe_name = re.sub(r'[\\/:*?"<>|\r\n]', '_', raw_name)[:200] or 'log.txt'
+    safe_name = safe_log_filename(uploaded_log)
 
     response = HttpResponse(uploaded_log.content, content_type='text/plain; charset=utf-8')
     response['Content-Disposition'] = f'attachment; filename="{safe_name}"'

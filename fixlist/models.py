@@ -17,6 +17,7 @@ import time
 import mmh3
 from django.utils import timezone
 
+from .machine_signals import RAN_BY_WORDS
 from .status_types import STATUS_CHOICES as _STATUS_CHOICES, STATUS_CSS_CLASS
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,26 @@ def get_default_rule_owner_id():
     return fallback_user.id
 
 
+class SoftDeleteQuerySet(models.QuerySet):
+    """Querysets of the models with a `deleted_at` trash timestamp."""
+
+    def live(self):
+        """Rows not in the trash."""
+        return self.filter(deleted_at__isnull=True)
+
+    def trashed(self):
+        """Rows in the trash."""
+        return self.filter(deleted_at__isnull=False)
+
+    def move_to_trash(self, when=None) -> int:
+        """Move every row to the trash (one UPDATE); returns how many."""
+        from django.utils import timezone
+        return self.update(deleted_at=when or timezone.now())
+
+
 class Fixlist(models.Model):
+    objects = SoftDeleteQuerySet.as_manager()
+
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fixlists')
     source_uploaded_log = models.ForeignKey('UploadedLog', on_delete=models.SET_NULL, null=True, blank=True, related_name='fixlists')
     username = models.CharField(max_length=255)
@@ -230,6 +250,13 @@ class SiteConfig(models.Model):
     def get_solo(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    @classmethod
+    def update_solo(cls, **fields):
+        """UPDATE the single row in place (F() expressions allowed), creating it first if missing."""
+        if not cls.objects.filter(pk=1).update(**fields):
+            cls.objects.get_or_create(pk=1)
+            cls.objects.filter(pk=1).update(**fields)
 
     @classmethod
     def current_guest_token(cls):
@@ -455,7 +482,17 @@ def generate_infection_case_id():
     return f"ic-{secrets.token_hex(4)}"
 
 
+class ClassificationRuleQuerySet(models.QuerySet):
+    def reparseable(self):
+        """Rules whose stored entry fields come from parsing their source text."""
+        return self.filter(match_type__in=(
+            ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH,
+        ))
+
+
 class ClassificationRule(models.Model):
+    objects = ClassificationRuleQuerySet.as_manager()
+
     STATUS_MALWARE = 'B'
     STATUS_PUP = 'P'
     STATUS_CLEAN = 'C'
@@ -579,8 +616,11 @@ class ClassificationRule(models.Model):
         return f"{self.status} [{self.match_type}] p{self.priority} {self.source_text[:80]} ({owner_name})"
 
 
-TAG_CATEGORY_COLOR_RE = re.compile(r'^#[0-9A-Fa-f]{6}$')
-DEFAULT_TAG_CATEGORY_COLOR = '#cccccc'
+# A '#rrggbb' colour, as tag categories and log type badges store it.
+HEX_COLOR_RE = re.compile(r'^#[0-9A-Fa-f]{6}$')
+DEFAULT_COLOR = '#cccccc'
+TAG_CATEGORY_COLOR_RE = HEX_COLOR_RE
+DEFAULT_TAG_CATEGORY_COLOR = DEFAULT_COLOR
 # The default category starts with the colour tag badges had before
 # categories existed (--la-info).
 DEFAULT_TAG_CATEGORY_NAME = 'default'
@@ -739,10 +779,9 @@ class RuleTag(models.Model):
         return self.name
 
 
-LOG_TYPE_UNKNOWN = 'Unknown'
-LOG_TYPE_FRST = 'FRST'
-LOG_TYPE_ADDITION = 'Addition'
-LOG_TYPE_FRST_AND_ADDITION = 'FRST&Addition'
+from .log_types import (  # noqa: E402 - re-exported, many modules import these from models
+    ANALYZED_LOG_TYPES, LOG_TYPE_ADDITION, LOG_TYPE_FRST, LOG_TYPE_FRST_AND_ADDITION, LOG_TYPE_UNKNOWN,
+)
 
 _HEADER_WINDOW_CHARS = 4096
 _PATTERN_CACHE = {'version': None, 'rules': []}
@@ -866,7 +905,11 @@ def detect_log_type(content: str) -> str:
     return LOG_TYPE_UNKNOWN
 
 
-_SCAN_DATE_RE = re.compile(r'Ran by .+\((\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})\)')
+# "Ran by" in every language FRST writes, shared with machine_signals.
+_SCAN_DATE_RE = re.compile(
+    r'(?:' + '|'.join(re.escape(word) for word in RAN_BY_WORDS) + r') '
+    r'[^\r\n]{0,400}?\((\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})\)'
+)
 
 
 def extract_scan_date(content: str):
@@ -889,8 +932,8 @@ def extract_scan_date(content: str):
 
 
 LOG_TYPE_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9 &._-]{0,31}$')
-LOG_TYPE_COLOR_RE = re.compile(r'^#[0-9A-Fa-f]{6}$')
-DEFAULT_LOG_TYPE_COLOR = '#cccccc'
+LOG_TYPE_COLOR_RE = HEX_COLOR_RE
+DEFAULT_LOG_TYPE_COLOR = DEFAULT_COLOR
 RESERVED_LOG_TYPE_NAMES = {'unknown'}
 
 
@@ -988,7 +1031,46 @@ def _logtype_rule_deleted(sender, instance, **kwargs):
     _bump_logtype_rules_version()
 
 
-class UploadedLog(models.Model):
+class AnalysisCountsBase(models.Model):
+    """Per-status line counts and Fixlog result counts of an uploaded log; shared
+    by the log itself and its statistics snapshot (UploadedLogStat)."""
+
+    total_line_count = models.PositiveIntegerField(default=0)
+    count_malware = models.PositiveIntegerField(default=0)
+    count_pup = models.PositiveIntegerField(default=0)
+    count_clean = models.PositiveIntegerField(default=0)
+    count_alert = models.PositiveIntegerField(default=0)
+    count_warning = models.PositiveIntegerField(default=0)
+    count_grayware = models.PositiveIntegerField(default=0)
+    count_security = models.PositiveIntegerField(default=0)
+    count_info = models.PositiveIntegerField(default=0)
+    count_junk = models.PositiveIntegerField(default=0)
+    count_unknown = models.PositiveIntegerField(default=0)
+    fixlog_total = models.PositiveIntegerField(default=0)
+    fixlog_success = models.PositiveIntegerField(default=0)
+    fixlog_not_found = models.PositiveIntegerField(default=0)
+    fixlog_error = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        abstract = True
+
+    @staticmethod
+    def counts_from_summary(summary) -> dict:
+        """``{field: value}`` for total_line_count and the count_* fields from an
+        analysis summary (``{'total_lines': n, 'status_counts': {code: n}}``)."""
+        summary = summary if isinstance(summary, dict) else {}
+        status_counts = summary.get('status_counts', {})
+        if not isinstance(status_counts, dict):
+            status_counts = {}
+        counts = {'total_line_count': max(0, int(summary.get('total_lines', 0) or 0))}
+        for status_code, field_name in UploadedLog.ANALYSIS_STATUS_FIELD_MAP.items():
+            counts[field_name] = max(0, int(status_counts.get(status_code, 0) or 0))
+        return counts
+
+
+class UploadedLog(AnalysisCountsBase):
+    objects = SoftDeleteQuerySet.as_manager()
+
     # Kept as a hint for code that wants the canonical built-in names; not enforced.
     KNOWN_LOG_TYPES = (
         'FRST', 'Addition', 'FRST&Addition', 'Fixlog', 'Shortcut',
@@ -1025,21 +1107,6 @@ class UploadedLog(models.Model):
         default=False,
         help_text='Protected logs cannot be trashed, permanently deleted, merged away, or auto-purged.',
     )
-    total_line_count = models.PositiveIntegerField(default=0)
-    count_malware = models.PositiveIntegerField(default=0)
-    count_pup = models.PositiveIntegerField(default=0)
-    count_clean = models.PositiveIntegerField(default=0)
-    count_alert = models.PositiveIntegerField(default=0)
-    count_warning = models.PositiveIntegerField(default=0)
-    count_grayware = models.PositiveIntegerField(default=0)
-    count_security = models.PositiveIntegerField(default=0)
-    count_info = models.PositiveIntegerField(default=0)
-    count_junk = models.PositiveIntegerField(default=0)
-    count_unknown = models.PositiveIntegerField(default=0)
-    fixlog_total = models.PositiveIntegerField(default=0)
-    fixlog_success = models.PositiveIntegerField(default=0)
-    fixlog_not_found = models.PositiveIntegerField(default=0)
-    fixlog_error = models.PositiveIntegerField(default=0)
     FIXLOG_STAT_FIELDS = ['fixlog_total', 'fixlog_success', 'fixlog_not_found', 'fixlog_error']
     # Small precomputed [[label, value, severity], ...] chips for tool logs
     # (ESET, MAU, SecurityCheck, ...) shown in the uploads / cases lists.
@@ -1111,8 +1178,8 @@ class UploadedLog(models.Model):
         belong to. To avoid N+1 queries, callers should `select_related`
         `recipient_user__fenris_profile` on the queryset.
         """
-        from .rule_sets import SHARED_RULE_SET_KEY, resolve_effective_rule_set_key
-        return 'shared' if resolve_effective_rule_set_key(self) == SHARED_RULE_SET_KEY else 'private'
+        from .rule_sets import resolve_effective_rule_set_key, rule_set_label
+        return rule_set_label(resolve_effective_rule_set_key(self))
 
     @classmethod
     def analysis_stat_fields(cls):
@@ -1123,16 +1190,10 @@ class UploadedLog(models.Model):
         return [*cls.analysis_stat_fields(), 'updated_at']
 
     def apply_analysis_summary(self, summary: dict):
-        summary_payload = summary if isinstance(summary, dict) else {}
-        status_counts = summary_payload.get('status_counts', {})
-        if not isinstance(status_counts, dict):
-            status_counts = {}
+        for field_name, value in self.counts_from_summary(summary).items():
+            setattr(self, field_name, value)
 
-        self.total_line_count = max(0, int(summary_payload.get('total_lines', 0) or 0))
-        for status_code, field_name in self.ANALYSIS_STATUS_FIELD_MAP.items():
-            setattr(self, field_name, max(0, int(status_counts.get(status_code, 0) or 0)))
-
-    ANALYZED_LOG_TYPES = {'FRST', 'Addition', 'FRST&Addition'}
+    ANALYZED_LOG_TYPES = ANALYZED_LOG_TYPES
 
     def recalculate_analysis_stats(self):
         from .rule_sets import SHARED_RULE_SET_KEY, resolve_effective_rule_set_key
@@ -1330,24 +1391,35 @@ class UploadedLogFileHash(models.Model):
         a parsing problem must not break the stats recalculation around it."""
         from .file_hashes import extract_file_hashes
 
-        try:
-            rows = extract_file_hashes(upload.log_type, upload.content or '')
-            # One unit: readers never see the log without rows, a failed
-            # insert keeps the old ones, and the savepoint keeps an outer
-            # transaction usable after the error is swallowed.
-            with transaction.atomic():
-                cls.objects.filter(upload=upload).delete()
-                cls.objects.bulk_create([
-                    cls(
-                        upload=upload, sha256=row.sha256, line_no=row.line_no,
-                        anchor_line_no=row.anchor_line_no, path=row.path,
-                        normalized_path=row.normalized_path, detection=row.detection,
-                        source=row.source, auto=row.auto, md5=row.md5,
-                    )
-                    for row in rows
-                ], batch_size=1000)
-        except Exception:
-            logger.exception('Storing file hashes failed for upload_id=%s', upload.upload_id)
+        def build_rows():
+            return [
+                cls(
+                    upload=upload, sha256=row.sha256, line_no=row.line_no,
+                    anchor_line_no=row.anchor_line_no, path=row.path,
+                    normalized_path=row.normalized_path, detection=row.detection,
+                    source=row.source, auto=row.auto, md5=row.md5,
+                )
+                for row in extract_file_hashes(upload.log_type, upload.content or '')
+            ]
+
+        _replace_upload_rows(cls, upload, build_rows, 'file hashes')
+
+
+def _replace_upload_rows(model, upload, build_rows, label):
+    """Replace `upload`'s rows of `model` with `build_rows()`. Never raises: a
+    parsing problem must not break the stats recalculation around it.
+
+    One unit: readers never see the log without rows, a failed insert keeps
+    the old ones, and the savepoint keeps an outer transaction usable after
+    the error is swallowed.
+    """
+    try:
+        rows = build_rows()
+        with transaction.atomic():
+            model.objects.filter(upload=upload).delete()
+            model.objects.bulk_create(rows, batch_size=1000)
+    except Exception:
+        logger.exception('Storing %s failed for upload_id=%s', label, upload.upload_id)
 
 
 class UploadedLogMachineSignal(models.Model):
@@ -1380,13 +1452,7 @@ class UploadedLogMachineSignal(models.Model):
     @classmethod
     def rebuild_for(cls, upload):
         """Replace the upload's rows from its current content. Never raises."""
-        try:
-            rows = cls.rows_for(upload.pk, upload.content or '')
-            with transaction.atomic():
-                cls.objects.filter(upload=upload).delete()
-                cls.objects.bulk_create(rows, batch_size=1000)
-        except Exception:
-            logger.exception('Storing machine signals failed for upload_id=%s', upload.upload_id)
+        _replace_upload_rows(cls, upload, lambda: cls.rows_for(upload.pk, upload.content or ''), 'machine signals')
 
 
 class HashVerdict(models.Model):
@@ -1615,7 +1681,24 @@ class Speech(models.Model):
         return f"{self.name} ({self.owner.username})"
 
 
+class InfectionCaseQuerySet(SoftDeleteQuerySet):
+    def auto_assign_targets(self, username, owner=None):
+        """Open, live, non-training cases of `username` (and `owner`) that collect new items."""
+        qs = self.filter(
+            InfectionCase.username_q(username),
+            auto_assign_new_items=True,
+            is_training=False,
+            status=InfectionCase.STATUS_OPEN,
+            deleted_at__isnull=True,
+        )
+        if owner is not None:
+            qs = qs.filter(owner=owner)
+        return qs.distinct()
+
+
 class InfectionCase(models.Model):
+    objects = InfectionCaseQuerySet.as_manager()
+
     STATUS_OPEN = 'open'
     STATUS_CLOSED = 'closed'
     STATUS_CHOICES = [
@@ -1797,6 +1880,8 @@ class InfectionCaseResponse(models.Model):
 
 
 class InfectionCaseNote(models.Model):
+    objects = SoftDeleteQuerySet.as_manager()
+
     case = models.ForeignKey(InfectionCase, on_delete=models.CASCADE, related_name='note_entries')
     anchor_log = models.ForeignKey('InfectionCaseLog', null=True, blank=True, on_delete=models.SET_NULL, related_name='pinned_notes')
     anchor_fixlist = models.ForeignKey('InfectionCaseFixlist', null=True, blank=True, on_delete=models.SET_NULL, related_name='pinned_notes')
@@ -1845,7 +1930,7 @@ class ParsedFilepathExclusion(models.Model):
 
         from . import frst_extractors as ex
 
-        self.normalized_filepath = ex.normalize_path(path).lower().strip()
+        self.normalized_filepath = ex.path_key(path)
 
     def save(self, *args, **kwargs):
         self.clean()
@@ -1855,28 +1940,13 @@ class ParsedFilepathExclusion(models.Model):
         return self.normalized_filepath
 
 
-class UploadedLogStat(models.Model):
+class UploadedLogStat(AnalysisCountsBase):
     source_id = models.PositiveIntegerField(unique=True, db_index=True)
     owner_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
     owner_username = models.CharField(max_length=150, blank=True, default='', db_index=True)
     recipient_username = models.CharField(max_length=150, blank=True, default='')
     log_type = models.CharField(max_length=32, default='Unknown', db_index=True)
     created_at = models.DateTimeField(db_index=True)
-    total_line_count = models.PositiveIntegerField(default=0)
-    count_malware = models.PositiveIntegerField(default=0)
-    count_pup = models.PositiveIntegerField(default=0)
-    count_clean = models.PositiveIntegerField(default=0)
-    count_alert = models.PositiveIntegerField(default=0)
-    count_warning = models.PositiveIntegerField(default=0)
-    count_grayware = models.PositiveIntegerField(default=0)
-    count_security = models.PositiveIntegerField(default=0)
-    count_info = models.PositiveIntegerField(default=0)
-    count_junk = models.PositiveIntegerField(default=0)
-    count_unknown = models.PositiveIntegerField(default=0)
-    fixlog_total = models.PositiveIntegerField(default=0)
-    fixlog_success = models.PositiveIntegerField(default=0)
-    fixlog_not_found = models.PositiveIntegerField(default=0)
-    fixlog_error = models.PositiveIntegerField(default=0)
     # What the shared analysis credited - its rules and the codes of its
     # warnings - so /stats/ can count rule tags. Tags are resolved from these
     # when the page is served, like everywhere else, so tagging a rule later
@@ -1937,16 +2007,10 @@ def update_uploaded_log_stat_snapshot(instance, shared_payload, shared_line_tags
         return
     defaults = _uploaded_log_stat_metadata(instance)
     summary = (shared_payload or {}).get('summary') if isinstance(shared_payload, dict) else None
-    status_counts = (summary or {}).get('status_counts', {}) if isinstance(summary, dict) else {}
-    if not isinstance(status_counts, dict):
-        status_counts = {}
-    defaults['total_line_count'] = max(0, int((summary or {}).get('total_lines', 0) or 0)) if summary else instance.total_line_count
-    for status_code, field_name in UploadedLog.ANALYSIS_STATUS_FIELD_MAP.items():
-        if summary is None:
-            # Non-analyzable log types (Fixlog, Unknown) — count_* fields stay zero.
-            defaults[field_name] = 0
-        else:
-            defaults[field_name] = max(0, int(status_counts.get(status_code, 0) or 0))
+    # Non-analyzable log types (Fixlog, Unknown) have no summary: count_* stay zero.
+    defaults.update(UploadedLog.counts_from_summary(summary))
+    if not summary:
+        defaults['total_line_count'] = instance.total_line_count
     defaults['rule_ids'], defaults['warning_codes'] = _stat_tag_sources(shared_payload)
     defaults['line_tag_ids'] = _stat_line_tag_ids(shared_payload, shared_line_tags)
     UploadedLogStat.objects.update_or_create(source_id=instance.pk, defaults=defaults)
@@ -2102,13 +2166,7 @@ def _auto_assign_new_uploaded_log_to_infection_cases(sender, instance, created, 
     if instance.deleted_at is not None:
         return
 
-    candidate_cases = InfectionCase.objects.filter(
-        InfectionCase.username_q(instance.forum_username),
-        auto_assign_new_items=True,
-        is_training=False,
-        status=InfectionCase.STATUS_OPEN,
-        deleted_at__isnull=True,
-    ).distinct()
+    candidate_cases = InfectionCase.objects.auto_assign_targets(instance.forum_username)
 
     if instance.recipient_user_id is None:
         candidate_owner_ids = list(candidate_cases.values_list('owner_id', flat=True).distinct())
@@ -2145,14 +2203,7 @@ def _auto_assign_new_fixlist_to_infection_cases(sender, instance, created, raw=F
     if instance.deleted_at is not None:
         return
 
-    candidate_cases = InfectionCase.objects.filter(
-        InfectionCase.username_q(instance.username),
-        owner=instance.owner,
-        auto_assign_new_items=True,
-        is_training=False,
-        status=InfectionCase.STATUS_OPEN,
-        deleted_at__isnull=True,
-    ).distinct()
+    candidate_cases = InfectionCase.objects.auto_assign_targets(instance.username, owner=instance.owner)
 
     InfectionCaseFixlist.objects.bulk_create(
         [
@@ -2177,14 +2228,7 @@ def _auto_assign_new_response_to_infection_cases(sender, instance, raw=False, **
     if instance.deleted_at is not None:
         return
 
-    candidate_cases = InfectionCase.objects.filter(
-        InfectionCase.username_q(instance.username),
-        owner=instance.owner,
-        auto_assign_new_items=True,
-        is_training=False,
-        status=InfectionCase.STATUS_OPEN,
-        deleted_at__isnull=True,
-    ).distinct()
+    candidate_cases = InfectionCase.objects.auto_assign_targets(instance.username, owner=instance.owner)
 
     InfectionCaseResponse.objects.bulk_create(
         [

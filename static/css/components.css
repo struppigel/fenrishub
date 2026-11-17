@@ -1,0 +1,136 @@
+/* Small components several pages share. Loaded from base.html after its own
+ * styles and before the page's, so a page's <style> block only holds what is
+ * specific to it (and can still override these).
+ * Hover feedback is an underline only, never a colour/border/background change. */
+
+/* Compact row action: view / download / restore / delete next to a list item.
+ * Element-qualified so it outranks base.html's `.fixlist-actions button`. */
+a.action-btn,
+button.action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    padding: 0 10px;
+    background-color: var(--la-bg-1);
+    color: var(--la-text-primary);
+    border: 1px solid var(--la-border);
+    font-size: 12px;
+    font-family: inherit;
+    line-height: 1;
+    text-decoration: none;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+a.action-btn:hover,
+button.action-btn:hover {
+    text-decoration: underline;
+}
+
+/* Destructive buttons (trash, delete permanently, delete tag ...). */
+.delete-btn,
+a.action-btn.delete-btn,
+button.action-btn.delete-btn {
+    background-color: var(--la-error-bg);
+    color: var(--la-error-text);
+    border-color: var(--la-error-border);
+}
+
+/* "deletion-protected" marker on uploads and fixlists. */
+.protected-state {
+    color: var(--la-success-text);
+}
+
+/* A checkbox with its label text beside it. */
+.checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--la-text-neutral);
+    cursor: pointer;
+}
+
+/* Warnings about a regex the rule forms are about to save. */
+.regex-warning {
+    font-size: 12px;
+    padding: 6px 10px;
+    color: var(--la-warning-text);
+    background-color: var(--la-warning-bg);
+    border: 1px solid var(--la-warning-border);
+}
+
+/* Tabs sitting on top of the panel they switch: the active tab shares the
+ * panel's border and background (--tab-bg) and covers the panel's top border,
+ * so the two read as one piece. */
+.panel-tabs {
+    display: flex;
+    gap: 2px;
+}
+
+.panel-tab {
+    position: relative;
+    padding: 4px 14px;
+    margin-bottom: -1px;
+    background-color: transparent;
+    color: var(--la-text-muted);
+    border: 1px solid var(--la-border-muted);
+    border-bottom-color: transparent;
+}
+
+.panel-tab.tab-active {
+    z-index: 1;
+    background-color: var(--tab-bg, var(--la-bg-1));
+    color: var(--la-text-primary);
+    border-color: var(--la-border);
+    border-bottom-color: var(--tab-bg, var(--la-bg-1));
+    cursor: default;
+}
+
+.panel-tab.tab-active:hover {
+    text-decoration: none;
+}
+
+/* Plain data table (API usage pages). */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-bottom: 16px;
+}
+
+.data-table th,
+.data-table td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--la-border-muted);
+    vertical-align: top;
+}
+
+.data-table th {
+    color: var(--la-text-muted);
+    font-weight: 600;
+}
+
+.data-table td.num,
+.data-table th.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Full-window dimmed backdrop centring a dialog; add `.show` to open it. */
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background-color: var(--la-overlay);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    z-index: 1000;
+}
+
+.modal-backdrop.show {
+    display: flex;
+}

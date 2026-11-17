@@ -9,11 +9,11 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
+from ..log_types import ANALYZED_LOG_TYPES
 from ..models import FixlistStat, RuleTag, TagCategory, UploadedLogStat
 from ..tagging import parse_tag_ids, selected_tags_for_picker, tag_ids_by_key
 
 
-ANALYZED_LOG_TYPES = ['FRST', 'Addition', 'FRST&Addition']
 UNASSIGNED_LABEL = 'Unassigned'
 DEFAULT_RANGE_DAYS = 30
 TOP_N = 20

@@ -1,0 +1,11 @@
+{% comment %}
+  Hidden inputs that carry the uploads list's filters (channel, forum user, log
+  type, search, page) through a POST, so the page comes back as it was.
+  Uses the uploads listing context (channel, default_channel, username_filter,
+  log_type_filter, search_query, page_obj).
+{% endcomment %}
+{% if channel and channel != default_channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+{% if username_filter %}<input type="hidden" name="u" value="{{ username_filter }}">{% endif %}
+{% if log_type_filter %}<input type="hidden" name="type" value="{{ log_type_filter }}">{% endif %}
+{% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
+{% if page_obj.number > 1 %}<input type="hidden" name="page" value="{{ page_obj.number }}">{% endif %}

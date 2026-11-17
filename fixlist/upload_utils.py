@@ -1,12 +1,12 @@
 """Upload merge and soft-delete utilities."""
 import logging
-import threading
 
 from django.conf import settings
-from django.db import IntegrityError, connections, transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .analyzer import ANALYSIS_PAYLOAD_FORMAT, analyze_log_text
+from . import background, trash
 from .models import UploadedLog, UploadedLogAnalysis
 
 logger = logging.getLogger(__name__)
@@ -70,8 +70,6 @@ def _refresh_cached_analysis_in_thread(upload_pk: int, rule_set_key: str) -> Non
         get_or_compute_upload_analysis(upload, rule_set_key)
     except Exception:
         logger.exception('Background analysis cache refresh failed (upload_pk=%s)', upload_pk)
-    finally:
-        connections.close_all()
 
 
 def schedule_cached_analysis_refresh(upload: UploadedLog, rule_set_key: str) -> bool:
@@ -87,13 +85,7 @@ def schedule_cached_analysis_refresh(upload: UploadedLog, rule_set_key: str) -> 
     if getattr(settings, 'TESTING', False):
         get_or_compute_upload_analysis(upload, rule_set_key)
         return True
-    thread = threading.Thread(
-        target=_refresh_cached_analysis_in_thread,
-        args=(upload.pk, rule_set_key),
-        name=f'analysis-refresh-{upload.pk}',
-        daemon=True,
-    )
-    thread.start()
+    background.start(_refresh_cached_analysis_in_thread, upload.pk, rule_set_key, name=f'analysis-refresh-{upload.pk}')
     return True
 
 
@@ -103,7 +95,6 @@ def _recalculate_analysis_stats_in_thread(upload_pk: int) -> None:
         upload.recalculate_analysis_stats()
     except Exception:
         logger.exception('Background analysis_stats recalculation failed (upload_pk=%s)', upload_pk)
-        connections.close_all()
         return
     try:
         # Look up the log's SHA256s on centralbox while nobody waits for it, so
@@ -123,8 +114,6 @@ def _recalculate_analysis_stats_in_thread(upload_pk: int) -> None:
         enqueue_for_upload(upload)
     except Exception:
         logger.exception('Queueing automatic fresh lookups failed (upload_pk=%s)', upload_pk)
-    finally:
-        connections.close_all()
 
 
 def schedule_analysis_stats_recalc(upload: UploadedLog) -> None:
@@ -134,13 +123,7 @@ def schedule_analysis_stats_recalc(upload: UploadedLog) -> None:
     if getattr(settings, 'TESTING', False):
         upload.recalculate_analysis_stats()
         return
-    thread = threading.Thread(
-        target=_recalculate_analysis_stats_in_thread,
-        args=(upload.pk,),
-        name=f'analysis-stats-{upload.pk}',
-        daemon=True,
-    )
-    thread.start()
+    background.start(_recalculate_analysis_stats_in_thread, upload.pk, name=f'analysis-stats-{upload.pk}')
 
 
 def start_reanalysis_process(log_type: str, only_untagged: bool) -> int:
@@ -174,14 +157,12 @@ def start_reanalysis_process(log_type: str, only_untagged: bool) -> int:
 
 def soft_delete_uploaded_log(log: UploadedLog) -> None:
     """Move an uploaded log to trash (soft delete)."""
-    log.deleted_at = timezone.now()
-    log.save(update_fields=['deleted_at'])
+    trash.soft_delete(log)
 
 
 def restore_uploaded_log(log: UploadedLog) -> None:
     """Restore a trashed uploaded log."""
-    log.deleted_at = None
-    log.save(update_fields=['deleted_at'])
+    trash.restore(log)
 
 
 def resolve_ordered_logs_for_merge(selected_ids: list[str], scoped_qs):

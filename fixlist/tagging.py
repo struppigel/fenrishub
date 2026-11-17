@@ -45,10 +45,11 @@ from collections import Counter
 from dataclasses import dataclass
 from functools import cached_property
 
-from . import frst_extractors
-from .analyzer import ANALYSIS_PAYLOAD_FORMAT, _re2, evaluate_regex_pattern
+from . import background, frst_extractors
+from . import regex_engine
+from .analyzer import ANALYSIS_PAYLOAD_FORMAT, evaluate_regex_pattern
 from django.conf import settings
-from django.db import connections, transaction
+from django.db import transaction
 from django.db.models import Case, Count, F, IntegerField, JSONField, Max, Q, Value, When
 from django.db.models.fields.json import KT
 from django.db.models.functions import Cast, Lower
@@ -99,12 +100,9 @@ def compile_pattern(pattern):
     cached = _compiled_cache.get(pattern)
     if cached is not None:
         return cached
-    try:
-        if _re2 is not None:
-            compiled = _re2.compile(f'(?i){pattern}')
-        else:
-            compiled = re.compile(pattern, re.IGNORECASE)
-    except Exception:
+    # re2 when installed (a pattern it refuses is never stored), else stdlib re.
+    compiled = regex_engine.compile(pattern, ignore_case=True, fallback=False)
+    if compiled is None:
         return None
     if len(_compiled_cache) > 500:
         _compiled_cache.clear()
@@ -121,7 +119,7 @@ def pattern_error(pattern, label='Regex'):
     evaluation = evaluate_regex_pattern(pattern)
     if evaluation['stdlib_error']:
         return f'Invalid {label.lower()}: {evaluation["stdlib_error"]}'
-    if _re2 is not None and not evaluation['re2_ok']:
+    if regex_engine.RE2_AVAILABLE and not evaluation['re2_ok']:
         return (
             f'{label} uses a feature the fast regex engine does not support '
             '(lookarounds and backreferences are not allowed).'
@@ -577,14 +575,8 @@ def _scan_matching_rule_ids(conditions_by_key):
         if regex_set is not None:
             hits = set()
             for text in (description, source_text):
-                if not text:
-                    continue
-                try:
-                    matched = regex_set.Match(text)
-                except Exception:
-                    matched = None
-                # google-re2's Set.Match returns None (not []) when nothing matched.
-                hits.update(matched or ())
+                if text:
+                    hits.update(regex_engine.set_match(regex_set, text))
             if hits:
                 candidates = always + [set_items[position] for position in hits]
         for key, conditions in candidates:
@@ -901,29 +893,13 @@ def _line_regex_set(patterns):
     pass, or ``(None, [])`` without re2. `positions` maps a Set index back to the
     pattern's index in `patterns`; patterns the Set refuses are left out and
     checked one by one instead."""
-    if _re2 is None or not patterns:
+    if not regex_engine.RE2_AVAILABLE or not patterns:
         return None, []
     key = tuple(patterns)
     cached = _line_set_cache.get(key)
     if cached is not None:
         return cached
-    result = (None, [])
-    try:
-        options = _re2.Options()
-        options.max_mem = 64 * 1024 * 1024
-        regex_set = _re2.Set(_re2._Anchor.UNANCHORED, options)
-        positions = []
-        for index, pattern in enumerate(patterns):
-            try:
-                regex_set.Add(f'(?i){pattern}')
-            except Exception:
-                continue
-            positions.append(index)
-        if positions:
-            regex_set.Compile()
-            result = (regex_set, positions)
-    except Exception:
-        result = (None, [])
+    result = regex_engine.build_set(patterns, ignore_case=True)
     if len(_line_set_cache) > 50:
         _line_set_cache.clear()
     _line_set_cache[key] = result
@@ -969,12 +945,8 @@ class LineTagMatcher:
                 if self.regex_statuses is None or line.get('dominant_status') in self.regex_statuses:
                     candidates.extend(self.loose)
                     if self.regex_set is not None:
-                        try:
-                            matched = self.regex_set.Match(line.get('line') or '')
-                        except Exception:
-                            matched = None
-                        # google-re2's Set.Match returns None (not []) when nothing matched.
-                        candidates.extend(self.set_items[position] for position in matched or ())
+                        matched = regex_engine.set_match(self.regex_set, line.get('line') or '')
+                        candidates.extend(self.set_items[position] for position in matched)
             parsed = []
 
             def parsed_entry_type(line=line, parsed=parsed):
@@ -1165,17 +1137,14 @@ def _take_queued_refresh():
 
 
 def _refresh_line_tags_in_thread():
-    try:
-        while True:
-            has_work, tag_ids = _take_queued_refresh()
-            if not has_work:
-                return
-            try:
-                refresh_line_tags(tag_ids)
-            except Exception:
-                logger.exception('Background line tag refresh failed (tag_ids=%s)', tag_ids)
-    finally:
-        connections.close_all()
+    while True:
+        has_work, tag_ids = _take_queued_refresh()
+        if not has_work:
+            return
+        try:
+            refresh_line_tags(tag_ids)
+        except Exception:
+            logger.exception('Background line tag refresh failed (tag_ids=%s)', tag_ids)
 
 
 def schedule_line_tag_refresh(tag_ids=None):
@@ -1193,7 +1162,7 @@ def schedule_line_tag_refresh(tag_ids=None):
 
     def start():
         if _queue_refresh(tag_ids):
-            threading.Thread(target=_refresh_line_tags_in_thread, name='line-tag-refresh', daemon=True).start()
+            background.start(_refresh_line_tags_in_thread, name='line-tag-refresh')
 
     transaction.on_commit(start)
 

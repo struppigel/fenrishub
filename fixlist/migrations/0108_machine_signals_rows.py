@@ -2,13 +2,15 @@ from django.db import migrations
 
 
 def build_machine_signals(apps, schema_editor):
-    """Store the machine signals of every log. Local parsing only; a log that
-    fails to parse keeps no rows (the correlations then read its start)."""
+    """Store the machine signals of every live log. Local parsing only; a
+    log without rows (trashed now, or failing to parse) is read from its
+    start instead, and gets rows when its stats are rebuilt."""
     from fixlist.machine_signals import log_signals
 
     UploadedLog = apps.get_model('fixlist', 'UploadedLog')
     UploadedLogMachineSignal = apps.get_model('fixlist', 'UploadedLogMachineSignal')
-    for upload in UploadedLog.objects.only('id', 'content').iterator(chunk_size=50):
+    live = UploadedLog.objects.filter(deleted_at__isnull=True).only('id', 'content')
+    for upload in live.iterator(chunk_size=10):
         try:
             signals = log_signals(upload.content or '')
         except Exception:

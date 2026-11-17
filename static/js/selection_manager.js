@@ -121,7 +121,19 @@
             }
         }
 
+        /* For a bulk-action button: refuse with `emptyMessage` while nothing is
+         * selected, else ask `question` ("{n}" becomes the count; null: just go). */
+        function confirmAction(emptyMessage, question = null) {
+            const count = getStored().size;
+            if (count === 0) {
+                alert(emptyMessage);
+                return false;
+            }
+            return question === null ? true : confirm(question.replace('{n}', count));
+        }
+
         return {
+            confirmAction,
             getStored,
             setStored,
             clearStored,
