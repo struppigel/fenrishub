@@ -378,6 +378,11 @@ const speeches = [
         names(lineSuggestionItems([9], config).speeches) === JSON.stringify([['shared for 9', true]]));
     const none = lineSuggestionItems([42], config);
     assert('a line no item fits gets nothing', !none.speeches.length && !none.snippets.length);
+    const withOwnSnippet = { ...config, snippets: [{ id: 6, name: 'own snippet', trigger_tag_ids: [7] }] };
+    assert('own and shared snippets are both listed, own first',
+        names(lineSuggestionItems([7], withOwnSnippet).snippets)
+            === JSON.stringify([['own snippet', false], ['shared snippet', true]]),
+        names(lineSuggestionItems([7], withOwnSnippet).snippets));
 })();
 
 (function testTagChipListsItsSpeechesAndSnippets() {

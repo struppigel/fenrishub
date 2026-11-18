@@ -26,7 +26,7 @@ def analyzer_snippets_for(user):
 
 
 def shared_tag_snippets_for(user):
-    """Other helpers' shared snippets suggesting a tag (the analyzer's fallback)."""
+    """Other helpers' shared snippets suggesting a tag (always suggested in the analyzer)."""
     return shared_tag_items_for(FixlistSnippet, user)
 
 

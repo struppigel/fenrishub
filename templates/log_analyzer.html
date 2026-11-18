@@ -702,7 +702,8 @@ window.logAnalyzerConfig = {
             // their category, and stay in their category as well.
             var suggestedIds = options.suggestedKey ? (config[options.suggestedKey] || []) : [];
             var suggested = items.filter(function(s) { return suggestedIds.indexOf(s.id) !== -1; });
-            // Other helpers' shared speeches, for tags no own speech covers.
+            // Other helpers' shared items for the tags found (speeches: only
+            // for tags no own speech covers).
             var extraItems = options.extraKey ? (config[options.extraKey] || []) : [];
             var extraIds = options.extraSuggestedKey ? (config[options.extraSuggestedKey] || []) : [];
             var extraSuggested = extraItems.filter(function(s) { return extraIds.indexOf(s.id) !== -1; });

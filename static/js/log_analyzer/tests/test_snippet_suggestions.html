@@ -87,15 +87,16 @@ const untagged = { id: 3, name: 'untagged', content: 'Reboot:', trigger_tag_ids:
     assertIds('no tags found, no suggestions', suggestedSnippetsForTags([], snippets).map((s) => s.id), []);
 })();
 
-(function testSharedFallback() {
+(function testSharedAlwaysSuggested() {
     const theirs7 = { id: 10, name: 'their defender', content: 'Their line one', trigger_tag_ids: [7] };
     const theirs8 = { id: 11, name: 'their browsers', content: 'Their line two', trigger_tag_ids: [8] };
-    assertIds('shared snippets come only for tags no own snippet covers',
-        fallbackSnippetsForTags([7, 8], [defender], [theirs7, theirs8]).map((s) => s.id), [11]);
-    assertIds('a covered tag gets no fallback even when its own snippet is used',
-        fallbackSnippetsForTags([7], [defender], [theirs7], defender.content).map((s) => s.id), []);
+    assertIds('shared snippets come for every found tag, covered by an own snippet or not',
+        suggestedSnippetsForTags([7, 8], [theirs7, theirs8]).map((s) => s.id), [10, 11]);
+    assertIds('shared snippets for tags not found are not offered',
+        suggestedSnippetsForTags([8], [theirs7, theirs8]).map((s) => s.id), [11]);
     assertIds('a shared snippet already in the text is not offered',
-        fallbackSnippetsForTags([8], [defender], [theirs8], 'Their line two').map((s) => s.id), []);
+        suggestedSnippetsForTags([8], [theirs8], 'Their line two').map((s) => s.id), []);
+    assertIds('no tags found, no shared suggestions', suggestedSnippetsForTags([], [theirs7]).map((s) => s.id), []);
 })();
 
 (function testUsedPerPanel() {
@@ -118,8 +119,15 @@ const untagged = { id: 3, name: 'untagged', content: 'Reboot:', trigger_tag_ids:
     refreshSnippetSuggestions();
     assertIds('a snippet in the response is not suggested in the response view', config.suggestedSnippetIds, [1]);
 
+    config.sharedTagSnippets = [{ id: 30, name: 'their defender', content: 'Their line', trigger_tag_ids: [7] }];
+    refreshSnippetSuggestions();
+    assertIds('a shared snippet is suggested although an own snippet covers its tag',
+        config.suggestedSharedSnippetIds, [30]);
+
     updateSpeechSuggestionsFromAnalysis({ rule_tags: [] });
     assertIds('a new analysis without tags clears the suggestions', config.suggestedSnippetIds, []);
+    assertIds('a new analysis without tags clears the shared suggestions', config.suggestedSharedSnippetIds, []);
+    config.sharedTagSnippets = [];
     activePanel = 'fix';
     fixlist.value = '';
     response.value = '';
@@ -147,6 +155,18 @@ const untagged = { id: 3, name: 'untagged', content: 'Reboot:', trigger_tag_ids:
         row && row.textContent.startsWith('suggested snippets from other helpers:'), row && row.textContent);
     assert('refilling a warning does not stack rows',
         warning.querySelectorAll('.analysis-warning-suggestions').length === 1);
+
+    config.sharedTagSnippets.push({ id: 21, name: 'their defender', content: 'Their other line', trigger_tag_ids: [7] });
+    warning.dataset.tagIds = JSON.stringify([7]);
+    renderWarningSpeechRow(warning);
+    row = warning.querySelector('.analysis-warning-snippets');
+    const buttons = row ? [...row.querySelectorAll('button')].map((b) => b.textContent) : [];
+    assert('own and shared snippets for the same tag are both listed, own first',
+        JSON.stringify(buttons) === JSON.stringify(['defender', 'their defender']), JSON.stringify(buttons));
+    assert('the shared ones are labelled as from other helpers',
+        row && row.textContent.startsWith('suggested snippets:') && row.textContent.includes('from other helpers:'),
+        row && row.textContent);
+    config.sharedTagSnippets.pop();
 
     warning.dataset.tagIds = JSON.stringify([7]);
     document.getElementById('selectedLines').value = defender.content;

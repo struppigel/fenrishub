@@ -12,6 +12,10 @@
 // found in the response, so a reply reloaded from a saved fixlist counts too,
 // and deleting the text brings the suggestion back.
 //
+// Other helpers' shared speeches only stand in for tags none of the analyst's
+// own speeches covers; their shared snippets are always suggested, next to
+// the analyst's own.
+//
 // Snippets go into whichever right panel is showing, so a snippet is not
 // suggested while every one of its lines is already in that panel: one in the
 // fixlist is still suggested in the response view, and the other way round.
@@ -145,17 +149,12 @@ function withoutUsedSnippets(snippets, text) {
     return (snippets || []).filter((snippet) => !snippetIsInText(snippet, text));
 }
 
-// The analyst's selected snippets for `tagIds` that are not in `text` yet.
+// The snippets for `tagIds` that are not in `text` yet. Serves the analyst's
+// selected snippets and other helpers' shared ones alike: unlike speeches,
+// shared snippets are always suggested, not only for tags no selected
+// snippet covers.
 function suggestedSnippetsForTags(tagIds, snippets, text = '') {
     return withoutUsedSnippets(speechesForTags(tagIds, snippets), text);
-}
-
-// Other helpers' shared snippets for the tags no selected snippet covers,
-// the snippet side of fallbackSpeechesForTags.
-function fallbackSnippetsForTags(tagIds, selectedSnippets, sharedSnippets, text = '') {
-    return withoutUsedSnippets(
-        speechesForTags(uncoveredTagIds(tagIds, selectedSnippets), sharedSnippets), text,
-    );
 }
 
 // "insert all" adds the menu's speeches in the order the menu lists them.
@@ -228,12 +227,21 @@ function ownElseSharedForTags(tagIds, own, shared) {
         .map((item) => ({ item, shared: true }));
 }
 
+// The analyst's own items for `tagIds` and then other helpers' shared ones,
+// both always - the rule for snippets. As [{item, shared}].
+function ownAndSharedForTags(tagIds, own, shared) {
+    return [
+        ...speechesForTags(tagIds, own).map((item) => ({ item, shared: false })),
+        ...speechesForTags(tagIds, shared).map((item) => ({ item, shared: true })),
+    ];
+}
+
 // {speeches, snippets} a log line's chips name.
 function lineSuggestionItems(tagIds, config) {
     const settings = config || {};
     return {
         speeches: ownElseSharedForTags(tagIds, settings.speeches, settings.sharedTagSpeeches),
-        snippets: ownElseSharedForTags(tagIds, settings.snippets, settings.sharedTagSnippets),
+        snippets: ownAndSharedForTags(tagIds, settings.snippets, settings.sharedTagSnippets),
     };
 }
 
@@ -395,18 +403,16 @@ function insertSuggestedSnippet(snippetId) {
     }
 }
 
-// One "suggested ..." row of a warning box: the analyst's own items, else
-// other helpers' shared ones. Nothing when there are neither.
+// One "suggested ..." row of a warning box: the analyst's own items, then
+// other helpers' shared ones after "from other helpers:". Nothing when there
+// are neither.
 function buildWarningSuggestionRow({ rowClass, noun, own, shared, title, onInsert }) {
     if (!own.length && !shared.length) {
         return null;
     }
     const row = document.createElement('div');
     row.className = `analysis-warning-suggestions ${rowClass}`;
-    row.appendChild(document.createTextNode(
-        own.length ? `suggested ${noun}:` : `suggested ${noun} from other helpers:`,
-    ));
-    (own.length ? own : shared).forEach((item) => {
+    const appendButtons = (items) => items.forEach((item) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'analysis-warning-suggestion';
@@ -415,6 +421,17 @@ function buildWarningSuggestionRow({ rowClass, noun, own, shared, title, onInser
         button.addEventListener('click', () => onInsert(item.id));
         row.appendChild(button);
     });
+    if (own.length) {
+        row.appendChild(document.createTextNode(`suggested ${noun}:`));
+        appendButtons(own);
+        if (shared.length) {
+            row.appendChild(document.createTextNode(' from other helpers:'));
+            appendButtons(shared);
+        }
+    } else {
+        row.appendChild(document.createTextNode(`suggested ${noun} from other helpers:`));
+        appendButtons(shared);
+    }
     return row;
 }
 
@@ -433,12 +450,15 @@ function renderWarningSpeechRow(warningElement) {
     const config = window.logAnalyzerConfig || {};
     const responseText = currentResponseText();
     const snippetText = currentSnippetTargetText();
+    const ownSpeeches = withoutUsedSpeeches(speechesForTags(tagIds, config.speeches), responseText);
     const rows = [
         buildWarningSuggestionRow({
             rowClass: 'analysis-warning-speeches',
             noun: 'speeches',
-            own: withoutUsedSpeeches(speechesForTags(tagIds, config.speeches), responseText),
-            shared: fallbackSpeechesForTags(tagIds, config.speeches, config.sharedTagSpeeches, responseText),
+            own: ownSpeeches,
+            // Shared speeches only stand in when no own one is suggested.
+            shared: ownSpeeches.length ? []
+                : fallbackSpeechesForTags(tagIds, config.speeches, config.sharedTagSpeeches, responseText),
             title: 'insert into the response',
             onInsert: insertSuggestedSpeech,
         }),
@@ -446,7 +466,7 @@ function renderWarningSpeechRow(warningElement) {
             rowClass: 'analysis-warning-snippets',
             noun: 'snippets',
             own: suggestedSnippetsForTags(tagIds, config.snippets, snippetText),
-            shared: fallbackSnippetsForTags(tagIds, config.snippets, config.sharedTagSnippets, snippetText),
+            shared: suggestedSnippetsForTags(tagIds, config.sharedTagSnippets, snippetText),
             title: 'insert into the panel on the right',
             onInsert: insertSuggestedSnippet,
         }),
@@ -479,9 +499,8 @@ function refreshSnippetSuggestions() {
     const text = currentSnippetTargetText();
     config.suggestedSnippetIds = suggestedSnippetsForTags(tagIds, config.snippets, text)
         .map((snippet) => snippet.id);
-    config.suggestedSharedSnippetIds = fallbackSnippetsForTags(
-        tagIds, config.snippets, config.sharedTagSnippets, text,
-    ).map((snippet) => snippet.id);
+    config.suggestedSharedSnippetIds = suggestedSnippetsForTags(tagIds, config.sharedTagSnippets, text)
+        .map((snippet) => snippet.id);
     if (window.reloadSnippetMenu) {
         window.reloadSnippetMenu();
     }

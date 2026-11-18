@@ -65,8 +65,8 @@ def analyzer_items_for(model, user):
 
 def shared_tag_items_for(model, user):
     """Other helpers' shared items that suggest at least one tag and that the
-    user has not selected - the analyzer's fallback when a tag found in a log
-    has no item of the user's own."""
+    user has not selected. The analyzer suggests shared snippets for every tag
+    found in a log, shared speeches only for tags no own speech covers."""
     qs = (
         model.objects.filter(is_shared=True, trigger_tags__isnull=False)
         .exclude(owner=user)
