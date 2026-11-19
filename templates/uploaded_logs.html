@@ -8,6 +8,15 @@
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
+    .username-filter-link {
+        color: inherit;
+        text-decoration: none;
+    }
+
+    .username-filter-link:hover {
+        text-decoration: underline;
+    }
+
     .duplicate-hash {
         color: var(--la-warning-text);
     }
@@ -174,7 +183,7 @@
                     {% endif %}
                 </div>
                 <div class="fixlist-meta">
-                    {{ uploaded_log.original_filename }} | {{ uploaded_log.forum_username }} | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}{% if not is_trash and uploaded_log.content_hash %} | <span class="content-hash{% if uploaded_log.is_hash_duplicate %} duplicate-hash{% endif %}" title="{{ uploaded_log.content_hash }}">{{ uploaded_log.content_hash|truncatechars:11 }}</span>{% endif %}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}{% if uploaded_log.is_protected %} | <span class="protected-state" title="this upload cannot be trashed, deleted, merged away or auto-purged">protected</span>{% endif %}{% if is_trash and uploaded_log.deleted_at %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}{% endif %}
+                    {{ uploaded_log.original_filename }} | <a href="?u={{ uploaded_log.forum_username|urlencode }}{% if username_link_query %}&amp;{{ username_link_query }}{% endif %}" class="username-filter-link" title="show only the logs of {{ uploaded_log.forum_username }}">{{ uploaded_log.forum_username }}</a> | {{ uploaded_log.created_at|date:"Y-m-d H:i" }}{% if not is_trash and uploaded_log.content_hash %} | <span class="content-hash{% if uploaded_log.is_hash_duplicate %} duplicate-hash{% endif %}" title="{{ uploaded_log.content_hash }}">{{ uploaded_log.content_hash|truncatechars:11 }}</span>{% endif %}{% if uploaded_log.is_incomplete %} | <span style="color: var(--la-warning-text);">incomplete logs</span>{% endif %}{% if uploaded_log.is_protected %} | <span class="protected-state" title="this upload cannot be trashed, deleted, merged away or auto-purged">protected</span>{% endif %}{% if is_trash and uploaded_log.deleted_at %} | deleted {{ uploaded_log.deleted_at|date:"Y-m-d H:i" }}{% endif %}
                 </div>
                 {% include "partials/upload_stat_chips.html" with show_rule_set=True %}
                 {% include "partials/upload_tags_text.html" with tags=uploaded_log.rule_tags %}

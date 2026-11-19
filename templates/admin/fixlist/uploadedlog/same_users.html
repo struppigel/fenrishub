@@ -1,0 +1,84 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+    .same-user-group { margin-bottom: 20px; }
+    .same-user-group table { width: 100%; }
+    .same-user-group td, .same-user-group th { vertical-align: middle; }
+    .same-user-evidence { margin: 6px 0; color: var(--body-quiet-color); }
+    .same-user-custom { margin-left: 6px; }
+</style>
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">Home</a>
+    &rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+    &rsaquo; <a href="{% url 'admin:fixlist_uploadedlog_changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+    &rsaquo; {{ title }}
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <p>
+        Forum names whose (non-deleted) logs look like the same machine: a shared machine SID or
+        disk ID, or the same computer name together with the same hardware, and never a machine the
+        full comparison calls a different one. A signal shared by many names (a cloned image, a
+        generic computer) is ignored. Check the logs before renaming.
+    </p>
+    <p>
+        Renaming changes every log (trashed ones too), fixlist and infection case of the checked
+        names, and the per-user stats, to the chosen name.
+    </p>
+    {% for group in groups %}
+    <form method="post" class="module same-user-group" onsubmit="return confirm('Rename the checked names in this group? This changes their logs, fixlists and cases.');">
+        {% csrf_token %}
+        <h2>{% for row in group.names %}{{ row.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</h2>
+        <div class="same-user-evidence">same {{ group.evidence|join:", " }}</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>rename</th>
+                    <th>keep this name</th>
+                    <th>forum name</th>
+                    <th>logs</th>
+                    <th>fixlists</th>
+                    <th>cases</th>
+                    <th>last upload</th>
+                    <th>newest logs</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in group.names %}
+                <tr>
+                    <td><input type="checkbox" name="names" value="{{ row.name }}" checked aria-label="rename {{ row.name }}"></td>
+                    <td><input type="radio" name="target" value="{{ row.name }}"{% if forloop.first %} checked{% endif %} aria-label="keep {{ row.name }}"></td>
+                    <td><a href="{% url 'uploaded_logs' %}?u={{ row.name|urlencode }}">{{ row.name }}</a></td>
+                    <td>{{ row.logs }}</td>
+                    <td>{{ row.fixlists }}</td>
+                    <td>{{ row.cases }}</td>
+                    <td>{{ row.last_upload|date:"Y-m-d H:i" }}</td>
+                    <td>{% for upload_id in row.samples %}<a href="{% url 'view_uploaded_log' upload_id %}">{{ upload_id }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+                </tr>
+                {% endfor %}
+                <tr>
+                    <td></td>
+                    <td><input type="radio" name="target" value="__custom__" aria-label="another name"></td>
+                    <td colspan="6">
+                        another name:
+                        <input type="text" name="custom_target" maxlength="100" class="same-user-custom"
+                               oninput="this.form.querySelector('input[name=target][value=__custom__]').checked = true;">
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        <div class="submit-row">
+            <input type="submit" class="default" value="Rename to the chosen name">
+        </div>
+    </form>
+    {% empty %}
+    <p>No forum names share a machine.</p>
+    {% endfor %}
+</div>
+{% endblock %}

@@ -3,7 +3,10 @@ The "related logs" tab of a log page (views/uploads.py related_logs_fragment):
 the logs correlations use, newest first, with chips, tags, a same-system
 badge and how many lines the two logs share a correlation for; then logs
 outside those that look like the same machine (machine_logs), from any forum
-user. data-found: how many logs were found, for the tab label.
+user, with a button giving those of another forum name this log's
+(rename_candidates: those the helper may rename; rename_blocked: those
+assigned to other helpers). data-found: how many logs were found, for the
+tab label.
 {% endcomment %}<div class="related-logs-head" data-found="{{ found_count }}">{% if scope == 'user' %}other logs of forum user {{ name }} (no case of yours){% elif scope %}logs of your cases with this log{% else %}no case of yours with this log and no forum user name{% endif %}</div>
 {% if other_system %}<div class="related-logs-warning">⚠ {{ other_system }} of these log{{ logs|length|pluralize }} seem{{ other_system|pluralize:"s," }} to come from another machine</div>{% endif %}
 {% for uploaded_log in logs %}
@@ -17,6 +20,15 @@ user. data-found: how many logs were found, for the tab label.
 {% for uploaded_log in machine_logs %}
 {% include "partials/related_log_row.html" %}
 {% endfor %}
+{% if rename_candidates %}{% with count=rename_candidates|length %}
+<form method="post" action="{% url 'view_uploaded_log' this_log.upload_id %}" class="related-logs-rename">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="rename_machine_logs">
+    {% for log in rename_candidates %}<input type="hidden" name="upload_ids" value="{{ log.upload_id }}">{% endfor %}
+    <button type="submit" style="padding: 2px 8px;" title="Give these logs the forum name of this log. Only the logs listed here are renamed - fixlists and cases stay as they are." onclick="return confirm('Rename {{ count }} log{{ count|pluralize }} to u/{{ this_log.forum_username|escapejs }}?');">rename {{ count }} log{{ count|pluralize }} to u/{{ this_log.forum_username }}</button>
+</form>
+{% endwith %}{% endif %}
+{% if rename_blocked %}<div class="related-logs-empty">{{ rename_blocked }} of these logs {{ rename_blocked|pluralize:"is,are" }} assigned to other helpers and can only be renamed by them</div>{% endif %}
 {% elif not logs %}
 <div class="related-logs-empty">no logs of other forum users look like this machine</div>
 {% endif %}

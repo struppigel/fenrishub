@@ -20,6 +20,7 @@ from .analyzer import (
 from .rule_sets import invalidate_for_rule_owner
 from .tagging import auto_tag_rules
 from .upload_utils import start_reanalysis_process
+from .username_merge import clean_forum_username, rename_forum_usernames, same_user_groups
 
 
 def _invalidate_for_owner_ids(owner_ids):
@@ -878,6 +879,11 @@ class UploadedLogAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.reanalyze_view),
                 name='fixlist_uploadedlog_reanalyze',
             ),
+            path(
+                'same-users/',
+                self.admin_site.admin_view(self.same_users_view),
+                name='fixlist_uploadedlog_same_users',
+            ),
         ]
         return custom_urls + urls
 
@@ -911,6 +917,49 @@ class UploadedLogAdmin(admin.ModelAdmin):
             'log_types': log_types,
         }
         return TemplateResponse(request, 'admin/fixlist/uploadedlog/reanalyze.html', context)
+
+    def same_users_view(self, request):
+        """Forum names whose logs come from the same machine (username_merge),
+        and renaming a group's names to one: logs, fixlists, cases, stats."""
+        if not self.has_change_permission(request):
+            raise PermissionDenied
+        page_url = reverse('admin:fixlist_uploadedlog_same_users')
+
+        if request.method == 'POST':
+            names = [name for name in dict.fromkeys(request.POST.getlist('names')) if name]
+            target = request.POST.get('target', '')
+            if target == '__custom__':
+                target = request.POST.get('custom_target', '')
+            target = clean_forum_username(target)
+            if target is None:
+                self.message_user(request, 'The new name must be 1-100 characters.', level=messages.ERROR)
+                return HttpResponseRedirect(page_url)
+            old_names = [name for name in names if name != target]
+            if not old_names:
+                self.message_user(request, 'Choose at least one name other than the new one.', level=messages.ERROR)
+                return HttpResponseRedirect(page_url)
+            known = set(UploadedLog.objects.live().filter(forum_username__in=old_names)
+                        .values_list('forum_username', flat=True))
+            unknown = [name for name in old_names if name not in known]
+            if unknown:
+                self.message_user(
+                    request, f'No logs are uploaded under {", ".join(unknown)}.', level=messages.ERROR,
+                )
+                return HttpResponseRedirect(page_url)
+            counts = rename_forum_usernames(old_names, target)
+            self.message_user(
+                request,
+                f'Renamed {", ".join(old_names)} to {target}: {counts["logs"]} logs, '
+                f'{counts["fixlists"]} fixlists, {counts["cases"]} cases.',
+                level=messages.SUCCESS,
+            )
+            return HttpResponseRedirect(page_url)
+
+        context = {
+            **_admin_page_context(self, request, 'Same users under several forum names'),
+            'groups': same_user_groups(),
+        }
+        return TemplateResponse(request, 'admin/fixlist/uploadedlog/same_users.html', context)
 
 
 @admin.register(LogTypeDetectionRule)

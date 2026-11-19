@@ -32,9 +32,10 @@ from ..case_correlations import (
 from ..machine_signals import KIND_COMPUTER, KIND_PROFILE, extract_signals, system_reason
 from ..models import LOG_TYPE_UNKNOWN, CorrelationCache, InfectionCaseLog, RuleTag, UploadedLog
 from ..status_types import STATUS_PAINT
-from ..permissions import user_can_delete_uploaded_log
+from ..permissions import user_can_delete_uploaded_log, user_can_rename_uploaded_log
 from ..rule_sets import resolve_effective_rule_set_key, resolve_user_rule_set_key, rule_set_label
 from ..tagging import found_tags_by_upload, logs_with_tags, tags_for_listing
+from ..username_merge import rename_logs
 from ..upload_utils import (
     execute_merge, schedule_analysis_stats_recalc, get_fresh_cached_analysis, schedule_cached_analysis_refresh,
 )
@@ -382,6 +383,11 @@ def _build_uploads_listing_context(request, *, deleted: bool) -> dict:
         'search_query': search_query,
         'tag_unanalyzed_count': tag_unanalyzed_count,
         'pagination_query': urlencode(pagination_params),
+        # A forum name in the list links to the list filtered by it (other filters but the search kept).
+        'username_link_query': urlencode(non_empty_params(
+            channel=channel if channel != default_channel else None,
+            type=log_type_filter,
+        )),
     }
 
 
@@ -454,6 +460,10 @@ def view_uploaded_log(request, upload_id):
             if new_username:
                 uploaded_log.forum_username = new_username
                 uploaded_log.save(update_fields=['forum_username'])
+            return redirect('view_uploaded_log', upload_id=upload_id)
+
+        if action == 'rename_machine_logs':
+            _rename_machine_logs(request, uploaded_log)
             return redirect('view_uploaded_log', upload_id=upload_id)
 
         if action == 'assign_to_me':
@@ -578,6 +588,48 @@ def _correlated_line_counts(uploaded_log, user, logs):
     return result
 
 
+# The rename button of the related-logs tab checks at most this many
+# same-machine logs (the tab lists 20).
+RENAME_MACHINE_LOGS_LIMIT = 100
+
+
+def _machine_rename_split(user, uploaded_log, machine_logs):
+    """(logs the user may rename to the log's forum name, how many others
+    differ but are assigned to another helper)."""
+    differing = [log for log in machine_logs if log.forum_username != uploaded_log.forum_username]
+    allowed = [log for log in differing if user_can_rename_uploaded_log(user, log)]
+    return allowed, len(differing) - len(allowed)
+
+
+def _rename_machine_logs(request, uploaded_log):
+    """The related-logs tab's "rename these logs": the posted logs that are
+    still same-machine logs of this one (anything else posted is ignored)
+    get its forum name. Non-staff helpers can't rename logs assigned to
+    another helper."""
+    if uploaded_log.deleted_at is not None:
+        messages.error(request, "A trashed log can't rename other logs.")
+        return
+    posted = set(collect_selected_ids(request.POST, 'upload_ids'))
+    matched_pks = [pk for pk, _labels in same_machine_logs(uploaded_log, limit=RENAME_MACHINE_LOGS_LIMIT)]
+    candidates = list(
+        UploadedLog.objects.live().filter(pk__in=matched_pks, upload_id__in=posted)
+        .select_related('created_by', 'recipient_user')
+    )
+    allowed, blocked = _machine_rename_split(request.user, uploaded_log, candidates)
+    renamed = rename_logs(allowed, uploaded_log.forum_username)
+    if renamed:
+        messages.success(
+            request, f'Renamed {renamed} log{"s" if renamed != 1 else ""} to u/{uploaded_log.forum_username}.',
+        )
+    if blocked:
+        messages.warning(
+            request, f'{blocked} log{"s are" if blocked != 1 else " is"} assigned to other helpers and '
+            'can only be renamed by them.',
+        )
+    if not renamed and not blocked:
+        messages.info(request, 'No logs to rename.')
+
+
 @login_required
 @require_http_methods(["GET"])
 def related_logs_fragment(request, upload_id):
@@ -626,9 +678,15 @@ def related_logs_fragment(request, upload_id):
             log.system_reason = system_reason(log.system, kind, raw.get(log.pk))
             log.correlated_lines, log.correlated_title = correlated.get(log.pk, (0, ''))
         other_system = sum(1 for log in logs if log.system == SYSTEM_DIFFERENT)
+    rename_candidates, rename_blocked = ([], 0)
+    if uploaded_log.deleted_at is None:
+        rename_candidates, rename_blocked = _machine_rename_split(request.user, uploaded_log, machine_logs)
     return render(request, 'partials/related_logs.html', {
+        'this_log': uploaded_log,
         'logs': logs,
         'machine_logs': machine_logs,
+        'rename_candidates': rename_candidates,
+        'rename_blocked': rename_blocked,
         'scope': scope,
         'name': name,
         'more_count': max(0, total - len(logs)),
