@@ -5,7 +5,9 @@ codes, so the analyzer never runs.
 """
 
 import importlib
+import json
 from datetime import timedelta
+from unittest import mock
 
 from django.apps import apps
 from django.contrib.auth.models import User
@@ -13,12 +15,17 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from ..analyzer import ANALYSIS_PAYLOAD_FORMAT
+from .. import centralbox
+from ..analyzer import ANALYSIS_PAYLOAD_FORMAT, invalidate_rule_buckets_cache
+from ..case_correlations import correlated_sha256s, correlations_for_upload
 from ..models import (
-    RuleTag, TagCategory, UploadedLog, UploadedLogAnalysis, UploadedLogStat,
-    update_uploaded_log_stat_snapshot,
+    CorrelationCache, HashVerdict, RuleTag, TagCategory, UploadedLog, UploadedLogAnalysis, UploadedLogFileHash,
+    UploadedLogStat, update_uploaded_log_stat_snapshot,
 )
-from .factories import make_rule
+from ..rule_sets import SHARED_RULE_SET_KEY
+from ..upload_utils import store_cached_analysis
+from .factories import make_rule, make_uploaded_log
+from .test_case_correlations import EVIL_SHA, FRST, MB_SAME, OTHER_LINE, RUN_LINE
 
 
 def _payload(line_rule_ids=(), warnings=(), wholelog_rule_ids=()):
@@ -272,6 +279,170 @@ class TagStatsViewTests(TestCase):
 
         self.assertContains(response, f'{reverse("log_search")}?tags={self.miner.pk}')
         self.assertContains(response, 'logs with tag, per day')
+
+
+class CachedAnalysisSyncsSnapshotTests(TestCase):
+    """Writing a log's cached shared analysis - however it happens - refreshes the snapshot's tag sources."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='alice', password='pw')
+        self.family = TagCategory.objects.create(name='family', color='#aa5555', priority=7)
+        self.vidar = RuleTag.objects.create(name='Vidar', category=self.family)
+
+    def _snapshot(self, log):
+        return UploadedLogStat.objects.get(source_id=log.pk)
+
+    def test_storing_a_shared_analysis_updates_the_tag_sources_only(self):
+        log = _log('a')
+        update_uploaded_log_stat_snapshot(log, _payload(line_rule_ids=[[1]]))
+        UploadedLogStat.objects.filter(source_id=log.pk).update(count_malware=4)
+
+        store_cached_analysis(log, SHARED_RULE_SET_KEY, _payload(
+            line_rule_ids=[[9], [3]], warnings=[{'code': 'low_memory', 'rule_ids': [5]}, {'code': ''}],
+        ))
+
+        stat = self._snapshot(log)
+        self.assertEqual(stat.rule_ids, [3, 5, 9])
+        self.assertEqual(stat.warning_codes, ['low_memory'])
+        self.assertEqual(stat.line_tag_ids, [])
+        self.assertEqual(stat.count_malware, 4)
+
+    def test_storing_a_private_analysis_leaves_the_snapshot_alone(self):
+        log = _log('a')
+        update_uploaded_log_stat_snapshot(log, _payload(line_rule_ids=[[1]]))
+
+        store_cached_analysis(log, f'private:{self.user.pk}', _payload(line_rule_ids=[[9]]))
+
+        self.assertEqual(self._snapshot(log).rule_ids, [1])
+
+    def test_opening_a_log_after_new_tagged_rules_counts_them_in_stats(self):
+        content = 'Scan result of Farbar Recovery Scan Tool\nC:\\vidar\\stealer.exe'
+        log = UploadedLog.objects.create(
+            forum_username='forum_user', original_filename='a.txt', content=content, log_type='FRST',
+        )
+        log.recalculate_analysis_stats()
+        self.client.force_login(self.user)
+        stats = lambda: {  # noqa: E731
+            row['name']: row['count']
+            for row in self.client.get(reverse('statistics'), {'tag_category': ''}).context['tag_stats']
+        }
+        self.assertNotIn('Vidar', stats())
+
+        rule = make_rule('C:\\vidar\\stealer.exe', owner=self.user)
+        rule.tags.add(self.vidar)
+        invalidate_rule_buckets_cache()
+        self.addCleanup(invalidate_rule_buckets_cache)
+        response = self.client.post(
+            reverse('analyze_log_api'), json.dumps({'log': content, 'upload_id': log.upload_id}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.assertIn(rule.pk, self._snapshot(log).rule_ids)
+        self.assertEqual(stats().get('Vidar'), 1)
+
+
+class CorrelatedCentralboxTagStatsTests(TestCase):
+    """Centralbox tags reach FRST logs through the hashes correlated with their lines."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='alice', password='pw')
+        self.client.force_login(self.user)
+        self.family = TagCategory.objects.create(name='family', color='#aa5555', priority=7)
+        self.asyncrat = RuleTag.objects.create(
+            name='AsyncRAT', match_pattern='asyncrat', match_centralbox=True, category=self.family,
+        )
+        now = timezone.now()
+        HashVerdict.objects.create(sha256=EVIL_SHA, state='known', verdict='malicious', family='asyncrat',
+                                   checked_at=now, next_check_at=now + timedelta(days=7))
+
+    def _rows(self):
+        response = self.client.get(reverse('statistics'), {'tag_category': ''})
+        self.assertEqual(response.status_code, 200)
+        return {row['name']: row['count'] for row in response.context['tag_stats']}
+
+    def _frst_with_correlations(self):
+        frst = make_uploaded_log('frst-log', log_type='FRST', content=FRST, forum_username='bob')
+        store_cached_analysis(frst, SHARED_RULE_SET_KEY, {
+            'format': ANALYSIS_PAYLOAD_FORMAT, 'summary': {}, 'warnings': [],
+            'lines': [{'line': text, 'dominant_status': '?', 'components': {}} for text in (RUN_LINE, OTHER_LINE)],
+        })
+        UploadedLogStat.objects.filter(source_id=frst.pk).update(total_line_count=3)
+        mb = make_uploaded_log('mb-log', log_type='Malwarebytes', content=MB_SAME, forum_username='bob')
+        UploadedLogFileHash.rebuild_for(mb)
+        with mock.patch.object(centralbox, '_http_get'), mock.patch.object(centralbox, '_request'):
+            correlations_for_upload(frst)
+        return frst
+
+    def test_computing_correlations_records_the_hashes(self):
+        frst = self._frst_with_correlations()
+
+        self.assertEqual(UploadedLogStat.objects.get(source_id=frst.pk).correlated_sha256s, [EVIL_SHA])
+        self.assertEqual(self._rows(), {'AsyncRAT': 1})
+
+    def test_a_centralbox_tag_added_later_counts_and_survives_deletion(self):
+        self.asyncrat.delete()
+        frst = self._frst_with_correlations()
+        self.assertEqual(self._rows(), {})
+
+        RuleTag.objects.create(name='AsyncRAT', match_pattern='asyncrat', match_centralbox=True, category=self.family)
+        frst.delete()
+
+        self.assertEqual(self._rows(), {'AsyncRAT': 1})
+
+    def test_hashes_from_another_system_are_left_out(self):
+        answer = {'lines': {
+            'a': [{'kind': 'hash', 'sha256': 'aa' * 32, 'system': 'same'}, {'kind': 'detection'}],
+            'b': [{'kind': 'hash', 'sha256': 'bb' * 32, 'system': 'different'},
+                  {'kind': 'file_info', 'sha256': 'aa' * 32, 'system': 'unknown'}],
+        }}
+        self.assertEqual(correlated_sha256s(answer), ['aa' * 32])
+        self.assertEqual(correlated_sha256s({}), [])
+
+
+class StatTagResyncMigrationTests(TestCase):
+    def _resync(self):
+        module = importlib.import_module('fixlist.migrations.0111_stat_tag_resync')
+        module.resync_stat_tags(apps, None)
+
+    def test_points_snapshots_at_fresh_shared_analyses_and_correlations(self):
+        fresh = _log('fresh')
+        stale = _log('stale')
+        private_only = _log('private')
+        for log in (fresh, stale, private_only):
+            update_uploaded_log_stat_snapshot(log, _payload(line_rule_ids=[[1]]))
+        # Written around save(), as rows from before the summary existed.
+        UploadedLogAnalysis.objects.bulk_create([
+            UploadedLogAnalysis(
+                upload=fresh, rule_set_key='shared', source_content_hash=fresh.content_hash,
+                payload=_payload(line_rule_ids=[[4], [2]], warnings=[{'code': 'low_memory', 'rule_ids': [9]}]),
+            ),
+            UploadedLogAnalysis(
+                upload=stale, rule_set_key='shared', source_content_hash='outdated',
+                payload=_payload(line_rule_ids=[[4]]),
+            ),
+            UploadedLogAnalysis(
+                upload=private_only, rule_set_key='private:1', source_content_hash=private_only.content_hash,
+                payload=_payload(line_rule_ids=[[4]]),
+            ),
+        ])
+        CorrelationCache.objects.create(upload=fresh, scope_key='user', signature='s', payload={
+            'lines': {'x': [{'kind': 'hash', 'sha256': 'aa' * 32, 'system': 'same'}]},
+        })
+        deleted_stat = UploadedLogStat.objects.create(source_id=99999, created_at=timezone.now(), rule_ids=[7])
+
+        self._resync()
+
+        fresh_stat = UploadedLogStat.objects.get(source_id=fresh.pk)
+        self.assertEqual(fresh_stat.rule_ids, [2, 4, 9])
+        self.assertEqual(fresh_stat.warning_codes, ['low_memory'])
+        self.assertEqual(fresh_stat.line_tag_ids, [])
+        self.assertEqual(fresh_stat.correlated_sha256s, ['aa' * 32])
+        self.assertEqual(UploadedLogStat.objects.get(source_id=stale.pk).rule_ids, [1])
+        self.assertEqual(UploadedLogStat.objects.get(source_id=private_only.pk).rule_ids, [1])
+        self.assertIsNone(UploadedLogStat.objects.get(source_id=stale.pk).correlated_sha256s)
+        deleted_stat.refresh_from_db()
+        self.assertEqual(deleted_stat.rule_ids, [7])
 
 
 class BackfillMigrationTests(TestCase):

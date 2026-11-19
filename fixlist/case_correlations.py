@@ -52,7 +52,7 @@ from .machine_signals import (  # noqa: F401 (re-exported)
 )
 from .models import (
     CorrelationCache, HashAlias, HashVerdict, InfectionCaseLog, UploadedLog, UploadedLogAnalysis,
-    UploadedLogFileHash, UploadedLogMachineSignal, iter_fixlog_results,
+    UploadedLogFileHash, UploadedLogMachineSignal, iter_fixlog_results, sync_stat_correlated_hashes,
 )
 from .log_types import (
     ADDITION_LOG_TYPES, DETECTION_LOG_TYPES, LOG_TYPE_FRST_AND_ADDITION, LOG_TYPE_FRST_SEARCH, LOG_TYPE_SHORTCUT,
@@ -964,10 +964,26 @@ def correlations_for_upload(uploaded_log, user=None):
             },
         }
         _store(uploaded_log, scope_key, signature, answer)
+        try:
+            sync_stat_correlated_hashes(uploaded_log.pk, correlated_sha256s(answer))
+        except Exception:
+            logger.exception('Storing correlated hashes in stats failed for %s', uploaded_log.upload_id)
         return answer
     except Exception:
         logger.exception('Case correlations failed for %s', getattr(uploaded_log, 'upload_id', '?'))
         return _empty()
+
+
+def correlated_sha256s(answer):
+    """The SHA256s an answer correlates with the log's lines, leaving out
+    logs from another system (as correlation_status does). For /stats/,
+    which finds the hashes' centralbox tags (see tagging.centralbox_tags_by_sha)."""
+    lines = answer.get('lines') if isinstance(answer, dict) else None
+    return sorted({
+        entry['sha256']
+        for entries in (lines or {}).values() for entry in entries or ()
+        if isinstance(entry, dict) and entry.get('sha256') and entry.get('system') != SYSTEM_DIFFERENT
+    })
 
 
 def _store(uploaded_log, scope_key, signature, answer):

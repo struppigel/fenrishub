@@ -1246,26 +1246,16 @@ class UploadedLog(AnalysisCountsBase):
         UploadedLogMachineSignal.rebuild_for(self)
 
         from .tagging import compute_line_tags, current_line_tags
+        from .upload_utils import store_cached_analysis
 
         line_tags = current_line_tags()
         shared_line_tags = compute_line_tags(shared_payload, line_tags) if shared_payload is not None else None
         if shared_payload is not None:
-            UploadedLogAnalysis.objects.update_or_create(
-                upload=self,
-                rule_set_key=SHARED_RULE_SET_KEY,
-                defaults={
-                    'payload': shared_payload, 'source_content_hash': self.content_hash,
-                    'line_tags': shared_line_tags,
-                },
-            )
+            store_cached_analysis(self, SHARED_RULE_SET_KEY, shared_payload, line_tags=shared_line_tags)
         if effective_payload is not None and effective_key != SHARED_RULE_SET_KEY:
-            UploadedLogAnalysis.objects.update_or_create(
-                upload=self,
-                rule_set_key=effective_key,
-                defaults={
-                    'payload': effective_payload, 'source_content_hash': self.content_hash,
-                    'line_tags': compute_line_tags(effective_payload, line_tags),
-                },
+            store_cached_analysis(
+                self, effective_key, effective_payload,
+                line_tags=compute_line_tags(effective_payload, line_tags),
             )
         if shared_payload is None and effective_payload is None:
             UploadedLogAnalysis.objects.filter(upload=self).delete()
@@ -1959,6 +1949,11 @@ class UploadedLogStat(AnalysisCountsBase):
     # lines - so they are stored, and refreshed for logs that still exist when
     # a line tag changes. None: never recorded.
     line_tag_ids = models.JSONField(null=True, blank=True, default=None)
+    # The SHA256s of related scanner / Fixlog logs that correlate with the
+    # log's lines (case_correlations), stored whenever the correlations are
+    # computed. Their centralbox tags are resolved when /stats/ is served, like
+    # rule tags. None: never correlated.
+    correlated_sha256s = models.JSONField(null=True, blank=True, default=None)
 
     class Meta:
         ordering = ['-created_at']
@@ -2011,31 +2006,49 @@ def update_uploaded_log_stat_snapshot(instance, shared_payload, shared_line_tags
     defaults.update(UploadedLog.counts_from_summary(summary))
     if not summary:
         defaults['total_line_count'] = instance.total_line_count
-    defaults['rule_ids'], defaults['warning_codes'] = _stat_tag_sources(shared_payload)
-    defaults['line_tag_ids'] = _stat_line_tag_ids(shared_payload, shared_line_tags)
+    defaults.update(stat_tag_fields(shared_payload, shared_line_tags))
     UploadedLogStat.objects.update_or_create(source_id=instance.pk, defaults=defaults)
 
 
-def _stat_tag_sources(payload):
-    """``(rule_ids, warning_codes)`` to snapshot from an analysis payload; empty lists without one."""
-    if not isinstance(payload, dict):
-        return [], []
-    from .tagging import payload_rule_ids
-    codes = {
-        warning.get('code') for warning in payload.get('warnings') or []
-        if isinstance(warning, dict) and warning.get('code')
-    }
-    return sorted(payload_rule_ids(payload)), sorted(codes)
+# Every write of a snapshot's tag sources goes through the helpers below, so
+# /stats/ reads what log search and the uploads list read from the cache.
 
+def stat_tag_fields(payload, line_tags=None, summary=None):
+    """The snapshot's tag sources - ``{rule_ids, warning_codes, line_tag_ids}`` - of a shared analysis.
 
-def _stat_line_tag_ids(payload, line_tags):
-    """The line tag ids to snapshot from an analysis payload; empty without one."""
-    if not isinstance(payload, dict):
-        return []
-    from .tagging import compute_line_tags, line_tag_hits
+    Rule ids and codes are the cache row's `tag_summary` (pass `summary` when
+    it is at hand, else it is derived from `payload`); line tag ids are the
+    stored `line_tags` matches (computed from `payload` when not given).
+    Empty lists without a payload: logs the analyzer skips hold no tags.
+    """
+    from .tagging import compute_line_tags, line_tag_hits, tag_summary_of
+
+    if summary is None:
+        summary = tag_summary_of(payload)
+    if summary is None:
+        return {'rule_ids': [], 'warning_codes': [], 'line_tag_ids': []}
     if line_tags is None:
-        line_tags = compute_line_tags(payload)
-    return sorted(line_tag_hits(line_tags))
+        line_tags = compute_line_tags(payload) if isinstance(payload, dict) else None
+    return {
+        'rule_ids': sorted(summary.get('rule_ids') or []),
+        'warning_codes': sorted(summary.get('codes') or []),
+        'line_tag_ids': sorted(line_tag_hits(line_tags)),
+    }
+
+
+def sync_stat_tag_sources(upload_pk, payload, line_tags=None):
+    """Point a log's snapshot at a newly cached shared analysis; the count_* fields are left alone."""
+    UploadedLogStat.objects.filter(source_id=upload_pk).update(**stat_tag_fields(payload, line_tags))
+
+
+def sync_stat_line_tag_ids(upload_pk, line_tag_ids):
+    """Store a log's refreshed line tag matches in its snapshot (see tagging.refresh_line_tags)."""
+    UploadedLogStat.objects.filter(source_id=upload_pk).update(line_tag_ids=sorted(line_tag_ids))
+
+
+def sync_stat_correlated_hashes(upload_pk, sha256s):
+    """Store the SHA256s correlated with a log's lines (see case_correlations.correlated_sha256s)."""
+    UploadedLogStat.objects.filter(source_id=upload_pk).update(correlated_sha256s=sorted(sha256s))
 
 
 def _fixlist_stat_defaults(instance):

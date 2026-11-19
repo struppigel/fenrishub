@@ -358,44 +358,6 @@ class StatisticsViewTests(TestCase):
         zero_days = [row for row in series if row['day'] != target_day]
         self.assertTrue(all(row['count'] == 0 for row in zero_days))
 
-    def test_malware_by_log_type_returns_percentage(self):
-        for i in range(3):
-            UploadedLog.objects.create(
-                forum_username='forumuser',
-                original_filename=f'frst-{i}.txt',
-                content='x',
-                created_by=self.helper,
-                log_type='FRST',
-            )
-        UploadedLog.objects.create(
-            forum_username='forumuser',
-            original_filename='addition.txt',
-            content='x',
-            created_by=self.helper,
-            log_type='Addition',
-        )
-        UploadedLogStat.objects.filter(log_type='FRST').first() and \
-            UploadedLogStat.objects.filter(log_type='FRST').update(count_malware=0)
-        # Mark one of the three FRST logs as infected, plus the single Addition.
-        first_frst = UploadedLogStat.objects.filter(log_type='FRST').order_by('source_id').first()
-        UploadedLogStat.objects.filter(pk=first_frst.pk).update(count_malware=4)
-        UploadedLogStat.objects.filter(log_type='Addition').update(count_malware=1)
-
-        self.client.force_login(self.helper)
-        response = self.client.get(reverse('statistics'))
-        rows = {row['log_type']: row for row in response.context['malware_by_log_type']}
-
-        self.assertEqual(rows['FRST']['total'], 3)
-        self.assertEqual(rows['FRST']['infected'], 1)
-        self.assertAlmostEqual(rows['FRST']['percent'], 33.3, places=1)
-
-        self.assertEqual(rows['Addition']['total'], 1)
-        self.assertEqual(rows['Addition']['infected'], 1)
-        self.assertEqual(rows['Addition']['percent'], 100.0)
-
-        self.assertEqual(rows['FRST&Addition']['total'], 0)
-        self.assertEqual(rows['FRST&Addition']['percent'], 0.0)
-
 
 class StatisticsRangeAndGroupingTests(TestCase):
     """The range never reaches past today or before the oldest data (the default

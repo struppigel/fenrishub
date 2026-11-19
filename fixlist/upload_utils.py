@@ -31,19 +31,31 @@ def get_fresh_cached_analysis(uploaded_log: UploadedLog, rule_set_key: str):
     return cached.payload
 
 
-def store_cached_analysis(uploaded_log: UploadedLog, rule_set_key: str, analysis: dict) -> None:
-    """Write `analysis` as the cached payload for (upload, rule set), with its line tag matches."""
+def store_cached_analysis(uploaded_log: UploadedLog, rule_set_key: str, analysis: dict, line_tags=None) -> None:
+    """Write `analysis` as the cached payload for (upload, rule set), with its line tag matches.
+
+    The one writer of cached analyses. A shared analysis also refreshes the
+    tag sources of the log's /stats/ snapshot, so the stats count the tags
+    that log search and the uploads list find in the same cache row.
+    `line_tags` is computed when not given.
+    """
+    from .rule_sets import SHARED_RULE_SET_KEY
+    from .models import sync_stat_tag_sources
     from .tagging import compute_line_tags
 
+    if line_tags is None:
+        line_tags = compute_line_tags(analysis)
     UploadedLogAnalysis.objects.update_or_create(
         upload=uploaded_log,
         rule_set_key=rule_set_key,
         defaults={
             'payload': analysis,
             'source_content_hash': uploaded_log.content_hash,
-            'line_tags': compute_line_tags(analysis),
+            'line_tags': line_tags,
         },
     )
+    if rule_set_key == SHARED_RULE_SET_KEY:
+        sync_stat_tag_sources(uploaded_log.pk, analysis, line_tags)
 
 
 def get_or_compute_upload_analysis(uploaded_log: UploadedLog, rule_set_key: str):

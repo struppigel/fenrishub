@@ -56,7 +56,7 @@ from django.db.models.functions import Cast, Lower
 
 from .models import (
     TAG_CATEGORY_COLOR_RE, ClassificationRule, FixlistSnippet, RuleTag, Speech, TagCategory, UploadedLog,
-    UploadedLogAnalysis, UploadedLogStat,
+    UploadedLogAnalysis, sync_stat_line_tag_ids,
 )
 from .rule_sets import SHARED_RULE_SET_KEY
 
@@ -1096,7 +1096,7 @@ def refresh_line_tags(tag_ids=None):
             UploadedLogAnalysis.objects.filter(pk=pk).update(line_tags=updated)
             updated_count += 1
             if rule_set_key == SHARED_RULE_SET_KEY:
-                UploadedLogStat.objects.filter(source_id=upload_id).update(line_tag_ids=sorted(hits))
+                sync_stat_line_tag_ids(upload_id, hits)
         # The refresh shares its process with request threads; let them run.
         time.sleep(0)
     return updated_count
@@ -1180,8 +1180,8 @@ def tag_summary_of(payload):
         'format': payload.get('format'),
         'rule_ids': sorted(payload_rule_ids(payload)),
         'codes': sorted({
-            warning.get('code') for warning in payload.get('warnings') or []
-            if isinstance(warning.get('code'), str)
+            warning['code'] for warning in payload.get('warnings') or []
+            if isinstance(warning, dict) and isinstance(warning.get('code'), str) and warning['code']
         }),
     }
 

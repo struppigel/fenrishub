@@ -12,7 +12,7 @@ from django.views.decorators.http import require_http_methods
 
 from ..log_types import ANALYZED_LOG_TYPES
 from ..models import FixlistStat, RuleTag, TagCategory, UploadedLogStat
-from ..tagging import parse_tag_ids, selected_tags_for_picker, tag_ids_by_key
+from ..tagging import centralbox_tags_by_sha, parse_tag_ids, selected_tags_for_picker, tag_ids_by_key
 
 
 UNASSIGNED_LABEL = 'Unassigned'
@@ -178,26 +178,49 @@ def _parse_category_id(raw, categories):
     return category_id if any(category['id'] == category_id for category in categories) else None
 
 
+SHA_LOOKUP_CHUNK = 2000
+
+
+def _centralbox_tags_by_sha(shas):
+    """``{sha256: {tag_id}}`` for `shas` (see tagging.centralbox_tags_by_sha), in chunks."""
+    if not shas:
+        return {}
+    tags = list(
+        RuleTag.objects.filter(match_centralbox=True).exclude(match_pattern='')
+        .only('pk', 'match_pattern', 'exclude_pattern')
+    )
+    if not tags:
+        return {}
+    shas = sorted(shas)
+    result = {}
+    for start in range(0, len(shas), SHA_LOOKUP_CHUNK):
+        result.update(centralbox_tags_by_sha(shas[start:start + SHA_LOOKUP_CHUNK], tags=tags))
+    return result
+
+
 def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
     """Logs per rule tag in the range: the table rows, the timeline and how many logs were counted.
 
     Tags come from the rules and warning codes each snapshot recorded, resolved
     now (see tagging.tag_ids_by_key), so a rule tagged later counts for past
-    logs too, plus the line tags it recorded (refreshed while the log exists). Without a category the table leaves out priority-0 categories -
+    logs too, plus the line tags it recorded (refreshed while the log exists)
+    and the centralbox tags of the hashes correlated with its lines (recorded
+    when the correlations are computed, tags resolved now). Without a category the table leaves out priority-0 categories -
     tags in nearly every log - as the uploads list does; a picked category shows
     all of its tags. Picked tags replace the most found ones in the chart.
     """
     trunc = TRUNC_BY_GRANULARITY[granularity]
     rows = (
         analyzed_qs.annotate(bucket=trunc('created_at', tzinfo=tz))
-        .values_list('bucket', 'rule_ids', 'warning_codes', 'line_tag_ids')
+        .values_list('bucket', 'rule_ids', 'warning_codes', 'line_tag_ids', 'correlated_sha256s')
     )
     bucket_by_row = {}
     rule_ids_by_row = {}
     codes_by_row = {}
     line_tag_ids_by_row = {}
+    shas_by_row = {}
     unrecorded = 0
-    for index, (bucket, rule_ids, codes, line_tag_ids) in enumerate(rows.iterator(chunk_size=500)):
+    for index, (bucket, rule_ids, codes, line_tag_ids, shas) in enumerate(rows.iterator(chunk_size=500)):
         if rule_ids is None:
             unrecorded += 1
             continue
@@ -207,9 +230,18 @@ def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
         rule_ids_by_row[index] = rule_ids
         codes_by_row[index] = codes or []
         line_tag_ids_by_row[index] = line_tag_ids or []
+        if shas:
+            shas_by_row[index] = shas
+
+    tag_ids_by_row = tag_ids_by_key(rule_ids_by_row, codes_by_row, line_tag_ids_by_row)
+    # Centralbox tags of the hashes correlated with the log's lines, as found now.
+    tags_by_sha = _centralbox_tags_by_sha(set().union(*shas_by_row.values()) if shas_by_row else set())
+    for index, shas in shas_by_row.items():
+        for sha in shas:
+            tag_ids_by_row[index].update(tags_by_sha.get(sha, ()))
 
     counts = {}
-    for index, tag_ids in tag_ids_by_key(rule_ids_by_row, codes_by_row, line_tag_ids_by_row).items():
+    for index, tag_ids in tag_ids_by_row.items():
         bucket = bucket_by_row[index]
         for tag_id in tag_ids:
             by_bucket = counts.setdefault(tag_id, {})
@@ -339,27 +371,6 @@ def _log_stats_context(request, log_range, axis, granularity, tz):
         'total': fixlog_totals['total'] or 0,
     }
 
-    totals_by_type = {
-        row['log_type']: row['n']
-        for row in log_qs.filter(log_type__in=ANALYZED_LOG_TYPES).values('log_type').annotate(n=Count('id'))
-    }
-    infected_by_type = {
-        row['log_type']: row['n']
-        for row in log_qs.filter(log_type__in=ANALYZED_LOG_TYPES, count_malware__gt=0)
-        .values('log_type').annotate(n=Count('id'))
-    }
-    malware_by_log_type = []
-    for lt in ANALYZED_LOG_TYPES:
-        total = totals_by_type.get(lt, 0)
-        infected = infected_by_type.get(lt, 0)
-        percent = round(infected / total * 100, 1) if total else 0.0
-        malware_by_log_type.append({
-            'log_type': lt,
-            'infected': infected,
-            'total': total,
-            'percent': percent,
-        })
-
     logs_per_helper_raw = (
         log_qs.values('recipient_username')
         .annotate(n=Count('id'))
@@ -428,7 +439,6 @@ def _log_stats_context(request, log_range, axis, granularity, tz):
 
     return {
         'headline': headline,
-        'malware_by_log_type': malware_by_log_type,
         'fixlog_summary': fixlog_summary,
         'logs_per_helper': logs_per_helper,
         'logs_per_helper_top': logs_per_helper[:TOP_N],

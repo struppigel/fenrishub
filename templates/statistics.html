@@ -226,33 +226,6 @@
     </div>
 
     <div class="stats-section">
-        <h3>% of logs containing malware (by log type)</h3>
-        <div class="stats-grid-two">
-            <table class="stats-table">
-                <thead>
-                    <tr>
-                        <th>log type</th>
-                        <th class="num">% with B lines</th>
-                        <th class="num">infected / total</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in malware_by_log_type %}
-                    <tr>
-                        <td>{{ row.log_type }}</td>
-                        <td class="num">{{ row.percent }}%</td>
-                        <td class="num">{{ row.infected }} / {{ row.total }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            <div class="stats-chart-wrap">
-                <canvas id="malwareByTypeChart" height="180"></canvas>
-            </div>
-        </div>
-    </div>
-
-    <div class="stats-section">
         <h3>logs with tag, per {{ granularity }}</h3>
         <form method="get" class="stats-tag-controls">
             <input type="hidden" name="start" value="{{ start_date }}">
@@ -266,7 +239,7 @@
             {% include "partials/tag_filter_picker.html" with tag_filter_title="draw these tags instead of the most found ones" tag_filter_placeholder="chart tags..." %}
         </form>
         <div class="stats-tag-note">
-            counts analyzed logs whose shared analysis contains the tag; {% if selected_tags %}showing the picked tags{% else %}showing the {{ tag_chart_top_n }} most found{% if selected_tag_category %} in the category{% endif %}{% endif %}.
+            counts analyzed logs whose shared analysis contains the tag, or whose lines correlate with a hash of a related log carrying it on centralbox (once the correlations were computed); {% if selected_tags %}showing the picked tags{% else %}showing the {{ tag_chart_top_n }} most found{% if selected_tag_category %} in the category{% endif %}{% endif %}.
             {% if tag_unrecorded_count %}{{ tag_unrecorded_count }} analyzed log{{ tag_unrecorded_count|pluralize }} in range {{ tag_unrecorded_count|pluralize:"has,have" }} no tag data (deleted before tag stats existed, or not rescanned since) and {{ tag_unrecorded_count|pluralize:"is,are" }} not counted.{% endif %}
         </div>
         {% if tag_stats or selected_tags %}
@@ -378,7 +351,6 @@
 {{ cb.usage.series|json_script:"data-cb-usage-series" }}
 {% else %}
 {{ uploads_per_day|json_script:"data-uploads-per-day" }}
-{{ malware_by_log_type|json_script:"data-malware-by-type" }}
 {{ known_unknown|json_script:"data-known-unknown" }}
 {{ fixlog_summary|json_script:"data-fixlog-summary" }}
 {{ logs_per_helper_series|json_script:"data-logs-per-helper-series" }}
@@ -445,43 +417,6 @@
                 }],
             },
             options: baseOptions,
-        });
-    }
-
-    const malwareByType = readJson('data-malware-by-type') || [];
-    const malwareCanvas = document.getElementById('malwareByTypeChart');
-    if (malwareCanvas && malwareByType.length) {
-        new Chart(malwareCanvas, {
-            type: 'bar',
-            data: {
-                labels: malwareByType.map(r => r.log_type),
-                datasets: [{
-                    label: '% logs with malware',
-                    data: malwareByType.map(r => r.percent),
-                    backgroundColor: colors.error,
-                    borderColor: colors.error,
-                }],
-            },
-            options: Object.assign({}, baseOptions, {
-                scales: Object.assign({}, baseOptions.scales, {
-                    y: Object.assign({}, baseOptions.scales.y, {
-                        max: 100,
-                        ticks: Object.assign({}, baseOptions.scales.y.ticks, {
-                            callback: (v) => v + '%',
-                        }),
-                    }),
-                }),
-                plugins: Object.assign({}, baseOptions.plugins, {
-                    tooltip: {
-                        callbacks: {
-                            label: (ctx) => {
-                                const row = malwareByType[ctx.dataIndex];
-                                return `${row.percent}% (${row.infected} of ${row.total})`;
-                            },
-                        },
-                    },
-                }),
-            }),
         });
     }
 
