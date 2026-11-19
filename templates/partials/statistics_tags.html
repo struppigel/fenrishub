@@ -1,0 +1,44 @@
+{% load rule_tags %}
+{# The tag chart and table of the logs and users tabs. tag_unit: "logs" or "users". #}
+<div class="stats-section">
+    <h3>{{ tag_unit }} with tag, per {{ granularity }}</h3>
+    <form method="get" class="stats-tag-controls">
+        <input type="hidden" name="start" value="{{ start_date }}">
+        <input type="hidden" name="end" value="{{ end_date }}">
+        {% if tab != 'logs' %}<input type="hidden" name="tab" value="{{ tab }}">{% endif %}
+        <select name="tag_category" title="only tags of this category" onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit();">
+            <option value="">all categories</option>
+            {% for category in tag_categories %}
+            <option value="{{ category.id }}" {% if category.id == selected_tag_category %}selected{% endif %}>{{ category.name }}</option>
+            {% endfor %}
+        </select>
+        {% include "partials/tag_filter_picker.html" with tag_filter_title="draw these tags instead of the most found ones" tag_filter_placeholder="chart tags..." %}
+    </form>
+    <div class="stats-tag-note">
+        {% if tag_unit == 'users' %}counts forum users with an analyzed log that contains the tag (each user once per {{ granularity }} and once in the table){% else %}counts analyzed logs whose shared analysis contains the tag{% endif %}, or whose lines correlate with a hash of a related log carrying it on centralbox (once the correlations were computed); {% if selected_tags %}showing the picked tags{% else %}showing the {{ tag_chart_top_n }} most found{% if selected_tag_category %} in the category{% endif %}{% endif %}.
+        {% if tag_unrecorded_count %}{{ tag_unrecorded_count }} analyzed log{{ tag_unrecorded_count|pluralize }} in range {{ tag_unrecorded_count|pluralize:"has,have" }} no tag data (deleted before tag stats existed, or not rescanned since) and {{ tag_unrecorded_count|pluralize:"is,are" }} not counted.{% endif %}
+    </div>
+    {% if tag_stats or selected_tags %}
+    <div class="stats-chart-wrap">
+        <canvas id="tagTimelineChart"></canvas>
+    </div>
+    {% endif %}
+    {% if tag_stats %}
+    <table class="stats-table" style="margin-top: 12px;">
+        <thead>
+            <tr><th>tag</th><th class="num">{{ tag_unit }}</th><th class="num">% of {{ tag_counted_count }} {% if tag_unit == 'users' %}users with analyzed logs{% else %}analyzed logs{% endif %}</th></tr>
+        </thead>
+        <tbody>
+            {% for row in tag_stats %}
+            <tr>
+                <td><a class="tag-chip{{ row|tag_category_class }}" href="{% url 'log_search' %}?tags={{ row.id }}" title="find the logs with this tag">{{ row.name }}</a></td>
+                <td class="num">{{ row.count }}</td>
+                <td class="num">{{ row.percent }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="info-box">no {% if selected_tag_category %}tags of this category{% else %}tags{% endif %} found in the analyzed logs of the selected range.</div>
+    {% endif %}
+</div>

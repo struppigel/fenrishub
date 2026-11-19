@@ -24,7 +24,7 @@ from ..models import (
     CentralboxAutoQueue, CentralboxFreshLookup, CentralboxUsageMinute, HashAlias, HashVerdict, SiteConfig,
     UploadedLogFileHash,
 )
-from .statistics import TRUNC_BY_GRANULARITY, UNASSIGNED_LABEL, _as_local_date, _bucket_label
+from .statistics import TRUNC_BY_GRANULARITY, UNASSIGNED_LABEL, _as_local_date, _bucket_label, _percent
 
 TOP_N = 20
 USAGE_DAYS = 7
@@ -284,7 +284,7 @@ def _coverage_stats(start_dt, end_dt):
             'hashes': len(keys),
             'answered': answered,
             'flagged': sum(1 for outcome in found if outcome in FLAGGED),
-            'percent': round(answered / len(keys) * 100, 1) if keys else 0.0,
+            'percent': _percent(answered, len(keys)),
         }
 
     sources = sorted(

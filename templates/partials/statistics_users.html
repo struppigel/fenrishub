@@ -1,0 +1,112 @@
+{# The users tab of the statistics page (views/statistics_users.py). #}
+{% if unknown_user_logs %}
+<div class="stats-tag-note">{{ unknown_user_logs }} log{{ unknown_user_logs|pluralize }} in range {{ unknown_user_logs|pluralize:"has,have" }} no known forum user (deleted before snapshots recorded it) and {{ unknown_user_logs|pluralize:"is,are" }} not counted here.</div>
+{% endif %}
+<div class="stats-cards">
+    <div class="stats-card">
+        <div class="stats-card-label">total users</div>
+        <div class="stats-card-value">{{ users_headline.users }}</div>
+    </div>
+    <div class="stats-card" title="whose first recorded log is in the range (logs deleted before snapshots recorded their user don't count)">
+        <div class="stats-card-label">new users</div>
+        <div class="stats-card-value">{{ users_headline.new_users }}</div>
+    </div>
+    <div class="stats-card malware">
+        <div class="stats-card-label">users with malware lines (B)</div>
+        <div class="stats-card-value">{{ users_headline.malware_users }}</div>
+    </div>
+    <div class="stats-card pup">
+        <div class="stats-card-label">users with pup lines (P)</div>
+        <div class="stats-card-value">{{ users_headline.pup_users }}</div>
+    </div>
+    <div class="stats-card warning">
+        <div class="stats-card-label">users with warning lines (!)</div>
+        <div class="stats-card-value">{{ users_headline.warning_users }}</div>
+    </div>
+</div>
+
+<div class="stats-section">
+    <h3>users per {{ granularity }}</h3>
+    <div class="stats-tag-note">users who uploaded a log, and new users: those whose first recorded log is in the {{ granularity }}. Logs deleted before snapshots recorded their user don't count, so a returning user whose earlier logs are gone shows as new.</div>
+    <div class="stats-chart-wrap">
+        <canvas id="usersPerBucketChart"></canvas>
+    </div>
+</div>
+
+{% include "partials/statistics_tags.html" with tag_unit="users" %}
+
+<div class="stats-section">
+    <h3>logs per user</h3>
+    <div class="stats-grid-two">
+        <table class="stats-table">
+            <tbody>
+                <tr><td>mean logs per user</td><td class="num">{{ logs_per_user.mean }}</td></tr>
+                <tr><td>median logs per user</td><td class="num">{{ logs_per_user.median }}</td></tr>
+                <tr><td>users with 2+ logs</td><td class="num">{{ logs_per_user.returning }}</td></tr>
+                <tr><td title="from a user's first to last log in the range, users with 2+ logs">median days first to last log</td><td class="num">{{ logs_per_user.median_span_days }}</td></tr>
+            </tbody>
+        </table>
+        <div class="stats-chart-wrap">
+            <canvas id="logsPerUserChart" height="180"></canvas>
+        </div>
+    </div>
+</div>
+
+<div class="stats-section">
+    <h3>cleanup reach</h3>
+    <table class="stats-table">
+        <thead>
+            <tr><th></th><th class="num">users</th><th class="num">% of {{ users_headline.users }} users</th></tr>
+        </thead>
+        <tbody>
+            <tr><td title="a fixlist for the user from the range's start on, also after its end">got a fixlist</td><td class="num">{{ users_cleanup.with_fixlist }}</td><td class="num">{{ users_cleanup.with_fixlist_pct }}%</td></tr>
+            <tr><td>uploaded a fixlog</td><td class="num">{{ users_cleanup.with_fixlog }}</td><td class="num">{{ users_cleanup.with_fixlog_pct }}%</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="stats-section">
+    <h3>open cases per helper, per {{ granularity }}</h3>
+    <div class="stats-tag-note">a user counts for a helper on every day from one of their logs with that helper to the next, as long as no more than {{ case_gap_days }} days pass between them; the table counts the users with a case open on any day of the range.</div>
+    {% if users_per_helper %}
+    <div class="stats-chart-wrap">
+        <canvas id="usersPerHelperChart"></canvas>
+    </div>
+    <table class="stats-table" style="margin-top: 12px;">
+        <thead>
+            <tr><th>helper</th><th class="num">users in range</th></tr>
+        </thead>
+        <tbody>
+            {% for row in users_per_helper %}
+            <tr><td>{{ row.username }}</td><td class="num">{{ row.count }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="info-box">no uploads with a known forum user in the selected range.</div>
+    {% endif %}
+</div>
+
+<div class="stats-section">
+    <h3>most active users</h3>
+    {% if top_users %}
+    <table class="stats-table">
+        <thead>
+            <tr><th>forum user</th><th class="num">logs</th><th class="num">fixlists</th><th>first log</th><th>last log</th></tr>
+        </thead>
+        <tbody>
+            {% for row in top_users %}
+            <tr>
+                <td>{{ row.username }}</td>
+                <td class="num">{{ row.logs }}</td>
+                <td class="num">{{ row.fixlists }}</td>
+                <td>{{ row.first }}</td>
+                <td>{{ row.last }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="info-box">no uploads with a known forum user in the selected range.</div>
+    {% endif %}
+</div>

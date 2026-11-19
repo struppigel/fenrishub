@@ -1934,6 +1934,9 @@ class UploadedLogStat(AnalysisCountsBase):
     source_id = models.PositiveIntegerField(unique=True, db_index=True)
     owner_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
     owner_username = models.CharField(max_length=150, blank=True, default='', db_index=True)
+    # The forum user who posted the log, as stat_username keys it; '' unknown
+    # (the log was gone before snapshots recorded it).
+    forum_username = models.CharField(max_length=100, blank=True, default='', db_index=True)
     recipient_username = models.CharField(max_length=150, blank=True, default='')
     log_type = models.CharField(max_length=32, default='Unknown', db_index=True)
     created_at = models.DateTimeField(db_index=True)
@@ -1966,6 +1969,8 @@ class FixlistStat(models.Model):
     source_id = models.PositiveIntegerField(unique=True, db_index=True)
     owner_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
     owner_username = models.CharField(max_length=150, blank=True, default='', db_index=True)
+    # The forum user the fixlist is for, as stat_username keys it; '' unknown.
+    username = models.CharField(max_length=255, blank=True, default='', db_index=True)
     created_at = models.DateTimeField(db_index=True)
     line_count = models.PositiveIntegerField(default=0)
 
@@ -1976,11 +1981,18 @@ class FixlistStat(models.Model):
         return f'FixlistStat(source_id={self.source_id})'
 
 
+def stat_username(value):
+    """A forum username as the stats key it: stripped and lowercased, like the
+    case-insensitive related-logs lookup. '' for none."""
+    return (value or '').strip().lower()
+
+
 def _uploaded_log_stat_metadata(instance):
     """Snapshot fields that don't depend on which ruleset analyzed the log."""
     return {
         'owner_id': instance.created_by_id,
         'owner_username': instance.created_by.username if instance.created_by_id else '',
+        'forum_username': stat_username(instance.forum_username),
         'recipient_username': instance.recipient_user.username if instance.recipient_user_id else '',
         'log_type': instance.log_type,
         'created_at': instance.created_at,
@@ -2055,6 +2067,7 @@ def _fixlist_stat_defaults(instance):
     return {
         'owner_id': instance.owner_id,
         'owner_username': instance.owner.username if instance.owner_id else '',
+        'username': stat_username(instance.username),
         'created_at': instance.created_at,
         'line_count': instance.line_count,
     }

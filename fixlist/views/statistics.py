@@ -124,6 +124,11 @@ def _as_local_date(value, tz):
     return value
 
 
+def _percent(part, whole):
+    """`part` as a percentage of `whole`, one decimal; 0.0 for an empty whole."""
+    return round(part / whole * 100, 1) if whole else 0.0
+
+
 def _counts_by_bucket_and_label(queryset, label_field, granularity, tz):
     """``{label: {bucket_date: count}}`` for one person field, counted in the database."""
     trunc = TRUNC_BY_GRANULARITY[granularity]
@@ -178,7 +183,8 @@ def _parse_category_id(raw, categories):
     return category_id if any(category['id'] == category_id for category in categories) else None
 
 
-SHA_LOOKUP_CHUNK = 2000
+# Hashes per IN (...) list: stays below SQLite's variable limit.
+SHA_LOOKUP_CHUNK = 500
 
 
 def _centralbox_tags_by_sha(shas):
@@ -198,8 +204,12 @@ def _centralbox_tags_by_sha(shas):
     return result
 
 
-def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
+def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids, unit_field=None):
     """Logs per rule tag in the range: the table rows, the timeline and how many logs were counted.
+
+    With `unit_field` (e.g. 'forum_username') it counts distinct values of
+    that field instead of logs: once per bucket in the chart, once in the
+    range in the table, and the % base is the distinct values with tag data.
 
     Tags come from the rules and warning codes each snapshot recorded, resolved
     now (see tagging.tag_ids_by_key), so a rule tagged later counts for past
@@ -210,23 +220,26 @@ def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
     all of its tags. Picked tags replace the most found ones in the chart.
     """
     trunc = TRUNC_BY_GRANULARITY[granularity]
-    rows = (
-        analyzed_qs.annotate(bucket=trunc('created_at', tzinfo=tz))
-        .values_list('bucket', 'rule_ids', 'warning_codes', 'line_tag_ids', 'correlated_sha256s')
+    fields = ['bucket', 'rule_ids', 'warning_codes', 'line_tag_ids', 'correlated_sha256s']
+    rows = analyzed_qs.annotate(bucket=trunc('created_at', tzinfo=tz)).values_list(
+        *fields, *([unit_field] if unit_field else []),
     )
     bucket_by_row = {}
+    unit_by_row = {}
     rule_ids_by_row = {}
     codes_by_row = {}
     line_tag_ids_by_row = {}
     shas_by_row = {}
     unrecorded = 0
-    for index, (bucket, rule_ids, codes, line_tag_ids, shas) in enumerate(rows.iterator(chunk_size=500)):
+    for index, (bucket, rule_ids, codes, line_tag_ids, shas, *unit) in enumerate(rows.iterator(chunk_size=500)):
         if rule_ids is None:
             unrecorded += 1
             continue
         if bucket is None:
             continue
         bucket_by_row[index] = _as_local_date(bucket, tz)
+        if unit_field:
+            unit_by_row[index] = unit[0]
         rule_ids_by_row[index] = rule_ids
         codes_by_row[index] = codes or []
         line_tag_ids_by_row[index] = line_tag_ids or []
@@ -240,14 +253,32 @@ def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
         for sha in shas:
             tag_ids_by_row[index].update(tags_by_sha.get(sha, ()))
 
+    # counts: {tag: {bucket: n}}, totals: {tag: n}. Logs are counted; units are
+    # gathered in sets so each counts once per bucket and once in the range.
     counts = {}
-    for index, tag_ids in tag_ids_by_row.items():
-        bucket = bucket_by_row[index]
-        for tag_id in tag_ids:
-            by_bucket = counts.setdefault(tag_id, {})
-            by_bucket[bucket] = by_bucket.get(bucket, 0) + 1
-
-    counted = len(rule_ids_by_row)
+    totals = {}
+    if unit_field:
+        units_by_bucket = {}
+        units_in_range = {}
+        for index, tag_ids in tag_ids_by_row.items():
+            bucket, unit = bucket_by_row[index], unit_by_row[index]
+            for tag_id in tag_ids:
+                units_by_bucket.setdefault(tag_id, {}).setdefault(bucket, set()).add(unit)
+                units_in_range.setdefault(tag_id, set()).add(unit)
+        counts = {
+            tag_id: {bucket: len(units) for bucket, units in by_bucket.items()}
+            for tag_id, by_bucket in units_by_bucket.items()
+        }
+        totals = {tag_id: len(units) for tag_id, units in units_in_range.items()}
+        counted = len(set(unit_by_row.values()))
+    else:
+        for index, tag_ids in tag_ids_by_row.items():
+            bucket = bucket_by_row[index]
+            for tag_id in tag_ids:
+                by_bucket = counts.setdefault(tag_id, {})
+                by_bucket[bucket] = by_bucket.get(bucket, 0) + 1
+                totals[tag_id] = totals.get(tag_id, 0) + 1
+        counted = len(rule_ids_by_row)
     tags = RuleTag.objects.select_related('category').in_bulk(set(counts) | set(picked_ids))
     # A deleted line tag can linger in the snapshots of logs that are gone.
     counts = {tag_id: by_bucket for tag_id, by_bucket in counts.items() if tag_id in tags}
@@ -263,8 +294,8 @@ def _tag_stats(analyzed_qs, axis, granularity, tz, category_id, picked_ids):
                 'id': tag_id,
                 'name': tags[tag_id].name,
                 'category_id': tags[tag_id].category_id,
-                'count': sum(by_bucket.values()),
-                'percent': round(sum(by_bucket.values()) / counted * 100, 1) if counted else 0.0,
+                'count': totals[tag_id],
+                'percent': _percent(totals[tag_id], counted),
             }
             for tag_id, by_bucket in counts.items()
             if tag_id in tags and shown(tags[tag_id])
@@ -302,14 +333,51 @@ def _bucket_owner(row):
 
 
 TAB_LOGS = 'logs'
+TAB_USERS = 'users'
 TAB_CENTRALBOX = 'centralbox'
+TABS = (TAB_LOGS, TAB_USERS, TAB_CENTRALBOX)
+
+
+def _stat_querysets(log_range):
+    """The log and fixlist snapshots created in the range."""
+    start_dt, end_dt = log_range
+    return (
+        UploadedLogStat.objects.filter(created_at__range=(start_dt, end_dt)),
+        FixlistStat.objects.filter(created_at__range=(start_dt, end_dt)),
+    )
+
+
+def _analyzed(log_qs):
+    """The snapshots of analyzed logs, the base of the tag and known/unknown stats."""
+    return log_qs.filter(log_type__in=ANALYZED_LOG_TYPES, total_line_count__gt=0)
+
+
+def _tag_params(request):
+    """The tag chart's choices from the URL: (categories, selected category id or None, picked tag ids)."""
+    tag_categories = list(TagCategory.objects.order_by('name').values('id', 'name'))
+    selected = _parse_category_id(request.GET.get('tag_category'), tag_categories)
+    return tag_categories, selected, parse_tag_ids(request.GET.getlist('tags'))
+
+
+def _tag_context(tag_stats, tag_categories, selected_tag_category, picked_tag_ids):
+    """The template context of the tag chart, table and controls."""
+    return {
+        'tag_stats': tag_stats['rows'],
+        'tag_series': tag_stats['series'],
+        'tag_counted_count': tag_stats['counted'],
+        'tag_unrecorded_count': tag_stats['unrecorded'],
+        'tag_categories': tag_categories,
+        'tag_chart_top_n': TAG_CHART_TOP_N,
+        'selected_tag_category': selected_tag_category,
+        'selected_tags': selected_tags_for_picker(picked_tag_ids),
+    }
 
 
 @login_required
 @require_http_methods(['GET'])
 def statistics_view(request):
     start_date, end_date, start_dt, end_dt = _resolve_range(request)
-    tab = TAB_CENTRALBOX if request.GET.get('tab') == TAB_CENTRALBOX else TAB_LOGS
+    tab = request.GET.get('tab') if request.GET.get('tab') in TABS else TAB_LOGS
     tz = timezone.get_current_timezone()
     granularity = _granularity(start_date, end_date)
     axis = _bucket_axis(start_date, end_date, granularity)
@@ -329,8 +397,14 @@ def statistics_view(request):
         carry = [] if raw_category is None else [('tag_category', raw_category)]
         carry += [('tags', tag_id) for tag_id in parse_tag_ids(request.GET.getlist('tags'))]
     else:
-        context.update(_log_stats_context(request, log_range=(start_dt, end_dt), axis=axis,
-                                          granularity=granularity, tz=tz))
+        if tab == TAB_USERS:
+            from .statistics_users import users_stats_context
+
+            context.update(users_stats_context(request, log_range=(start_dt, end_dt), axis=axis,
+                                               granularity=granularity, tz=tz))
+        else:
+            context.update(_log_stats_context(request, log_range=(start_dt, end_dt), axis=axis,
+                                              granularity=granularity, tz=tz))
         carry = [('tag_category', '' if context['selected_tag_category'] is None else context['selected_tag_category'])]
         carry += [('tags', tag['id']) for tag in context['selected_tags']]
     context['carry_params'] = carry
@@ -340,9 +414,7 @@ def statistics_view(request):
 
 def _log_stats_context(request, log_range, axis, granularity, tz):
     """The logs tab: uploads, fixlists, tags and helpers in the range."""
-    start_dt, end_dt = log_range
-    log_qs =UploadedLogStat.objects.filter(created_at__range=(start_dt, end_dt))
-    fixlist_qs = FixlistStat.objects.filter(created_at__range=(start_dt, end_dt))
+    log_qs, fixlist_qs = _stat_querysets(log_range)
 
     line_totals = log_qs.aggregate(
         b=Sum('count_malware'),
@@ -385,7 +457,7 @@ def _log_stats_context(request, log_range, axis, granularity, tz):
         key=lambda r: (-r['count'], r['username'].lower()),
     )
 
-    analyzed_qs = log_qs.filter(log_type__in=ANALYZED_LOG_TYPES, total_line_count__gt=0)
+    analyzed_qs = _analyzed(log_qs)
     known_pct_expr = ExpressionWrapper(
         (F('total_line_count') - F('count_unknown')) * 100.0 / F('total_line_count'),
         output_field=FloatField(),
@@ -432,12 +504,11 @@ def _log_stats_context(request, log_range, axis, granularity, tz):
         _counts_by_bucket_and_label(fixlist_qs, 'owner_username', granularity, tz), axis, granularity,
     )
 
-    tag_categories = list(TagCategory.objects.order_by('name').values('id', 'name'))
-    selected_tag_category = _parse_category_id(request.GET.get('tag_category'), tag_categories)
-    picked_tag_ids = parse_tag_ids(request.GET.getlist('tags'))
+    tag_categories, selected_tag_category, picked_tag_ids = _tag_params(request)
     tag_stats = _tag_stats(analyzed_qs, axis, granularity, tz, selected_tag_category, picked_tag_ids)
 
     return {
+        **_tag_context(tag_stats, tag_categories, selected_tag_category, picked_tag_ids),
         'headline': headline,
         'fixlog_summary': fixlog_summary,
         'logs_per_helper': logs_per_helper,
@@ -448,12 +519,4 @@ def _log_stats_context(request, log_range, axis, granularity, tz):
         'fixlists_per_helper': fixlists_per_helper,
         'fixlists_per_helper_top': fixlists_per_helper[:TOP_N],
         'fixlists_per_helper_series': fixlists_per_helper_series,
-        'tag_stats': tag_stats['rows'],
-        'tag_series': tag_stats['series'],
-        'tag_counted_count': tag_stats['counted'],
-        'tag_unrecorded_count': tag_stats['unrecorded'],
-        'tag_categories': tag_categories,
-        'tag_chart_top_n': TAG_CHART_TOP_N,
-        'selected_tag_category': selected_tag_category,
-        'selected_tags': selected_tags_for_picker(picked_tag_ids),
     }
