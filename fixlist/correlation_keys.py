@@ -13,7 +13,10 @@ these keys and look up every key of each analyzed line:
   extensions), `clsid:<guid>` (COM objects), `fw:<rule>` (firewall rules),
   `uninstall:<subkey>` (an installed program's Uninstall key: Addition's
   Installed Programs, Spor's SOFTWARE section, scanner / Fixlog targets) and
-  `msi:<guid>` (an MSI product code, which is also its Uninstall subkey).
+  `msi:<guid>` (an MSI product code, which is also its Uninstall subkey) and
+  `app:<display name>` (an installed program by its name: Addition's Installed
+  Programs, a Fixlog app investigation, MAU; the versions are compared when
+  the entries are matched, see installed_program).
 
 Scanner detections, Fixlog results and hash rows give their keys through
 target_keys(); analyzed lines through line_keys(). Hives and user SIDs are
@@ -39,6 +42,7 @@ TYPED_MATCHES = {
     'fw': 'firewall',
     'uninstall': 'uninstall',
     'msi': 'msi',
+    'app': 'app',
 }
 
 _GUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -100,6 +104,36 @@ def software_keys(text):
         if guid:
             keys.add(f'msi:{guid.group(1).lower()}')
     return keys
+
+
+# An Installed Programs line: "<name> (<hive>\...\<subkey>) (Version: <v> - <publisher>)[ Hidden]".
+# The name can hold parens itself, so it ends where the hive starts.
+_INSTALLED_PROGRAM_RE = re.compile(
+    r'^(.{1,300}?) \((?:HKLM(?:-x32)?|HKU\\S-1-[\d-]{1,80})\\\.\.\.\\.{1,300}\) \(Version: ([^()]{0,100}?) - .{0,300}\)'
+)
+_SPACES_RE = re.compile(r'\s+')
+
+
+def app_key(name):
+    """`app:<display name>` of an installed program (lowercased, blanks
+    collapsed), '' for none."""
+    name = _SPACES_RE.sub(' ', (name or '').strip()).lower()
+    return f'app:{name}' if name else ''
+
+
+def installed_program(text):
+    """(display name, version) of an Addition Installed Programs line, or None.
+    The version is '' when FRST shows none."""
+    match = _INSTALLED_PROGRAM_RE.match((text or '').strip())
+    if not match:
+        return None
+    return match.group(1).strip(), match.group(2).strip()
+
+
+def versions_differ(a, b):
+    """True when two program versions are both known and not the same."""
+    a, b = (a or '').strip().lower(), (b or '').strip().lower()
+    return bool(a and b and a != '?' and b != '?' and a != b)
 
 
 def msi_key(product_code):
@@ -320,7 +354,12 @@ def line_keys(line):
     # An Installed Programs line (found by its text: cached payloads may lack
     # the entry type).
     typed.update(software_keys(text))
+    program = installed_program(text)
+    if program:
+        typed.add(app_key(program[0]))
     typed.discard('')
-    for key in sorted(typed):
+    # The name of a program is the weakest key: an entry found through its
+    # Uninstall key or MSI product code too says so.
+    for key in sorted(typed, key=lambda key: (key.startswith('app:'), key)):
         result.append((key, TYPED_MATCHES[key.split(':', 1)[0]]))
     return result

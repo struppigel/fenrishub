@@ -40,7 +40,9 @@ from ..upload_utils import (
     execute_merge, schedule_analysis_stats_recalc, get_fresh_cached_analysis, schedule_cached_analysis_refresh,
 )
 from .. import centralbox_auto
-from .centralbox import add_hash_summary, page_correlation_context, page_hash_context
+from .centralbox import (
+    add_hash_summary, page_correlation_context, page_hash_context, page_reverse_correlation_context,
+)
 from .guest import deny_guests
 from .upload_actions import (
     handle_delete_action, handle_assign_to_me_action, handle_unassign_to_general_action,
@@ -488,6 +490,9 @@ def view_uploaded_log(request, upload_id):
         _apply_frst_rule_statuses(uploaded_log, highlight)
         # What related logs say about the files of these lines (cached).
         correlation_context = page_correlation_context(uploaded_log, request.user, highlight)
+    elif highlight is not None and request.user.is_authenticated:
+        # Any other log: the FRST / Addition lines that point at its lines.
+        correlation_context = page_reverse_correlation_context(uploaded_log, request.user)
     if uploaded_log.log_type == 'Fixlog':
         # Same numbers as the Fixlog chips in the uploads / cases lists.
         fixlog_stats = [

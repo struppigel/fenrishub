@@ -19,7 +19,10 @@ from django.views.decorators.http import require_http_methods
 from ..log_highlighting import SummaryItem
 
 from .. import centralbox, centralbox_auto
-from ..case_correlations import cached_correlations, correlations_for_upload, related_upload_ids, summary_note
+from ..case_correlations import (
+    cached_correlations, correlations_for_upload, related_upload_ids, reverse_correlations, reverse_note,
+    reverse_status, summary_note,
+)
 from ..correlation_keys import line_path_keys
 from ..file_hashes import is_md5, is_sha256
 from ..log_types import LOG_TYPE_SPOR
@@ -393,12 +396,66 @@ def case_correlations_api(request):
     uploaded_log = UploadedLog.objects.filter(upload_id=upload_id).first() if upload_id else None
     if uploaded_log is None:
         return JsonResponse({'scope': '', 'name': '', 'correlations': {}, 'statuses': {}, 'notes': {}})
+    if uploaded_log.log_type not in UploadedLog.ANALYZED_LOG_TYPES:
+        # Any other log: the FRST / Addition lines that point at its lines
+        # (reverse: true), keyed by its own line texts like the forward answer.
+        return JsonResponse(_reverse_answer(uploaded_log, request.user))
     result = correlations_for_upload(uploaded_log, request.user)
     return JsonResponse({
         'scope': result['scope'], 'name': result['name'],
         'correlations': result['lines'], 'statuses': result.get('statuses') or {},
         'notes': result.get('notes') or {},
     })
+
+
+def _reverse_answer(uploaded_log, user):
+    """The endpoint's answer for a log that is not an FRST / Addition log."""
+    result = reverse_correlations(uploaded_log, user, compute=True)
+    correlations, statuses, notes = {}, {}, {}
+    for no, entries in result['lines'].items():
+        text = result['texts'].get(no, '')
+        if not text:
+            continue
+        merged = correlations.setdefault(text, [])
+        merged.extend(entry for entry in entries if entry not in merged)
+    for text, entries in correlations.items():
+        status = reverse_status(entries)
+        if status:
+            statuses[text] = status
+            notes[text] = reverse_note(entries, status)
+    return {
+        'scope': result['scope'], 'name': result['name'], 'reverse': True,
+        'correlations': correlations, 'statuses': statuses, 'notes': notes,
+    }
+
+
+def page_reverse_correlation_context(uploaded_log, user):
+    """For the log page of any log that is not an FRST / Addition log: the
+    lines of its related FRST / Addition logs that point at its lines, in the
+    shape of page_correlation_context (reverse: true), so the same markers
+    and info box show them. A marker is coloured by the FRST line's rule
+    verdict when that is B, P, ! or G. Nothing goes into the summary box.
+    Stored correlations only (case_correlations.reverse_correlations); when
+    one is outdated, `fresh` is false and the page asks `refresh_url`. Never raises."""
+    try:
+        result = reverse_correlations(uploaded_log, user)
+        if not result['lines'] and result['fresh']:
+            return {}
+        context = {
+            'fresh': bool(result['fresh']),
+            'refresh_url': f"{reverse('case_correlations_api')}?upload_id={uploaded_log.upload_id}",
+            'scope': result['scope'], 'name': result['name'], 'reverse': True,
+            'upload_id': uploaded_log.upload_id,
+            'can_lookup': False,
+            'lines': {
+                no: {'status': reverse_status(entries), 'entries': entries}
+                for no, entries in result['lines'].items()
+            },
+        }
+        return context
+    except Exception:
+        logger.exception('Building the reverse correlation page context failed for %s', uploaded_log.upload_id)
+        return {}
 
 
 # Summary severity (log_highlighting.SummaryItem) for a correlation status letter.

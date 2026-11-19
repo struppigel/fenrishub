@@ -427,6 +427,30 @@ window.CorrelationInfo = (function () {
         });
     }
 
+    // The FRST / Addition lines that point at the shown line (reverse
+    // entries): the line, its rule verdict, what the shown log says there and
+    // a link to it.
+    function renderReverse(parent, group) {
+        const items = group.entries.filter((entry) => entry.kind === 'reverse');
+        if (!items.length) return;
+        const list = section(parent, 'FRST / Addition lines');
+        items.forEach((entry) => {
+            const li = row();
+            const head = el('div', 'cinfo-finding');
+            const letter = str(entry.line_status);
+            const cls = Format().STATUS_CLASS[letter];
+            if (cls) head.appendChild(el('span', 'cinfo-status-letter cinfo-sev-' + cls, letter));
+            if (str(entry.what)) head.appendChild(el('span', 'cinfo-key', 'via ' + entry.what));
+            const how = Format().MATCH_NOTES[entry.match];
+            if (how) head.appendChild(el('span', 'cinfo-note', how));
+            if (entry.in_folder) head.appendChild(el('span', 'cinfo-note', 'in this folder'));
+            li.appendChild(head);
+            if (str(entry.text)) li.appendChild(el('pre', 'cinfo-line', entry.text));
+            li.appendChild(sourceNode(entry));
+            list.appendChild(li);
+        });
+    }
+
     function flagsNode(flags) {
         const wrap = el('span', 'cinfo-flags');
         (Array.isArray(flags) ? flags : []).filter((flag) => typeof flag === 'string').forEach((flag) => {
@@ -530,6 +554,7 @@ window.CorrelationInfo = (function () {
             const heading = el('h3', 'cinfo-file-title');
             heading.appendChild(el('span', 'cinfo-file-name', group.file || 'this line'));
             if (group.how === 'folder') heading.appendChild(el('span', 'cinfo-note', 'a folder this file is in'));
+            else if (group.how === 'reverse') heading.appendChild(el('span', 'cinfo-note', 'pointed at by'));
             else if (group.how) heading.appendChild(el('span', 'cinfo-note', group.how));
             box.appendChild(heading);
             const changed = Format().fileChanges(group, state.lineText, isOwn);
@@ -538,6 +563,7 @@ window.CorrelationInfo = (function () {
             renderFindings(box, group);
             renderFacts(box, group);
             renderActivity(box, group);
+            renderReverse(box, group);
             bodyEl.appendChild(box);
         });
         bodyEl.scrollTop = scrollTop;

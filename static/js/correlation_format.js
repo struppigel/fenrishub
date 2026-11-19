@@ -18,6 +18,7 @@ window.CorrelationFormat = (function () {
         firewall: 'same firewall rule',
         uninstall: 'same installed program',
         msi: 'same installed program',
+        app: 'same installed program (by name)',
     };
 
     // Line-verdict status letter -> the marker / icon colour class.
@@ -89,6 +90,10 @@ window.CorrelationFormat = (function () {
         if (entry.role === 'installer event') return 'Windows Installer';
         if (entry.role === 'package') return 'Store / MSIX package';
         if (entry.role === 'removed by MAU') return 'removed by MAU';
+        if (entry.role === 'deleted by MAU') return 'deleted by MAU';
+        if (entry.role === 'MAU failed to delete') return 'MAU failed to delete';
+        if (entry.role === 'MAU install source') return 'installed from this folder (MAU)';
+        if (entry.role === 'installed app') return 'installed app';
         if (entry.role === 'dll' && parent) return 'service DLL of ' + parent;
         if (entry.folder && entry.in_folder) return 'in this folder';
         return parent ? 'under ' + parent : '';
@@ -102,7 +107,17 @@ window.CorrelationFormat = (function () {
 
     // What a related log says, without log ids: the detection name or family
     // and the centralbox verdict (or the fixlist result).
+    // A line of an FRST / Addition log that points at the shown line
+    // (case_correlations.reverse_correlations): its text and what the shown
+    // log says there.
+    function reverse(entry) {
+        const how = MATCH_NOTES[entry.match] || '';
+        return [text(entry.text), entry.what ? 'via ' + text(entry.what) : '', how,
+            entry.in_folder ? 'in this folder' : ''].filter(Boolean).join(DOT) || 'FRST line';
+    }
+
     function finding(entry) {
+        if (entry.kind === 'reverse') return reverse(entry);
         if (entry.kind === 'fixlog') return entry.result || 'fixlist result';
         if (entry.kind === 'evidence') return evidence(entry);
         if (entry.kind === 'file_info') return fileInfo(entry);
@@ -152,6 +167,12 @@ window.CorrelationFormat = (function () {
         const where = scope === 'user'
             ? `other logs of user ${name} (no case of yours)`
             : 'other logs of this case';
+        if (list.length && list.every((entry) => entry.kind === 'reverse')) {
+            const logs = scope === 'user'
+                ? `FRST / Addition logs of user ${name} (no case of yours)`
+                : 'FRST / Addition logs of this case';
+            return `lines of ${logs} that point here`;
+        }
         if (own && !others) return "same file in this log's Addition part";
         if (own) return `same file in this log's Addition part and in ${where}`;
         return `same file in ${where}`;
@@ -204,13 +225,15 @@ window.CorrelationFormat = (function () {
         const groups = new Map();
         (Array.isArray(entries) ? entries : []).forEach((entry) => {
             if (!entry || typeof entry !== 'object') return;
-            const file = text(entry.file);
-            const how = entry.in_folder ? 'folder' : (MATCH_NOTES[entry.match] || '');
+            // Reverse entries: one group for all the FRST lines pointing here.
+            const file = entry.kind === 'reverse' ? '' : text(entry.file);
+            const how = entry.kind === 'reverse' ? 'reverse'
+                : entry.in_folder ? 'folder' : (MATCH_NOTES[entry.match] || '');
             const key = how + '\n' + file.toLowerCase();
             if (!groups.has(key)) groups.set(key, { file, how, entries: [] });
             groups.get(key).entries.push(entry);
         });
-        const rank = (group) => (group.how === '' ? 0 : group.how === 'folder' ? 2 : 1);
+        const rank = (group) => (group.how === '' || group.how === 'reverse' ? 0 : group.how === 'folder' ? 2 : 1);
         return [...groups.values()].sort((a, b) => rank(a) - rank(b));
     }
 
@@ -231,7 +254,7 @@ window.CorrelationFormat = (function () {
     // line's own size differs). Not rated: files are updated all the time.
     // '' when they agree, for a folder group and without two values.
     function fileChanges(group, lineText, isOwn) {
-        if (!group || group.how === 'folder') return '';
+        if (!group || group.how === 'folder' || group.how === 'reverse') return '';
         const own = typeof isOwn === 'function' ? isOwn : () => false;
         const facts = { size: new Map(), modified: new Map(), md5: new Map(), sha256: new Map() };
         const note = (kind, value, where) => {

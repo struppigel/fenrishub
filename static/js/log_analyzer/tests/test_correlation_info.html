@@ -210,6 +210,31 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
         && CorrelationFormat.fileChanges({ ...group(entries), how: 'folder' }, '') === '');
     assert('a service DLL says whose it is', CorrelationFormat.mentionRole({ role: 'dll', parent: 'EvilSvc' })
         === 'service DLL of EvilSvc');
+    assert('installed apps and MAU deletions are named',
+        CorrelationFormat.mentionRole({ role: 'installed app' }) === 'installed app'
+        && CorrelationFormat.mentionRole({ role: 'deleted by MAU' }) === 'deleted by MAU'
+        && CorrelationFormat.mentionRole({ role: 'MAU install source' }) === 'installed from this folder (MAU)'
+        && CorrelationFormat.MATCH_NOTES.app === 'same installed program (by name)');
+
+    // The other way round: FRST / Addition lines that point at this line.
+    entries = [
+        { kind: 'reverse', upload_id: 'frst-a', log_type: 'FRST&Addition', line_no: 636, system: 'same',
+          text: 'Tool Kit (HKLM\\...\\Tool Kit) (Version: 2.4 - Acme)', line_status: 'B', what: 'installed app',
+          match: 'app' },
+        { kind: 'reverse', upload_id: 'frst-a', log_type: 'FRST&Addition', line_no: 40, system: 'same',
+          text: 'R2 ToolSvc; C:\\Program Files\\Tool Kit\\svc.exe', line_status: '', what: 'installed app',
+          in_folder: true },
+    ];
+    open(true);
+    assert('the reverse view names the FRST lines pointing here',
+        text().includes('lines of FRST / Addition logs of this case that point here')
+        && text().includes('pointed at by') && text().includes('via installed app')
+        && text().includes('same installed program (by name)') && text().includes('in this folder'), text());
+    const reverseLinks = Array.from(document.querySelectorAll('.cinfo-link')).map((a) => a.getAttribute('href'));
+    assert('reverse rows link to the FRST line', reverseLinks.includes('/uploads/frst-a/#L636')
+        && reverseLinks.includes('/uploads/frst-a/#L40'), reverseLinks.join(' '));
+    assert('the FRST verdict is shown', !!document.querySelector('.cinfo-list .cinfo-status-letter.cinfo-sev-b'));
+    CorrelationInfo.close();
 
     const summary = document.getElementById('summary');
     summary.textContent = `${passed} passed, ${failed} failed`;

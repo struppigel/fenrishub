@@ -385,7 +385,7 @@ function renderLineInspectorCorrelations(entry) {
 
 function isValidCorrelation(item) {
     return item && typeof item === 'object'
-        && ['hash', 'detection', 'fixlog', 'evidence', 'file_info', 'mention'].includes(item.kind)
+        && ['hash', 'detection', 'fixlog', 'evidence', 'file_info', 'mention', 'reverse'].includes(item.kind)
         && typeof item.upload_id === 'string' && typeof item.log_type === 'string';
 }
 

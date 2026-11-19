@@ -141,3 +141,214 @@ def shortcut_mentions(content):
             out.append(Mention(index + 1, lnk.strip(), SECTION_SHORTCUT, label, '', '', text, 'shortcut',
                                extra=[['target', target[:200]]]))
     return out
+
+
+# --- Fixlog: installed-app investigation ------------------------------------
+# A fixlist PowerShell snippet that lists every installed app (Uninstall keys)
+# with its install folder and the files in it:
+#   "<=== <name> [<version>] (<publisher>) ===>"
+#   "  Path: <folder> | Created: ... | Files: 27 | Folders: 3" (or "Path: N/A",
+#   "Path: <x>" followed by "  [NOT FOUND]" / "  [ACCESS DENIED]" / "  [ERROR] ...")
+#   "  [DIR] <created> - <modified> - <n> files - <folder>"
+#   "  [<SHA256>] <created> - <modified> - <size> - Signer: <signer> - <path>"
+# The signer is "Unsigned", "N/A (not PE)", a name, or a name followed by
+# " [INVALID: <status>]".
+SECTION_APP_INVESTIGATION = 'app investigation'
+MAX_APPS_PER_LOG = 1000
+_PS_START = '========= Powershell: ========='
+_PS_END = '========= End of Powershell: ========='
+_APP_HEADER_RE = re.compile(r'^<=== (.{1,300}) \[([^\[\]]{0,100})\] \((.{0,300})\) ===>\s*$')
+_APP_PATH_RE = re.compile(r'^\s+Path: (.{1,600}?)(?: \| (.{0,300}))?\s*$')
+_APP_COUNT_RE = re.compile(r'\b(Files|Folders): (\d{1,9})\b')
+_APP_STATE_RE = re.compile(r'^\s+\[(NOT FOUND|ACCESS DENIED|ERROR)\]')
+_APP_FILE_RE = re.compile(
+    r'^\s+\[(?:[0-9A-Fa-f]{64}|N/A|HASH-ERROR)\] .{0,80}? - Signer: (.{0,300}?) - ([A-Za-z]:\\.{1,600})$'
+)
+_INVALID_SIGNER_RE = re.compile(r'\[INVALID: ([^\]]{0,60})\]\s*$')
+
+
+@dataclass
+class AppFacts:
+    line_no: int
+    name: str
+    version: str = ''
+    publisher: str = ''
+    path: str = ''
+    state: str = ''             # NOT FOUND / ACCESS DENIED / ERROR / N/A / MSI: ... ('' when listed)
+    files: int = 0
+    folders: int = 0
+    is_folder: bool = False     # the path is a folder (else a single file)
+    unsigned: int = 0           # PE files without a signature
+    invalid: list = field(default_factory=list)   # [path, signer] of PE files whose signature does not hold
+    signers: list = field(default_factory=list)   # distinct signers of its PE files, in order
+
+
+def fixlog_app_facts(content):
+    """An AppFacts per app of the installed-app investigation in a Fixlog's
+    PowerShell output (only inside "Powershell:" blocks)."""
+    apps = []
+    if '<=== ' not in (content or ''):
+        return apps
+    inside = False
+    current = None
+    for index, body in enumerate(_bodies(content)):
+        if body.startswith(_PS_START):
+            inside, current = True, None
+            continue
+        if body.startswith(_PS_END):
+            inside, current = False, None
+            continue
+        if not inside:
+            continue
+        m = _APP_HEADER_RE.match(body)
+        if m:
+            if len(apps) >= MAX_APPS_PER_LOG:
+                break
+            version, publisher = m.group(2).strip(), m.group(3).strip()
+            current = AppFacts(index + 1, m.group(1).strip(), '' if version == '?' else version,
+                               '' if publisher == '?' else publisher)
+            apps.append(current)
+            continue
+        if current is None or not body.strip():
+            continue
+        m = _APP_PATH_RE.match(body)
+        if m and not current.path and not current.state:
+            path, details = m.group(1).strip(), m.group(2) or ''
+            if is_path(path):
+                current.path = path
+            else:
+                current.state = path[:120]
+            counts = dict(_APP_COUNT_RE.findall(details))
+            current.files = int(counts.get('Files', 0))
+            current.folders = int(counts.get('Folders', 0))
+            current.is_folder = 'Folders' in counts or path.endswith('\\')
+            continue
+        m = _APP_STATE_RE.match(body)
+        if m:
+            current.state = m.group(1)
+            continue
+        m = _APP_FILE_RE.match(body)
+        if m:
+            signer = m.group(1).strip()
+            if signer.startswith('N/A'):
+                continue
+            if signer == 'Unsigned':
+                current.unsigned += 1
+                continue
+            invalid = _INVALID_SIGNER_RE.search(signer)
+            name = signer[:invalid.start()].strip() if invalid else signer
+            if invalid and len(current.invalid) < 20:
+                current.invalid.append([m.group(2).strip()[:300], f'{name} [{invalid.group(1)}]'[:200]])
+            if name and name not in current.signers and len(current.signers) < 10:
+                current.signers.append(name[:120])
+    return apps
+
+
+# --- MAU (Malicious App Uninstaller) ----------------------------------------
+# Report form: "Analyzing <id>..." per product with "  Key=Value" lines (the
+# Uninstall values) and "RESOLVED: Key=Value" lines; "Deleted items:" lists
+# "  [File] <path>", "  [Dir] <path>", "  [RegKey] <key>", "  [RegValue] <key>\<value>",
+# "  [Service] <name>", "  [Task] <path>"; "Failed to delete: <path>".
+# Console form: the same behind "[hh:mm:ss] ", with "   Resolved: <name>",
+# "   Publisher: <name>" and "Deleted <kind>: <target>" lines.
+MAX_MAU_ITEMS = 2000
+_MAU_TIME_RE = re.compile(r'^\[\d{1,2}:\d{2}:\d{2}\] ')
+_MAU_ANALYZING_RE = re.compile(r'^Analyzing (.{1,300}?)\.\.\.\s*$')
+_MAU_VALUE_RE = re.compile(r'^\s+(DisplayName|DisplayVersion|Publisher|InstallLocation|InstallSource)=(.{0,600})$')
+_MAU_RESOLVED_RE = re.compile(r'^RESOLVED: (DisplayName|Publisher|InstallLocation)=(.{0,600})$')
+_MAU_CONSOLE_VALUE_RE = re.compile(r'^\s+(Resolved|Publisher): (.{1,300})$')
+_MAU_ITEM_RE = re.compile(r'^\s*\[(File|Dir|Directory|RegKey|RegValue|Service|Task)\] (.{1,1000})$')
+_MAU_DELETED_RE = re.compile(
+    r'^\s*Deleted (file|directory|folder|dir|registry key|registry value|key|value|service|task): (.{1,1000})$',
+    re.IGNORECASE,
+)
+_MAU_FAILED_RE = re.compile(r'^\s*Failed to delete: (.{1,1000})$')
+_MAU_UNINSTALL_KEY_RE = re.compile(r'\\Uninstall\\[^\\]{1,300}$', re.IGNORECASE)
+_MAU_CONSOLE_KINDS = {
+    'file': 'File', 'directory': 'Dir', 'folder': 'Dir', 'dir': 'Dir', 'registry key': 'RegKey', 'key': 'RegKey',
+    'registry value': 'RegValue', 'value': 'RegValue', 'service': 'Service', 'task': 'Task',
+}
+_MAU_ATTRS = {
+    'DisplayName': 'name', 'DisplayVersion': 'version', 'Publisher': 'publisher',
+    'InstallLocation': 'install_location', 'InstallSource': 'install_source',
+}
+
+
+@dataclass
+class MauProduct:
+    line_no: int
+    ident: str                  # the "Analyzing" id: an MSI product code or a name
+    name: str = ''
+    version: str = ''
+    publisher: str = ''
+    install_location: str = ''
+    install_source: str = ''
+    uninstall_keys: list = field(default_factory=list)
+
+
+@dataclass
+class MauItem:
+    line_no: int
+    kind: str                   # File / Dir / RegKey / RegValue / Service / Task
+    target: str
+    failed: bool = False        # "Failed to delete: <path>"
+
+
+def _mau_value(value):
+    value = (value or '').strip()
+    return '' if not value or value.startswith('<') else value
+
+
+def mau_facts(content):
+    """(products, deleted items) of a MAU log, report or console form."""
+    products, items = [], []
+    current = None
+    in_deleted = False
+    for index, raw in enumerate(_bodies(content)):
+        stamp = _MAU_TIME_RE.match(raw)
+        body = raw[stamp.end():] if stamp else raw
+        if not body.strip():
+            continue
+        m = _MAU_ANALYZING_RE.match(body)
+        if m:
+            current = MauProduct(index + 1, m.group(1).strip())
+            products.append(current)
+            in_deleted = False
+            continue
+        if body.startswith('Deleted items'):
+            in_deleted = True
+            continue
+        if current is not None and not in_deleted:
+            m = _MAU_VALUE_RE.match(body) or _MAU_RESOLVED_RE.match(body)
+            if m:
+                attr, value = _MAU_ATTRS[m.group(1)], _mau_value(m.group(2))
+                if value and not getattr(current, attr):
+                    setattr(current, attr, value[:300])
+                continue
+            m = _MAU_CONSOLE_VALUE_RE.match(body)
+            if m:
+                attr = 'name' if m.group(1) == 'Resolved' else 'publisher'
+                if not getattr(current, attr):
+                    setattr(current, attr, _mau_value(m.group(2))[:300])
+                continue
+        m = _MAU_ITEM_RE.match(body)
+        if m:
+            kind = 'Dir' if m.group(1) == 'Directory' else m.group(1)
+            target = m.group(2).strip()
+            if in_deleted and len(items) < MAX_MAU_ITEMS:
+                items.append(MauItem(index + 1, kind, target))
+            elif current is not None and kind == 'RegKey' and _MAU_UNINSTALL_KEY_RE.search(target) \
+                    and target not in current.uninstall_keys:
+                # The product's own Uninstall key among its traces.
+                current.uninstall_keys.append(target)
+            continue
+        if len(items) >= MAX_MAU_ITEMS:
+            continue
+        m = _MAU_DELETED_RE.match(body)
+        if m:
+            items.append(MauItem(index + 1, _MAU_CONSOLE_KINDS[m.group(1).lower()], m.group(2).strip()))
+            continue
+        m = _MAU_FAILED_RE.match(body)
+        if m:
+            items.append(MauItem(index + 1, 'File', m.group(1).strip(), failed=True))
+    return products, items

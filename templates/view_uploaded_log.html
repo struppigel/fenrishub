@@ -1169,6 +1169,9 @@ const CaseCorrelations = (function () {
     // page_correlation_context): "correlated: ..." after a line the rules
     // already list, else the line itself as a new entry in line order.
     function drawSummary() {
+        // The reverse view (a log that FRST / Addition lines point at) adds
+        // nothing to the summary box.
+        if (data.reverse) return;
         const pane = document.getElementById('highlightSummary');
         if (!pane) return;
         let list = pane.querySelector('.hl-summary-list');
@@ -1272,6 +1275,7 @@ const CaseCorrelations = (function () {
                     upload_id: data.upload_id,
                     scope: answer.scope || '',
                     name: answer.name || '',
+                    reverse: answer.reverse === true,
                     lines: byLineNumber(answer),
                     fresh: true,
                     refresh_url: url,

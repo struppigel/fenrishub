@@ -23,7 +23,14 @@ one of the upload's cases, collect what that log says about the file:
 - installed software (kind 'mention' too): Spor's SOFTWARE section (Uninstall
   entries, Windows Installer events, Store / MSIX packages) and MAU's removed
   products, under the program's Uninstall key / MSI product code (Addition's
-  Installed Programs lines) or its folder (Packages lines, files inside).
+  Installed Programs lines) or its folder (Packages lines, files inside); a
+  Fixlog's installed-app investigation and MAU's products also under the
+  program's display name (`app:` keys, versions compared), with their install
+  folders; everything MAU deleted (files, folders, registry keys and values,
+  services, tasks).
+
+reverse_correlations() turns the stored answers around for any other log:
+which FRST / Addition lines point at each of its lines.
 
 Database and local parsing only: nothing is ever sent to centralbox. Paths
 are compared with the analyzer's own key (normalize_path, lowercased).
@@ -37,7 +44,8 @@ import re
 
 from .analyzer import ANALYSIS_PAYLOAD_FORMAT
 from .correlation_keys import (
-    MATCH_PATH, argument_paths, identity_key, is_path_key, line_keys, msi_key, software_keys, target_keys,
+    MATCH_PATH, app_key, argument_paths, identity_key, installed_program, is_path_key, line_keys, msi_key,
+    software_keys, target_keys, task_key, versions_differ,
 )
 from .file_hashes import _as_path, normalized_path
 from . import spor_log
@@ -58,7 +66,9 @@ from .log_types import (
     ADDITION_LOG_TYPES, DETECTION_LOG_TYPES, LOG_TYPE_FRST_AND_ADDITION, LOG_TYPE_FRST_SEARCH, LOG_TYPE_SHORTCUT,
     LOG_TYPE_SPOR,
 )
-from .tool_log_facts import frst_search_facts, shortcut_mentions
+from .tool_log_facts import (
+    SECTION_APP_INVESTIGATION, fixlog_app_facts, frst_search_facts, mau_facts, shortcut_mentions,
+)
 from .status_types import dominant_status
 
 logger = logging.getLogger(__name__)
@@ -68,7 +78,7 @@ MAX_ENTRIES_PER_LINE = 60
 # entries before all others), so what decides the line's status is never cut.
 KIND_RANK = {'detection': 0, 'hash': 1, 'fixlog': 2, 'file_info': 3, 'evidence': 4, 'mention': 5}
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 15
+CORRELATION_VERSION = 16
 # Detections are read from the summary boxes of DETECTION_LOG_TYPES logs
 # (log_highlighting); Defender events from the "Windows Defender:" section of
 # ADDITION_LOG_TYPES logs (both in log_types).
@@ -332,6 +342,8 @@ def _defender_real_action(action):
 def _fixlog_entries(upload_ids, index):
     for upload in UploadedLog.objects.filter(pk__in=upload_ids, log_type='Fixlog').only('pk', 'upload_id', 'content'):
         content = upload.content or ''
+        if '<=== ' in content:
+            _fixlog_app_entries(upload, index)
         for line_no, target, result in iter_fixlog_results(content):
             entry = {
                 'kind': 'fixlog',
@@ -651,25 +663,116 @@ def _software_entries(upload_id, lines, index):
             _add_folder_entry(index, details['folder'], entry)
 
 
+def _mau_mention(upload_id, line_no, text, role, file, extra=(), severity=''):
+    return {
+        'kind': 'mention', 'upload_id': upload_id, 'log_type': 'MAU', 'line_no': line_no,
+        'section': 'MAU', 'subsection': '', 'time': '', 'tags': '', 'text': text[:300],
+        'role': role, 'parent': '', 'file_status': '', 'flags': [],
+        'extra': [list(pair) for pair in extra][:spor_log.MAX_EXTRA], 'severity': severity, 'file': file[:120],
+    }
+
+
 def _mau_entries(upload_ids, index):
-    """The products the related MAU logs removed ("Analyzing {GUID}..."),
-    under their MSI product code: Addition's Installed Programs line of it."""
+    """What the related MAU logs removed (tool_log_facts.mau_facts): each
+    product under its MSI product code, Uninstall key and display name
+    (Addition's Installed Programs line), and its install folder; the folder
+    it was installed from (often a dropper's Temp folder); every deleted
+    file, folder, registry key / value, service and task."""
     for upload in UploadedLog.objects.filter(pk__in=upload_ids, log_type='MAU').only('upload_id', 'log_type', 'content'):
-        highlight = highlight_log('MAU', upload.content or '')
-        if highlight is None:
+        products, items = mau_facts(upload.content or '')
+        for product in products:
+            name = product.name if product.name and product.name != product.ident else ''
+            text = name + (f' ({product.publisher})' if product.publisher else '') if name else product.ident
+            extra = [('product code', product.ident[:80])] if msi_key(product.ident) else []
+            if product.version:
+                extra.append(('version', product.version[:80]))
+            if product.install_location:
+                extra.append(('install folder', product.install_location[:200]))
+            if product.install_source:
+                extra.append(('installed from', product.install_source[:200]))
+            entry = _mau_mention(upload.upload_id, product.line_no, text, 'removed by MAU', name or product.ident, extra)
+            if name:
+                entry['version'] = product.version[:100]
+            keys = {msi_key(product.ident), app_key(name)}
+            for key in product.uninstall_keys:
+                keys.update(software_keys(key))
+            for key in sorted(keys - {''}):
+                index.setdefault(key, []).append(entry)
+            if product.install_location:
+                _add_folder_entry(index, product.install_location, entry)
+            if product.install_source:
+                _add_folder_entry(index, product.install_source, {**entry, 'role': 'MAU install source'})
+        for item in items:
+            target = item.target.strip().strip('"')
+            role = 'MAU failed to delete' if item.failed else 'deleted by MAU'
+            path = _as_path(target) if item.kind in ('File', 'Dir') else ''
+            entry = _mau_mention(
+                upload.upload_id, item.line_no, f'[{item.kind}] {target}', role,
+                file_name(path) if path else ntpath.basename(target.rstrip('\\')),
+                severity='w' if item.failed else '',
+            )
+            if item.kind == 'Dir':
+                if path:
+                    _add_folder_entry(index, path, entry)
+            elif item.kind == 'File':
+                if path:
+                    _add_path_entry(index, path, entry)
+            elif item.kind == 'Service':
+                index.setdefault(f'svc:{target.lower()}', []).append(entry)
+            elif item.kind == 'Task':
+                key = task_key(target)
+                if key:
+                    index.setdefault(key, []).append(entry)
+            elif item.kind == 'RegValue':
+                # "<key>\<value>": a Run value is "<Run key>|<value>" to
+                # target_keys. The values of an Uninstall key stand for the
+                # product, which its own entry (or the key's) already gives.
+                key_path, _sep, value = target.rpartition('\\')
+                for key in target_keys(f'{key_path}|{value}' if key_path else target):
+                    if not is_path_key(key) and not key.startswith(('uninstall:', 'msi:')):
+                        index.setdefault(key, []).append(entry)
+            else:
+                for key in target_keys(target):
+                    if not is_path_key(key):
+                        index.setdefault(key, []).append(entry)
+
+
+def _fixlog_app_entries(upload, index):
+    """The installed-app investigation of a Fixlog (a fixlist PowerShell
+    snippet, tool_log_facts.fixlog_app_facts): each app under its display
+    name (Addition's Installed Programs line; the versions are compared when
+    matched) and its install folder (the files inside), or its one file."""
+    for app in fixlog_app_facts(upload.content or ''):
+        extra = []
+        if app.path:
+            extra.append(('path', app.path[:200]))
+        if app.state:
+            extra.append(('state', app.state[:80]))
+        if app.files or app.folders:
+            extra.append(('contents', f'{app.files} files, {app.folders} folders'))
+        if app.unsigned:
+            extra.append(('unsigned PE files', str(app.unsigned)))
+        for path, signer in app.invalid[:5]:
+            extra.append(('invalid signature', f'{file_name(path)}: {signer}'))
+        if app.signers:
+            extra.append(('signers', ', '.join(app.signers)[:200]))
+        text = app.name + (f' [{app.version}]' if app.version else '') + (f' ({app.publisher})' if app.publisher else '')
+        entry = {
+            'kind': 'mention', 'upload_id': upload.upload_id, 'log_type': 'Fixlog', 'line_no': app.line_no,
+            'section': SECTION_APP_INVESTIGATION, 'subsection': '', 'time': '', 'tags': '', 'text': text[:300],
+            'role': 'installed app', 'parent': '', 'file_status': app.state[:40], 'flags': [],
+            'extra': [list(pair) for pair in extra][:spor_log.MAX_EXTRA],
+            'severity': 'w' if app.invalid else '', 'file': app.name[:120], 'version': app.version[:100],
+        }
+        key = app_key(app.name)
+        if key:
+            index.setdefault(key, []).append(entry)
+        if not app.path or app.state:
             continue
-        for item in highlight.summary:
-            key = msi_key(item.target) if item.severity == 'i' else ''
-            if not key:
-                continue
-            name = item.name if item.name != item.target else ''
-            text = name + (f' ({item.action})' if item.action else '') if name else item.target
-            index.setdefault(key, []).append({
-                'kind': 'mention', 'upload_id': upload.upload_id, 'log_type': 'MAU', 'line_no': item.line_no,
-                'section': 'MAU', 'subsection': '', 'time': '', 'tags': '', 'text': text[:300],
-                'role': 'removed by MAU', 'parent': '', 'file_status': '', 'flags': [],
-                'extra': [['product code', item.target[:80]]], 'severity': '', 'file': (name or item.target)[:120],
-            })
+        if app.is_folder:
+            _add_folder_entry(index, app.path, entry)
+        else:
+            _add_path_entry(index, app.path, entry)
 
 
 def _add_path_entry(index, path, entry):
@@ -851,6 +954,7 @@ MATCH_NOTES = {
     'firewall': 'same firewall rule',
     'uninstall': 'same installed program',
     'msi': 'same installed program',
+    'app': 'same installed program (by name)',
 }
 
 
@@ -974,6 +1078,155 @@ def correlations_for_upload(uploaded_log, user=None):
         return _empty()
 
 
+# --- The other way round: which FRST / Addition lines point at a line of
+# another log (its page and the analyzer show them on that log's lines).
+
+# What a forward entry is, in a few words, for the reverse view.
+_REVERSE_WHAT = {
+    'hash': 'file hash', 'detection': 'detection', 'fixlog': 'fixlist result', 'file_info': 'file details',
+    'evidence': 'timeline', 'mention': 'mention',
+}
+# FRST line verdicts that colour a reverse marker; the others stay neutral.
+REVERSE_MARKER_STATUSES = frozenset({'B', 'P', '!', 'G'})
+
+
+def _reverse_what(entry):
+    if entry.get('kind') == 'mention' and entry.get('role'):
+        return entry['role']
+    return _REVERSE_WHAT.get(entry.get('kind'), entry.get('kind') or '')
+
+
+def _frst_line_facts(frst, texts):
+    """{stripped line text: (first line number, rule status)} of an FRST /
+    Addition log, for the texts asked. The status comes from a fresh analysis,
+    the log's own rule set first ('' when there is none)."""
+    wanted = set(texts)
+    numbers = {}
+    for no, raw in enumerate((frst.content or '').split('\n'), start=1):
+        text = raw.strip()
+        if text in wanted and text not in numbers:
+            numbers[text] = no
+    statuses = {}
+    try:
+        from .rule_sets import resolve_effective_rule_set_key
+        preferred = resolve_effective_rule_set_key(frst)
+    except Exception:
+        preferred = None
+    rows = sorted(
+        UploadedLogAnalysis.objects.filter(upload=frst, source_content_hash=frst.content_hash)
+        .values_list('rule_set_key', 'payload'),
+        key=lambda row: row[0] != preferred,
+    )
+    for _key, payload in rows:
+        if not isinstance(payload, dict) or payload.get('format') != ANALYSIS_PAYLOAD_FORMAT:
+            continue
+        for line in payload.get('lines') or ():
+            if isinstance(line, dict):
+                text = (line.get('line') or '').strip()
+                if text in wanted and text not in statuses:
+                    statuses[text] = line.get('dominant_status') or ''
+        break
+    return {text: (numbers.get(text, 0), statuses.get(text, '')) for text in wanted}
+
+
+def reverse_correlations(uploaded_log, user=None, compute=False):
+    """{scope, name, fresh, lines: {line no: [entry]}, texts: {line no:
+    stripped text}} for a log that is not an FRST / Addition log: the lines
+    of its related FRST / Addition logs (related_upload_ids) whose
+    correlations name one of its lines, under that line's number.
+
+    Read from those logs' correlations: the stored ones only (`fresh` False
+    when one of them is outdated or missing), or computed when needed with
+    `compute` (the endpoint). Each entry: kind 'reverse', the FRST log's
+    upload_id / log_type, its line_no and text, its rule status
+    (`line_status`), `what` this log says there, and the forward entry's
+    match, in_folder and system. Never raises."""
+    answer = {'scope': '', 'name': '', 'fresh': True, 'lines': {}, 'texts': {}}
+    try:
+        if uploaded_log.log_type in UploadedLog.ANALYZED_LOG_TYPES:
+            return answer
+        upload_ids, scope, name = related_upload_ids(uploaded_log, user)
+        answer['scope'], answer['name'] = scope, name
+        if not upload_ids:
+            return answer
+        analyzed = UploadedLog.objects.filter(
+            pk__in=upload_ids, log_type__in=UploadedLog.ANALYZED_LOG_TYPES,
+        ).order_by('-created_at', '-pk')
+        lines = {}
+        seen = set()
+        own_id = uploaded_log.upload_id
+        for frst in analyzed:
+            if compute:
+                forward, fresh = correlations_for_upload(frst, user), True
+            else:
+                forward, fresh = cached_correlations(frst, user)
+            answer['fresh'] = answer['fresh'] and bool(fresh)
+            texts = (forward or {}).get('lines') if isinstance(forward, dict) else None
+            if not isinstance(texts, dict):
+                continue
+            hits = {}
+            for text, entries in texts.items():
+                found = [
+                    entry for entry in entries or ()
+                    if isinstance(entry, dict) and entry.get('upload_id') == own_id and entry.get('line_no')
+                ]
+                if found:
+                    hits[text] = found
+            if not hits:
+                continue
+            facts = _frst_line_facts(frst, hits)
+            for text, entries in hits.items():
+                frst_no, status = facts.get(text, (0, ''))
+                for entry in entries:
+                    no = str(entry['line_no'])
+                    slot = (no, frst.upload_id, text)
+                    if slot in seen:
+                        continue
+                    seen.add(slot)
+                    reverse = {
+                        'kind': 'reverse', 'upload_id': frst.upload_id, 'log_type': frst.log_type,
+                        'line_no': frst_no, 'text': text[:300], 'line_status': status,
+                        'what': _reverse_what(entry), 'system': entry.get('system', SYSTEM_UNKNOWN),
+                    }
+                    for key in ('match', 'in_folder'):
+                        if entry.get(key):
+                            reverse[key] = entry[key]
+                    lines.setdefault(no, []).append(reverse)
+        if not lines:
+            return answer
+        for entries in lines.values():
+            # Lines that name this one directly before the files inside a
+            # folder it names, each in line order, so the cap never drops them.
+            entries.sort(key=lambda entry: (bool(entry.get('in_folder')), entry['line_no'] or 0))
+            del entries[MAX_ENTRIES_PER_LINE:]
+        content_lines = (uploaded_log.content or '').split('\n')
+        answer['lines'] = lines
+        answer['texts'] = {
+            no: content_lines[int(no) - 1].strip() for no in lines if 0 < int(no) <= len(content_lines)
+        }
+        return answer
+    except Exception:
+        logger.exception('Reverse correlations failed for %s', getattr(uploaded_log, 'upload_id', '?'))
+        return {'scope': '', 'name': '', 'fresh': True, 'lines': {}, 'texts': {}}
+
+
+def reverse_status(entries):
+    """The marker status of a line's reverse entries: the worst FRST rule
+    verdict among REVERSE_MARKER_STATUSES (logs of another system left out), else ''."""
+    return dominant_status([
+        entry.get('line_status') for entry in entries
+        if entry.get('line_status') in REVERSE_MARKER_STATUSES and entry.get('system') != SYSTEM_DIFFERENT
+    ], default='')
+
+
+def reverse_note(entries, status):
+    """What the reverse entry that gave a line its marker status says."""
+    for entry in entries:
+        if entry.get('line_status') == status and entry.get('system') != SYSTEM_DIFFERENT:
+            return f"{entry.get('log_type', '')} L{entry.get('line_no') or '?'}: {entry.get('text', '')[:120]}"
+    return ''
+
+
 def correlated_sha256s(answer):
     """The SHA256s an answer correlates with the log's lines, leaving out
     logs from another system (as correlation_status does). For /stats/,
@@ -1032,11 +1285,14 @@ def _compute(uploaded_log, upload_ids, payload):
             continue
         entries = []
         seen = set()
+        program = installed_program(text)
 
         def add(entry, match, in_folder=False):
             slot = (entry.get('upload_id'), entry.get('line_no'), entry.get('kind'))
             if slot in seen:
                 return
+            if match == 'app' and program and versions_differ(program[1], entry.get('version')):
+                return  # another version of a program with the same name
             seen.add(slot)
             extra = {}
             if match != MATCH_PATH:
