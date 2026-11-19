@@ -10,10 +10,12 @@ crash bucket ids or URL parts, so those types yield nothing.
 
 MD5s are kept where they name a file: next to its SHA256 (Malwarebytes,
 Fixlog File:), or alone (Trojan Killer, the entries of a Fixlog Folder: or
-FilesInDirectory: block).
+FilesInDirectory: block, the File: entries of an FRST Search log, a Spor
+log run with -algo MD5).
 
 A row is `auto` when it may be checked on centralbox without anyone asking:
-scanner detections, MAU file hashes and the hashes of a Fixlog `File:` block.
+scanner detections, MAU file hashes, the hashes of a Fixlog `File:` block
+and the files a Spor log flags.
 Everything else (Fixlog folder listings with thousands of hashes, PowerShell
 output, stray hashes, MD5-only rows) is only checked when an analyst asks
 from the hash menu.
@@ -25,10 +27,13 @@ of log_highlighting.render_highlighted_html, so the page can find the token.
 import re
 from dataclasses import dataclass
 
-from . import frst_extractors
-from .log_highlighting import _MB_DETECTION_RE, _TK_DETECTION_RE
+from . import frst_extractors, spor_log
+from .log_highlighting import _MB_DETECTION_RE, _TK_DETECTION_RE, _inline
+from .log_types import LOG_TYPE_FRST_SEARCH, LOG_TYPE_SPOR
 
-HASH_LOG_TYPES = frozenset({'Malwarebytes', 'HitmanPro', 'MAU', 'Fixlog', 'Trojan Killer'})
+HASH_LOG_TYPES = frozenset({
+    'Malwarebytes', 'HitmanPro', 'MAU', 'Fixlog', 'Trojan Killer', LOG_TYPE_SPOR, LOG_TYPE_FRST_SEARCH,
+})
 
 # Folder listings reach ~6,000 hashes; anything beyond this is not stored.
 MAX_ROWS_PER_LOG = 10000
@@ -238,6 +243,85 @@ def _extract_trojan_killer(bodies, out):
     _extract_sha256_lines(bodies, out, 'trojan_killer')
 
 
+_SPOR_PROCESS_RE = re.compile(r'; process [^;]*')
+# SUMMARY: "... .pdf.lnk  !double-extension  (loaded by C:\...\host.exe)" names the
+# program that loaded the flagged file: not flagged itself.
+# At the end of the line: the path itself can hold parens ("Program Files (x86)").
+_SPOR_LOADED_BY_RE = re.compile(r' \(loaded by [^\r\n]{1,600}\)\s*$')
+
+
+def _line_paths(text):
+    return [value for cls, value in _inline(text) if cls == 'hl-path']
+
+
+def _spor_flagged_paths(bodies, detections):
+    """Normalized paths Spor itself points at: Defender detections, lines
+    with a flag other than the ones normal on many PCs, and the SUMMARY."""
+    flagged = {normalized_path(path) for _no, _threat, _action, path in detections}
+    summary = spor_log.section_ranges(bodies).get(spor_log.SECTION_SUMMARY)
+    known = None
+    for index, body in enumerate(bodies):
+        in_summary = summary is not None and summary[0] < index < summary[1]
+        cut = body.find(spor_log.FLAGS_MARK)
+        loud = cut != -1 and any(flag not in spor_log.QUIET_FLAGS for flag in body[cut:].split()[1:])
+        if (in_summary or loud) and cut != -1 and spor_log.SYNTAX_FLAG in body[cut:].split():
+            # A path made to look like log text: only the whole path FILES lists counts.
+            if known is None:
+                known = spor_log.known_paths(bodies)
+            item = spor_log.split_item(body.strip(), known)
+            if item.resolved:
+                flagged.add(normalized_path(item.item))
+            continue
+        if in_summary or loud:
+            text = body if cut == -1 else body[:cut]
+            # Defender lines name the process that touched the file: not flagged itself.
+            text = _SPOR_PROCESS_RE.sub('', text)
+            text = _SPOR_LOADED_BY_RE.sub('', text)
+            inline = spor_log.INLINE_FLAG_RE.search(text)
+            if inline:
+                # "path  !flag  ...": the flagged path ends before its flags.
+                text = text[:inline.start()]
+            for path in _line_paths(text):
+                flagged.add(normalized_path(path))
+    flagged.discard('')
+    return flagged
+
+
+def _extract_spor(bodies, out):
+    """Spor: the FILES section, one "path => <hash>, signature ..." line per
+    file (SHA256, or MD5 with -algo MD5; SHA1 is not stored). A Defender
+    detection of the same file gives the row its name. Only files Spor
+    flags are `auto`: a log lists hundreds of unsigned files, which would
+    switch off the automatic checks of the whole log."""
+    detections = spor_log.iter_defender_detections(bodies)
+    threats = {}
+    for _no, threat, _action, path in detections:
+        threats.setdefault(normalized_path(path), threat)
+    flagged = _spor_flagged_paths(bodies, detections)
+    for parsed in spor_log.iter_file_lines(bodies):
+        line_no, path, value, signature = parsed.line_no, parsed.path, parsed.hash, parsed.signature
+        key = normalized_path(path)
+        auto = key in flagged or signature in spor_log.BAD_SIGNATURES
+        detection = threats.get(key, '')
+        if is_sha256(value):
+            # With the file's MD5 ("md5" detail): the pair lets the MD5-only rows
+            # of other logs (FRST Search, Fixlog folders) find this SHA256's verdict.
+            out.add(value, line_no, line_no, path, detection, 'spor', auto, md5=parsed.details.get('md5', ''))
+        elif is_md5(value):
+            out.add('', line_no, line_no, path, detection, 'spor', False, md5=value)
+
+
+def _extract_frst_search(content, out):
+    """FRST Search: the MD5 of each File: entry, on the line below its path.
+    MD5 only, like Trojan Killer: checked from the hash menu, never by itself."""
+    from .tool_log_facts import frst_search_facts
+
+    files, _mentions = frst_search_facts(content)
+    for facts in files:
+        if facts.md5:
+            out.add('', facts.hash_line_no, facts.line_no, facts.path, '', 'frst_search', False, md5=facts.md5)
+
+
 def _extract_fixlog(bodies, out):
     in_file_block = in_folder_block = False
     current = (None, '')  # (line_no, path) of the file the block is describing
@@ -292,12 +376,18 @@ def extract_file_hashes(log_type, content):
             _extract_sha256_lines(bodies, out, 'mau')
         elif log_type == 'Trojan Killer':
             _extract_trojan_killer(bodies, out)
+        elif log_type == LOG_TYPE_SPOR:
+            _extract_spor(bodies, out)
+        elif log_type == LOG_TYPE_FRST_SEARCH:
+            _extract_frst_search(content, out)
         elif log_type == 'Fixlog':
             _extract_fixlog(bodies, out)
             # HitmanPro results in the Fixlog: the path is on the item line
             # above the hash. Checked from the hash menu only, like the rest.
             _extract_hitmanpro(bodies, out, source='fixlog_hitmanpro', auto=False)
-        out.add_leftovers(bodies)
+        if log_type != LOG_TYPE_FRST_SEARCH:
+            # FRST Search lists file and registry names, which can be 64 hex characters.
+            out.add_leftovers(bodies)
         auto_seen = 0
         for row in out.rows:
             if row.auto:

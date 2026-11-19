@@ -159,6 +159,26 @@ class TemplateMarkupTests(TestCase):
         self.assertIn(".line-copy-menu {", css)
         self.assertIn("css/line_copy_menu.css", self._read_template("log_analyzer.html"))
 
+    def test_both_pages_load_the_correlation_info_box(self):
+        """The line's info icon opens the shared info box (correlation_info.js)
+        in the analyzer and on the uploaded-log page; without the script the
+        icon does nothing, without the styles the box has no frame."""
+        for template in ("log_analyzer.html", "view_uploaded_log.html"):
+            content = self._read_template(template)
+            with self.subTest(template=template):
+                self.assertIn("js/correlation_info.js", content)
+                self.assertIn("css/correlation_info.css", content)
+                # After correlation_format.js, which it builds on.
+                self.assertLess(content.index("js/correlation_format.js"), content.index("js/correlation_info.js"))
+
+    def test_shared_correlation_scripts_contain_no_raw_line_separators(self):
+        js_dir = Path(__file__).resolve().parent.parent.parent / "static" / "js"
+        for name in ("correlation_info.js", "correlation_format.js", "centralbox_lookup.js"):
+            with self.subTest(script=name):
+                content = (js_dir / name).read_text(encoding="utf-8")
+                self.assertNotIn(" ", content)
+                self.assertNotIn(" ", content)
+
     def test_analyzer_scripts_contain_no_raw_line_separators(self):
         """A raw U+2028/U+2029 inside a JS regex literal is a line break and
         stops the whole script from parsing (it broke shared.js once); such

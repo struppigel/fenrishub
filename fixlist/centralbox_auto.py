@@ -64,6 +64,8 @@ SCANNER_SOURCES = {
     'hitmanpro': 'HitmanPro',
     'trojan_killer': 'Trojan Killer',
     'fixlog_hitmanpro': 'HitmanPro (Fixlog)',
+    # A Spor FILES row of a file its Defender section names.
+    'spor': 'Spor (Defender)',
 }
 # MAU files worth a fresh lookup: programs, libraries, drivers, installers,
 # scripts and shortcuts-to-code. Anything else in MAU's FILES section
@@ -163,11 +165,13 @@ def flagged_frst_paths(uploads, user=None):
 
 def _row_candidate(source, detection, path, normalized_path, flagged_paths):
     """(priority, reason) of one hash row, or None when it is not a candidate."""
-    from .log_highlighting import threat_severity
+    from .log_highlighting import defender_severity, threat_severity
 
     best = None
     detection = (detection or '').strip()
-    if source in SCANNER_SOURCES and detection and threat_severity(detection) == 'b':
+    # Defender names carry their category ("PUA:Win32/..."), rated on its own.
+    rate = defender_severity if source == 'spor' else threat_severity
+    if source in SCANNER_SOURCES and detection and rate(detection) == 'b':
         best = (CentralboxAutoQueue.PRIORITY_SCANNER, f'{SCANNER_SOURCES[source]}: {detection}')
     if source == 'mau' and is_executable_path(path):
         option = (CentralboxAutoQueue.PRIORITY_MAU, 'removed by MAU')

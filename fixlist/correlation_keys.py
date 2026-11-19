@@ -10,7 +10,10 @@ these keys and look up every key of each analyzed line:
 - typed keys for things that are not files, with a prefix:
   `run:<value>` (Run / RunOnce values), `svc:<name>` (services and drivers),
   `task:<path>` and `taskid:<guid>` (scheduled tasks), `ext:<id>` (browser
-  extensions), `clsid:<guid>` (COM objects), `fw:<rule>` (firewall rules).
+  extensions), `clsid:<guid>` (COM objects), `fw:<rule>` (firewall rules),
+  `uninstall:<subkey>` (an installed program's Uninstall key: Addition's
+  Installed Programs, Spor's SOFTWARE section, scanner / Fixlog targets) and
+  `msi:<guid>` (an MSI product code, which is also its Uninstall subkey).
 
 Scanner detections, Fixlog results and hash rows give their keys through
 target_keys(); analyzed lines through line_keys(). Hives and user SIDs are
@@ -34,6 +37,8 @@ TYPED_MATCHES = {
     'ext': 'extension',
     'clsid': 'clsid',
     'fw': 'firewall',
+    'uninstall': 'uninstall',
+    'msi': 'msi',
 }
 
 _GUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -54,13 +59,70 @@ _TARGET_PREFIX_RE = re.compile(r'^(?:key|value|file|folder|registry(?:\s+key|\s+
 
 _PATH_KEY_RE = re.compile(r'^(?:[a-z]:\\|\\\\)')
 
+# --- Installed programs: Uninstall keys ------------------------------------
+# FRST's / Spor's short form: "(HKLM\...\7-Zip) (Version: ..." in an Installed
+# Programs line, or "HKLM-x32\...\X" / "HKU\<SID>\...\X" on its own (Spor's
+# "key" detail). Subkey names can hold parens ("Firefox 128.0 (x64 en-US)").
+_SHORT_UNINSTALL_RE = re.compile(
+    r'(?:^|\()(?:HKLM(?:-x32)?|HKU\\S-1-[\d-]{1,80})\\\.\.\.\\(.{1,300}?)(?:\) \(Version:|$)',
+    re.IGNORECASE,
+)
+# The full key in any hive spelling (HKLM, HKEY_LOCAL_MACHINE, "HKLM:", HKU\<SID>,
+# WOW6432Node): Malwarebytes, AdwCleaner, Fixlog, MAU targets.
+_FULL_UNINSTALL_RE = re.compile(
+    r'\\microsoft\\windows\\currentversion\\uninstall\\([^\\"\'|\]\r\n]{1,300})', re.IGNORECASE,
+)
+_BRACED_GUID_RE = re.compile(r'^\{(' + _GUID + r')\}$', re.IGNORECASE)
+
 
 def is_path_key(key):
     """True for a file path key, False for a typed one (`run:...`, ...)."""
     return bool(_PATH_KEY_RE.match(key or ''))
 
 
-def _task_key(path):
+def software_keys(text):
+    """`uninstall:<subkey>` (and `msi:<guid>` for an MSI product code) of the
+    Uninstall key a text names: an Installed Programs line, a Spor "key"
+    value, a registry target. The hive is left out like for the other typed
+    keys; a wildcard ("Uninstall\\*") names no program."""
+    text = (text or '').strip()
+    if not text or ('\\...\\' not in text and 'uninstall\\' not in text.lower()):
+        return set()
+    names = [match.group(1) for match in _SHORT_UNINSTALL_RE.finditer(text)]
+    names += [match.group(1) for match in _FULL_UNINSTALL_RE.finditer(text)]
+    keys = set()
+    for name in names:
+        name = name.split(' => ', 1)[0].strip().rstrip('\\').strip()
+        if not name or '*' in name:
+            continue
+        keys.add(f'uninstall:{name.lower()}')
+        guid = _BRACED_GUID_RE.match(name)
+        if guid:
+            keys.add(f'msi:{guid.group(1).lower()}')
+    return keys
+
+
+def msi_key(product_code):
+    """`msi:<guid>` of an MSI product code ("{795F9101-...}"), '' if it is none."""
+    match = _BRACED_GUID_RE.match((product_code or '').strip())
+    return f'msi:{match.group(1).lower()}' if match else ''
+
+
+def identity_key(kind, name):
+    """The typed key of a persistence entry named by another log (Spor's
+    PERSISTENCE: spor_log.persistence_identity): `run:<value>`, `svc:<name>`
+    or `task:<path>`; '' for anything else."""
+    name = (name or '').strip()
+    if not name:
+        return ''
+    if kind == 'task':
+        return task_key(name)
+    if kind in ('run', 'svc'):
+        return f'{kind}:{name.lower()}'
+    return ''
+
+
+def task_key(path):
     """`task:<path>` for a task path in any spelling ("\\Foo", "System32\\Tasks\\Foo")."""
     value = (path or '').strip().strip('"').lower().lstrip('\\')
     match = _TASK_FILE_RE.match(value)
@@ -86,7 +148,7 @@ def target_keys(target, result=''):
             keys.add(key)
             task = _TASK_FILE_RE.match(key)
             if task:
-                keys.add(_task_key(task.group(1)))
+                keys.add(task_key(task.group(1)))
     lowered = text.lower()
     for pattern, prefix in (
         (_RUN_TARGET_RE, 'run'), (_SERVICE_TARGET_RE, 'svc'), (_CLSID_TARGET_RE, 'clsid'),
@@ -97,10 +159,11 @@ def target_keys(target, result=''):
             keys.add(f'{prefix}:{match.group(1).strip()}')
     match = _TASK_TREE_TARGET_RE.search(lowered)
     if match:
-        keys.add(_task_key(match.group(1)))
+        keys.add(task_key(match.group(1)))
     match = _FIREWALL_TARGET_RE.search(lowered)
     if match:
         keys.add(f'fw:{match.group(1).strip()}')
+    keys.update(software_keys(text))
     if path:
         # Only the extension's own folder: a Fixlog moving its files one by
         # one would otherwise fill an extension line with them.
@@ -235,7 +298,7 @@ def line_keys(line):
         typed.add(f'svc:{name.lower()}')
     elif entry_type in ('scheduled_task', 'scheduled_task_command'):
         if name:
-            typed.add(_task_key(name))
+            typed.add(task_key(name))
         match = _TASK_GUID_LINE_RE.match(text)
         if match:
             typed.add(f'taskid:{match.group(1).lower()}')
@@ -254,6 +317,9 @@ def line_keys(line):
         forced = _FORCED_EXTENSION_RE.match(text)
         ids = [forced.group(1)] if forced else _EXTENSION_ID_RE.findall(text.lower())
         typed.update(f'ext:{value}' for value in ids)
+    # An Installed Programs line (found by its text: cached payloads may lack
+    # the entry type).
+    typed.update(software_keys(text))
     typed.discard('')
     for key in sorted(typed):
         result.append((key, TYPED_MATCHES[key.split(':', 1)[0]]))

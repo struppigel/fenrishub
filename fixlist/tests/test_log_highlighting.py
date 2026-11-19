@@ -10,6 +10,7 @@ from ..log_highlighting import (
 from ..templatetags.rule_tags import stat_class
 from ..models import LogTypeDetectionRule, UploadedLog, count_fixlog_results
 from .uploaded_log_shared_setup import UploadedLogSharedSetupMixin
+from .spor_sample import SPOR, SPOR_V2, SPOR_V3
 
 # Sanitized excerpts of real logs (usernames, machine names and SIDs replaced).
 
@@ -400,6 +401,7 @@ FIXTURES = {
     'AdwCleaner': [ADWCLEANER_SCAN, ADWCLEANER_CLEAN],
     'Emsisoft': [EMSISOFT],
     'Trojan Killer': [TROJAN_KILLER],
+    'Spor': [SPOR, SPOR_V2, SPOR_V3],
     'Fixlog': [FIXLOG],
     'Shortcut': [SHORTCUT],
 }
@@ -1159,14 +1161,19 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'utf-16-le')
         self.assertContains(response, 'id="highlightSummary" data-info-pane="summary"')
 
-    def test_upload_without_summary_shows_metadata_without_tabs(self):
+    def test_upload_without_summary_shows_metadata_next_to_related_logs(self):
+        # The related logs tab is always offered (its same-machine search
+        # covers other forum users); the metadata is shown first.
         upload = UploadedLog.objects.create(
             upload_id='untabbed-notes', forum_username='forum_user', original_filename='notes.txt',
             content='some text nobody recognises', log_type='Unknown',
         )
         response = self._get(upload)
-        self.assertNotContains(response, 'role="tablist"')
-        self.assertContains(response, 'id="logMetadata" data-info-pane="metadata">')
+        self.assertNotContains(response, 'data-info-tab="summary"')
+        self.assertContains(response, 'data-info-tab="related"')
+        self.assertContains(response, 'data-info-tab="metadata" role="tab" aria-selected="true"')
+        self.assertContains(response, 'id="logMetadata" data-info-pane="metadata" role="tabpanel" '
+                                       'aria-labelledby="infoTabMetadata">')
 
     def test_log_without_sections_has_no_collapse_all_button(self):
         upload = UploadedLog.objects.create(

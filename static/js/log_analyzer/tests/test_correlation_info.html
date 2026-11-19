@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<!--
+  Tests for the correlation info box (static/js/correlation_info.js), opened
+  from a line's info icon in the analyzer and on the uploaded log page.
+
+  It shows everything the other logs say about the line's files: hashes with
+  copy / VirusTotal / centralbox lookups, detections and fixlist results, file
+  facts (Spor FILES, FRST Search) and activity (Spor timeline and sections,
+  shortcuts), each row linking to the log line it comes from.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>correlation info box tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>correlation info box tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+<button id="trigger" type="button">trigger</button>
+
+<script src="../../common.js"></script>
+<script src="../../centralbox_lookup.js"></script>
+<script src="../../correlation_format.js"></script>
+<script src="../../correlation_info.js"></script>
+
+<script>
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '\u2713 ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '\u2717 ' + description + (detail ? ' - ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+const SHA = 'e5'.repeat(32);
+const KNOWN_SHA = 'a1'.repeat(32);
+const SHA1 = 'f0'.repeat(20);
+let entries = [
+    { kind: 'hash', upload_id: 'spor-log', log_type: 'Spor', line_no: 47, anchor_line_no: 47, sha256: SHA, md5: '',
+      detection: '', severity: '', file: 'evil.exe', centralbox: null, system: 'same' },
+    { kind: 'hash', upload_id: 'mb-log', log_type: 'Malwarebytes', line_no: 3, sha256: KNOWN_SHA, md5: '',
+      detection: 'Trojan.AsyncRAT', severity: 'b', file: 'evil.exe', system: 'different',
+      centralbox: { verdict: 'malicious', family: 'asyncrat', report_url: 'https://centralbox.dev/analysis/' + KNOWN_SHA } },
+    { kind: 'file_info', upload_id: 'spor-log', log_type: 'Spor', line_no: 47, source: 'spor_files', file: 'evil.exe',
+      path: 'C:\\x\\evil.exe', signature: 'unsigned', company: 'Microsoft Corporation', original_name: 'svchost.exe',
+      original_name_differs: true, sha256: SHA, sha1: SHA1, severity: '', system: 'same' },
+    { kind: 'evidence', upload_id: 'spor-log', log_type: 'Spor', line_no: 19, time: '2026-11-18 07:48:46',
+      sources: 'PF PCA BAM', file_status: 'unsigned', details: 'PCA: Installer failed', flags: [], severity: '',
+      file: 'evil.exe', system: 'same' },
+    { kind: 'mention', upload_id: 'spor-log', log_type: 'Spor', line_no: 60, section: 'PERSISTENCE',
+      subsection: 'Run keys (all entries)', time: '2026-11-18 04:50:37', tags: '', text: 'HKU\\...\\Run\\Evil => C:\\x\\evil.exe',
+      role: 'target', parent: '', file_status: 'unsigned', flags: [], severity: '', file: 'evil.exe', system: 'same',
+      extra: [['page', 'https://www.virustotal.com/gui/file/abc'], ['from', 'https://evil.example/x']] },
+    { kind: 'mention', upload_id: 'spor-log', log_type: 'Spor', line_no: 70, section: 'DEFENDER',
+      subsection: 'Defender exclusions (current)', time: '2026-11-17 16:12:59', tags: 'Paths', text: '[Paths] C:\\x',
+      role: 'item', parent: '', file_status: '', flags: [], severity: '', file: 'x', folder: true, in_folder: true,
+      system: 'same' },
+    { kind: 'detection', upload_id: 'frst-log', log_type: 'Addition', line_no: 5, detection: 'Trojan:Win32/Malgent!MSR',
+      action: 'Quarantine', severity: 'b', source: 'defender', file: 'evil.exe', system: 'same' },
+];
+let refreshed = 0;
+let jumped = null;
+const trigger = document.getElementById('trigger');
+
+function open(canLookup) {
+    CorrelationInfo.open({
+        lineText: 'HKU\\...\\Run: [evil] => C:\\x\\evil.exe',
+        getEntries: () => entries,
+        isOwn: (entry) => entry.upload_id === 'frst-log',
+        scope: 'case', name: '', status: 'B',
+        onJump: (lineNo) => { jumped = lineNo; },
+        lookup: { canLookup, urls: { check: '/check', fresh: '/fresh', freshStatus: '/status/' + '0'.repeat(64) } },
+        refresh: async () => { refreshed += 1; },
+        trigger,
+    });
+}
+
+const dialog = () => document.querySelector('.cinfo-dialog');
+const text = () => dialog().textContent;
+
+trigger.focus();
+open(true);
+assert('the dialog is open and focused', CorrelationInfo.isOpen() && document.activeElement === dialog());
+assert('it shows the line', text().includes('HKU\\...\\Run: [evil]'));
+const titles = [...document.querySelectorAll('.cinfo-file-name')].map((node) => node.textContent);
+assert('entries are grouped per file, the line\'s own file first', titles[0] === 'evil.exe' && titles.length === 2,
+    titles.join(', '));
+assert('the folder group says it is a folder the file is in', text().includes('a folder this file is in'));
+const hashes = [...document.querySelectorAll('.cinfo-hash-value')].map((node) => node.textContent);
+assert('every hash once (SHA-256 from hash and file rows, SHA-1)', hashes.length === 3 && hashes.includes(SHA1), hashes.join(' '));
+assert('a known hash shows its centralbox verdict and report',
+    text().includes('centralbox: malicious') && !!document.querySelector('a[href="https://centralbox.dev/analysis/' + KNOWN_SHA + '"]'));
+const lookups = [...document.querySelectorAll('.cinfo-hash-lookup button')].map((node) => node.textContent);
+assert('only the hash without a result offers check and fresh lookup',
+    lookups.length === 2 && lookups.includes('check on centralbox') && lookups.includes('run fresh lookup'), lookups.join(', '));
+assert('file facts show the original name and that it differs',
+    text().includes('svchost.exe') && text().includes('differs from the file name'));
+assert('the Defender detection is listed with its action', text().includes('Trojan:Win32/Malgent!MSR') && text().includes('Quarantine'));
+const times = [...document.querySelectorAll('.cinfo-file:first-of-type .cinfo-time')].map((node) => node.textContent);
+assert('activity is newest first', times.join() === ['2026-11-18 07:48', '2026-11-18 04:50'].join(), times.join(', '));
+assert('a VirusTotal address is a link, other addresses stay text',
+    !!document.querySelector('.cinfo-extra a[href="https://www.virustotal.com/gui/file/abc"]')
+    && !document.querySelector('.cinfo-extra a[href="https://evil.example/x"]') && text().includes('https://evil.example/x'));
+const links = [...document.querySelectorAll('a.cinfo-link')].map((node) => node.getAttribute('href'));
+assert('rows of other logs link to their line', links.includes('/uploads/spor-log/#L47') && links.includes('/uploads/mb-log/#L3'),
+    links.join(' '));
+assert('another system is marked', text().includes('other system?'));
+
+// A row of the shown log itself jumps instead.
+const jump = document.querySelector('.cinfo-jump');
+jump.click();
+assert('an own row closes the box and jumps to its line', !CorrelationInfo.isOpen() && jumped === 5, String(jumped));
+assert('focus returns to the trigger', document.activeElement === trigger);
+
+// Without lookups: no buttons.
+open(false);
+assert('no lookup buttons without lookups', document.querySelectorAll('.cinfo-hash-lookup').length === 0);
+document.querySelector('.cinfo-modal').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+assert('Escape closes the box', !CorrelationInfo.isOpen());
+
+// A lookup refreshes and re-renders from the new entries.
+(async () => {
+    const realCheck = CentralboxLookup.check;
+    CentralboxLookup.check = async (target, urls, progress) => {
+        progress('checking ...');
+        return { message: 'centralbox: malicious', refresh: true };
+    };
+    open(true);
+    entries = entries.map((entry) => (entry.sha256 === SHA && entry.kind === 'hash'
+        ? { ...entry, centralbox: { verdict: 'malicious', family: 'newfamily', report_url: 'https://centralbox.dev/analysis/' + SHA } }
+        : entry));
+    document.querySelector('.cinfo-hash-lookup button').click();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert('a lookup refreshes the correlations', refreshed === 1, String(refreshed));
+    assert('the box shows the new result after the refresh', text().includes('newfamily'));
+    assert('the answer stays visible', text().includes('centralbox: malicious'));
+    CentralboxLookup.check = realCheck;
+    CorrelationInfo.close();
+
+    // Installed software (an Installed Programs line): Spor's Uninstall entry
+    // and Windows Installer event of the same program form one group.
+    entries = [
+        { kind: 'mention', upload_id: 'spor-log', log_type: 'Spor', line_no: 2667, section: 'SOFTWARE',
+          subsection: 'Installed programs, installed or updated in the last 30 days (Uninstall keys)',
+          time: '2026-11-18 06:50:56', tags: 'machine', role: 'uninstall entry', match: 'msi', file: 'Tailscale',
+          text: '2026-11-18 06:50:56 [machine] Tailscale => Windows Installer (msiexec), version 1.104.7',
+          file_status: '', flags: [], extra: [], severity: '', system: 'same' },
+        { kind: 'mention', upload_id: 'spor-log', log_type: 'Spor', line_no: 2734, section: 'SOFTWARE',
+          subsection: 'Windows Installer: installs and removals in the last 30 days (Application log)',
+          time: '2026-11-18 06:50:58', tags: '1033', role: 'installer event', match: 'uninstall', file: 'Tailscale',
+          text: '2026-11-18 06:50:58 [1033] installed: Tailscale 1.104.7 (Tailscale Inc.) => SYSTEM',
+          file_status: '', flags: [], extra: [], severity: '', system: 'same' },
+    ];
+    open(true);
+    const softwareTitles = [...document.querySelectorAll('.cinfo-file-title')].map((node) => node.textContent);
+    assert('one group per installed program, matched by its key', softwareTitles.length === 1
+        && softwareTitles[0].includes('Tailscale') && softwareTitles[0].includes('same installed program'),
+        softwareTitles.join(' | '));
+    assert('the roles read installed program and Windows Installer',
+        text().includes('installed program') && text().includes('Windows Installer'));
+    CorrelationInfo.close();
+
+    // A file replaced between the logs: Spor and FRST Search of this system
+    // disagree on its size, modified time and MD5 (and the line's own size).
+    const fileInfo = (upload, logType, lineNo, facts) => ({
+        kind: 'file_info', upload_id: upload, log_type: logType, line_no: lineNo, file: 'evil.exe',
+        path: 'C:\\x\\evil.exe', severity: '', system: 'same', ...facts,
+    });
+    entries = [
+        fileInfo('spor-log', 'Spor', 3407, { size: '133128', modified: '2026-10-22 08:00:10', md5: 'aa'.repeat(16) }),
+        fileInfo('search-log', 'FRST Search', 11, { size: '000120000', modified: '2026-10-22 08:00', md5: 'bb'.repeat(16) }),
+    ];
+    open(true);
+    const changed = document.querySelector('.cinfo-changed');
+    assert('a file that changed between the logs says so', !!changed
+        && changed.textContent.includes('size 133128 (Spor L3407), 120000 (FRST Search L11)')
+        && changed.textContent.includes('MD5 ') && !changed.textContent.includes('modified'),
+        changed ? changed.textContent : 'no note');
+    CorrelationInfo.close();
+    const group = (list) => ({ file: 'evil.exe', how: '', entries: list });
+    const lineText = 'R2 Evil; C:\\x\\evil.exe [999 2026-10-21] () [File not signed]';
+    assert('the line\'s own size counts', CorrelationFormat.lineSize(lineText) === '999'
+        && CorrelationFormat.fileChanges(group([entries[0]]), lineText).includes('999 (this line)'));
+    assert('one log alone, the same values, another system or a folder: no note',
+        CorrelationFormat.fileChanges(group([entries[0]]), 'no size here') === ''
+        && CorrelationFormat.fileChanges(group([entries[0], { ...entries[0], upload_id: 'x' }]), '') === ''
+        && CorrelationFormat.fileChanges(group([entries[0], { ...entries[1], system: 'different' }]), '') === ''
+        && CorrelationFormat.fileChanges(group([entries[0], { ...entries[1], in_folder: true }]), '') === ''
+        && CorrelationFormat.fileChanges({ ...group(entries), how: 'folder' }, '') === '');
+    assert('a service DLL says whose it is', CorrelationFormat.mentionRole({ role: 'dll', parent: 'EvilSvc' })
+        === 'service DLL of EvilSvc');
+
+    const summary = document.getElementById('summary');
+    summary.textContent = `${passed} passed, ${failed} failed`;
+    summary.className = failed ? 'fail' : 'pass';
+})();
+</script>
+</body>
+</html>

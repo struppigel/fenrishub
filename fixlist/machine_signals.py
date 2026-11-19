@@ -5,8 +5,8 @@ Kinds, strongest first (see compare):
 - `sid`: the machine SID (S-1-5-21-a-b-c) of the local accounts an Addition
   log lists. Random per Windows install.
 - `computer`: the computer name in an FRST header ("Ran by U (admin) on PC
-  (model) (date)", in every language FRST writes) or a scanner's "Computer
-  name".
+  (model) (date)", in every language FRST writes), a scanner's "Computer
+  name" or a Spor header ("Computer:  PC, Windows 11 ...").
 - `usersid`: the SID prefixes of FRST's HKU\\S-1-5-21-... lines: the machine
   SID on a home PC, the domain's on a domain-joined one, so weaker.
 - `profile`: Windows profile names (C:\\Users\\<name>\\, the "Ran by" user).
@@ -61,6 +61,13 @@ _MODEL_RE = re.compile(r'^\((.*)\) \([^()]*\)\s*$')
 _COMPUTER_NAME_RE = re.compile(
     r'^[ \t]{0,20}Computer name(?: \.){0,40}[ \t]{0,20}:[ \t]{0,20}(\S{1,64})', re.MULTILINE | re.IGNORECASE,
 )
+# Spor's header: "Computer:  PC, Windows 11 Home ..." and "Run by:    user (administrator)".
+_SPOR_COMPUTER_RE = re.compile(r'^Computer:[ \t]{1,20}([^,\s]{1,64}),', re.MULTILINE)
+_SPOR_RUN_BY_RE = re.compile(r'^Run by:[ \t]{1,20}([^\s(]{1,64})', re.MULTILINE)
+# Spor's "Machine SID: S-1-5-21-a-b-c" header line and the "; sid S-1-5-21-a-b-c-RID"
+# of its local accounts: the same domain SID as Addition's "Accounts:".
+_SPOR_MACHINE_SID_RE = re.compile(r'^Machine SID:[ \t]{1,20}(S-1-5-21-\d{1,10}-\d{1,10}-\d{1,10})[ \t\r]*$', re.MULTILINE)
+_SPOR_ACCOUNT_SID_RE = re.compile(r'; sid (S-1-5-21-\d{1,10}-\d{1,10}-\d{1,10})-\d{1,10}(?![\d-])')
 _PROFILE_RE = re.compile(r'[A-Za-z]:\\Users\\([^\\"\r\n]{1,64})\\', re.IGNORECASE)
 # Profile folders Windows creates itself (or placeholders): never a real user.
 SYSTEM_PROFILE_NAMES = frozenset({
@@ -100,11 +107,18 @@ def extract_signals(content, head_only=False):
             signals[KIND_HW].add('model:' + _norm(model.group(1)))
     for computer in _COMPUTER_NAME_RE.findall(content):
         signals[KIND_COMPUTER].add(computer.lower())
+    for computer in _SPOR_COMPUTER_RE.findall(content):
+        signals[KIND_COMPUTER].add(computer.lower())
+    for user_name in _SPOR_RUN_BY_RE.findall(content):
+        if user_name.lower() not in SYSTEM_PROFILE_NAMES:
+            signals[KIND_PROFILE].add(user_name.lower())
     for profile in _PROFILE_RE.findall(content):
         profile = profile.strip().lower()
         if profile and profile not in SYSTEM_PROFILE_NAMES:
             signals[KIND_PROFILE].add(profile)
     signals[KIND_SID].update(sid.lower() for sid in _ACCOUNT_SID_RE.findall(content))
+    signals[KIND_SID].update(sid.lower() for sid in _SPOR_MACHINE_SID_RE.findall(content))
+    signals[KIND_SID].update(sid.lower() for sid in _SPOR_ACCOUNT_SID_RE.findall(content))
     signals[KIND_USERSID].update(sid.lower() for sid in _HKU_SID_RE.findall(content))
     for mbr, gpt in _DISK_ID_RE.findall(content):
         value = (mbr or gpt).lower()

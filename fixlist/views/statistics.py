@@ -1,6 +1,7 @@
 """Aggregate statistics across snapshotted upload and fixlist data."""
 
 from datetime import date, datetime, time, timedelta
+from urllib.parse import urlencode
 
 from django.contrib.auth.decorators import login_required
 from django.db.models import Avg, Count, ExpressionWrapper, F, FloatField, Min, Sum
@@ -268,12 +269,47 @@ def _bucket_owner(row):
     return (row.get('owner_username') or '').strip() or UNASSIGNED_LABEL
 
 
+TAB_LOGS = 'logs'
+TAB_CENTRALBOX = 'centralbox'
+
+
 @login_required
 @require_http_methods(['GET'])
 def statistics_view(request):
     start_date, end_date, start_dt, end_dt = _resolve_range(request)
+    tab = TAB_CENTRALBOX if request.GET.get('tab') == TAB_CENTRALBOX else TAB_LOGS
+    tz = timezone.get_current_timezone()
+    granularity = _granularity(start_date, end_date)
+    axis = _bucket_axis(start_date, end_date, granularity)
 
-    log_qs = UploadedLogStat.objects.filter(created_at__range=(start_dt, end_dt))
+    context = {
+        'tab': tab,
+        'start_date': start_date.isoformat(),
+        'end_date': end_date.isoformat(),
+        'granularity': granularity,
+    }
+    if tab == TAB_CENTRALBOX:
+        from .statistics_centralbox import centralbox_stats
+
+        context['cb'] = centralbox_stats(start_dt, end_dt, axis, granularity, tz)
+        # The logs tab's tag choices ride along, so switching back keeps them.
+        raw_category = request.GET.get('tag_category')
+        carry = [] if raw_category is None else [('tag_category', raw_category)]
+        carry += [('tags', tag_id) for tag_id in parse_tag_ids(request.GET.getlist('tags'))]
+    else:
+        context.update(_log_stats_context(request, log_range=(start_dt, end_dt), axis=axis,
+                                          granularity=granularity, tz=tz))
+        carry = [('tag_category', '' if context['selected_tag_category'] is None else context['selected_tag_category'])]
+        carry += [('tags', tag['id']) for tag in context['selected_tags']]
+    context['carry_params'] = carry
+    context['carry_query'] = urlencode(carry)
+    return render(request, 'statistics.html', context)
+
+
+def _log_stats_context(request, log_range, axis, granularity, tz):
+    """The logs tab: uploads, fixlists, tags and helpers in the range."""
+    start_dt, end_dt = log_range
+    log_qs =UploadedLogStat.objects.filter(created_at__range=(start_dt, end_dt))
     fixlist_qs = FixlistStat.objects.filter(created_at__range=(start_dt, end_dt))
 
     line_totals = log_qs.aggregate(
@@ -355,10 +391,6 @@ def statistics_view(request):
         'analyzed_log_count': analyzed_agg['n'] or 0,
     }
 
-    tz = timezone.get_current_timezone()
-    granularity = _granularity(start_date, end_date)
-    axis = _bucket_axis(start_date, end_date, granularity)
-
     # Uploads per bucket are the per-helper counts summed: one query for both charts.
     log_counts = _counts_by_bucket_and_label(log_qs, 'recipient_username', granularity, tz)
     uploads_by_bucket = {}
@@ -394,10 +426,7 @@ def statistics_view(request):
     picked_tag_ids = parse_tag_ids(request.GET.getlist('tags'))
     tag_stats = _tag_stats(analyzed_qs, axis, granularity, tz, selected_tag_category, picked_tag_ids)
 
-    context = {
-        'start_date': start_date.isoformat(),
-        'end_date': end_date.isoformat(),
-        'granularity': granularity,
+    return {
         'headline': headline,
         'malware_by_log_type': malware_by_log_type,
         'fixlog_summary': fixlog_summary,
@@ -418,4 +447,3 @@ def statistics_view(request):
         'selected_tag_category': selected_tag_category,
         'selected_tags': selected_tags_for_picker(picked_tag_ids),
     }
-    return render(request, 'statistics.html', context)

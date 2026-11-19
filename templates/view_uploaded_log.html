@@ -98,22 +98,6 @@
         display: none !important;
     }
 
-    /* Feedback of a centralbox lookup from the info panel, next to the line's marker. */
-    .hl-cor-lookup-hint {
-        position: absolute;
-        z-index: 120;
-        padding: 1px 6px;
-        font-family: monospace;
-        font-size: 12px;
-        line-height: 1.4;
-        white-space: nowrap;
-        color: var(--la-text-primary);
-        background: var(--la-bg-1);
-        border: 1px solid var(--la-border-strong);
-        box-shadow: var(--la-shadow);
-        pointer-events: none;
-    }
-
     /* Related logs tab (partials/related_logs.html): case-page rows. While it
        is open the log itself is hidden and the list uses the whole page. */
     .uploaded-log-page.related-open > .form-group {
@@ -189,7 +173,8 @@
     }
 </style>
 {% if highlight %}<link rel="stylesheet" href="{% static 'css/log_highlight.css' %}">
-<link rel="stylesheet" href="{% static 'css/line_copy_menu.css' %}">{% endif %}
+<link rel="stylesheet" href="{% static 'css/line_copy_menu.css' %}">
+<link rel="stylesheet" href="{% static 'css/correlation_info.css' %}">{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -236,7 +221,7 @@
 {% if has_info_tabs %}
 <div class="panel-tabs log-info-tabs" role="tablist" aria-label="log information">
     {% if has_summary %}<button type="button" class="panel-tab tab-active" id="infoTabSummary" data-info-tab="summary" role="tab" aria-selected="true" aria-controls="highlightSummary">summary</button>{% endif %}
-    {% if related_count %}<button type="button" class="panel-tab" id="infoTabRelated" data-info-tab="related" role="tab" aria-selected="false" aria-controls="relatedLogs" title="the logs correlations use: your cases with this log, else the same forum user">related logs ({{ related_count }})</button>{% endif %}
+    <button type="button" class="panel-tab" id="infoTabRelated" data-info-tab="related" data-count="{{ related_count }}" role="tab" aria-selected="false" aria-controls="relatedLogs" title="the logs correlations use: your cases with this log, else the same forum user; plus logs of other forum users that look like the same machine">related logs{% if related_count %} ({{ related_count }}){% endif %}</button>
     <button type="button" class="panel-tab{% if not has_summary %} tab-active{% endif %}" id="infoTabMetadata" data-info-tab="metadata" role="tab" aria-selected="{% if has_summary %}false{% else %}true{% endif %}" aria-controls="logMetadata">metadata</button>
 </div>
 {% endif %}
@@ -258,10 +243,8 @@
     {% endif %}
 </div>
 {% endif %}
-{% if related_count %}
 {# Loaded in the background after the page (views/uploads.py related_logs_fragment). #}
 <div class="log-info-pane related-logs-pane" id="relatedLogs" data-info-pane="related" data-url="{% url 'uploaded_log_related' uploaded_log.upload_id %}" role="tabpanel" aria-labelledby="infoTabRelated" hidden><div class="related-logs-empty">loading...</div></div>
-{% endif %}
 <div class="meta-grid log-info-pane" id="logMetadata" data-info-pane="metadata"{% if has_info_tabs %} role="tabpanel" aria-labelledby="infoTabMetadata"{% if has_summary %} hidden{% endif %}{% endif %}>
     <div class="meta-key">id</div>
     <div>{{ uploaded_log.upload_id }}</div>
@@ -349,6 +332,7 @@
 {# Lookups of correlated hashes, shared with the analyzer. #}
 <script src="{% static 'js/centralbox_lookup.js' %}"></script>
 <script src="{% static 'js/correlation_format.js' %}"></script>
+<script src="{% static 'js/correlation_info.js' %}"></script>
 <script src="{% static 'js/popup_menu.js' %}"></script>
 <script>
 // The content is rendered as chunked .log-chunk blocks (see chunk_log filter)
@@ -414,7 +398,7 @@ function toggleLogMaximized(force) {
             // A redirect means the login page (session expired): not ours to show.
             .then((response) => (response.ok && !response.redirected ? response.text() : Promise.reject(response.status)))
             // Our own server-rendered (escaped) template, same origin.
-            .then((html) => { pane.innerHTML = html; })
+            .then((html) => { pane.innerHTML = html; showFoundCount(pane); })
             .catch(() => {
                 relatedLoaded = false;
                 pane.innerHTML = '';
@@ -423,6 +407,16 @@ function toggleLogMaximized(force) {
                 note.textContent = 'could not load the related logs - open the tab again to retry';
                 pane.appendChild(note);
             });
+    }
+
+    // The page counts only the case / forum-user logs; a label without a
+    // count gets the list's own (same-machine logs of other forum users).
+    function showFoundCount(pane) {
+        const tab = document.getElementById('infoTabRelated');
+        const marker = pane.querySelector('[data-found]');
+        if (!tab || !marker || tab.dataset.count !== '0') return;
+        const found = parseInt(marker.dataset.found, 10);
+        if (found > 0) tab.textContent = 'related logs (' + found + ')';
     }
 
     function selectTab(name, remember) {
@@ -999,7 +993,7 @@ const Centralbox = (function () {
 // without data nothing changes, and a failed refresh keeps the stored view.
 const CaseCorrelations = (function () {
     const none = {
-        has: () => false, canLookup: () => false, hashes: () => [], reposition: () => {}, header: () => '', menuItems: () => [], statusClass: () => '',
+        has: () => false, canLookup: () => false, hashes: () => [], reposition: () => {}, header: () => '', openInfo: () => {}, statusClass: () => '',
         ready: Promise.resolve(),
     };
     let data = null;
@@ -1044,40 +1038,25 @@ const CaseCorrelations = (function () {
         return Format.header(line ? entriesFor(line) : [], isOwn, { scope: data.scope, name: data.name });
     }
 
-    // One row per finding: the log type it was found in (and a warning when
-    // that log seems to come from another system). Clicking opens that log
-    // at the line (the file's entry for a hash), which its page scrolls to
-    // and marks (LineJump).
-    function menuItems(line) {
-        const items = Format.rows(entriesFor(line), isOwn).map(entry => {
-            const key = Format.source(entry, isOwn);
-            const value = Format.finding(entry);
-            if (isOwn(entry)) {
-                // This log: jump to the line on this page.
-                const no = Number(entry.anchor_line_no || entry.line_no);
-                return { key, value, run: () => LineJump.jump(no, 4000) };
-            }
-            const url = Format.logUrl(entry);
-            return { key, value, run: () => { if (url) openUrl(url); } };
+    // The info box (static/js/correlation_info.js): everything the other logs
+    // say about the line's files, with links to them and centralbox lookups.
+    // It reads the line's entries again after a lookup refreshed them.
+    function openInfo(line, trigger) {
+        if (!line || typeof CorrelationInfo !== 'object') return;
+        const no = line.dataset ? line.dataset.n : '';
+        CorrelationInfo.open({
+            lineText: line.textContent.trim(),
+            getEntries: () => entriesFor(document.getElementById('L' + no) || line),
+            isOwn,
+            scope: data.scope,
+            name: data.name,
+            status: (data.lines[no] || {}).status || '',
+            // This log: jump to the line on this page (LineJump marks it).
+            onJump: lineNo => LineJump.jump(Number(lineNo), 4000),
+            lookup: { canLookup: lookupConfig.can_lookup, urls: LOOKUP_URLS },
+            refresh,
+            trigger,
         });
-        // The centralbox report of each correlated hash, shown as its URL.
-        Format.reportUrls(entriesFor(line)).forEach(url => items.push({ key: 'centralbox', value: url, run: () => openUrl(url) }));
-        // Correlated hashes without a centralbox verdict: look them up here,
-        // as in the analyzer (with the related log that holds the hash).
-        const targets = lookupConfig.can_lookup && typeof CentralboxLookup === 'object'
-            ? CentralboxLookup.targets(entriesFor(line)) : [];
-        if (targets.length) {
-            targets.forEach(target => {
-                const which = targets.length > 1 ? ' ' + target.short : (target.file ? ' of ' + target.file : '');
-                if (lookupConfig.hash_url) {
-                    items.push({ key: 'centralbox', value: 'check this hash' + which, run: () => checkHash(target, line) });
-                }
-                if (lookupConfig.fresh_url && lookupConfig.fresh_status_url) {
-                    items.push({ key: 'centralbox', value: 'run fresh lookup' + which, run: () => freshLookup(target, line) });
-                }
-            });
-        }
-        return items;
     }
 
     // A correlated hash can be looked up (the panel then offers it): the
@@ -1100,79 +1079,6 @@ const CaseCorrelations = (function () {
         check: lookupConfig.hash_url, fresh: lookupConfig.fresh_url, freshStatus: lookupConfig.fresh_status_url,
     };
 
-    // Lookup feedback: a small label in front of the line's marker (or at the
-    // line's end), on its row. It follows scrolling and a redraw of the
-    // markers, hides while the line is outside the visible log, and fades a
-    // moment after the answer.
-    let lookupHint = null;
-    let lookupHintTimer = null;
-    let lookupHintLine = '';
-
-    function removeHint() {
-        if (lookupHintTimer) clearTimeout(lookupHintTimer);
-        lookupHintTimer = null;
-        if (lookupHint) lookupHint.remove();
-        lookupHint = null;
-        lookupHintLine = '';
-    }
-
-    function placeHint() {
-        if (!lookupHint) return;
-        const current = lookupHintLine ? document.getElementById('L' + lookupHintLine) : null;
-        if (!current) {
-            removeHint();
-            return;
-        }
-        const marker = markers.find(([markerLine]) => markerLine === current);
-        const anchor = marker && !marker[1].hidden ? marker[1] : current;
-        const rect = anchor.getBoundingClientRect();
-        const box = root ? root.getBoundingClientRect() : null;
-        lookupHint.hidden = Boolean(box && (rect.top < box.top || rect.top + 12 > box.bottom));
-        if (lookupHint.hidden) return;
-        const width = lookupHint.offsetWidth || 0;
-        const height = lookupHint.offsetHeight || 0;
-        const left = marker ? rect.left - width - 4 : rect.right - width;
-        lookupHint.style.left = `${Math.max(8, left) + window.scrollX}px`;
-        lookupHint.style.top = `${rect.top + (Math.min(rect.height, 18) - height) / 2 + window.scrollY}px`;
-    }
-
-    document.addEventListener('scroll', placeHint, { capture: true, passive: true });
-    window.addEventListener('resize', placeHint);
-
-    function hint(line, message, done) {
-        if (lookupHintTimer) clearTimeout(lookupHintTimer);
-        lookupHintTimer = null;
-        const no = line && line.dataset ? line.dataset.n : '';
-        if (!no) return;
-        if (!lookupHint) {
-            lookupHint = document.createElement('div');
-            lookupHint.className = 'hl-cor-lookup-hint';
-            lookupHint.setAttribute('role', 'status');
-            lookupHint.setAttribute('aria-live', 'polite');
-            document.body.appendChild(lookupHint);
-        }
-        lookupHintLine = no;
-        lookupHint.textContent = message;
-        placeHint();
-        if (done) lookupHintTimer = setTimeout(removeHint, 4000);
-    }
-
-    // The answer: shown, then the correlations are fetched again (a new
-    // answer changes marker and summary) and the label follows the redraw.
-    async function finishLookup(line, result) {
-        hint(line, result.message, true);
-        if (!result.refresh) return;
-        await refresh();
-        if (lookupHint && lookupHint.textContent === result.message) hint(line, result.message, true);
-    }
-
-    async function checkHash(target, line) {
-        await finishLookup(line, await CentralboxLookup.check(target, LOOKUP_URLS, (message) => hint(line, message)));
-    }
-
-    async function freshLookup(target, line) {
-        await finishLookup(line, await CentralboxLookup.fresh(target, LOOKUP_URLS, (message) => hint(line, message)));
-    }
 
     // A marker per correlated line, in its status colour: the info icon alone,
     // at the right edge where the hover icons end with theirs, placed outside
@@ -1393,7 +1299,7 @@ const CaseCorrelations = (function () {
         ready,
         // The hover icons cover a line's marker: both are placed in one layout.
         reposition: () => place(),
-        header, menuItems, statusClass,
+        header, openInfo, statusClass,
     };
 })();
 
@@ -1652,7 +1558,9 @@ function openTokenMenu(token) {
     infoButton.addEventListener('click', function (event) {
         event.preventDefault();
         event.stopPropagation();
-        openLineMenu(infoButton, CaseCorrelations.header(currentLine), CaseCorrelations.menuItems);
+        if (!currentLine) return;
+        TokenMenu.close();
+        CaseCorrelations.openInfo(currentLine, infoButton);
     });
 })();
 

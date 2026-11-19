@@ -22,6 +22,7 @@ from .. import centralbox, centralbox_auto
 from ..case_correlations import cached_correlations, correlations_for_upload, related_upload_ids, summary_note
 from ..correlation_keys import line_path_keys
 from ..file_hashes import is_md5, is_sha256
+from ..log_types import LOG_TYPE_SPOR
 from ..models import HashVerdict, RuleTag, UploadedLog, UploadedLogFileHash
 from ..tagging import centralbox_tags_by_sha
 from ..validators import PayloadValidator
@@ -66,8 +67,9 @@ def page_hash_context(uploaded_log, user=None):
             return {}
         auto = [
             {'sha256': sha, 'line_no': line_no, 'anchor_line_no': anchor,
-             # Scanner detections, MAU files and Fixlog File: entries get a flag in the summary box.
-             'flag': source in ('malwarebytes', 'hitmanpro', 'fixlog_file', 'mau')}
+             # Scanner detections, MAU files, Fixlog File: entries and the files a
+             # Spor log flags get a flag in the summary box.
+             'flag': source in ('malwarebytes', 'hitmanpro', 'fixlog_file', 'mau', 'spor')}
             for sha, line_no, anchor, is_auto, source, md5 in rows if is_auto
         ]
         # MD5-only rows (Trojan Killer, Fixlog Folder:): marked through the
@@ -118,16 +120,16 @@ _SUMMARY_SEVERITY = {'malicious': 'b', 'suspicious': 'w', 'clean': 'c'}
 
 
 def add_hash_summary(highlight, uploaded_log, context):
-    """Summary box of a Fixlog or MAU log: the lines whose hash has a stored
-    centralbox result, next to what the highlighter lists. Fixlog: also every
-    File: entry, and "not in centralbox" answers (e.g. checked by hand in a
-    folder listing). MAU (dozens of hashes, checked by themselves): only real
+    """Summary box of a Fixlog, MAU or Spor log: the lines whose hash has a
+    stored centralbox result, next to what the highlighter lists. Fixlog: also
+    every File: entry, and "not in centralbox" answers (e.g. checked by hand in
+    a folder listing). MAU and Spor (dozens to thousands of hashes): only real
     verdicts, at the file's path line. The page adds the centralbox flag.
     Database only; never raises."""
     try:
         if highlight is None or not context:
             return
-        mau = uploaded_log.log_type == 'MAU'
+        mau = uploaded_log.log_type in ('MAU', LOG_TYPE_SPOR)
         verdicts = context.get('verdicts') or {}
         md5_map = context.get('md5_map') or {}
         md5_unknown = context.get('md5_unknown') or {}

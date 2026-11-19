@@ -146,6 +146,30 @@
         text-decoration: underline;
     }
 
+    .stats-tabs {
+        --tab-bg: var(--la-bg-4);
+        border-bottom: 1px solid var(--la-border);
+        margin-bottom: 12px;
+    }
+
+    /* Links, not buttons: take the buttons' font size like the other panel tabs. */
+    .stats-tabs a.panel-tab {
+        display: inline-block;
+        font-size: 12px;
+    }
+
+    .stats-status {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        font-size: 12px;
+        color: var(--la-text-muted);
+        margin-bottom: 8px;
+    }
+
+    .stats-status .on { color: var(--la-text-primary); }
+    .stats-status .off { color: var(--la-warning-text); }
+
     @media (max-width: 720px) {
         .stats-grid-two { grid-template-columns: 1fr; }
     }
@@ -154,19 +178,27 @@
 
 {% block content %}
 <div>
+    <nav class="panel-tabs stats-tabs" aria-label="statistics">
+        <a class="panel-tab{% if tab == 'logs' %} tab-active{% endif %}" href="{% url 'statistics' %}?start={{ start_date }}&amp;end={{ end_date }}{% if carry_query %}&amp;{{ carry_query }}{% endif %}"{% if tab == 'logs' %} aria-current="page"{% endif %}>logs</a>
+        <a class="panel-tab{% if tab == 'centralbox' %} tab-active{% endif %}" href="{% url 'statistics' %}?tab=centralbox&amp;start={{ start_date }}&amp;end={{ end_date }}{% if carry_query %}&amp;{{ carry_query }}{% endif %}"{% if tab == 'centralbox' %} aria-current="page"{% endif %}>centralbox</a>
+    </nav>
+
     <form method="get" class="stats-range-form">
         <label>start date<input type="date" name="start" value="{{ start_date }}"></label>
         <label>end date<input type="date" name="end" value="{{ end_date }}"></label>
-        <input type="hidden" name="tag_category" value="{{ selected_tag_category|default_if_none:'' }}">
-        {% for tag in selected_tags %}<input type="hidden" name="tags" value="{{ tag.id }}">{% endfor %}
+        {% if tab == 'centralbox' %}<input type="hidden" name="tab" value="centralbox">{% endif %}
+        {% for name, value in carry_params %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
         <button type="submit">apply</button>
-        <a href="{% url 'statistics' %}"><button type="button">reset</button></a>
-        <a href="{% url 'statistics' %}?all=1&amp;tag_category={{ selected_tag_category|default_if_none:'' }}{% for tag in selected_tags %}&amp;tags={{ tag.id }}{% endfor %}"><button type="button" title="everything from the first upload or fixlist on">all time</button></a>
+        <a href="{% url 'statistics' %}{% if tab == 'centralbox' %}?tab=centralbox{% endif %}"><button type="button">reset</button></a>
+        <a href="{% url 'statistics' %}?all=1{% if tab == 'centralbox' %}&amp;tab=centralbox{% endif %}{% if carry_query %}&amp;{{ carry_query }}{% endif %}"><button type="button" title="everything from the first upload or fixlist on">all time</button></a>
         <span style="font-size: 12px; color: var(--la-text-muted);">showing {{ start_date }} &rarr; {{ end_date }}</span>
     </form>
 
     <div class="divider"></div>
 
+    {% if tab == 'centralbox' %}
+    {% include "partials/statistics_centralbox.html" %}
+    {% else %}
     <div class="stats-cards">
         <div class="stats-card">
             <div class="stats-card-label">total logs</div>
@@ -337,8 +369,14 @@
         <div class="info-box">no fixlists created in the selected range.</div>
         {% endif %}
     </div>
+    {% endif %}
 </div>
 
+{% if tab == 'centralbox' %}
+{{ cb.verdicts.series|json_script:"data-cb-verdict-series" }}
+{{ cb.fresh.series|json_script:"data-cb-fresh-series" }}
+{{ cb.usage.series|json_script:"data-cb-usage-series" }}
+{% else %}
 {{ uploads_per_day|json_script:"data-uploads-per-day" }}
 {{ malware_by_log_type|json_script:"data-malware-by-type" }}
 {{ known_unknown|json_script:"data-known-unknown" }}
@@ -346,6 +384,7 @@
 {{ logs_per_helper_series|json_script:"data-logs-per-helper-series" }}
 {{ fixlists_per_helper_series|json_script:"data-fixlists-per-helper-series" }}
 {{ tag_series|json_script:"data-tag-series" }}
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -483,7 +522,8 @@
         '#b48ead', '#a3be8c', '#d08770', '#88c0d0', '#bf616a', '#ebcb8b',
     ];
     // One line per series over the bucket axis: {days, series: [{label|username, data}]}.
-    function seriesLineChart(canvasId, dataId) {
+    // `colorFor(label)` may pin a series' color; others take the palette's.
+    function seriesLineChart(canvasId, dataId, colorFor) {
         const seriesData = readJson(dataId) || { days: [], series: [] };
         const canvas = document.getElementById(canvasId);
         if (!canvas || !seriesData.series.length) return;
@@ -491,15 +531,19 @@
             type: 'line',
             data: {
                 labels: seriesData.days,
-                datasets: seriesData.series.map((s, i) => ({
-                    label: s.label || s.username,
-                    data: s.data,
-                    borderColor: seriesPalette[i % seriesPalette.length],
-                    backgroundColor: seriesPalette[i % seriesPalette.length],
-                    tension: 0.2,
-                    pointRadius: 2,
-                    fill: false,
-                })),
+                datasets: seriesData.series.map((s, i) => {
+                    const label = s.label || s.username;
+                    const color = (colorFor && colorFor(label)) || seriesPalette[i % seriesPalette.length];
+                    return {
+                        label: label,
+                        data: s.data,
+                        borderColor: color,
+                        backgroundColor: color,
+                        tension: 0.2,
+                        pointRadius: 2,
+                        fill: false,
+                    };
+                }),
             },
             options: baseOptions,
         });
@@ -508,6 +552,22 @@
     seriesLineChart('tagTimelineChart', 'data-tag-series');
     seriesLineChart('logsPerHelperChart', 'data-logs-per-helper-series');
     seriesLineChart('fixlistsPerHelperChart', 'data-fixlists-per-helper-series');
+
+    const cbColors = {
+        'malicious': colors.error,
+        'suspicious': colors.warning,
+        'clean': colors.primary,
+        'not in centralbox': colors.muted,
+        'manual': colors.info,
+        'auto': colors.primary,
+        'reads': colors.info,
+        'fresh lookups': colors.primary,
+        'failures': colors.error,
+    };
+    const cbColor = (label) => cbColors[label];
+    seriesLineChart('cbVerdictChart', 'data-cb-verdict-series', cbColor);
+    seriesLineChart('cbFreshChart', 'data-cb-fresh-series', cbColor);
+    seriesLineChart('cbUsageChart', 'data-cb-usage-series', cbColor);
 })();
 </script>
 {% endblock %}

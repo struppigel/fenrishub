@@ -1,0 +1,191 @@
+{% comment %}
+The centralbox tab of the statistics page (views/statistics_centralbox.py).
+Context: `cb` = centralbox_stats(...), plus `granularity`.
+{% endcomment %}
+<div class="stats-status">
+    <span>server key: <span class="{% if cb.health.key_set %}on{% else %}off{% endif %}">{% if cb.health.key_set %}set{% else %}not set{% endif %}</span></span>
+    <span>lookups: <span class="{% if cb.health.enabled %}on{% else %}off{% endif %}">{% if cb.health.enabled %}on{% else %}off{% endif %}</span></span>
+    <span>automatic fresh lookups: <span class="{% if cb.health.auto_enabled %}on{% else %}off{% endif %}">{% if cb.health.auto_enabled %}on{% else %}off{% endif %}</span></span>
+    {% if cb.health.paused %}
+    <span class="off">paused until {{ cb.health.paused_until|date:"Y-m-d H:i" }}{% if cb.health.pause_reason %}: {{ cb.health.pause_reason }}{% endif %}</span>
+    {% else %}
+    <span>not paused</span>
+    {% endif %}
+</div>
+
+<div class="stats-cards">
+    <div class="stats-card">
+        <div class="stats-card-label">hashes checked</div>
+        <div class="stats-card-value">{{ cb.verdicts.total }}</div>
+    </div>
+    <div class="stats-card malware">
+        <div class="stats-card-label">malicious</div>
+        <div class="stats-card-value">{{ cb.verdicts.malicious }}</div>
+    </div>
+    <div class="stats-card pup">
+        <div class="stats-card-label">suspicious</div>
+        <div class="stats-card-value">{{ cb.verdicts.suspicious }}</div>
+    </div>
+    <div class="stats-card">
+        <div class="stats-card-label">clean</div>
+        <div class="stats-card-value">{{ cb.verdicts.clean }}</div>
+    </div>
+    <div class="stats-card">
+        <div class="stats-card-label">not in centralbox</div>
+        <div class="stats-card-value">{{ cb.verdicts.unknown }}</div>
+    </div>
+</div>
+
+<div class="stats-section">
+    <h3>verdicts per {{ granularity }}</h3>
+    <div class="stats-tag-note">
+        each hash counts once, on the day of its latest check (older checks are not kept).{% if cb.verdicts.other %} {{ cb.verdicts.other }} known hash{{ cb.verdicts.other|pluralize:"es" }} had no verdict.{% endif %}
+    </div>
+    {% if cb.verdicts.total %}
+    <div class="stats-chart-wrap">
+        <canvas id="cbVerdictChart"></canvas>
+    </div>
+    {% else %}
+    <div class="info-box">no hashes checked in the selected range.</div>
+    {% endif %}
+</div>
+
+<div class="stats-section">
+    <h3>malicious and suspicious hashes by family and type</h3>
+    {% if cb.verdicts.families or cb.verdicts.malware_types %}
+    <div class="stats-grid-two" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
+        <table class="stats-table">
+            <thead><tr><th>family</th><th class="num">hashes</th></tr></thead>
+            <tbody>
+                {% for row in cb.verdicts.families %}
+                <tr><td>{{ row.name }}</td><td class="num">{{ row.count }}</td></tr>
+                {% empty %}
+                <tr><td colspan="2">no family named</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <table class="stats-table">
+            <thead><tr><th>malware type</th><th class="num">hashes</th></tr></thead>
+            <tbody>
+                {% for row in cb.verdicts.malware_types %}
+                <tr><td>{{ row.name }}</td><td class="num">{{ row.count }}</td></tr>
+                {% empty %}
+                <tr><td colspan="2">no type named</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="info-box">no malicious or suspicious hash with a family or type in the selected range.</div>
+    {% endif %}
+</div>
+
+<div class="stats-section">
+    <h3>fresh lookups per {{ granularity }}</h3>
+    <div class="stats-tag-note">
+        fresh analyses started in the range; a hash looked up again only keeps its latest lookup.
+    </div>
+    {% if cb.fresh.total %}
+    <div class="stats-chart-wrap">
+        <canvas id="cbFreshChart"></canvas>
+    </div>
+    <div class="stats-grid-two" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 12px;">
+        <table class="stats-table">
+            <tbody>
+                <tr><td>fresh lookups</td><td class="num">{{ cb.fresh.total }}</td></tr>
+                <tr><td>started by a helper</td><td class="num">{{ cb.fresh.manual }}</td></tr>
+                <tr><td>started automatically</td><td class="num">{{ cb.fresh.auto }}</td></tr>
+                {% for row in cb.fresh.states %}
+                <tr><td>{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <table class="stats-table">
+            <thead><tr><th>started by</th><th class="num">lookups</th></tr></thead>
+            <tbody>
+                {% for row in cb.fresh.requesters %}
+                <tr><td>{{ row.username }}</td><td class="num">{{ row.count }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="info-box">no fresh lookups started in the selected range.</div>
+    {% endif %}
+</div>
+
+<div class="stats-section">
+    <h3>API usage, last {{ cb.usage.days }} days</h3>
+    <div class="stats-tag-note">
+        calls to centralbox per day; only the last {{ cb.usage.days }} days are kept, whatever range is picked.
+    </div>
+    {% if cb.usage.reads or cb.usage.fresh or cb.usage.failures %}
+    <div class="stats-grid-two">
+        <table class="stats-table">
+            <tbody>
+                <tr><td>reads</td><td class="num">{{ cb.usage.reads }}</td></tr>
+                <tr><td>fresh lookup calls</td><td class="num">{{ cb.usage.fresh }}</td></tr>
+                <tr><td>failures</td><td class="num">{{ cb.usage.failures }}</td></tr>
+                <tr><td>most reads in one minute</td><td class="num">{{ cb.usage.peak_reads_per_minute }}</td></tr>
+            </tbody>
+        </table>
+        <div class="stats-chart-wrap">
+            <canvas id="cbUsageChart"></canvas>
+        </div>
+    </div>
+    {% else %}
+    <div class="info-box">no calls to centralbox in the last {{ cb.usage.days }} days.</div>
+    {% endif %}
+</div>
+
+<div class="stats-section">
+    <h3>hashes in logs answered by centralbox</h3>
+    <div class="stats-tag-note">
+        distinct hashes found in the logs uploaded in the range, by where in the log they were found; only logs that still exist are counted. answered includes "not in centralbox".
+    </div>
+    {% if cb.coverage.sources %}
+    <table class="stats-table">
+        <thead>
+            <tr><th>found in</th><th class="num">hashes</th><th class="num">answered</th><th class="num">% answered</th><th class="num">malicious / suspicious</th></tr>
+        </thead>
+        <tbody>
+            {% for row in cb.coverage.sources %}
+            <tr>
+                <td>{{ row.label }}</td>
+                <td class="num">{{ row.hashes }}</td>
+                <td class="num">{{ row.answered }}</td>
+                <td class="num">{{ row.percent }}%</td>
+                <td class="num">{{ row.flagged }}</td>
+            </tr>
+            {% endfor %}
+            <tr>
+                <td><strong>all sources</strong></td>
+                <td class="num"><strong>{{ cb.coverage.total.hashes }}</strong></td>
+                <td class="num"><strong>{{ cb.coverage.total.answered }}</strong></td>
+                <td class="num"><strong>{{ cb.coverage.total.percent }}%</strong></td>
+                <td class="num"><strong>{{ cb.coverage.total.flagged }}</strong></td>
+            </tr>
+        </tbody>
+    </table>
+    {% else %}
+    <div class="info-box">no hashes in the logs uploaded in the selected range.</div>
+    {% endif %}
+</div>
+
+<div class="stats-section">
+    <h3>automatic lookup queue (now)</h3>
+    <div class="stats-tag-note">
+        {% if cb.queue.moving %}the queue is being worked off{% else %}the queue is not moving (automatic lookups off, centralbox paused, or today's limit reached){% endif %};
+        {{ cb.queue.started_last_day }} of {{ cb.queue.per_day }} automatic lookups used in the last 24 hours{% if cb.queue.last_auto_at %}, the last one {{ cb.queue.last_auto_at|date:"Y-m-d H:i" }}{% endif %}.
+    </div>
+    <table class="stats-table">
+        <thead><tr><th>waiting because of</th><th class="num">hashes</th></tr></thead>
+        <tbody>
+            {% for row in cb.queue.priorities %}
+            <tr><td>{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+            {% endfor %}
+            <tr><td><strong>queued</strong></td><td class="num"><strong>{{ cb.queue.total }}</strong></td></tr>
+            {% if cb.queue.oldest %}<tr><td>waiting since</td><td class="num">{{ cb.queue.oldest|date:"Y-m-d H:i" }}</td></tr>{% endif %}
+        </tbody>
+    </table>
+</div>

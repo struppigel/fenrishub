@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 
 from .. import trash
 from ..file_hashes import HASH_LOG_TYPES
+from ..log_types import LOG_TYPE_SPOR
 from ..forms import UploadedLogForm
 from ..log_converters import convert_log_to_response
 from ..log_highlighting import (
@@ -496,14 +497,15 @@ def view_uploaded_log(request, upload_id):
     centralbox_context = {}
     if highlight is not None and uploaded_log.log_type in HASH_LOG_TYPES:
         centralbox_context = page_hash_context(uploaded_log, request.user)
-        if uploaded_log.log_type in ('Fixlog', 'MAU'):
+        if uploaded_log.log_type in ('Fixlog', 'MAU', LOG_TYPE_SPOR):
             add_hash_summary(highlight, uploaded_log, centralbox_context)
     if request.user.is_authenticated:
         # Resumes queued automatic fresh lookups after a restart (cheap when idle).
         centralbox_auto.ensure_auto_drainer()
 
     # The "related logs" tab: only how many there are now (one query); the
-    # list itself loads when the tab is opened (related_logs_fragment).
+    # list itself loads when the tab is opened (related_logs_fragment). The
+    # tab is always offered: its same-machine search covers other forum users.
     try:
         related_count = len(related_upload_ids(uploaded_log, request.user)[0])
     except Exception:
@@ -518,7 +520,7 @@ def view_uploaded_log(request, upload_id):
         'centralbox': centralbox_context,
         'correlations': correlation_context,
         'related_count': related_count,
-        'has_info_tabs': bool((highlight is not None and highlight.has_summary) or related_count),
+        'has_info_tabs': True,
     })
 
 
@@ -630,6 +632,7 @@ def related_logs_fragment(request, upload_id):
         'scope': scope,
         'name': name,
         'more_count': max(0, total - len(logs)),
+        'found_count': total + len(machine_logs),
         'other_system': other_system,
     })
 

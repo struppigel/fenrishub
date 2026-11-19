@@ -2,7 +2,7 @@
 
 `highlight_log(log_type, content)` turns a log of one of the `HIGHLIGHTERS`
 types (MAU, ESET, Malwarebytes, HitmanPro, Emsisoft, Trojan Killer, AdwCleaner, Fixlog,
-Shortcut, KpRm, SecurityCheck, FRST Search) into sections of tokenised lines
+Shortcut, KpRm, SecurityCheck, FRST Search, Spor) into sections of tokenised lines
 plus a summary of detections (or failures) for the box at the top of the page.
 `render_highlighted_html()` turns that into HTML, and `compute_tool_stats()`
 derives the small chips stored on UploadedLog.tool_stats for the list views.
@@ -26,7 +26,8 @@ from html import escape as html_escape
 
 from django.utils.safestring import mark_safe
 
-from .log_types import ANALYZED_LOG_TYPES, DETECTION_LOG_TYPES
+from . import spor_log
+from .log_types import ANALYZED_LOG_TYPES, DETECTION_LOG_TYPES, LOG_TYPE_SPOR
 from .status_types import STATUS_PAINT
 
 logger = logging.getLogger(__name__)
@@ -316,6 +317,21 @@ def threat_severity(name):
             or 'adware' in lower):
         return 'p'
     return 'b'
+
+
+# Defender's category prefix ("PUA:Win32/...") where the generic rating
+# (threat_severity) would call it malware.
+_DEFENDER_CATEGORY_SEVERITY = {
+    'pua': 'p', 'puadlmanager': 'p', 'puaminer': 'p', 'puabundler': 'p', 'softwarebundler': 'p',
+    'browsermodifier': 'p', 'adware': 'p', 'program': 'p', 'monitoringtool': 'p',
+    'hacktool': 'g', 'remoteaccess': 'g', 'tool': 'g',
+}
+
+
+def defender_severity(threat):
+    """Summary severity of a Defender threat name ("Trojan:Win32/Malgent!MSR")."""
+    category = threat.split(':', 1)[0].strip().lower() if ':' in threat else ''
+    return _DEFENDER_CATEGORY_SEVERITY.get(category) or threat_severity(threat)
 
 
 def _count_sev(value, sev='b'):
@@ -736,6 +752,262 @@ def _highlight_trojan_killer(lines):
             continue
         kv = _kv_colon(body, 'hl-company' if body.strip().startswith(_TK_COMPANY_KEYS) else '')
         b.add(_mk(no, kv if kv else _inline(body), cr))
+    return b.result()
+
+
+# ---------------------------------------------------------------------------
+# Spor (forensic triage log; the line format is in spor_log)
+# ---------------------------------------------------------------------------
+
+# A status word in brackets, FILES' "signature <state>" and Defender's
+# "; action <what>": each coloured by what it says.
+_SPOR_MARK_RE = re.compile(
+    r'(?P<status> \[(?P<word>' + '|'.join(re.escape(word) for word in spor_log.STATUS_WORDS)
+    + r'|> \d{1,9} MB, not hashed)\])'
+    r'|\bsignature (?P<sig>valid|invalid|revoked|expired|unsigned)\b'
+    r'|(?:^|(?<=; ))action (?P<action>[^;]{1,60})'
+)
+_SPOR_TIME_RE = re.compile(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?= |$)')
+_SPOR_TAGS_RE = re.compile(r'^\[[^\[\]\r\n]{1,80}\](?= |$)')
+_SPOR_DEFENDER_RE = re.compile(r'^(Defender (?:detected|action taken): )(.{1,300}?)(?= => |$)')
+# A sub-line of the item above: "    loaded: C:\...", "    from: https://...".
+_SPOR_SUB_RE = re.compile(r'^([ \t]{2,})([a-z][a-z0-9 ]{0,30}:)(.*)$')
+# ClickFix PowerShell history: "<line number> [suspicious|last] <command>".
+_SPOR_HISTORY_RE = re.compile(r'^(\d{1,7})( )(\[(?:suspicious|last)\])( ?)(.*)$')
+_SPOR_LEGEND_RE = re.compile(r'^([ \t]+)(\S+)([ \t]+)(.*)$')
+_SPOR_SIGNATURE_RE = re.compile(r'\bsignature (valid|invalid|revoked|expired|unsigned)\b')
+
+
+def _spor_status_class(word):
+    if word in spor_log.BAD_SIGNATURE_STATUSES:
+        return 'hl-sev-b'
+    if word in ('unsigned', 'no access'):
+        return 'hl-sev-w'
+    return 'hl-dim'
+
+
+def _spor_marked(text, files=False, defender=False):
+    """Tokenize the part of a line after its time and tags."""
+    out = []
+    pos = 0
+    for m in _SPOR_MARK_RE.finditer(text):
+        if (m.group('sig') and not files) or (m.group('action') and not defender):
+            continue
+        if m.start() > pos:
+            out += _inline(text[pos:m.start()])
+        if m.group('status'):
+            out += [('', ' '), (_spor_status_class(m.group('word')), m.group('status')[1:])]
+        elif m.group('sig'):
+            sig = m.group('sig')
+            cls = 'hl-sev-c' if sig == 'valid' else 'hl-sev-w' if sig == 'unsigned' else 'hl-sev-b'
+            out += [('hl-dim', 'signature '), (cls, sig)]
+        else:
+            action = m.group('action')
+            out += [('hl-key', 'action '), ('hl-sev-' + _action_severity(action), action)]
+        pos = m.end()
+    if pos < len(text):
+        out += _inline(text[pos:])
+    return out
+
+
+def _spor_flag_tokens(flags_text):
+    """'<==== !flag !flag': a warning, unless only flags normal on many PCs."""
+    flags = flags_text[len('<===='):].split()
+    loud = any(flag not in spor_log.QUIET_FLAGS for flag in flags)
+    return [('hl-sev-w' if loud else 'hl-sev-g', flags_text)]
+
+
+# SOFTWARE's Windows Installer events: a failed install, a removal.
+_SPOR_TAG_CLASS = {'[11708]': 'hl-sev-w', '[1034]': 'hl-dim'}
+
+
+def _spor_item_tokens(text, files=False, defender=False, section=''):
+    """Tokens of an item line: time, [tags], the item, status, details, flags.
+    A !log-syntax-in-name line (a path made to look like log text) is shown
+    as written: no status or " => " in it is coloured as if it were real."""
+    tokens = []
+    m = _SPOR_TIME_RE.match(text)
+    if m:
+        tokens.append(('hl-dim', m.group(0)))
+        text = text[m.end():]
+        if text.startswith(' '):
+            tokens.append(('', ' '))
+            text = text[1:]
+    flag_tokens = []
+    cut = text.find(spor_log.FLAGS_MARK)
+    if cut != -1:
+        flag_tokens = [('', ' ')] + _spor_flag_tokens(text[cut + 1:])
+        text = text[:cut]
+    m = _SPOR_TAGS_RE.match(text)
+    if m:
+        tag_cls = _SPOR_TAG_CLASS.get(m.group(0), 'hl-accent') if section == spor_log.SECTION_SOFTWARE else 'hl-accent'
+        tokens.append((tag_cls, m.group(0)))
+        text = text[m.end():]
+        if text.startswith(' '):
+            tokens.append(('', ' '))
+            text = text[1:]
+    if spor_log.SYNTAX_FLAG in ' '.join(token for _cls, token in flag_tokens).split():
+        return tokens + _inline(text) + flag_tokens
+    if cut == -1 and section == spor_log.SECTION_SUMMARY:
+        m = spor_log.INLINE_FLAG_RE.search(text)
+        if m:
+            # Flags between double blanks, then e.g. "(loaded by <path>)".
+            flag_tokens = _spor_inline_flag_tokens(text[m.start() - 2:])
+            text = text[:m.start() - 2]
+    if defender:
+        m = _SPOR_DEFENDER_RE.match(text)
+        if m:
+            threat = m.group(2)
+            tokens += [('', m.group(1)), (_THREAT + defender_severity(threat), threat)]
+            text = text[m.end():]
+    return tokens + _spor_marked(text, files, defender) + flag_tokens
+
+
+def _spor_inline_flag_tokens(text):
+    """'  !flag  (loaded by C:\\x.exe)': each flag a warning (unless normal on
+    many PCs), the rest as usual."""
+    out = []
+    for index, part in enumerate(spor_log.INLINE_FLAG_RE.split(text)):
+        if not part:
+            continue
+        if index % 2:
+            out.append(('hl-sev-g' if part in spor_log.QUIET_FLAGS else 'hl-sev-w', part))
+            continue
+        m = _SPOR_LOADED_BY_RE.match(part)
+        if m:
+            # Without the closing paren in the path ("Program Files (x86)" keeps its own).
+            out += [('', m.group(1))] + _inline(m.group(2)) + [('', m.group(3))]
+        else:
+            out += _inline(part)
+    return out
+
+
+_SPOR_LOADED_BY_RE = re.compile(r'^(\s*\(loaded by )(.{1,600})(\)\s*)$')
+
+
+def _first_path(text):
+    for cls, value in _inline(text):
+        if cls == 'hl-path':
+            return value
+    return ''
+
+
+def _spor_summary_item(b, no, body):
+    """A SUMMARY line as a summary-box item."""
+    item = spor_log.split_item(body)
+    m = spor_log.INLINE_FLAG_RE.search(item.item) if not item.flags else None
+    if m:
+        # "[Prefetch] C:\...\x.pdf.lnk  !double-extension  (loaded by ...)": flags inline.
+        item.flags = spor_log.INLINE_FLAG_RE.findall(item.item)
+        item.item = item.item[:m.start()].rstrip()
+    m = _SPOR_DEFENDER_RE.match(item.item)
+    target = ''
+    if m:
+        name = m.group(2)
+        severity = defender_severity(name)
+        target = _first_path(item.rest)
+    else:
+        name = item.item
+        if item.loud_flags or item.status in spor_log.BAD_SIGNATURE_STATUSES:
+            severity = 'w'
+        elif item.status == 'unsigned':
+            severity = 'g'
+        else:
+            severity = 'i'
+    action = ' '.join(part for part in (item.tags, item.status, ' '.join(item.flags)) if part)
+    b.item(no, severity, name[:300], target, action)
+
+
+def _spor_banner_tokens(body, title):
+    start = body.find(title)
+    end = start + len(title)
+    return [('hl-dim', body[:start]), ('hl-header', title), ('hl-dim', body[end:])]
+
+
+def _highlight_spor(lines):
+    b = _Builder('Spor flagged items')
+    section = ''
+    unsigned = bad_signature = 0
+    for i, raw in enumerate(lines):
+        no = i + 1
+        body, cr = _split_cr(raw)
+        title = spor_log.section_title(body)
+        if title:
+            if not section:
+                # The log's own title banner; the header lines follow.
+                section = 'HEADER'
+                b.add(_mk(no, [('hl-title', body)], cr))
+            elif title.startswith('End of log'):
+                section = 'END'
+                b.end_section()
+                b.add(_mk(no, [('hl-dim', body)], cr))
+            else:
+                section = title
+                b.header(_mk(no, _spor_banner_tokens(body, title), cr))
+            continue
+        stripped = body.strip()
+        if not stripped:
+            b.add(_mk(no, [('', body)], cr))
+            continue
+        if stripped.startswith('---') and stripped.endswith('---'):
+            b.add(_mk(no, [('hl-subheader', body)], cr))
+            continue
+        if stripped.startswith('('):
+            b.add(_mk(no, [('hl-dim', body)], cr))
+            continue
+        if section in ('', 'HEADER', 'END'):
+            if body[:1].isspace():
+                # The "Format:" explanation continues indented.
+                b.add(_mk(no, [('hl-dim', body)], cr))
+            else:
+                kv = _kv_colon(body)
+                b.add(_mk(no, kv if kv else _inline(body), cr))
+            continue
+        if section == spor_log.SECTION_LEGEND:
+            m = _SPOR_LEGEND_RE.match(body)
+            if m:
+                lead, code, gap, rest = m.groups()
+                b.add(_mk(no, [('', lead), ('hl-key', code), ('', gap), ('hl-dim', rest)], cr))
+            else:
+                b.add(_mk(no, [('hl-subheader' if stripped.endswith(':') else 'hl-dim', body)], cr))
+            continue
+        files = section == spor_log.SECTION_FILES
+        defender = section in (spor_log.SECTION_DEFENDER, spor_log.SECTION_SUMMARY, spor_log.SECTION_TIMELINE)
+        m = _SPOR_SUB_RE.match(body)
+        if m:
+            lead, key, rest = m.groups()
+            b.add(_mk(no, [('', lead), ('hl-key', key)] + _spor_item_tokens(rest, files, defender, section), cr))
+            continue
+        if body[:1].isspace():
+            b.add(_mk(no, _inline(body), cr))
+            continue
+        m = _SPOR_HISTORY_RE.match(body)
+        if m:
+            number, gap, tag, gap2, command = m.groups()
+            flag_tokens = []
+            cut = command.find(spor_log.FLAGS_MARK)
+            if cut != -1:
+                flag_tokens = [('', ' ')] + _spor_flag_tokens(command[cut + 1:])
+                command = command[:cut]
+            tag_cls = 'hl-sev-w' if tag == '[suspicious]' else 'hl-accent'
+            b.add(_mk(no, [('hl-dim', number), ('', gap), (tag_cls, tag), ('', gap2), ('', command)] + flag_tokens, cr))
+            continue
+        b.add(_mk(no, _spor_item_tokens(body, files, defender, section), cr))
+        if section == spor_log.SECTION_SUMMARY:
+            _spor_summary_item(b, no, body)
+        elif files:
+            m = _SPOR_SIGNATURE_RE.search(body)
+            if m and m.group(1) == 'unsigned':
+                unsigned += 1
+            elif m and m.group(1) in spor_log.BAD_SIGNATURES:
+                bad_signature += 1
+    detections = spor_log.iter_defender_detections(lines)
+    b.stats += [
+        Stat('Defender', str(len(detections)), 'b'),
+        Stat('Flagged', str(len(b.summary)), 'w'),
+        Stat('Unsigned', str(unsigned), 'w'),
+        Stat('Bad signature', str(bad_signature), 'b'),
+    ]
     return b.result()
 
 
@@ -1430,6 +1702,7 @@ HIGHLIGHTERS = {
     'HitmanPro': _highlight_hitmanpro,
     'Emsisoft': _highlight_emsisoft,
     'Trojan Killer': _highlight_trojan_killer,
+    LOG_TYPE_SPOR: _highlight_spor,
     'AdwCleaner': _highlight_adwcleaner,
     'Fixlog': _highlight_fixlog,
     'Shortcut': _highlight_shortcut,
@@ -1578,6 +1851,10 @@ def compute_tool_stats(log_type, content):
         return [_chip('deleted', deleted, 'c'),
                 _chip('sched', _stat_value(result, 'Scheduled') or 0, 'w'),
                 _chip('failed', _stat_value(result, 'Failed') or 0, 'b')]
+    if log_type == LOG_TYPE_SPOR:
+        return [_chip('defender', _stat_value(result, 'Defender') or 0, 'b'),
+                _chip('flagged', _stat_value(result, 'Flagged') or 0, 'w'),
+                _chip('bad sig', _stat_value(result, 'Bad signature') or 0, 'b')]
     if log_type == 'KpRm':
         scheduled = sum(int(s.value) for s in result.stats if 'schedul' in s.label.lower())
         return [_chip('removed', _stat_value(result, 'Removed') or 0, 'c'),

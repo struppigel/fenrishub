@@ -543,8 +543,22 @@ def api_upload_analysis(request, upload_id):
     is the worst finding's verdict letter, apart from the rule verdict and
     never counting logs from another machine; '' when no finding has one.
     `correlations=full` adds the entries: hash rows (detection, sha256 / md5,
-    stored centralbox result, tags), scanner or Defender detections and
-    Fixlog results, each with its own `status` and `system` (same /
+    stored centralbox result, tags), scanner or Defender detections,
+    Fixlog results, Spor timeline evidence (kind `evidence`: time, sources,
+    file_status, details, flags), file facts (kind `file_info`, from Spor
+    FILES / AMCACHE FILES and FRST Search: signature, signer, version,
+    company, original_name, size, dates, hashes, ...) and other places a log
+    names the file (kind `mention`: section, subsection, role, parent, text,
+    extra, flags; Spor module sections, Shortcut and FRST Search logs; `folder`
+    for a Defender-excluded folder or an install / package folder; role
+    `uninstall entry` / `installer event` / `package` for Spor's SOFTWARE
+    section and `removed by MAU` for MAU products, found through an Installed
+    Programs line's uninstall key or MSI product code: `match` `uninstall` /
+    `msi`; role `dll` for a svchost service's DLL and `entry` for a Spor
+    persistence entry without a file, e.g. a deleted task; Spor's Run values,
+    services and tasks also match by name: `match` `registry` / `service` /
+    `task`; file_info carries `size`, `created`, `modified` and `md5` when the
+    log has them), each with its own `status` and `system` (same /
     different / unknown machine); `correlations=0` leaves it all out. The
     stored answer is served even when outdated (`correlation_scope.fresh`
     false) at no cost; `correlations_fresh=1` recomputes it then, and one

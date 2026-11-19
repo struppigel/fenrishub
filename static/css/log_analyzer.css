@@ -1393,21 +1393,6 @@ button.lookup-menu-item {
     pointer-events: none;
 }
 
-.line-correlation-menu .line-correlation-source .line-copy-menu-key {
-    color: var(--la-text-primary);
-}
-
-.line-correlation-menu .line-correlation-bad .line-copy-menu-value {
-    color: var(--la-status-b);
-}
-
-
-/* Panel rows: the detection's severity, and a muted "different system?". */
-.line-correlation-menu .line-correlation-sev-b .line-copy-menu-value { color: var(--la-status-b); }
-.line-correlation-menu .line-correlation-sev-p .line-copy-menu-value { color: var(--la-status-p); }
-.line-correlation-menu .line-correlation-sev-g .line-copy-menu-value { color: var(--la-status-g); }
-.line-correlation-menu .line-correlation-sev-w .line-copy-menu-value { color: var(--la-status-w); }
-.line-correlation-menu .line-correlation-system-different .line-copy-menu-key { color: var(--la-text-disabled); }
 
 
 /* The line's buttons (info, copy, search) as one block at the end of the line. */
@@ -1515,7 +1500,16 @@ body:not(.no-word-wrap) #logLines .log-line:has(.line-tag-chips, .centralbox-sug
 }
 
 /* Correlations in the line inspector (case_correlations.js
-   renderLineInspectorCorrelations): coloured like the line's ⓘ menu. */
+   renderLineInspectorCorrelations): coloured like the info box. */
+.line-inspector-correlation-more {
+    font: inherit;
+    color: var(--la-text-primary);
+    background: var(--la-bg-3);
+    border: 1px solid var(--la-border);
+    padding: 1px 8px;
+    cursor: pointer;
+}
+.line-inspector-correlation-more:hover { text-decoration: underline; }
 .line-inspector-correlations .line-correlation-sev-b .line-inspector-correlation-finding { color: var(--la-status-b); }
 .line-inspector-correlations .line-correlation-sev-p .line-inspector-correlation-finding { color: var(--la-status-p); }
 .line-inspector-correlations .line-correlation-sev-g .line-inspector-correlation-finding { color: var(--la-status-g); }

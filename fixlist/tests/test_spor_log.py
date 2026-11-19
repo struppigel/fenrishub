@@ -1,0 +1,279 @@
+"""Spor logs (forensic triage): the parser (fixlist/spor_log.py), the
+highlighter, the FILES hash rows, the correlations they feed into FRST lines
+(hashes, Defender detections, timeline evidence), the header's machine
+signals and the automatic centralbox candidates. Nothing here may call
+centralbox."""
+
+from unittest import mock
+
+from django.test import SimpleTestCase, TestCase
+from django.urls import reverse
+
+from .. import centralbox, centralbox_auto, spor_log
+from ..file_hashes import extract_file_hashes
+from ..log_highlighting import compute_tool_stats, highlight_log, iter_lines
+from ..machine_signals import extract_signals
+from ..models import CentralboxAutoQueue, InfectionCase, InfectionCaseLog, UploadedLogFileHash
+from .factories import make_uploaded_log, make_user
+from .spor_sample import DROP_SHA, DROPPER, EVIL, EVIL_SHA, INVOICE, LINES, NOTES_MD5, OK_SHA, SHA1, SPOR
+from .test_case_correlations import RUN_LINE, cache_analysis
+
+
+def no(needle, start=1):
+    """1-based number of the first fixture line from `start` containing `needle`."""
+    for index in range(start - 1, len(LINES)):
+        if needle in LINES[index]:
+            return index + 1
+    raise AssertionError(f'{needle!r} not in fixture')
+
+
+def classes(line):
+    """{class: text of its first token} of a line's tokens, also under each single class."""
+    out = {}
+    for cls, text in line.tokens:
+        if cls:
+            out.setdefault(cls, text)
+    for cls, text in line.tokens:
+        for single in cls.split():
+            out.setdefault(single, text)
+    return out
+
+
+class ParserTests(SimpleTestCase):
+    def test_sections_by_title(self):
+        titles = [title for title, _start, _end in spor_log.iter_sections(LINES)]
+        self.assertEqual(titles[:3], ['Spor 0.1.0', 'SUMMARY', 'TIMELINE'])
+        self.assertIn('AMCACHE FILES', titles)
+        self.assertTrue(titles[-1].startswith('End of log'))
+
+    def test_split_item(self):
+        item = spor_log.split_item(LINES[no('[PF PCA BAM]') - 1])
+        self.assertEqual((item.time, item.tags, item.item, item.status), ('2026-11-18 07:48:46', 'PF PCA BAM', EVIL, 'unsigned'))
+        self.assertTrue(item.rest.startswith('PCA: Installer failed'))
+        # Status after the target (persistence), no time, [user] tags, flags.
+        item = spor_log.split_item('2026-09-30 03:55:49 EvilSvc => C:\\x\\a.exe [unsigned], start auto')
+        self.assertEqual((item.tags, item.item, item.status), ('', 'EvilSvc', 'unsigned'))
+        item = spor_log.split_item('[bob] cmd /c calc.exe => order 4 <==== !suspicious !lolbin')
+        self.assertEqual((item.time, item.tags, item.item, item.rest), ('', 'bob', 'cmd /c calc.exe', 'order 4'))
+        self.assertEqual((item.flags, item.loud_flags), (['!suspicious', '!lolbin'], ['!suspicious']))
+        self.assertEqual(spor_log.split_item('C:\\x\\big.iso [> 600 MB, not hashed]').status, '> 600 MB, not hashed')
+        # A bracket that is no status word stays part of the item.
+        self.assertEqual(spor_log.split_item('C:\\x\\[a] b.exe').item, 'C:\\x\\[a] b.exe')
+
+    def test_files_lines(self):
+        files = {path: (line_no, value, signature) for line_no, path, value, signature in spor_log.iter_files(LINES)}
+        self.assertEqual(files[EVIL], (no(f'{EVIL} => '), EVIL_SHA.upper(), 'unsigned'))
+        self.assertEqual(files[DROPPER][2], 'invalid')
+        self.assertEqual(files['C:\\Users\\Bob\\Desktop\\notes.ps1'][1:], (NOTES_MD5.upper(), ''))
+        self.assertEqual(files['C:\\Users\\Bob\\Desktop\\big.iso'][1:], ('', ''))
+        self.assertNotIn('C:\\Users\\Bob\\Desktop\\old.exe', files)  # AMCACHE FILES is another section
+
+    def test_defender_detections_one_per_file_and_threat_with_the_action(self):
+        found = spor_log.iter_defender_detections(LINES)
+        self.assertEqual(found, [
+            (no('[1117]'), 'Trojan:Win32/Malgent!MSR', 'Quarantine', DROPPER),
+            (no('[1116] Defender detected: PUA'), 'PUA:Win32/Presenoker', '', 'C:\\Users\\Bob\\Downloads\\bundle.exe'),
+        ])
+
+    def test_timeline_evidence_per_path(self):
+        found = {item.path: item for item in spor_log.iter_timeline_evidence(LINES)}
+        self.assertEqual(set(found), {
+            EVIL, 'C:\\Windows\\System32\\mshta.exe', INVOICE,
+            'C:\\Users\\Bob\\AppData\\Local\\App\\1.0.1\\app.exe', 'C:\\Users\\Bob\\AppData\\Local\\App\\1.0.0\\app.exe',
+        })
+        evil = found[EVIL]
+        self.assertEqual((evil.line_no, evil.time, evil.sources, evil.file_status, evil.flags),
+                         (no('[PF PCA BAM]'), '2026-11-18 07:48:46', 'PF PCA BAM', 'unsigned', []))
+        self.assertEqual(found[INVOICE].flags, ['!double-extension'])
+        # A "path:" sub-line: its own time and status, the sources of its line.
+        old = found['C:\\Users\\Bob\\AppData\\Local\\App\\1.0.0\\app.exe']
+        self.assertEqual((old.line_no, old.time, old.sources, old.file_status),
+                         (no('1.0.0\\app.exe'), '2026-10-23 19:29:00', 'SRU', 'gone'))
+        # The merged line's own path is listed once, at the merged line.
+        self.assertEqual(found['C:\\Users\\Bob\\AppData\\Local\\App\\1.0.1\\app.exe'].line_no, no('[SRU]'))
+
+
+class HighlightTests(SimpleTestCase):
+    def setUp(self):
+        self.result = highlight_log('Spor', SPOR)
+        self.lines = {line.no: line for line in iter_lines(self.result)}
+
+    def line(self, needle, start=1):
+        return classes(self.lines[no(needle, start)])
+
+    def test_sections_and_header(self):
+        headers = [section.header.text.split(' - ')[0].strip('= ') for section in self.result.sections
+                   if section.header is not None]
+        self.assertEqual(headers, ['SUMMARY', 'TIMELINE', 'PREFETCH', 'DEFENDER', 'CLICKFIX', 'FILES',
+                                   'AMCACHE FILES', 'LEGEND'])
+        self.assertEqual(self.line('Spor 0.1.0')['hl-title'], LINES[0])
+        self.assertEqual(self.line('Computer:')['hl-key'], 'Computer:')
+        self.assertIn('hl-subheader', self.line('--- Files loaded'))
+        self.assertEqual(self.line('(line: time [sources]'), {'hl-dim': LINES[no('(line: time [sources]') - 1]})
+
+    def test_items_statuses_and_flags(self):
+        evil = self.line('[PF PCA BAM]')
+        self.assertEqual((evil['hl-dim'], evil['hl-accent'], evil['hl-path'], evil['hl-sev-w']),
+                         ('2026-11-18 07:48:46', '[PF PCA BAM]', EVIL, '[unsigned]'))
+        self.assertEqual(self.line('mshta.exe =>')['hl-sev-g'], '<==== !lolbin')
+        invoice = self.line('[DL OPN]')
+        self.assertEqual((invoice['hl-path'], invoice['hl-sev-w']), (INVOICE, '<==== !double-extension'))
+        self.assertIn(('hl-dim', '[gone]'), self.lines[no('[DL OPN]')].tokens)
+        loaded = self.line('    loaded:')
+        self.assertEqual((loaded['hl-key'], loaded['hl-path']), ('loaded:', EVIL))
+
+    def test_defender_threats_and_actions(self):
+        detected = self.line('[1116] Defender detected: Trojan')
+        self.assertEqual(detected['hl-threat hl-sev-b'], 'Trojan:Win32/Malgent!MSR')
+        self.assertEqual(detected['hl-path'], DROPPER)
+        self.assertEqual(self.line('[1116] Defender detected: PUA')['hl-threat hl-sev-p'], 'PUA:Win32/Presenoker')
+        taken = self.line('[1117]')
+        self.assertEqual((taken['hl-key'], taken['hl-sev-c']), ('action ', 'Quarantine'))
+
+    def test_files_signatures_and_hashes(self):
+        self.assertEqual(self.line(f'{EVIL} => ')['hl-sev-w'], 'unsigned')
+        self.assertEqual(self.line(f'{DROPPER} => ')['hl-sev-b'], 'invalid')
+        ok = self.line('ok.exe =>')
+        self.assertEqual((ok['hl-sev-c'], ok['hl-hash']), ('valid', OK_SHA.upper()))
+        self.assertEqual(self.line('old.exe =>')['hl-hash'], SHA1.upper())
+
+    def test_powershell_history_is_not_tokenized(self):
+        history = self.lines[no('789 [suspicious]')]
+        self.assertEqual(classes(history)['hl-sev-w'], '[suspicious]')
+        self.assertNotIn('hl-path', classes(history))
+        self.assertIn(('hl-sev-w', '<==== !suspicious'), history.tokens)
+        self.assertEqual(self.line('    PF ')['hl-key'], 'PF')
+
+    def test_summary_lists_the_summary_section(self):
+        items = [(item.line_no, item.severity, item.name) for item in self.result.summary]
+        self.assertEqual(items, [
+            (no('[timeline DEF]'), 'w', 'Defender paths exclusions changed (now 1: C:\\Users\\Bob\\Downloads)'),
+            (no('[Persistence]'), 'g', f'service EvilSvc (auto): {EVIL}'),
+            (no('[Defender] Defender detected: Trojan'), 'b', 'Trojan:Win32/Malgent!MSR'),
+            (no('[Defender] Defender detected: PUA'), 'p', 'PUA:Win32/Presenoker'),
+            (no('[ClickFix]'), 'i', 'Run dialog cmd /c calc.exe'),
+        ])
+        self.assertEqual(self.result.summary[2].target, DROPPER)
+        self.assertEqual(self.result.summary[1].action, 'Persistence unsigned')
+        self.assertEqual([(stat.label, stat.value, stat.severity) for stat in self.result.stats], [
+            ('Defender', '2', 'b'), ('Flagged', '5', 'w'), ('Unsigned', '2', 'w'), ('Bad signature', '1', 'b'),
+        ])
+
+    def test_list_chips(self):
+        self.assertEqual(compute_tool_stats('Spor', SPOR),
+                         [['defender', 2, 'b'], ['flagged', 5, 'w'], ['bad sig', 1, 'b']])
+
+
+class FileHashTests(SimpleTestCase):
+    def test_files_section_rows(self):
+        rows = {row.path: row for row in extract_file_hashes('Spor', SPOR) if row.source == 'spor'}
+        self.assertEqual(set(rows), {EVIL, DROPPER, 'C:\\Program Files\\Ok\\ok.exe', 'C:\\Users\\Bob\\Desktop\\notes.ps1'})
+        evil = rows[EVIL]
+        self.assertEqual((evil.sha256, evil.line_no, evil.anchor_line_no, evil.detection),
+                         (EVIL_SHA, no(f'{EVIL} => '), no(f'{EVIL} => '), ''))
+        self.assertEqual(rows[DROPPER].detection, 'Trojan:Win32/Malgent!MSR')
+        notes = rows['C:\\Users\\Bob\\Desktop\\notes.ps1']
+        self.assertEqual((notes.sha256, notes.md5, notes.auto), ('', NOTES_MD5, False))
+
+    def test_only_files_spor_flags_are_checked_by_themselves(self):
+        auto = {row.path for row in extract_file_hashes('Spor', SPOR) if row.auto}
+        # evil.exe: in the SUMMARY; dropper.exe: Defender detection and invalid signature.
+        self.assertEqual(auto, {EVIL, DROPPER})
+
+    def test_a_process_named_by_defender_is_not_flagged(self):
+        content = SPOR.replace('C:\\Program Files\\Ok\\ok.exe', 'C:\\Windows\\explorer.exe')
+        auto = {row.path for row in extract_file_hashes('Spor', content) if row.auto}
+        self.assertNotIn('C:\\Windows\\explorer.exe', auto)
+
+    def test_sha1_values_are_not_rows(self):
+        rows = extract_file_hashes('Spor', SPOR)
+        self.assertFalse([row for row in rows if 'sha1only' in row.path or 'old.exe' in row.path])
+
+    def test_crlf(self):
+        plain = [(row.sha256, row.line_no, row.path, row.auto) for row in extract_file_hashes('Spor', SPOR)]
+        crlf = [(row.sha256, row.line_no, row.path, row.auto)
+                for row in extract_file_hashes('Spor', SPOR.replace('\n', '\r\n'))]
+        self.assertEqual(plain, crlf)
+
+
+class MachineSignalTests(SimpleTestCase):
+    def test_header_gives_computer_and_profile(self):
+        signals = extract_signals(SPOR)
+        self.assertEqual(signals['computer'], {'pc-bob'})
+        self.assertIn('bob', signals['profile'])
+
+
+DROPPER_LINE = f'2026-11-14 07:20 - 2026-11-14 07:20 - 012345678 _____ (Evil Ltd) {DROPPER}'
+INVOICE_LINE = f'2026-11-17 07:49 - 2026-11-17 07:49 - 000123456 _____ () {INVOICE}'
+FRST = '\n'.join(['Scan result of Farbar Recovery Scan Tool (FRST)', RUN_LINE, DROPPER_LINE, INVOICE_LINE])
+
+
+class CorrelationTests(TestCase):
+    def setUp(self):
+        user = make_user()
+        self.client.force_login(user)
+        case = InfectionCase.objects.create(owner=user, username='bob', auto_assign_new_items=False)
+        frst = make_uploaded_log('frst-spor', log_type='FRST', content=FRST, forum_username='nobody')
+        cache_analysis(frst, [RUN_LINE, DROPPER_LINE, INVOICE_LINE])
+        spor = make_uploaded_log('spor-log', log_type='Spor', content=SPOR, forum_username='nobody')
+        UploadedLogFileHash.rebuild_for(spor)
+        for upload in (frst, spor):
+            InfectionCaseLog.objects.create(case=case, uploaded_log=upload)
+
+    def get(self):
+        with mock.patch.object(centralbox, '_http_get') as http, mock.patch.object(centralbox, '_request') as request:
+            body = self.client.get(reverse('case_correlations_api'), {'upload_id': 'frst-spor'}).json()
+        http.assert_not_called()
+        request.assert_not_called()
+        return body
+
+    def test_hash_and_timeline_evidence_of_the_same_file(self):
+        body = self.get()
+        entries = body['correlations'][RUN_LINE]
+        # The hash row, the timeline, the FILES facts and the Prefetch "loaded:" line.
+        self.assertEqual({(entry['kind'], entry['upload_id']) for entry in entries},
+                         {('hash', 'spor-log'), ('evidence', 'spor-log'), ('file_info', 'spor-log'),
+                          ('mention', 'spor-log')})
+        sha = next(entry for entry in entries if entry['kind'] == 'hash')
+        self.assertEqual((sha['sha256'], sha['log_type']), (EVIL_SHA, 'Spor'))
+        evidence = next(entry for entry in entries if entry['kind'] == 'evidence')
+        self.assertEqual(
+            (evidence['line_no'], evidence['time'], evidence['sources'], evidence['file_status'], evidence['flags']),
+            (no('[PF PCA BAM]'), '2026-11-18 07:48:46', 'PF PCA BAM', 'unsigned', []),
+        )
+        self.assertEqual(evidence['file'], 'evil.exe')
+        # Running and being unsigned is no finding by itself.
+        self.assertEqual(body['statuses'][RUN_LINE], '')
+
+    def test_defender_detection_and_hash_with_its_name(self):
+        body = self.get()
+        entries = body['correlations'][DROPPER_LINE]
+        detection = next(entry for entry in entries if entry['kind'] == 'detection')
+        self.assertEqual((detection['detection'], detection['action'], detection['source'], detection['log_type']),
+                         ('Trojan:Win32/Malgent!MSR', 'Quarantine', 'defender', 'Spor'))
+        sha = next(entry for entry in entries if entry['kind'] == 'hash')
+        self.assertEqual((sha['sha256'], sha['detection']), (DROP_SHA, 'Trojan:Win32/Malgent!MSR'))
+        self.assertEqual(body['statuses'][DROPPER_LINE], 'B')
+        self.assertEqual(body['notes'][DROPPER_LINE], 'Trojan:Win32/Malgent!MSR · Spor')
+
+    def test_flagged_evidence_gives_a_warning(self):
+        body = self.get()
+        (evidence,) = body['correlations'][INVOICE_LINE]
+        self.assertEqual((evidence['kind'], evidence['severity'], evidence['flags']),
+                         ('evidence', 'w', ['!double-extension']))
+        self.assertEqual(body['statuses'][INVOICE_LINE], '!')
+        self.assertEqual(body['notes'][INVOICE_LINE], '!double-extension · Spor')
+
+
+class AutoCandidateTests(TestCase):
+    def test_spor_rows_count_with_defender_malware_names_only(self):
+        spor = make_uploaded_log('spor-auto', log_type='Spor', content=SPOR)
+        UploadedLogFileHash.rebuild_for(spor)
+        UploadedLogFileHash.objects.create(
+            upload=spor, sha256='b2' * 32, line_no=1, anchor_line_no=1, path='C:\\x\\pua.exe',
+            normalized_path='c:\\x\\pua.exe', detection='PUA:Win32/Presenoker', source='spor', auto=True,
+        )
+        found = centralbox_auto.auto_fresh_candidates([spor.pk])
+        self.assertEqual(found, {
+            DROP_SHA: (CentralboxAutoQueue.PRIORITY_SCANNER, 'Spor (Defender): Trojan:Win32/Malgent!MSR'),
+        })

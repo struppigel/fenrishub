@@ -87,6 +87,24 @@ class CompareTests(TestCase):
         self.assertEqual(compare({'hw': {'h'}}, {'hw': {'g'}}), 'unknown')
         self.assertEqual(compare({}, {'sid': {'a'}}), 'unknown')
 
+    def test_spor_machine_sid_decides_against_the_addition(self):
+        spor = '\n'.join([
+            '==================== Spor 0.1.0 - forensic triage log ====',
+            'Computer:  DESKTOP-BOB, Windows 11 Home 26H2, build 26300.9974, 64-bit',
+            'Run by:    Bob (administrator)',
+            f'Machine SID: {SID}',
+        ])
+        self.assertEqual(extract_signals(spor)['sid'], {SID.lower()})
+        self.assertEqual(compare(log_signals(spor), log_signals(ADDITION)), 'same')
+        # A reinstall keeps the computer name but gets a new SID.
+        reinstalled = spor.replace(SID, 'S-1-5-21-1-2-3')
+        self.assertEqual(compare(log_signals(reinstalled), log_signals(ADDITION)), 'different')
+        # Without the header line, the accounts' SIDs say the same.
+        accounts = ('Computer:  DESKTOP-BOB, Windows 11\n'
+                    f'Bob => password set 2026-09-24 02:19:07; enabled; admin; sid {SID}-1001\n')
+        self.assertEqual(extract_signals(accounts)['sid'], {SID.lower()})
+        self.assertNotIn('sid', extract_signals('Machine SID: S-1-5-18\n'))
+
     def test_addition_and_frst_of_one_scan_are_the_same_system(self):
         # The Addition has no computer name; the FRST's HKU SIDs are no
         # account SIDs, so the shared profile name decides.
@@ -135,6 +153,25 @@ class SameMachineLogsTests(TestCase):
         self.assertIn('same machine SID, disk ID', html)
         self.assertNotIn(SID, html)
         self.assertNotIn('3CB325E2', html)
+
+    def test_a_lone_log_gets_the_tab_and_the_search(self):
+        lone = self.add('lone-log', 'Addition', ADDITION, forum_username='lonely')
+        self.add('renamed-log', 'Addition', ADDITION.replace('Bob', 'Robert'), forum_username='robert')
+        page = self.client.get(reverse('view_uploaded_log', args=['lone-log'])).content.decode()
+        self.assertIn('>related logs</button>', page)
+        html = self.client.get(reverse('uploaded_log_related', args=[lone.upload_id])).content.decode()
+        self.assertIn('possibly the same machine', html)
+        self.assertIn('renamed-log', html)
+        self.assertIn('add-log', html)  # the case log of forum user bob
+        self.assertIn('data-found="2"', html)
+
+    def test_a_lone_log_without_matches_says_the_search_ran(self):
+        self.add('lone-log', 'Unknown', 'just some text', forum_username='lonely')
+        html = self.client.get(reverse('uploaded_log_related', args=['lone-log'])).content.decode()
+        self.assertIn('other logs of forum user lonely', html)
+        self.assertIn('no related logs', html)
+        self.assertIn('no logs of other forum users look like this machine', html)
+        self.assertIn('data-found="0"', html)
 
 
 class OtherSystemTests(TestCase):

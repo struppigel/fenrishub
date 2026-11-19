@@ -51,8 +51,12 @@ class RelatedLogsTests(TestCase):
         self.assertIn('related logs (2)', html)
         self.assertIn(reverse('uploaded_log_related', args=['frst-log']), html)
 
-    def test_no_tab_without_related_logs(self):
-        self.assertNotIn('data-info-tab="related"', self.page().content.decode())
+    def test_tab_is_offered_without_related_logs(self):
+        # Its same-machine search covers the logs of other forum users.
+        html = self.page().content.decode()
+        self.assertIn('data-info-tab="related"', html)
+        self.assertIn('>related logs</button>', html)
+        self.assertIn(reverse('uploaded_log_related', args=['frst-log']), html)
 
     def test_a_log_without_summary_gets_tabs_for_its_related_logs(self):
         self.add('plain-log', 'Unknown', 'just some text')

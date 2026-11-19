@@ -2,13 +2,14 @@
 The "related logs" tab of a log page (views/uploads.py related_logs_fragment):
 the logs correlations use, newest first, with chips, tags, a same-system
 badge and how many lines the two logs share a correlation for; then logs
-outside those that look like the same machine (machine_logs).
-{% endcomment %}<div class="related-logs-head">{% if scope == 'user' %}other logs of forum user {{ name }} (no case of yours){% else %}logs of your cases with this log{% endif %}</div>
+outside those that look like the same machine (machine_logs), from any forum
+user. data-found: how many logs were found, for the tab label.
+{% endcomment %}<div class="related-logs-head" data-found="{{ found_count }}">{% if scope == 'user' %}other logs of forum user {{ name }} (no case of yours){% elif scope %}logs of your cases with this log{% else %}no case of yours with this log and no forum user name{% endif %}</div>
 {% if other_system %}<div class="related-logs-warning">⚠ {{ other_system }} of these log{{ logs|length|pluralize }} seem{{ other_system|pluralize:"s," }} to come from another machine</div>{% endif %}
 {% for uploaded_log in logs %}
 {% include "partials/related_log_row.html" %}
 {% empty %}
-<div class="related-logs-empty">no related logs</div>
+{% if scope %}<div class="related-logs-empty">no related logs</div>{% endif %}
 {% endfor %}
 {% if more_count %}<div class="related-logs-empty">and {{ more_count }} more</div>{% endif %}
 {% if machine_logs %}
@@ -16,4 +17,6 @@ outside those that look like the same machine (machine_logs).
 {% for uploaded_log in machine_logs %}
 {% include "partials/related_log_row.html" %}
 {% endfor %}
+{% elif not logs %}
+<div class="related-logs-empty">no logs of other forum users look like this machine</div>
 {% endif %}

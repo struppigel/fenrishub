@@ -293,3 +293,54 @@ class KeyCorrelationTests(TestCase):
         self.assertEqual([(entry['source'], entry['match']) for entry in own], [('defender', 'argument')])
         # The analyzer finds the row of the log's own entry by its text.
         self.assertEqual(own[0]['line_text'], 'Name: Trojan:Win32/Posilod.EB!cl')
+
+
+class SoftwareKeyTests(TestCase):
+    """Installed programs: Addition's Installed Programs lines, Spor's
+    "key" detail and registry targets of scanners / Fixlogs share one key."""
+
+    def test_short_forms_of_frst_and_spor(self):
+        from ..correlation_keys import software_keys
+
+        self.assertEqual(software_keys(r'7-Zip 24.09 (x64) (HKLM\...\7-Zip) (Version: 24.09 - Igor Pavlov)'),
+                         {'uninstall:7-zip'})
+        # A subkey name with parens of its own.
+        self.assertEqual(
+            software_keys(r'Firefox (HKLM\...\Mozilla Firefox 128.0 (x64 en-US)) (Version: 128.0 - Mozilla)'),
+            {'uninstall:mozilla firefox 128.0 (x64 en-us)'},
+        )
+        self.assertEqual(software_keys(r'HKLM-x32\...\Google Chrome'), {'uninstall:google chrome'})
+        self.assertEqual(software_keys(r'HKU\S-1-5-21-1-2-3-1001\...\Discord'), {'uninstall:discord'})
+        # An MSI product code is also the msi key.
+        self.assertEqual(
+            software_keys(r'App (HKLM\...\{599B5A52-33FD-0EA6-D7F2-E62F2058A21C}) (Version: 1.0 - X) Hidden'),
+            {'uninstall:{599b5a52-33fd-0ea6-d7f2-e62f2058a21c}', 'msi:599b5a52-33fd-0ea6-d7f2-e62f2058a21c'},
+        )
+
+    def test_full_registry_forms(self):
+        from ..correlation_keys import software_keys
+
+        self.assertEqual(software_keys(
+            r'HKU\S-1-5-21-1-2-3-1002\SOFTWARE\MICROSOFT\WINDOWS\CURRENTVERSION\UNINSTALL\uTorrent'),
+            {'uninstall:utorrent'})
+        self.assertEqual(software_keys(
+            r'HKLM\SOFTWARE\WOW6432NODE\MICROSOFT\WINDOWS\CURRENTVERSION\UNINSTALL\Crack.exe_is1'),
+            {'uninstall:crack.exe_is1'})
+        self.assertEqual(software_keys(
+            r'"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Evil" => removed successfully'),
+            {'uninstall:evil'})
+        self.assertEqual(software_keys(r'[HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Evil]'),
+                         {'uninstall:evil'})
+        # PowerShell's wildcard names no program; a file path no key.
+        self.assertEqual(software_keys(r"'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',"), set())
+        self.assertEqual(software_keys(r'C:\Program Files\Evil\evil.exe'), set())
+
+    def test_line_and_target_keys(self):
+        from ..correlation_keys import msi_key
+
+        line = {'line': r'TeamViewer (HKLM\...\TeamViewer) (Version: 15.83.7 - TeamViewer)', 'components': {}}
+        self.assertIn(('uninstall:teamviewer', 'uninstall'), line_keys(line))
+        self.assertIn('uninstall:utorrent', target_keys(
+            r'HKU\S-1-5-21-1-2-3-1002\SOFTWARE\MICROSOFT\WINDOWS\CURRENTVERSION\UNINSTALL\uTorrent'))
+        self.assertEqual(msi_key('{795F9101-3A31-5313-82FC-13CFC9E0FE17}'), 'msi:795f9101-3a31-5313-82fc-13cfc9e0fe17')
+        self.assertEqual(msi_key('Tailscale'), '')

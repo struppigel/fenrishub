@@ -8,7 +8,22 @@ one of the upload's cases, collect what that log says about the file:
   stored centralbox result if any (a bare hash counts too);
 - a detection of a scanner without hashes (ESET, Emsisoft, AdwCleaner, and
   hash-less detections of the others): detection name and action;
-- a Fixlog result ("<path> => moved successfully").
+- a Fixlog result ("<path> => moved successfully");
+- a Spor log's Defender detections (kind 'detection') and its timeline
+  (kind 'evidence': when the file ran, was created or downloaded, by which
+  sources, with Spor's flags);
+- facts about the file itself (kind 'file_info': a Spor log's FILES and
+  AMCACHE FILES lines - signature, signer, version, company, original name,
+  hashes - and an FRST Search log's File: entries - dates, size, attributes,
+  company, MD5, signed or not);
+- the other places a log names the file (kind 'mention': Spor's module
+  sections - programs that loaded it, the Run key / service / task / install
+  pointing at it, network use, downloads, a Defender-excluded folder it is in
+  - an FRST Search folder or registry hit, a shortcut pointing at it);
+- installed software (kind 'mention' too): Spor's SOFTWARE section (Uninstall
+  entries, Windows Installer events, Store / MSIX packages) and MAU's removed
+  products, under the program's Uninstall key / MSI product code (Addition's
+  Installed Programs lines) or its folder (Packages lines, files inside).
 
 Database and local parsing only: nothing is ever sent to centralbox. Paths
 are compared with the analyzer's own key (normalize_path, lowercased).
@@ -21,9 +36,12 @@ import ntpath
 import re
 
 from .analyzer import ANALYSIS_PAYLOAD_FORMAT
-from .correlation_keys import MATCH_PATH, argument_paths, is_path_key, line_keys, target_keys
+from .correlation_keys import (
+    MATCH_PATH, argument_paths, identity_key, is_path_key, line_keys, msi_key, software_keys, target_keys,
+)
 from .file_hashes import _as_path, normalized_path
-from .log_highlighting import highlight_log, threat_severity
+from . import spor_log
+from .log_highlighting import defender_severity, highlight_log, threat_severity  # noqa: F401 (defender_severity re-exported)
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Max, Q
 from django.db.models.functions import Substr
@@ -36,14 +54,21 @@ from .models import (
     CorrelationCache, HashAlias, HashVerdict, InfectionCaseLog, UploadedLog, UploadedLogAnalysis,
     UploadedLogFileHash, UploadedLogMachineSignal, iter_fixlog_results,
 )
-from .log_types import ADDITION_LOG_TYPES, DETECTION_LOG_TYPES, LOG_TYPE_FRST_AND_ADDITION
+from .log_types import (
+    ADDITION_LOG_TYPES, DETECTION_LOG_TYPES, LOG_TYPE_FRST_AND_ADDITION, LOG_TYPE_FRST_SEARCH, LOG_TYPE_SHORTCUT,
+    LOG_TYPE_SPOR,
+)
+from .tool_log_facts import frst_search_facts, shortcut_mentions
 from .status_types import dominant_status
 
 logger = logging.getLogger(__name__)
 
-MAX_ENTRIES_PER_LINE = 20
+MAX_ENTRIES_PER_LINE = 60
+# When a line has more entries than that, these come first (status-giving
+# entries before all others), so what decides the line's status is never cut.
+KIND_RANK = {'detection': 0, 'hash': 1, 'fixlog': 2, 'file_info': 3, 'evidence': 4, 'mention': 5}
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 11
+CORRELATION_VERSION = 15
 # Detections are read from the summary boxes of DETECTION_LOG_TYPES logs
 # (log_highlighting); Defender events from the "Windows Defender:" section of
 # ADDITION_LOG_TYPES logs (both in log_types).
@@ -236,19 +261,6 @@ _DEFENDER_VALUE_COLUMN = len('Path     : ')
 # Path entries that name a file on disk ("webfile:_<path>|<url>|...",
 # "file:_<archive>-><member>"); process:, behavior:, amsi:, regkey:, ... do not.
 _DEFENDER_FILE_ENTRY_RE = re.compile(r'^(?:file|containerfile|webfile):_(.+)$', re.IGNORECASE)
-# Defender's category prefix ("PUA:Win32/...") where the generic rating
-# (threat_severity) would call it malware.
-_DEFENDER_CATEGORY_SEVERITY = {
-    'pua': 'p', 'puadlmanager': 'p', 'puaminer': 'p', 'puabundler': 'p', 'softwarebundler': 'p',
-    'browsermodifier': 'p', 'adware': 'p', 'program': 'p', 'monitoringtool': 'p',
-    'hacktool': 'g', 'remoteaccess': 'g', 'tool': 'g',
-}
-
-
-def defender_severity(threat):
-    """Summary severity of a Defender threat name ("Trojan:Win32/Malgent!MSR")."""
-    category = threat.split(':', 1)[0].strip().lower() if ':' in threat else ''
-    return _DEFENDER_CATEGORY_SEVERITY.get(category) or threat_severity(threat)
 
 
 def _defender_events(lines):
@@ -504,6 +516,248 @@ def _addition_entries(upload_ids, index, own=None):
             _add_defender_entries(index, own.upload_id, 'Addition', detections, lines=content.split('\n'))
 
 
+def evidence_severity(flags, file_status):
+    """'w' for a Spor timeline entry with a flag that is not normal on many
+    PCs, or a file whose signature does not hold; '' otherwise."""
+    loud = any(flag not in spor_log.QUIET_FLAGS for flag in flags or ())
+    return 'w' if loud or file_status in spor_log.BAD_SIGNATURE_STATUSES else ''
+
+
+# A FILES "<name> <value>" part -> the file_info key it is stored under.
+_FILES_FACT_KEYS = {
+    'signature': 'signature', 'signer': 'signer', 'thumbprint': 'thumbprint', 'note': 'note',
+    'file version': 'version', 'description': 'description', 'product': 'product', 'company': 'company',
+    'original name': 'original_name', 'amcache sha1': 'sha1', 'md5': 'md5', 'size': 'size',
+    'created': 'created', 'modified': 'modified',
+}
+
+
+def original_name_differs(path, original_name):
+    """True when a file's version resource names another file ("invoice.pdf.exe"
+    whose original name is "svchost.exe"). Shown, never rated: renamed
+    installers are common."""
+    base = ntpath.basename(path or '').lower()
+    original = (original_name or '').strip().lower()
+    if not base or not original:
+        return False
+    stem = base.rsplit('.', 1)[0]
+    return not (original == base or original.startswith(base + '.') or original.rsplit('.', 1)[0] == stem)
+
+
+def _file_info_entry(upload_id, log_type, line_no, path, source, facts, hashes, severity=''):
+    entry = {
+        'kind': 'file_info', 'upload_id': upload_id, 'log_type': log_type, 'line_no': line_no,
+        'source': source, 'file': file_name(path), 'path': path[:400], 'severity': severity,
+    }
+    entry.update({key: value[:300] for key, value in facts.items() if value})
+    entry.update({key: value.lower() for key, value in hashes.items() if value})
+    if entry.get('original_name') and original_name_differs(path, entry['original_name']):
+        entry['original_name_differs'] = True
+    return entry
+
+
+def _spor_file_infos(upload_id, lines):
+    """(path, file_info entry) of a Spor log's FILES and AMCACHE FILES lines."""
+    for parsed in spor_log.iter_file_lines(lines):
+        facts = {_FILES_FACT_KEYS[name]: value for name, value in parsed.details.items() if name in _FILES_FACT_KEYS}
+        if 'signature' in facts:
+            facts['signature'] = parsed.signature
+        sha1 = facts.pop('sha1', '')
+        md5 = facts.pop('md5', '')
+        value = parsed.hash
+        hashes = {'sha256': value if len(value) == 64 else '', 'md5': value if len(value) == 32 else md5,
+                  'sha1': value if len(value) == 40 else sha1}
+        if parsed.status:
+            facts['file_status'] = parsed.status
+        bad = parsed.signature in spor_log.BAD_SIGNATURES or parsed.status in spor_log.BAD_SIGNATURE_STATUSES
+        yield parsed.path, _file_info_entry(upload_id, LOG_TYPE_SPOR, parsed.line_no, parsed.path, 'spor_files', facts,
+                                            hashes, 'w' if bad else '')
+    for line_no, path, sha1 in spor_log.iter_amcache_files(lines):
+        yield path, _file_info_entry(upload_id, LOG_TYPE_SPOR, line_no, path, 'spor_amcache', {}, {'sha1': sha1})
+
+
+def _mention_entry(upload_id, log_type, mention):
+    entry = {
+        'kind': 'mention', 'upload_id': upload_id, 'log_type': log_type, 'line_no': mention.line_no,
+        'section': mention.section[:80], 'subsection': mention.subsection[:160], 'time': mention.time,
+        'tags': mention.tags[:80], 'text': mention.text[:300], 'role': mention.role, 'parent': mention.parent[:200],
+        # Not `status`: the API gives every entry its status letter under that name.
+        'file_status': mention.status, 'flags': mention.flags[:10], 'extra': mention.extra[:spor_log.MAX_EXTRA],
+        'severity': evidence_severity(mention.flags, mention.status),
+        # A persistence entry without a file of its own: named by its value / service / task.
+        'file': file_name(mention.path) or (mention.identity[1][:120] if mention.identity else ''),
+    }
+    if mention.folder:
+        entry['folder'] = True
+    return entry
+
+
+# Folders too broad to speak for the files inside them: a drive root, Windows,
+# Program Files (and its Common Files / WindowsApps), ProgramData, a user
+# profile and its AppData / Desktop / Downloads / Documents folders.
+_BROAD_FOLDER_RE = re.compile(
+    r'^[a-z]:(?:\\(?:windows|programdata'
+    r'|program files(?: \(x86\))?(?:\\(?:common files|windowsapps))?'
+    r'|users(?:\\[^\\]+(?:\\(?:desktop|downloads|documents'
+    r'|appdata(?:\\(?:local|roaming|locallow)(?:\\programs)?)?))?)?))?$'
+)
+
+
+def is_broad_folder(key):
+    """True for a folder key too broad to speak for the files inside it."""
+    return bool(_BROAD_FOLDER_RE.match((key or '').rstrip('\\')))
+
+
+def _add_folder_entry(index, folder, entry):
+    """Index `entry` as a folder mention (the files inside get it too), unless
+    the folder is too broad."""
+    key = normalized_path(folder).rstrip('\\')
+    if key and not is_broad_folder(key):
+        index.setdefault(key, []).append({**entry, 'folder': True})
+
+
+SOFTWARE_ROLES = {'uninstall': 'uninstall entry', 'installer': 'installer event', 'package': 'package'}
+
+
+def _software_entries(upload_id, lines, index):
+    """Spor's SOFTWARE facts: an Uninstall entry under its key (Addition's
+    Installed Programs line) and its install folder; a Windows Installer
+    event under its MSI product code; a Store / MSIX package under its folder
+    (Addition's Packages line, and the files inside)."""
+    for fact in spor_log.iter_software(lines):
+        details = fact.details
+        entry = {
+            'kind': 'mention', 'upload_id': upload_id, 'log_type': LOG_TYPE_SPOR, 'line_no': fact.line_no,
+            'section': spor_log.SECTION_SOFTWARE, 'subsection': fact.subsection[:160], 'time': fact.time,
+            'tags': fact.tags[:80], 'text': fact.text[:300], 'role': SOFTWARE_ROLES[fact.kind], 'parent': '',
+            'file_status': fact.status, 'flags': fact.flags[:10], 'extra': [],
+            # Packages by their full name: not every operation names the app.
+            'severity': evidence_severity(fact.flags, fact.status),
+            'file': (details.get('package') or fact.name)[:120],
+        }
+        if fact.kind == 'uninstall':
+            # Its Uninstall key only: the Windows Installer events stand for
+            # the MSI product code.
+            for key in software_keys(details.get('key', '')):
+                if key.startswith('uninstall:'):
+                    index.setdefault(key, []).append(entry)
+            if details.get('folder'):
+                _add_folder_entry(index, details['folder'], entry)
+        elif fact.kind == 'installer':
+            key = msi_key(details.get('product code', ''))
+            if key:
+                index.setdefault(key, []).append(entry)
+        elif details.get('folder'):
+            _add_folder_entry(index, details['folder'], entry)
+
+
+def _mau_entries(upload_ids, index):
+    """The products the related MAU logs removed ("Analyzing {GUID}..."),
+    under their MSI product code: Addition's Installed Programs line of it."""
+    for upload in UploadedLog.objects.filter(pk__in=upload_ids, log_type='MAU').only('upload_id', 'log_type', 'content'):
+        highlight = highlight_log('MAU', upload.content or '')
+        if highlight is None:
+            continue
+        for item in highlight.summary:
+            key = msi_key(item.target) if item.severity == 'i' else ''
+            if not key:
+                continue
+            name = item.name if item.name != item.target else ''
+            text = name + (f' ({item.action})' if item.action else '') if name else item.target
+            index.setdefault(key, []).append({
+                'kind': 'mention', 'upload_id': upload.upload_id, 'log_type': 'MAU', 'line_no': item.line_no,
+                'section': 'MAU', 'subsection': '', 'time': '', 'tags': '', 'text': text[:300],
+                'role': 'removed by MAU', 'parent': '', 'file_status': '', 'flags': [],
+                'extra': [['product code', item.target[:80]]], 'severity': '', 'file': (name or item.target)[:120],
+            })
+
+
+def _add_path_entry(index, path, entry):
+    key = normalized_path(path)
+    if key:
+        index.setdefault(key, []).append(entry)
+
+
+def _spor_entries(upload_ids, index):
+    """What the related Spor logs say: Defender detections, timeline
+    evidence, file facts (FILES, AMCACHE FILES) and mentions in the module
+    sections. (Their FILES hashes are hash rows too: _hash_entries.)"""
+    for upload in UploadedLog.objects.filter(pk__in=upload_ids, log_type=LOG_TYPE_SPOR).only('pk', 'upload_id', 'content'):
+        lines = (upload.content or '').split('\n')
+        known = spor_log.known_paths(lines)
+        _add_defender_entries(index, upload.upload_id, LOG_TYPE_SPOR, spor_log.iter_defender_detections(lines))
+        for path, entry in _spor_file_infos(upload.upload_id, lines):
+            _add_path_entry(index, path, entry)
+        for mention in spor_log.iter_mentions(lines, known):
+            entry = _mention_entry(upload.upload_id, LOG_TYPE_SPOR, mention)
+            _add_path_entry(index, mention.path, entry)
+            if mention.identity:
+                # A persistence entry under its name too: an FRST Run / service /
+                # task line whose program differs or is gone still finds it.
+                key = identity_key(*mention.identity)
+                if key:
+                    index.setdefault(key, []).append(entry)
+        _software_entries(upload.upload_id, lines, index)
+        for evidence in spor_log.iter_timeline_evidence(lines, known):
+            key = normalized_path(evidence.path)
+            if not key:
+                continue
+            index.setdefault(key, []).append({
+                'kind': 'evidence',
+                'upload_id': upload.upload_id,
+                'log_type': LOG_TYPE_SPOR,
+                'line_no': evidence.line_no,
+                'time': evidence.time,
+                'sources': evidence.sources[:80],
+                # Not `status`: the API gives every entry its status letter under that name.
+                'file_status': evidence.file_status,
+                'details': evidence.details[:200],
+                'flags': evidence.flags[:10],
+                'severity': evidence_severity(evidence.flags, evidence.file_status),
+                'file': file_name(evidence.path),
+            })
+
+
+def _frst_search_entries(upload_ids, index):
+    """File: entries (file_info) and folder / registry hits (mention) of the
+    related FRST Search logs. (Their MD5s are hash rows too.)"""
+    for upload in UploadedLog.objects.filter(pk__in=upload_ids, log_type=LOG_TYPE_FRST_SEARCH).only('upload_id', 'content'):
+        files, mentions = frst_search_facts(upload.content or '')
+        for facts in files:
+            _add_path_entry(index, facts.path, _file_info_entry(
+                upload.upload_id, LOG_TYPE_FRST_SEARCH, facts.line_no, facts.path, facts.source, facts.facts,
+                {'md5': facts.md5},
+            ))
+        for mention in mentions:
+            _add_path_entry(index, mention.path, _mention_entry(upload.upload_id, LOG_TYPE_FRST_SEARCH, mention))
+
+
+def _shortcut_entries(upload_ids, index):
+    """Shortcuts of the related Shortcut logs: under their target and their .lnk file."""
+    for upload in UploadedLog.objects.filter(pk__in=upload_ids, log_type=LOG_TYPE_SHORTCUT).only('upload_id', 'content'):
+        for mention in shortcut_mentions(upload.content or ''):
+            _add_path_entry(index, mention.path, _mention_entry(upload.upload_id, LOG_TYPE_SHORTCUT, mention))
+
+
+def mention_text(entry):
+    """A mention in a few words: its flags, else where in the log it is."""
+    loud = [flag for flag in entry.get('flags') or () if flag not in spor_log.QUIET_FLAGS]
+    if loud:
+        return ' '.join(loud)
+    where = ' \u203a '.join(part for part in (entry.get('section') or '', entry.get('subsection') or '') if part)
+    return ' '.join(part for part in (where, entry.get('file_status') or '') if part)
+
+
+def evidence_text(entry):
+    """A Spor timeline entry in a few words: its flags, else when and by
+    which sources the file was seen."""
+    loud = [flag for flag in entry.get('flags') or () if flag not in spor_log.QUIET_FLAGS]
+    if loud:
+        return ' '.join(loud)
+    seen = ' '.join(part for part in (str(entry.get('time') or '')[:16], entry.get('sources') or '') if part)
+    return ' '.join(part for part in (seen, entry.get('file_status') or '') if part)
+
+
 def _add_system_badges(uploaded_log, index):
     """Give every entry `system`: does its log come from the same machine?"""
     upload_ids = {entry['upload_id'] for entries in index.values() for entry in entries}
@@ -595,6 +849,8 @@ MATCH_NOTES = {
     'extension': 'same extension',
     'clsid': 'same CLSID',
     'firewall': 'same firewall rule',
+    'uninstall': 'same installed program',
+    'msi': 'same installed program',
 }
 
 
@@ -607,6 +863,12 @@ def summary_note(entries, status, own_upload_id=''):
             continue
         result = entry.get('centralbox') or {}
         name = result.get('family') or result.get('malware_type') or entry.get('detection') or ''
+        if entry.get('kind') == 'evidence':
+            name = evidence_text(entry)
+        elif entry.get('kind') == 'mention':
+            name = mention_text(entry)
+        elif entry.get('kind') == 'file_info':
+            name = 'signature ' + entry['signature'] if entry.get('signature') else 'file details'
         verdict = result.get('verdict') or ''
         where = 'in detected folder' if entry.get('in_folder') else ''
         how = MATCH_NOTES.get(entry.get('match') or '', '')
@@ -731,13 +993,18 @@ def _compute(uploaded_log, upload_ids, payload):
     _detection_entries(upload_ids, index, covered)
     _fixlog_entries(upload_ids, index)
     _addition_entries(upload_ids, index, own=uploaded_log)
+    _spor_entries(upload_ids, index)
+    _frst_search_entries(upload_ids, index)
+    _shortcut_entries(upload_ids, index)
+    _mau_entries(upload_ids, index)
     if not index:
         return {}
     # A scanner that detected a whole folder (e.g. AdwCleaner's Folders
-    # section) also speaks for the files and folders inside it.
+    # section) also speaks for the files and folders inside it, and so does
+    # a folder mention (a Defender path exclusion).
     detections = {}
     for key, entries in index.items():
-        found = [entry for entry in entries if entry['kind'] == 'detection']
+        found = [entry for entry in entries if entry['kind'] == 'detection' or entry.get('folder')]
         if found:
             detections[key] = found
     result = {}
@@ -772,6 +1039,8 @@ def _compute(uploaded_log, upload_ids, payload):
                 for entry in detections.get(parent, ()):
                     add(entry, match, in_folder=True)
                 parent, previous = ntpath.dirname(parent), parent
+        if len(entries) > MAX_ENTRIES_PER_LINE:
+            entries.sort(key=lambda entry: (not entry_status(entry), KIND_RANK.get(entry.get('kind'), 9)))
         if entries:
             result[text] = entries[:MAX_ENTRIES_PER_LINE]
     if result:
