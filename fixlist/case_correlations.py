@@ -557,7 +557,7 @@ def evidence_severity(flags, file_status):
     """'w' for a Spor timeline entry with a flag that is not normal on many
     PCs, or a file whose signature does not hold; '' otherwise."""
     loud = any(flag not in spor_log.QUIET_FLAGS for flag in flags or ())
-    return 'w' if loud or file_status in spor_log.BAD_SIGNATURE_STATUSES else ''
+    return 'w' if loud or spor_log.is_bad_signature(file_status) else ''
 
 
 # A FILES "<name> <value>" part -> the file_info key it is stored under.
@@ -606,7 +606,7 @@ def _spor_file_infos(upload_id, lines):
                   'sha1': value if len(value) == 40 else sha1}
         if parsed.status:
             facts['file_status'] = parsed.status
-        bad = parsed.signature in spor_log.BAD_SIGNATURES or parsed.status in spor_log.BAD_SIGNATURE_STATUSES
+        bad = parsed.signature in spor_log.BAD_SIGNATURES or spor_log.is_bad_signature(parsed.status)
         yield parsed.path, _file_info_entry(upload_id, LOG_TYPE_SPOR, parsed.line_no, parsed.path, 'spor_files', facts,
                                             hashes, 'w' if bad else '')
     for line_no, path, sha1 in spor_log.iter_amcache_files(lines):
@@ -1594,9 +1594,10 @@ def _timed_lines(collectors):
 
 def _spor_timeline_events(upload_id, lines, known):
     """[TimelineEvent] of a Spor log's TIMELINE items in the PC's local time;
-    [] when its header does not tell the time base. Spor names only the
-    offset when it ran: events before a daylight saving change are an hour
-    off (and then seldom matched)."""
+    [] when its header does not tell the time base. UTC plus the offset when
+    Spor ran is FRST's own rule (FileTimeToLocalFileTime uses the offset at
+    scan time, also for files from the other DST season), so the times match
+    FRST's to the minute when both ran under the same offset."""
     offset = spor_log.local_offset_minutes(lines)
     if offset is None:
         return []

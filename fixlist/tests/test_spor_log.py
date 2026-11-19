@@ -164,6 +164,104 @@ class HighlightTests(SimpleTestCase):
                          [['defender', 2, 'b'], ['flagged', 5, 'w'], ['bad sig', 1, 'b']])
 
 
+BIG_ISO = 'C:\\Users\\anna\\Downloads\\big.iso'
+FAILED_EXE = 'C:\\Users\\Bob\\evil.exe'
+# Shapes Spor 0.1.1 writes that the main fixture does not have.
+MORE_SHAPES = '\n'.join([
+    '\ufeff==================== Spor 0.1.1 - forensic triage log ===========',
+    'Created:   2026-11-19 21:09:24 UTC (local time 22:09, UTC+01:00)',
+    'Times:     UTC',
+    '',
+    '==================== TIMELINE - last 30 days, oldest first ========',
+    '2026-11-03 05:06:21 [NEW] C:\\T\\20261103\\w.dll [unsigned] => +2 more times since 2026-10-27 21:25',
+    '    path: C:\\T\\20261027\\w.dll [unsigned] => 2026-10-27 21:25:28',
+    '    path: C:\\T\\20261103\\w.dll [unsigned] => 2026-11-03 05:06:21',
+    '2026-11-19 06:52:31 [MPL] \\\\?\\C:\\Users\\Bob\\x\\default_exe.exe',
+    '',
+    '==================== DOWNLOADS AND OPENED FILES - downloads ========',
+    '2026-11-12 13:37:27 [strup] [7-Zip] archives created',
+    f'2026-11-18 16:33:22 [[anna] Brave] {BIG_ISO} [> 600 MB, not hashed, unsigned]',
+    '',
+    '==================== PERSISTENCE - Run keys ========================',
+    '--- Run keys (all entries) ---',
+    '2026-01-01 00:00:00 [run] HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Game'
+    ' => C:\\Games [x]\\a.exe [unsigned], value Game',
+    '2026-01-02 00:00:00 [task] \\Evil\\Com => C:\\x\\evil.dll (COM handler, HKCU) [unsigned], arguments A',
+    '',
+    '==================== DEFENDER - detections ==========================',
+    '--- Defender events (oldest first) ---',
+    f'2026-11-19 06:53:24 [1118] Defender action FAILED: Trojan:Win32/Evil => {FAILED_EXE}; action Quarantine'
+    ' <==== !not-removed',
+    '',
+    '==================== LEGEND ========================================',
+    'Status (in brackets after a file):',
+    '    no access           Spor could not read it',
+    '    > N MB, not hashed  too big for the hash limit',
+    '    PF    Prefetch: program run',
+    '==================== End of log. Scan took 1.0 s ====',
+])
+MORE_LINES = MORE_SHAPES.split('\n')
+
+
+def more_no(needle):
+    return next(index + 1 for index, line in enumerate(MORE_LINES) if needle in line)
+
+
+class MoreShapesTests(SimpleTestCase):
+    def test_bom_before_the_banner(self):
+        self.assertEqual(spor_log.section_title(MORE_LINES[0]), 'Spor 0.1.1')
+
+    def test_defender_action_failed_is_a_detection(self):
+        self.assertEqual(spor_log.iter_defender_detections(MORE_LINES),
+                         [(more_no('action FAILED'), 'Trojan:Win32/Evil', 'Quarantine', FAILED_EXE)])
+
+    def test_several_statuses_in_one_bracket(self):
+        item = spor_log.split_item(MORE_LINES[more_no('[[anna] Brave]') - 1])
+        self.assertEqual((item.item, item.status), (BIG_ISO, '> 600 MB, not hashed, unsigned'))
+        self.assertEqual(spor_log.status_words(item.status), ['> 600 MB, not hashed', 'unsigned'])
+        self.assertTrue(spor_log.is_bad_signature('gone, invalid signature'))
+        self.assertFalse(spor_log.is_bad_signature(item.status))
+
+    def test_several_tag_groups_and_a_user_inside_one(self):
+        item = spor_log.split_item(MORE_LINES[more_no('[7-Zip]') - 1])
+        self.assertEqual((item.tags, item.item), ('strup 7-Zip', 'archives created'))
+        item = spor_log.split_item(MORE_LINES[more_no('[[anna] Brave]') - 1])
+        self.assertEqual(item.tags, '[anna] Brave')
+        mentions = {mention.path: mention for mention in spor_log.iter_mentions(MORE_LINES)}
+        self.assertEqual(mentions[BIG_ISO].status, '> 600 MB, not hashed, unsigned')
+
+    def test_target_paths_end_at_their_status_or_note(self):
+        targets = {mention.line_no: (mention.path, mention.status) for mention in spor_log.iter_mentions(MORE_LINES)
+                   if mention.role == 'target'}
+        self.assertEqual(targets[more_no('Run\\Game')], ('C:\\Games [x]\\a.exe', 'unsigned'))
+        self.assertEqual(targets[more_no('COM handler')], ('C:\\x\\evil.dll', 'unsigned'))
+
+    def test_device_prefix_is_left_out(self):
+        item = spor_log.split_item(MORE_LINES[more_no('[MPL]') - 1])
+        self.assertEqual(item.item, 'C:\\Users\\Bob\\x\\default_exe.exe')
+        self.assertEqual(spor_log.strip_device_prefix('\\??\\C:\\x.exe'), 'C:\\x.exe')
+        self.assertEqual(spor_log.strip_device_prefix('\\\\server\\share\\x.exe'), '\\\\server\\share\\x.exe')
+
+    def test_timeline_items_include_merged_paths_at_their_own_time(self):
+        found = [(line_no, item.time, item.item, item.tags) for line_no, item in spor_log.iter_timeline_items(MORE_LINES)]
+        self.assertEqual(found, [
+            (more_no('[NEW]'), '2026-11-03 05:06:21', 'C:\\T\\20261103\\w.dll', 'NEW'),
+            (more_no('20261027\\w.dll'), '2026-10-27 21:25:28', 'C:\\T\\20261027\\w.dll', 'NEW'),
+            (more_no('[MPL]'), '2026-11-19 06:52:31', 'C:\\Users\\Bob\\x\\default_exe.exe', 'MPL'),
+        ])
+
+    def test_highlighting(self):
+        lines = {line.no: line.tokens for line in iter_lines(highlight_log('Spor', MORE_SHAPES))}
+        self.assertIn(('hl-threat hl-sev-b', 'Trojan:Win32/Evil'), lines[more_no('action FAILED')])
+        self.assertIn(('hl-accent', '[7-Zip]'), lines[more_no('[7-Zip]')])
+        brave = lines[more_no('[[anna] Brave]')]
+        self.assertIn(('hl-accent', '[[anna] Brave]'), brave)
+        self.assertIn(('hl-sev-w', '[> 600 MB, not hashed, unsigned]'), brave)
+        self.assertIn(('hl-key', 'no access'), lines[more_no('    no access')])
+        self.assertIn(('hl-key', '> N MB, not hashed'), lines[more_no('    > N MB')])
+        self.assertIn(('hl-key', 'PF'), lines[more_no('    PF ')])
+
+
 class FileHashTests(SimpleTestCase):
     def test_files_section_rows(self):
         rows = {row.path: row for row in extract_file_hashes('Spor', SPOR) if row.source == 'spor'}

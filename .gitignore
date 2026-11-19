@@ -69,3 +69,4 @@ scripts/
 
 # FenrisHub MCP server (local LLM client tool, not part of the deployed app)
 tools/fenrishub_mcp/
+tools/Spor/

@@ -1090,6 +1090,15 @@ const CaseCorrelations = (function () {
     // icons, which cover it.
     let markers = [];
     let listening = false;
+
+    // A line of a collapsed section (not its header) still reports its old
+    // boxes in browsers that hide <details> content with content-visibility.
+    function lineHidden(line) {
+        const section = line.closest('details');
+        if (section && !section.open && !line.closest('summary')) return true;
+        return !line.getClientRects().length;
+    }
+
     // All layout reads first, then all writes: interleaving them would force
     // a reflow per marker on every scroll event.
     function place() {
@@ -1098,7 +1107,7 @@ const CaseCorrelations = (function () {
         const base = root.scrollTop - rootRect.top - root.clientTop;
         const right = root.scrollLeft + root.clientWidth - 2;
         const tops = markers.map(([line]) => (
-            line.getClientRects().length ? line.getBoundingClientRect().top + base : null
+            lineHidden(line) ? null : line.getBoundingClientRect().top + base
         ));
         markers.forEach(([, group], index) => { group.hidden = tops[index] === null; });
         const widths = markers.map(([, group]) => group.offsetWidth);
@@ -1513,8 +1522,17 @@ function openTokenMenu(token) {
         return TokenMenu.isOpenFor(copyButton) || TokenMenu.isOpenFor(searchButton) || TokenMenu.isOpenFor(infoButton);
     }
 
+    // The line the hover icons belong to is lit (log_highlight.css); it stays
+    // lit while the pointer is on its icons or one of its menus is open.
+    function hideActions() {
+        actions.hidden = true;
+        if (currentLine) currentLine.classList.remove('hl-hovered');
+    }
+
     function placeActions(line) {
+        if (currentLine && currentLine !== line) currentLine.classList.remove('hl-hovered');
         currentLine = line;
+        line.classList.add('hl-hovered');
         infoButton.hidden = !CaseCorrelations.has(line);
         // Same icon as the line's marker underneath (lookup arrow or circled i).
         if (typeof CentralboxLookup === 'object') CentralboxLookup.setIcon(infoButton, CaseCorrelations.canLookup(line));
@@ -1533,7 +1551,7 @@ function openTokenMenu(token) {
     }
 
     function hideUnlessHovered() {
-        if (!root.matches(':hover')) actions.hidden = true;
+        if (!root.matches(':hover')) hideActions();
     }
 
     function openLineMenu(button, header, buildItems) {
@@ -1549,7 +1567,7 @@ function openTokenMenu(token) {
         else if (line === currentLine && actions.hidden) placeActions(line);
     });
     root.addEventListener('mouseleave', function () {
-        if (!menuOpenHere()) actions.hidden = true;
+        if (!menuOpenHere()) hideActions();
     });
     copyButton.addEventListener('click', function (event) {
         event.preventDefault();

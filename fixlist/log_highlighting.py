@@ -762,26 +762,30 @@ def _highlight_trojan_killer(lines):
 # A status word in brackets, FILES' "signature <state>" and Defender's
 # "; action <what>": each coloured by what it says.
 _SPOR_MARK_RE = re.compile(
-    r'(?P<status> \[(?P<word>' + '|'.join(re.escape(word) for word in spor_log.STATUS_WORDS)
-    + r'|> \d{1,9} MB, not hashed)\])'
+    r'(?P<status> \[(?P<word>' + spor_log.STATUS_WORD + r'(?:, ' + spor_log.STATUS_WORD + r'){0,5})\])'
     r'|\bsignature (?P<sig>valid|invalid|revoked|expired|unsigned)\b'
     r'|(?:^|(?<=; ))action (?P<action>[^;]{1,60})'
 )
 _SPOR_TIME_RE = re.compile(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?= |$)')
-_SPOR_TAGS_RE = re.compile(r'^\[[^\[\]\r\n]{1,80}\](?= |$)')
-_SPOR_DEFENDER_RE = re.compile(r'^(Defender (?:detected|action taken): )(.{1,300}?)(?= => |$)')
+# One tag group ("[PF PCA]", "[[anna] Brave]"); an item can start with several.
+_SPOR_TAGS_RE = re.compile(r'^' + spor_log.TAG_GROUP + r'(?= |$)')
+_SPOR_DEFENDER_RE = re.compile(r'^(Defender (?:detected|action taken|action FAILED): )(.{1,300}?)(?= => |$)')
 # A sub-line of the item above: "    loaded: C:\...", "    from: https://...".
 _SPOR_SUB_RE = re.compile(r'^([ \t]{2,})([a-z][a-z0-9 ]{0,30}:)(.*)$')
 # ClickFix PowerShell history: "<line number> [suspicious|last] <command>".
 _SPOR_HISTORY_RE = re.compile(r'^(\d{1,7})( )(\[(?:suspicious|last)\])( ?)(.*)$')
-_SPOR_LEGEND_RE = re.compile(r'^([ \t]+)(\S+)([ \t]+)(.*)$')
+# "    PF    Prefetch: ...", "    no access           Spor could not ...": the
+# code (a status word can have blanks of its own) ends at two or more blanks.
+_SPOR_LEGEND_RE = re.compile(r'^([ \t]+)(\S+(?: \S+){0,5}?)([ \t]{2,})(\S.*)$')
 _SPOR_SIGNATURE_RE = re.compile(r'\bsignature (valid|invalid|revoked|expired|unsigned)\b')
 
 
-def _spor_status_class(word):
-    if word in spor_log.BAD_SIGNATURE_STATUSES:
+def _spor_status_class(status):
+    """The colour of a status bracket: its worst word wins."""
+    words = spor_log.status_words(status)
+    if any(word in spor_log.BAD_SIGNATURE_STATUSES for word in words):
         return 'hl-sev-b'
-    if word in ('unsigned', 'no access'):
+    if any(word in ('unsigned', 'no access') for word in words):
         return 'hl-sev-w'
     return 'hl-dim'
 
@@ -838,8 +842,10 @@ def _spor_item_tokens(text, files=False, defender=False, section=''):
     if cut != -1:
         flag_tokens = [('', ' ')] + _spor_flag_tokens(text[cut + 1:])
         text = text[:cut]
-    m = _SPOR_TAGS_RE.match(text)
-    if m:
+    for _group in range(5):
+        m = _SPOR_TAGS_RE.match(text)
+        if not m:
+            break
         tag_cls = _SPOR_TAG_CLASS.get(m.group(0), 'hl-accent') if section == spor_log.SECTION_SOFTWARE else 'hl-accent'
         tokens.append((tag_cls, m.group(0)))
         text = text[m.end():]
@@ -908,9 +914,9 @@ def _spor_summary_item(b, no, body):
         target = _first_path(item.rest)
     else:
         name = item.item
-        if item.loud_flags or item.status in spor_log.BAD_SIGNATURE_STATUSES:
+        if item.loud_flags or spor_log.is_bad_signature(item.status):
             severity = 'w'
-        elif item.status == 'unsigned':
+        elif 'unsigned' in spor_log.status_words(item.status):
             severity = 'g'
         else:
             severity = 'i'

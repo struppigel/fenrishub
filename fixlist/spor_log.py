@@ -52,12 +52,19 @@ SYNTAX_FLAG = '!log-syntax-in-name'
 # "[Prefetch] C:\...\x.pdf.lnk  !double-extension  (loaded by C:\...\host.exe)".
 INLINE_FLAG_RE = re.compile(r'(?<=  )(![a-zA-Z][a-zA-Z0-9-]{1,40})(?=  |\s*$)')
 
-# " [status]" (also "[> 600 MB, not hashed]"), anywhere in a line.
-STATUS_RE = re.compile(
-    r' \[(' + '|'.join(re.escape(word) for word in STATUS_WORDS) + r'|> \d{1,9} MB, not hashed)\]'
-)
+# One status word (also "> 600 MB, not hashed").
+STATUS_WORD = r'(?:' + '|'.join(re.escape(word) for word in STATUS_WORDS) + r'|> \d{1,9} MB, not hashed)'
+_STATUS_WORD_RE = re.compile(STATUS_WORD)
+# " [status]", anywhere in a line. Spor joins several with ", " in one bracket:
+# "[> 600 MB, not hashed, unsigned]".
+STATUS_RE = re.compile(r' \[(' + STATUS_WORD + r'(?:, ' + STATUS_WORD + r'){0,5})\]')
 _TIME_RE = re.compile(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?= |$)')
-_TAGS_RE = re.compile(r'^\[([^\[\]\r\n]{1,80})\](?: |$)')
+# One tag group, a "[user] " inside it allowed (multi-user logs of Spor 0.1.1
+# and older: "[[anna] Brave]").
+TAG_GROUP = r'\[(?:[^\[\]\r\n]|\[[^\[\]\r\n]{1,40}\]){1,80}\]'
+# The leading tag groups of an item: "[task] [106] ", "[anna] [Brave] ".
+_TAGS_RE = re.compile(r'^((?:' + TAG_GROUP + r' ){0,4}' + TAG_GROUP + r')(?: |$)')
+_TAG_GROUP_RE = re.compile(TAG_GROUP)
 FLAGS_MARK = ' <==== '
 _PATH_START_RE = re.compile(r'^(?:[A-Za-z]:\\|\\\\)')
 _SUB_LINE_RE = re.compile(r'^( {2,}|\t+)([a-z][a-z0-9 ]{0,30}):(?: (.*)|)$')
@@ -69,13 +76,20 @@ FILES_DETAIL_NAMES = (
     'original name', 'amcache sha1', 'file version', 'description', 'thumbprint', 'signature', 'modified',
     'product', 'company', 'created', 'signer', 'note', 'size', 'md5',
 )
-_DEFENDER_RE = re.compile(r'^Defender (detected|action taken): (.{1,300})$')
+# "Defender action FAILED:" (events 1008, 1118, 1119) comes with !not-removed.
+_DEFENDER_RE = re.compile(r'^Defender (detected|action taken|action FAILED): (.{1,300})$')
 # Defender path entries that name a file ("file:_<path>", "webfile:_<path>|<url>|...").
 _DEFENDER_FILE_PREFIX_RE = re.compile(r'^(?:file|containerfile|webfile):_', re.IGNORECASE)
-# Where a path ends inside the rest of a line: its status, a detail, the next
-# part, or the " (svchost DLL)" note of a service hosted by svchost.exe.
+# Where a path ends inside the rest of a line: its status (a bracket that is
+# no status stays part of the path: "C:\Games [x]\a.exe"), a detail, the next
+# part, the " (svchost DLL)" note of a service hosted by svchost.exe or the
+# " (COM handler, HKLM)" note of a task's COM handler.
 SVCHOST_DLL_NOTE = ' (svchost DLL)'
-_PATH_END_RE = re.compile(r' \[| => |, |; | \(svchost DLL\)|$')
+COM_HANDLER_NOTE = ' (COM handler, '
+_PATH_END_RE = re.compile(r'(?= \[' + STATUS_WORD + r'[,\]])| => |, |; | \(svchost DLL\)| \(COM handler, |$')
+# Device prefixes Windows APIs give paths ("\\?\C:\...", "\??\C:\..."; Spor's MPLog
+# lines up to 0.1.1): without them the path matches the same file elsewhere.
+_DEVICE_PREFIX_RE = re.compile(r'^(?:\\\\\?\\|\\\?\?\\)(?=[A-Za-z]:\\)')
 # SOFTWARE Uninstall entries: "...; folder C:\...\" (the install folder).
 _SOFTWARE_FOLDER_RE = re.compile(r'(?:^|; )folder ([^;]{1,400})')
 # Sub-lines whose value is a file or folder of its own.
@@ -111,9 +125,26 @@ def is_path(text):
     return bool(_PATH_START_RE.match(text or ''))
 
 
+def strip_device_prefix(path):
+    r"""`path` without a leading device prefix ("\\?\C:\x" -> "C:\x")."""
+    return _DEVICE_PREFIX_RE.sub('', path, count=1)
+
+
+def status_words(status):
+    """The status words of a bracket ("> 600 MB, not hashed, unsigned" ->
+    ['> 600 MB, not hashed', 'unsigned'])."""
+    return _STATUS_WORD_RE.findall(status or '')
+
+
+def is_bad_signature(status):
+    """True when a status bracket says the signature does not hold."""
+    return any(word in BAD_SIGNATURE_STATUSES for word in status_words(status))
+
+
 def section_title(body):
     """'TIMELINE' for "==== TIMELINE - last 30 days ... ====", '' for other lines.
     The log's own title banner gives "Spor 0.1.0", the last one "End of log. ..."."""
+    body = body.lstrip('﻿')
     if not body.startswith(SECTION_PREFIX):
         return ''
     text = body.strip().strip('=').strip()
@@ -174,7 +205,7 @@ def split_item(body, known=None):
         text = ''
     m = _TAGS_RE.match(text)
     if m:
-        item.tags = m.group(1)
+        item.tags = ' '.join(group[1:-1] for group in _TAG_GROUP_RE.findall(m.group(1)))
         text = text[m.end():]
     item.text = text
     if SYNTAX_FLAG in item.flags:
@@ -182,7 +213,7 @@ def split_item(body, known=None):
         path = resolve_item_path(text, known) if known else ''
         if path:
             item.resolved = True
-            item.item = path
+            item.item = strip_device_prefix(path)
             remainder = text[len(path):]
             m = STATUS_RE.match(remainder)
             if m:
@@ -203,7 +234,7 @@ def split_item(body, known=None):
         m = STATUS_RE.search(item.rest)
         if m:
             item.status = m.group(1)
-    item.item = head.strip()
+    item.item = strip_device_prefix(head.strip())
     return item
 
 
@@ -475,15 +506,20 @@ def _path_at(text):
     """The path `text` starts with, up to its status, " => " or the next part."""
     if not is_path(text):
         return ''
-    return text[:_PATH_END_RE.search(text).start()].strip()
+    return strip_device_prefix(text[:_PATH_END_RE.search(text).start()].strip())
 
 
 def _status_after(text, path):
+    text = strip_device_prefix(text)
     if not text.startswith(path):
         return ''
     position = len(path)
     if text.startswith(SVCHOST_DLL_NOTE, position):
         position += len(SVCHOST_DLL_NOTE)
+    elif text.startswith(COM_HANDLER_NOTE, position):
+        end = text.find(')', position)
+        if end != -1:
+            position = end + 1
     m = STATUS_RE.match(text, position)
     return m.group(1) if m else ''
 
@@ -495,8 +531,6 @@ def _status_after(text, path):
 PERSISTENCE_KINDS = {
     'run': 'run', 'runonce': 'run', 'policy-run': 'run', 'service': 'svc', 'driver': 'svc', 'task': 'task',
 }
-# Further tags after the kind ("[task] [106] \Path" of a Task Scheduler event).
-_MORE_TAGS_RE = re.compile(r'^(?:\[[^\[\]\r\n]{1,80}\] ){1,5}')
 _VALUE_MARKS = ('; value ', ', value ')
 
 
@@ -516,7 +550,8 @@ def persistence_identity(item):
             cut = max(rest.rfind(mark) for mark in _VALUE_MARKS)
             name = rest[cut + len('; value '):] if cut != -1 else ''
     else:
-        name = _MORE_TAGS_RE.sub('', item.item, count=1)
+        # Further tags ("[task] [106] \Path" of a Task Scheduler event) are in item.tags.
+        name = item.item
     name = name.strip()
     if not name or name == '-':
         return None
@@ -772,18 +807,38 @@ def local_offset_minutes(lines):
 
 def iter_timeline_items(lines, known=None):
     """(line_no, SporItem) of the TIMELINE section's item lines that have a
-    time. `known` (known_paths) resolves !log-syntax-in-name lines; one that
-    stays unresolved is left out, as in iter_timeline_evidence."""
+    time, and of the "path:" sub-lines of a merged line at their own time
+    (tags of their line). `known` (known_paths) resolves !log-syntax-in-name
+    lines; one that stays unresolved is left out, as in iter_timeline_evidence."""
     ranges = section_ranges(lines)
     if SECTION_TIMELINE not in ranges:
         return
     if known is None:
         known = known_paths(lines)
     start, end = ranges[SECTION_TIMELINE]
+    parent = None
     for index in range(start + 1, end):
         body = _body(lines[index])
+        sub = _sub_line(body)
+        if sub is not None:
+            # A merged line's "path: X [status] => <time>[, first <time>, N times]":
+            # each path at its own time, with the sources of its line.
+            key, value = sub
+            if key != 'path' or parent is None:
+                continue
+            item = split_item(value, known)
+            m = _TIME_RE.match(item.rest)
+            if not m or not item.trusted or not is_path(item.item):
+                continue
+            item.time, item.tags = m.group(0), parent.tags
+            if item.time == parent.time and item.item.lower() == parent.item.lower():
+                continue   # the merged line itself
+            yield index + 1, item
+            continue
         if not _is_item_line(body) or not _TIME_RE.match(body):
+            parent = None
             continue
         item = split_item(body, known)
+        parent = item if item.trusted else None
         if item.trusted:
             yield index + 1, item

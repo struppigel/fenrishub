@@ -254,6 +254,19 @@
     transition: none;
 }
 
+/* The line the hover icons belong to, slightly lighter, and the icons with
+   it (set by the log page's script, so it stays while the pointer is on the
+   icons or a line menu is open). A background image: the slow fade above is
+   only for background-color, and the jump mark still shows through. */
+.uploaded-content {
+    --hl-hover-tint: color-mix(in srgb, var(--la-text-main) 5%, transparent);
+}
+
+.uploaded-content .hl-line.hl-hovered,
+.uploaded-content .hl-line-actions:not(.hl-cor-marker) {
+    background-image: linear-gradient(var(--hl-hover-tint), var(--hl-hover-tint));
+}
+
 /* Summary box above the log */
 .hl-summary {
     margin-bottom: 10px;
