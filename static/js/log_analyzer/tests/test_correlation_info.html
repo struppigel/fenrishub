@@ -236,6 +236,52 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
     assert('the FRST verdict is shown', !!document.querySelector('.cinfo-list .cinfo-status-letter.cinfo-sev-b'));
     CorrelationInfo.close();
 
+    // Related files and times: a host program, a detected sibling, a file of
+    // the same name, the files inside a folder line, a line at the same time.
+    entries = [
+        { kind: 'hash', upload_id: 'spor-log', log_type: 'Spor', line_no: 9, sha256: SHA, md5: '', detection: '',
+          severity: '', file: 'wscript.exe', centralbox: null, system: 'same', match: 'host' },
+        { kind: 'detection', upload_id: 'eset-log', log_type: 'ESET', line_no: 2, detection: 'Win64/Kryptik trojan',
+          action: 'cleaned', severity: 'b', file: 'MSBuild.exe', system: 'same', match: 'sibling',
+          other_path: 'c:\\users\\username\\hidden\\toolsnet\\msbuild.exe' },
+        { kind: 'mention', upload_id: 'mau-log', log_type: 'MAU', line_no: 14, section: 'MAU', subsection: '', time: '',
+          tags: '', text: 'Fake Runtime: C:\\x\\ToolsNet.wsf', role: 'installed by product (MAU)', parent: '',
+          file_status: '', flags: [], severity: '', file: 'ToolsNet.wsf', system: 'same', match: 'name',
+          other_path: 'c:\\x\\toolsnet.wsf' },
+        { kind: 'mention', upload_id: 'fix-log', log_type: 'Fixlog', line_no: 8, section: '', subsection: '', time: '',
+          tags: '', text: '3 Fixlog results: a.props, b.props, c.props', role: 'files inside', parent: '',
+          file_status: '', flags: [], severity: '', file: '', system: 'same', match: 'inside' },
+        { kind: 'mention', upload_id: 'frst-log', log_type: 'FRST', line_no: 3, section: '', subsection: '',
+          time: '2026-11-18 15:26', tags: '', text: '2026-11-18 15:26 - ... C:\\WINDOWS\\system32\\Tasks\\DataAgent',
+          role: 'same time', parent: '', file_status: '', flags: [], severity: '', file: 'DataAgent', system: 'same',
+          match: 'timing' },
+    ];
+    open(true);
+    const groupNotes = [...document.querySelectorAll('.cinfo-file-title')].map((node) => node.textContent);
+    assert('related groups say how they relate, the informational ones last',
+        groupNotes[0].includes('inside this folder')
+        && groupNotes.slice(1).every((note) => /host program|detected file in same folder|same file name elsewhere|at the same time/.test(note)),
+        groupNotes.join(' | '));
+    assert('a related file names where it is', text().includes('c:\\users\\username\\hidden\\toolsnet\\msbuild.exe'));
+    assert('summaries and same-time lines show their text',
+        CorrelationFormat.mentionRole(entries[3]) === '3 Fixlog results: a.props, b.props, c.props'
+        && CorrelationFormat.mentionRole(entries[4]).includes('Tasks\\DataAgent')
+        && CorrelationFormat.mentionRole(entries[2]) === 'installed by a product (MAU)');
+    CorrelationInfo.close();
+    assert('lines of the log at the same time are no file in it',
+        CorrelationFormat.header([entries[4]], (entry) => entry.upload_id === 'frst-log', { scope: 'case' })
+        === 'lines of this log created at the same time');
+    const named = (path, md5) => ({ kind: 'hash', upload_id: 'x', log_type: 'Fixlog', line_no: 1, file: 'a.wsf',
+        md5, sha256: '', match: 'name', other_path: path, system: 'same' });
+    const namedGroups = CorrelationFormat.fileGroups([named('c:\\x\\a.wsf', 'aa'.repeat(16)), named('c:\\y\\a.wsf', 'bb'.repeat(16))]);
+    assert('two other files of the same name are two groups, never one changed file',
+        namedGroups.length === 2 && namedGroups.every((g) => CorrelationFormat.fileChanges(g, '') === '')
+        && CorrelationFormat.fileChanges({ file: 'a.wsf', how: 'same file name elsewhere',
+            entries: [named('c:\\x\\a.wsf', 'aa'.repeat(16)), named('c:\\x\\a.wsf', 'bb'.repeat(16))] }, '') === '');
+    assert('host, sibling, name and timing only inform',
+        ['host', 'sibling', 'name', 'timing'].every((match) => CorrelationFormat.INFO_MATCHES.has(match))
+        && !CorrelationFormat.INFO_MATCHES.has('same_hash') && !CorrelationFormat.INFO_MATCHES.has('inside'));
+
     const summary = document.getElementById('summary');
     summary.textContent = `${passed} passed, ${failed} failed`;
     summary.className = failed ? 'fail' : 'pass';

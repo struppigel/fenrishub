@@ -737,3 +737,53 @@ def iter_software(lines):
         out.append(SoftwareFact(index + 1, kind, name[:200], subsection, item.time, item.tags, item.status,
                                 item.flags, stripped[:300], details))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Times: the TIMELINE's items, and how to read their times as local time
+# ---------------------------------------------------------------------------
+
+# "Created:   2026-11-18 12:45:48 UTC (local time 13:45, UTC+01:00)"
+_LOCAL_OFFSET_RE = re.compile(r'\(local time \d\d:\d\d, UTC([+-])(\d\d):(\d\d)\)')
+_HEADER_LINES = 30
+
+
+def local_offset_minutes(lines):
+    """Minutes to add to the log's times for the PC's local time: the
+    "Created:" line's UTC offset when the header says "Times: UTC", 0 when it
+    names another time base (local); None when the header does not tell."""
+    times = None
+    offset = None
+    for raw in lines[:_HEADER_LINES]:
+        body = _body(raw)
+        if body.startswith('Times:'):
+            times = body.split(':', 1)[1].strip().upper()
+        elif body.startswith('Created:'):
+            m = _LOCAL_OFFSET_RE.search(body)
+            if m:
+                minutes = int(m.group(2)) * 60 + int(m.group(3))
+                offset = -minutes if m.group(1) == '-' else minutes
+    if times is None:
+        return None
+    if not times.startswith('UTC'):
+        return 0
+    return offset
+
+
+def iter_timeline_items(lines, known=None):
+    """(line_no, SporItem) of the TIMELINE section's item lines that have a
+    time. `known` (known_paths) resolves !log-syntax-in-name lines; one that
+    stays unresolved is left out, as in iter_timeline_evidence."""
+    ranges = section_ranges(lines)
+    if SECTION_TIMELINE not in ranges:
+        return
+    if known is None:
+        known = known_paths(lines)
+    start, end = ranges[SECTION_TIMELINE]
+    for index in range(start + 1, end):
+        body = _body(lines[index])
+        if not _is_item_line(body) or not _TIME_RE.match(body):
+            continue
+        item = split_item(body, known)
+        if item.trusted:
+            yield index + 1, item

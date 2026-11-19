@@ -132,7 +132,8 @@ class LineKeyTests(TestCase):
         self.assertEqual(keys[TASK_LINE]['task:evil updater'], 'task')
         self.assertEqual(keys[TASK_LINE]['taskid:5f2eaf8f-4827-4b10-a79a-83a72769a412'], 'task')
         self.assertEqual(keys[TASK_LINE][r'c:\users\username\appdata\roaming\x y\a.ps1'], 'argument')
-        self.assertEqual(keys[TASK_LINE][r'c:\windows\system32\windowspowershell\v1.0\powershell.exe'], 'path')
+        # powershell.exe only runs a.ps1: listed, but as the host program.
+        self.assertEqual(keys[TASK_LINE][r'c:\windows\system32\windowspowershell\v1.0\powershell.exe'], 'host')
         self.assertEqual(keys[EXTENSION_LINE]['ext:pbdpajcdgknpendpmecafmopknefafha'], 'extension')
         self.assertEqual(keys[FIREWALL_LINE]['fw:{1834c62c-1ac6-4753-bf2a-03ace49b2de2}'], 'firewall')
         self.assertEqual(keys[CLSID_LINE]['clsid:2f81b25e-7507-4844-bff2-77d2cc24ced4'], 'clsid')

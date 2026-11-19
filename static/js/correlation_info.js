@@ -556,6 +556,8 @@ window.CorrelationInfo = (function () {
             if (group.how === 'folder') heading.appendChild(el('span', 'cinfo-note', 'a folder this file is in'));
             else if (group.how === 'reverse') heading.appendChild(el('span', 'cinfo-note', 'pointed at by'));
             else if (group.how) heading.appendChild(el('span', 'cinfo-note', group.how));
+            // Where the related file is (a detected sibling, a copy, a file of the same name).
+            if (group.otherPath && group.how) heading.appendChild(el('span', 'cinfo-muted', group.otherPath));
             box.appendChild(heading);
             const changed = Format().fileChanges(group, state.lineText, isOwn);
             if (changed) box.appendChild(el('p', 'cinfo-changed', changed));

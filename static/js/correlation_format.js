@@ -19,7 +19,21 @@ window.CorrelationFormat = (function () {
         uninstall: 'same installed program',
         msi: 'same installed program',
         app: 'same installed program (by name)',
+        browser: 'same browser setting',
+        host: 'host program',
+        sibling: 'detected file in same folder',
+        name: 'same file name elsewhere',
+        same_hash: 'same file content elsewhere',
+        inside: 'inside this folder',
+        timing: 'at the same time',
     };
+
+    // Matches that only inform and never give a status
+    // (case_correlations.INFO_MATCHES): their groups come last.
+    const INFO_MATCHES = new Set(['host', 'sibling', 'name', 'timing']);
+    // Matches about another file than the line's (each names it in
+    // `other_path`), or about another line: never compared as one file.
+    const OTHER_FILE_MATCHES = new Set(['sibling', 'name', 'same_hash', 'inside', 'timing']);
 
     // Line-verdict status letter -> the marker / icon colour class.
     const STATUS_CLASS = { B: 'b', P: 'p', C: 'c', A: 'a', '!': 'w', G: 'g', S: 's', I: 'i', J: 'j' };
@@ -94,6 +108,9 @@ window.CorrelationFormat = (function () {
         if (entry.role === 'MAU failed to delete') return 'MAU failed to delete';
         if (entry.role === 'MAU install source') return 'installed from this folder (MAU)';
         if (entry.role === 'installed app') return 'installed app';
+        if (entry.role === 'installed by product (MAU)') return 'installed by a product (MAU)';
+        // A summary of the files inside a folder line, a line or event at the same time.
+        if (entry.role === 'files inside' || entry.role === 'same time') return text(entry.text);
         if (entry.role === 'dll' && parent) return 'service DLL of ' + parent;
         if (entry.folder && entry.in_folder) return 'in this folder';
         return parent ? 'under ' + parent : '';
@@ -162,8 +179,6 @@ window.CorrelationFormat = (function () {
     // part, or both. `scope` 'user': the forum user's logs (no case of yours).
     function header(entries, isOwn, { scope, name }) {
         const list = Array.isArray(entries) ? entries : [];
-        const own = list.some(isOwn);
-        const others = list.some((entry) => !isOwn(entry));
         const where = scope === 'user'
             ? `other logs of user ${name} (no case of yours)`
             : 'other logs of this case';
@@ -173,6 +188,13 @@ window.CorrelationFormat = (function () {
                 : 'FRST / Addition logs of this case';
             return `lines of ${logs} that point here`;
         }
+        // Only entries about the line's own file make it "the same file".
+        const sameFile = list.filter((entry) => !OTHER_FILE_MATCHES.has(entry.match));
+        if (list.length && !sameFile.length) {
+            return list.every(isOwn) ? 'lines of this log created at the same time' : `related files and times in ${where}`;
+        }
+        const own = sameFile.some(isOwn);
+        const others = sameFile.some((entry) => !isOwn(entry));
         if (own && !others) return "same file in this log's Addition part";
         if (own) return `same file in this log's Addition part and in ${where}`;
         return `same file in ${where}`;
@@ -229,11 +251,16 @@ window.CorrelationFormat = (function () {
             const file = entry.kind === 'reverse' ? '' : text(entry.file);
             const how = entry.kind === 'reverse' ? 'reverse'
                 : entry.in_folder ? 'folder' : (MATCH_NOTES[entry.match] || '');
-            const key = how + '\n' + file.toLowerCase();
-            if (!groups.has(key)) groups.set(key, { file, how, entries: [] });
+            // Another file of the same name is its own group.
+            const otherPath = text(entry.other_path);
+            const key = how + '\n' + file.toLowerCase() + '\n' + otherPath;
+            if (!groups.has(key)) {
+                groups.set(key, { file, how, otherPath, info: INFO_MATCHES.has(entry.match), entries: [] });
+            }
             groups.get(key).entries.push(entry);
         });
-        const rank = (group) => (group.how === '' || group.how === 'reverse' ? 0 : group.how === 'folder' ? 2 : 1);
+        const rank = (group) => (group.how === '' || group.how === 'reverse' ? 0
+            : group.info ? 3 : group.how === 'folder' ? 2 : 1);
         return [...groups.values()].sort((a, b) => rank(a) - rank(b));
     }
 
@@ -264,7 +291,7 @@ window.CorrelationFormat = (function () {
             if (key && !facts[kind].has(key)) facts[kind].set(key, where);
         };
         (group.entries || []).forEach((entry) => {
-            if (!entry || entry.in_folder || entry.system === 'different') return;
+            if (!entry || entry.in_folder || entry.system === 'different' || OTHER_FILE_MATCHES.has(entry.match)) return;
             if (entry.kind !== 'file_info' && entry.kind !== 'hash') return;
             const where = (own(entry) ? 'this log' : text(entry.log_type) || 'other log') + ' L' + entry.line_no;
             if (entry.kind === 'file_info') {
@@ -287,7 +314,7 @@ window.CorrelationFormat = (function () {
     }
 
     return {
-        DOT, MATCH_NOTES, STATUS_CLASS, REPORT_URL_RE,
+        DOT, MATCH_NOTES, INFO_MATCHES, STATUS_CLASS, REPORT_URL_RE,
         finding, source, rows, header, logUrl, reportUrls, hashValues,
         sha256Of, md5Of, mentionWhere, mentionRole, entryTime, fileGroups, lineSize, fileChanges,
     };

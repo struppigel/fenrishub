@@ -27,7 +27,20 @@ one of the upload's cases, collect what that log says about the file:
   Fixlog's installed-app investigation and MAU's products also under the
   program's display name (`app:` keys, versions compared), with their install
   folders; everything MAU deleted (files, folders, registry keys and values,
-  services, tasks).
+  services, tasks) and the files its products' MSI components point at.
+
+Besides the line's own files (`match` says how else an entry was found):
+- 'host': what is said about a host program the line runs a file through;
+- 'sibling': a detection of another file in the same folder;
+- 'name': a file of the same uncommon name in another folder;
+- 'same_hash': another path with the same SHA256 (its hashes, detections);
+- 'inside': for a folder line of the created / modified files sections,
+  what is said about the files inside (status-giving entries one by one,
+  the rest summed up in 'files inside' mentions);
+- 'timing': created-files lines of the log within TIMING_WINDOW of a flagged
+  one, and the related Spor logs' timeline events of that time.
+'host', 'sibling', 'name' and 'timing' only inform (INFO_MATCHES): they never
+give a line a status.
 
 reverse_correlations() turns the stored answers around for any other log:
 which FRST / Addition lines point at each of its lines.
@@ -36,17 +49,22 @@ Database and local parsing only: nothing is ever sent to centralbox. Paths
 are compared with the analyzer's own key (normalize_path, lowercased).
 """
 
+import bisect
 import hashlib
 import json
 import logging
 import ntpath
 import re
+from collections import Counter, namedtuple
+from datetime import datetime, timedelta
 
 from .analyzer import ANALYSIS_PAYLOAD_FORMAT
 from .correlation_keys import (
-    MATCH_PATH, app_key, argument_paths, identity_key, installed_program, is_path_key, line_keys, msi_key,
-    software_keys, target_keys, task_key, versions_differ,
+    MATCH_ARGUMENT, MATCH_HOST, MATCH_PATH, app_key, argument_paths, identity_key, installed_program,
+    is_host_program, is_path_key, line_keys, msi_key, name_key, software_keys, target_keys,
+    task_key, versions_differ,
 )
+from . import frst_extractors as ex
 from .file_hashes import _as_path, normalized_path
 from . import spor_log
 from .log_highlighting import defender_severity, highlight_log, threat_severity  # noqa: F401 (defender_severity re-exported)
@@ -78,7 +96,7 @@ MAX_ENTRIES_PER_LINE = 60
 # entries before all others), so what decides the line's status is never cut.
 KIND_RANK = {'detection': 0, 'hash': 1, 'fixlog': 2, 'file_info': 3, 'evidence': 4, 'mention': 5}
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 16
+CORRELATION_VERSION = 19
 # Detections are read from the summary boxes of DETECTION_LOG_TYPES logs
 # (log_highlighting); Defender events from the "Windows Defender:" section of
 # ADDITION_LOG_TYPES logs (both in log_types).
@@ -176,14 +194,34 @@ def stored_signals(upload_pks):
 
 
 def _fresh_payload(uploaded_log):
-    """Any fresh cached analysis of the upload (the line texts are the same for every rule set)."""
-    for payload in (
-        UploadedLogAnalysis.objects.filter(upload=uploaded_log, source_content_hash=uploaded_log.content_hash)
-        .values_list('payload', flat=True)
-    ):
+    """A fresh cached analysis of the upload: the log's own rule set's first
+    (its rule verdicts pick the timing anchors), else any other in key order
+    (the line texts are the same for every rule set)."""
+    try:
+        from .rule_sets import resolve_effective_rule_set_key
+        preferred = resolve_effective_rule_set_key(uploaded_log)
+    except Exception:
+        preferred = None
+    fresh = UploadedLogAnalysis.objects.filter(upload=uploaded_log, source_content_hash=uploaded_log.content_hash)
+    # The keys first: only the payload used is fetched and decoded.
+    keys = sorted(fresh.values_list('rule_set_key', flat=True), key=lambda key: (key != preferred, key))
+    for key in keys:
+        payload = fresh.filter(rule_set_key=key).values_list('payload', flat=True).first()
         if isinstance(payload, dict) and payload.get('format') == ANALYSIS_PAYLOAD_FORMAT:
             return payload
     return None
+
+
+def _first_line_numbers(content, wanted):
+    """{stripped line text: its first line number} for the wanted texts."""
+    numbers = {}
+    for no, raw in enumerate((content or '').split('\n'), start=1):
+        text = raw.strip()
+        if text in wanted and text not in numbers:
+            numbers[text] = no
+            if len(numbers) == len(wanted):
+                break
+    return numbers
 
 
 def _centralbox_result(sha, md5, verdicts, unknown_md5s):
@@ -411,25 +449,12 @@ _ADDITION_FIELD_RE = re.compile(r'^([A-Za-z][A-Za-z ]{0,40}?)\s*:\s?(.*)$')
 # it follows a blank line).
 _ADDITION_SECTION_END_RE = re.compile(r'^={5,}')
 _DEFENDER_CMDLINE_RE = re.compile(r'^cmdline:_(.+)$', re.IGNORECASE)
-# Programs a detected command line runs through: the detection is about what
-# they run (a script, a DLL), not about them.
-_CMDLINE_HOSTS = frozenset({
-    'cmd.exe', 'powershell.exe', 'pwsh.exe', 'powershell_ise.exe', 'wscript.exe', 'cscript.exe', 'mshta.exe',
-    'rundll32.exe', 'regsvr32.exe', 'conhost.exe', 'explorer.exe', 'msiexec.exe', 'schtasks.exe',
-    'wmic.exe', 'certutil.exe', 'bitsadmin.exe', 'forfiles.exe', 'msbuild.exe', 'installutil.exe',
-    'regasm.exe', 'regsvcs.exe', 'svchost.exe', 'dllhost.exe', 'cmstp.exe', 'odbcconf.exe', 'pcalua.exe',
-})
-# Windows' own binaries: never what a command-line detection is about.
-_SYSTEM_DIR_PREFIXES = ('c:\\windows\\system32\\', 'c:\\windows\\syswow64\\', 'c:\\windows\\microsoft.net\\')
-
-
 def _cmdline_target(command_line):
     """The file a Defender "CmdLine:_" detection is about: the first path in
     the command line that is not a host program or a Windows binary, else ''."""
     for key in argument_paths(command_line):
-        if ntpath.basename(key) in _CMDLINE_HOSTS or key.startswith(_SYSTEM_DIR_PREFIXES):
-            continue
-        return key
+        if not is_host_program(key):
+            return key
     return ''
 
 
@@ -620,6 +645,22 @@ def is_broad_folder(key):
     return bool(_BROAD_FOLDER_RE.match((key or '').rstrip('\\')))
 
 
+# Folders whose files have nothing to do with each other besides the broad
+# ones: Temp, the browser caches, Windows' own system folders.
+_BROAD_PARENT_RE = re.compile(
+    r'^[a-z]:\\(?:windows(?:\\temp|\\system32(?:\\drivers|\\tasks)?|\\syswow64)'
+    r'|users\\[^\\]+\\appdata\\local(?:\\temp|\\microsoft\\windows\\(?:inetcache|webcache)))$'
+)
+
+
+def is_broad_parent(key):
+    """True for a folder whose files say nothing about each other (siblings,
+    a folder line's contents): the broad folders, Temp, the browser caches,
+    System32."""
+    key = (key or '').rstrip('\\')
+    return is_broad_folder(key) or bool(_BROAD_PARENT_RE.match(key))
+
+
 def _add_folder_entry(index, folder, entry):
     """Index `entry` as a folder mention (the files inside get it too), unless
     the folder is too broad."""
@@ -663,13 +704,19 @@ def _software_entries(upload_id, lines, index):
             _add_folder_entry(index, details['folder'], entry)
 
 
-def _mau_mention(upload_id, line_no, text, role, file, extra=(), severity=''):
+def _plain_mention(upload_id, log_type, line_no, text, role, file='', section='', time='', tags='', extra=(),
+                   severity=''):
+    """A mention entry built from parts (not from a parsed Spor item)."""
     return {
-        'kind': 'mention', 'upload_id': upload_id, 'log_type': 'MAU', 'line_no': line_no,
-        'section': 'MAU', 'subsection': '', 'time': '', 'tags': '', 'text': text[:300],
+        'kind': 'mention', 'upload_id': upload_id, 'log_type': log_type, 'line_no': line_no,
+        'section': section, 'subsection': '', 'time': time, 'tags': tags[:80], 'text': text[:300],
         'role': role, 'parent': '', 'file_status': '', 'flags': [],
         'extra': [list(pair) for pair in extra][:spor_log.MAX_EXTRA], 'severity': severity, 'file': file[:120],
     }
+
+
+def _mau_mention(upload_id, line_no, text, role, file, extra=(), severity=''):
+    return _plain_mention(upload_id, 'MAU', line_no, text, role, file, section='MAU', extra=extra, severity=severity)
 
 
 def _mau_entries(upload_ids, index):
@@ -702,6 +749,12 @@ def _mau_entries(upload_ids, index):
                 _add_folder_entry(index, product.install_location, entry)
             if product.install_source:
                 _add_folder_entry(index, product.install_source, {**entry, 'role': 'MAU install source'})
+            for line_no, path in product.key_paths:
+                # A file the product's MSI components point at: what it installed.
+                _add_path_entry(index, path, _mau_mention(
+                    upload.upload_id, line_no, f'{name or product.ident}: {path}', 'installed by product (MAU)',
+                    file_name(path),
+                ))
         for item in items:
             target = item.target.strip().strip('"')
             role = 'MAU failed to delete' if item.failed else 'deleted by MAU'
@@ -781,13 +834,17 @@ def _add_path_entry(index, path, entry):
         index.setdefault(key, []).append(entry)
 
 
-def _spor_entries(upload_ids, index):
+def _spor_entries(upload_ids, index, spor_logs=None):
     """What the related Spor logs say: Defender detections, timeline
     evidence, file facts (FILES, AMCACHE FILES) and mentions in the module
-    sections. (Their FILES hashes are hash rows too: _hash_entries.)"""
+    sections. (Their FILES hashes are hash rows too: _hash_entries.) Keeps
+    (upload_id, lines, known paths) of each in `spor_logs` when given, for
+    their timeline events (_spor_timeline_events), read only when needed."""
     for upload in UploadedLog.objects.filter(pk__in=upload_ids, log_type=LOG_TYPE_SPOR).only('pk', 'upload_id', 'content'):
         lines = (upload.content or '').split('\n')
         known = spor_log.known_paths(lines)
+        if spor_logs is not None:
+            spor_logs.append((upload.upload_id, lines, known))
         _add_defender_entries(index, upload.upload_id, LOG_TYPE_SPOR, spor_log.iter_defender_detections(lines))
         for path, entry in _spor_file_infos(upload.upload_id, lines):
             _add_path_entry(index, path, entry)
@@ -861,18 +918,16 @@ def evidence_text(entry):
     return ' '.join(part for part in (seen, entry.get('file_status') or '') if part)
 
 
-def _add_system_badges(uploaded_log, index):
-    """Give every entry `system`: does its log come from the same machine?"""
-    upload_ids = {entry['upload_id'] for entries in index.values() for entry in entries}
-    if not upload_ids:
-        return
-    pks = dict(UploadedLog.objects.filter(upload_id__in=upload_ids).values_list('upload_id', 'pk'))
+def _system_verdicts(uploaded_log, upload_pks):
+    """{upload_id: does that log come from the upload's machine?} for the
+    related logs and the upload itself (its own entries: the Addition part,
+    lines at the same time)."""
+    pks = dict(UploadedLog.objects.filter(pk__in=list(upload_pks)).values_list('upload_id', 'pk'))
     signals = stored_signals({uploaded_log.pk, *pks.values()})
     own = signals.get(uploaded_log.pk) or {}
-    verdict_by_upload = {upload_id: compare(own, signals.get(pk) or {}) for upload_id, pk in pks.items()}
-    for entries in index.values():
-        for entry in entries:
-            entry['system'] = verdict_by_upload.get(entry['upload_id'], SYSTEM_UNKNOWN)
+    verdicts = {upload_id: compare(own, signals.get(pk) or {}) for upload_id, pk in pks.items()}
+    verdicts[uploaded_log.upload_id] = compare(own, own)
+    return verdicts
 
 
 # A finding as a line-verdict status letter (status_types): detection
@@ -882,8 +937,42 @@ _SEVERITY_STATUS = {'b': 'B', 'p': 'P', 'g': 'G', 'w': '!', 'c': 'C', 'j': 'J', 
 _VERDICT_STATUS = {'malicious': 'B', 'suspicious': '!', 'clean': 'C'}
 
 
+# Malware and PUPs; and every status that flags something.
+MALWARE_STATUSES = frozenset({'B', 'P'})
+FLAGGED_STATUSES = frozenset({'B', 'P', '!', 'G'})
+
+MATCH_SIBLING = 'sibling'
+MATCH_NAME = 'name'
+MATCH_TIMING = 'timing'
+MATCH_SAME_HASH = 'same_hash'
+MATCH_INSIDE = 'inside'
+# The role of the mention that sums up what is said about a folder line's files.
+ROLE_FILES_INSIDE = 'files inside'
+# The statuses an entry found through a match may give its line (all for a
+# match not listed). Informational matches give none: a host program the line
+# runs something through, a detected file in the same folder, a file of the
+# same name elsewhere, a line or event at the same time. A file inside a
+# folder line's folder speaks for the folder only when it is malware or a PUP.
+_MATCH_STATUSES = {
+    MATCH_HOST: frozenset(), MATCH_SIBLING: frozenset(), MATCH_NAME: frozenset(), MATCH_TIMING: frozenset(),
+    MATCH_INSIDE: MALWARE_STATUSES,
+}
+INFO_MATCHES = frozenset(match for match, statuses in _MATCH_STATUSES.items() if not statuses)
+
+
 def entry_status(entry):
-    """The worst status letter one correlation entry stands for, or ''."""
+    """The worst status letter one correlation entry stands for, or '' (as
+    far as its match lets it: _MATCH_STATUSES)."""
+    allowed = _MATCH_STATUSES.get(entry.get('match'))
+    if allowed is not None and not allowed:
+        return ''
+    status = finding_status(entry)
+    return status if allowed is None or status in allowed else ''
+
+
+def finding_status(entry):
+    """The worst status letter of what an entry says (its detection
+    severity, its centralbox verdict), however it was matched; ''."""
     candidates = []
     result = entry.get('centralbox')
     if isinstance(result, dict) and result.get('verdict') in _VERDICT_STATUS:
@@ -932,9 +1021,15 @@ def _signature(uploaded_log, upload_ids, scope, name):
     signals_state = UploadedLogMachineSignal.objects.filter(
         upload_id__in=[uploaded_log.pk, *upload_ids],
     ).aggregate(n=Count('pk'), latest=Max('pk'))
+    # The upload's own analyses: their rule verdicts pick the timing anchors.
+    # A re-analysis rewrites the row (updated_at); tag updates do not.
+    analyses = UploadedLogAnalysis.objects.filter(upload=uploaded_log).aggregate(
+        n=Count('pk'), latest=Max('updated_at'),
+    )
     raw = json.dumps([
         CORRELATION_VERSION, uploaded_log.content_hash, scope, name, related,
         signals_state['n'] or 0, signals_state['latest'] or 0,
+        analyses['n'] or 0, analyses['latest'].isoformat() if analyses['latest'] else '',
         verdicts_changed.isoformat() if verdicts_changed else '',
         aliases_changed.isoformat() if aliases_changed else '',
         pairs_changed or 0,
@@ -945,7 +1040,7 @@ def _signature(uploaded_log, upload_ids, scope, name):
 
 # How an entry was matched when not through the line's own file (correlation_keys).
 MATCH_NOTES = {
-    'argument': 'file in command line',
+    MATCH_ARGUMENT: 'file in command line',
     'registry': 'same registry value',
     'service': 'same service',
     'task': 'same task',
@@ -955,7 +1050,16 @@ MATCH_NOTES = {
     'uninstall': 'same installed program',
     'msi': 'same installed program',
     'app': 'same installed program (by name)',
+    'browser': 'same browser setting',
+    MATCH_HOST: 'host program',
+    MATCH_SIBLING: 'detected file in same folder',
+    MATCH_NAME: 'same file name elsewhere',
+    MATCH_SAME_HASH: 'same file content elsewhere',
+    MATCH_INSIDE: 'inside this folder',
+    MATCH_TIMING: 'at the same time',
 }
+# Matches whose note names the file the entry is about.
+_NOTE_FILE_MATCHES = frozenset({MATCH_ARGUMENT, MATCH_SIBLING, MATCH_NAME, MATCH_SAME_HASH, MATCH_INSIDE})
 
 
 def summary_note(entries, status, own_upload_id=''):
@@ -976,7 +1080,7 @@ def summary_note(entries, status, own_upload_id=''):
         verdict = result.get('verdict') or ''
         where = 'in detected folder' if entry.get('in_folder') else ''
         how = MATCH_NOTES.get(entry.get('match') or '', '')
-        if entry.get('match') == 'argument' and entry.get('file'):
+        if entry.get('match') in _NOTE_FILE_MATCHES and entry.get('file'):
             how = f"{how}: {entry['file']}"
         source = 'Defender' if entry.get('source') == 'defender' else ''
         # An entry of the log itself (Defender events of its Addition part).
@@ -1087,7 +1191,7 @@ _REVERSE_WHAT = {
     'evidence': 'timeline', 'mention': 'mention',
 }
 # FRST line verdicts that colour a reverse marker; the others stay neutral.
-REVERSE_MARKER_STATUSES = frozenset({'B', 'P', '!', 'G'})
+REVERSE_MARKER_STATUSES = FLAGGED_STATUSES
 
 
 def _reverse_what(entry):
@@ -1101,31 +1205,13 @@ def _frst_line_facts(frst, texts):
     Addition log, for the texts asked. The status comes from a fresh analysis,
     the log's own rule set first ('' when there is none)."""
     wanted = set(texts)
-    numbers = {}
-    for no, raw in enumerate((frst.content or '').split('\n'), start=1):
-        text = raw.strip()
-        if text in wanted and text not in numbers:
-            numbers[text] = no
+    numbers = _first_line_numbers(frst.content, wanted)
     statuses = {}
-    try:
-        from .rule_sets import resolve_effective_rule_set_key
-        preferred = resolve_effective_rule_set_key(frst)
-    except Exception:
-        preferred = None
-    rows = sorted(
-        UploadedLogAnalysis.objects.filter(upload=frst, source_content_hash=frst.content_hash)
-        .values_list('rule_set_key', 'payload'),
-        key=lambda row: row[0] != preferred,
-    )
-    for _key, payload in rows:
-        if not isinstance(payload, dict) or payload.get('format') != ANALYSIS_PAYLOAD_FORMAT:
-            continue
-        for line in payload.get('lines') or ():
-            if isinstance(line, dict):
-                text = (line.get('line') or '').strip()
-                if text in wanted and text not in statuses:
-                    statuses[text] = line.get('dominant_status') or ''
-        break
+    for line in (_fresh_payload(frst) or {}).get('lines') or ():
+        if isinstance(line, dict):
+            text = (line.get('line') or '').strip()
+            if text in wanted and text not in statuses:
+                statuses[text] = line.get('dominant_status') or ''
     return {text: (numbers.get(text, 0), statuses.get(text, '')) for text in wanted}
 
 
@@ -1166,9 +1252,11 @@ def reverse_correlations(uploaded_log, user=None, compute=False):
                 continue
             hits = {}
             for text, entries in texts.items():
+                # A 'files inside' summary stands for many lines, not its first.
                 found = [
                     entry for entry in entries or ()
                     if isinstance(entry, dict) and entry.get('upload_id') == own_id and entry.get('line_no')
+                    and entry.get('role') != ROLE_FILES_INSIDE
                 ]
                 if found:
                     hits[text] = found
@@ -1212,30 +1300,38 @@ def reverse_correlations(uploaded_log, user=None, compute=False):
 
 def reverse_status(entries):
     """The marker status of a line's reverse entries: the worst FRST rule
-    verdict among REVERSE_MARKER_STATUSES (logs of another system left out), else ''."""
+    verdict among REVERSE_MARKER_STATUSES (logs of another system and
+    informational matches left out: a flagged task says nothing about the
+    wscript.exe it runs through), else ''."""
     return dominant_status([
-        entry.get('line_status') for entry in entries
-        if entry.get('line_status') in REVERSE_MARKER_STATUSES and entry.get('system') != SYSTEM_DIFFERENT
+        entry.get('line_status') for entry in entries if _reverse_rates(entry)
     ], default='')
+
+
+def _reverse_rates(entry):
+    return (entry.get('line_status') in REVERSE_MARKER_STATUSES and entry.get('system') != SYSTEM_DIFFERENT
+            and entry.get('match') not in INFO_MATCHES)
 
 
 def reverse_note(entries, status):
     """What the reverse entry that gave a line its marker status says."""
     for entry in entries:
-        if entry.get('line_status') == status and entry.get('system') != SYSTEM_DIFFERENT:
+        if entry.get('line_status') == status and _reverse_rates(entry):
             return f"{entry.get('log_type', '')} L{entry.get('line_no') or '?'}: {entry.get('text', '')[:120]}"
     return ''
 
 
 def correlated_sha256s(answer):
     """The SHA256s an answer correlates with the log's lines, leaving out
-    logs from another system (as correlation_status does). For /stats/,
-    which finds the hashes' centralbox tags (see tagging.centralbox_tags_by_sha)."""
+    logs from another system and informational matches (as correlation_status
+    does). For /stats/, which finds the hashes' centralbox tags (see
+    tagging.centralbox_tags_by_sha)."""
     lines = answer.get('lines') if isinstance(answer, dict) else None
     return sorted({
         entry['sha256']
         for entries in (lines or {}).values() for entry in entries or ()
         if isinstance(entry, dict) and entry.get('sha256') and entry.get('system') != SYSTEM_DIFFERENT
+        and entry.get('match') not in INFO_MATCHES
     })
 
 
@@ -1255,6 +1351,321 @@ def _store(uploaded_log, scope_key, signature, answer):
         logger.exception('Storing correlations failed for %s', getattr(uploaded_log, 'upload_id', '?'))
 
 
+class _LineEntries:
+    """The entries of one analyzed line, each related log line once, each
+    with `system` (does its log come from the upload's machine?)."""
+
+    def __init__(self, text, verdicts):
+        self.entries = []
+        self.seen = set()
+        self.program = installed_program(text)
+        self.verdicts = verdicts
+        # A created / modified files line: CreatedLine (see _add_timing).
+        self.created = None
+
+    def add(self, entry, match, in_folder=False, other_path='', slot=None):
+        """Add `entry` unless its log line is listed already (or `slot`, for
+        an entry that stands for several lines). True when added."""
+        slot = slot or (entry.get('upload_id'), entry.get('line_no'), entry.get('kind'))
+        if slot in self.seen:
+            return False
+        if match == 'app' and self.program and versions_differ(self.program[1], entry.get('version')):
+            return False  # another version of a program with the same name
+        self.seen.add(slot)
+        extra = {}
+        if match != MATCH_PATH:
+            extra['match'] = match
+        if in_folder:
+            extra['in_folder'] = True
+        if other_path:
+            extra['other_path'] = other_path[:400]
+        added = {**entry, **extra} if extra else entry
+        added['system'] = self.verdicts.get(entry.get('upload_id'), SYSTEM_UNKNOWN)
+        self.entries.append(added)
+        return True
+
+
+# How many entries a line gets per informational / copy match: detected
+# siblings, files of the same name, other paths with the same content, lines
+# and events at the same time.
+MAX_RELATED_PER_LINE = 5
+# Flagged entries of the files inside a folder line listed one by one; all
+# others (and any beyond) are summed up per log and kind.
+MAX_INSIDE_ENTRIES = 20
+# The SHA256 of an empty file: copies of it are no copies of anything.
+_EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+
+
+def _rank(entry):
+    """Sort key: status-giving entries first, then by kind."""
+    return (not entry_status(entry), KIND_RANK.get(entry.get('kind'), 9))
+
+
+class _RelatedIndex:
+    """Lookups over the index for files related to a line's file without
+    sharing its path: detected files by folder, files by name, paths by
+    content (SHA256) and the path keys in order (the files inside a folder)."""
+
+    def __init__(self, index):
+        self.index = index
+        self.path_keys = sorted(key for key in index if is_path_key(key))
+        self.detected_by_parent = {}
+        self.by_name = {}
+        self.paths_by_sha = {}
+        self.shas_by_path = {}
+        for key in self.path_keys:
+            for entry in index[key]:
+                if entry.get('folder'):
+                    continue
+                if entry['kind'] == 'detection' or (entry['kind'] == 'hash' and entry_status(entry) in MALWARE_STATUSES):
+                    self.detected_by_parent.setdefault(ntpath.dirname(key), []).append((key, entry))
+                sha = entry.get('sha256') if entry['kind'] in ('hash', 'file_info') else ''
+                if sha and sha != _EMPTY_SHA256:
+                    self.paths_by_sha.setdefault(sha, set()).add(key)
+                    self.shas_by_path.setdefault(key, set()).add(sha)
+            name = name_key(key)
+            if name:
+                self.by_name.setdefault(name, []).append(key)
+
+    def siblings(self, key):
+        """(path, entry) of detections of other files in the key's folder."""
+        parent = ntpath.dirname(key)
+        if not parent or is_broad_parent(parent):
+            return []
+        return [(path, entry) for path, entry in self.detected_by_parent.get(parent, ()) if path != key]
+
+    def same_name(self, key):
+        """Other paths of a file with the key's (uncommon) name."""
+        name = name_key(key)
+        return [path for path in self.by_name.get(name, ()) if path != key] if name else []
+
+    def same_content(self, key):
+        """Other paths with a SHA256 the key's file has."""
+        paths = set()
+        for sha in self.shas_by_path.get(key, ()):
+            paths |= self.paths_by_sha[sha]
+        paths.discard(key)
+        return sorted(paths)
+
+    def inside(self, folder):
+        """(path, entries) of the keys below a folder key, in order."""
+        prefix = folder.rstrip('\\') + '\\'
+        start = bisect.bisect_left(self.path_keys, prefix)
+        for position in range(start, len(self.path_keys)):
+            path = self.path_keys[position]
+            if not path.startswith(prefix):
+                break
+            yield path, self.index[path]
+
+
+# Where programs are installed: two copies of a file there (another version
+# folder, a vendor's shared DLL) are what installers do.
+_INSTALLED_PREFIXES = ('c:\\program files', 'c:\\windows\\')
+
+
+def _both_installed(key, other):
+    return key.startswith(_INSTALLED_PREFIXES) and other.startswith(_INSTALLED_PREFIXES)
+
+
+def _add_related(collector, related, key):
+    """The files related to one of the line's files without sharing its
+    path: detected siblings, copies (same content: their detections and
+    hashes) and files of the same name. Copies and names between two
+    installed programs' folders only when the copy is flagged."""
+    added = 0
+    for path, entry in related.siblings(key):
+        if added >= MAX_RELATED_PER_LINE:
+            break
+        added += collector.add(entry, MATCH_SIBLING, other_path=path)
+    for path in related.same_content(key)[:MAX_RELATED_PER_LINE]:
+        for entry in related.index.get(path, ()):
+            if entry['kind'] not in ('hash', 'detection') or entry.get('folder'):
+                continue
+            if _both_installed(key, path) and entry_status(entry) not in FLAGGED_STATUSES:
+                continue
+            collector.add(entry, MATCH_SAME_HASH, other_path=path)
+    added = 0
+    for path in related.same_name(key):
+        if _both_installed(key, path):
+            continue
+        for entry in sorted(related.index.get(path, ()), key=_rank):
+            if added >= MAX_RELATED_PER_LINE:
+                return
+            if not entry.get('folder'):
+                added += collector.add(entry, MATCH_NAME, other_path=path)
+
+
+# What the files inside a folder line are, in a few words, per kind.
+_INSIDE_WHAT = {
+    'hash': 'file hashes', 'detection': 'detections', 'fixlog': 'Fixlog results', 'file_info': 'file details',
+    'evidence': 'Spor timeline entries', 'mention': 'mentions',
+}
+
+
+def _inside_what(entry):
+    """What an entry about a file inside a folder line is, in a few words:
+    a mention's role when it reads as one ("deleted by MAU"), else where in
+    its log it is ("mentions in AMCACHE"), else its kind."""
+    if entry['kind'] != 'mention':
+        return _INSIDE_WHAT.get(entry['kind'], entry['kind'])
+    role = entry.get('role') or ''
+    if ' ' in role:
+        return role
+    section = entry.get('section') or ''
+    return f'mentions in {section}' if section else 'mentions'
+
+
+def _add_inside(collector, related, folder):
+    """What other logs say about the files inside a folder line's folder:
+    flagged entries one by one, the others summed up per (log, what) in a
+    'files inside' mention. Only malware and PUPs colour the line
+    (_MATCH_STATUSES)."""
+    if is_broad_parent(folder):
+        return
+    listed = 0
+    groups = {}
+    for path, entries in related.inside(folder):
+        for entry in entries:
+            if finding_status(entry) in FLAGGED_STATUSES and listed < MAX_INSIDE_ENTRIES:
+                listed += collector.add(entry, MATCH_INSIDE, other_path=path)
+                continue
+            # The file names in order, each once (a dict keeps the order).
+            group = groups.setdefault((entry['upload_id'], _inside_what(entry)), {'first': entry, 'files': {}})
+            group['files'].setdefault(entry.get('file') or file_name(path))
+    for (upload_id, what), group in groups.items():
+        first, files = group['first'], list(group['files'])
+        names = ', '.join(files[:5]) + (', ...' if len(files) > 5 else '')
+        collector.add(
+            _plain_mention(upload_id, first.get('log_type', ''), first.get('line_no'), f'{len(files)} {what}: {names}',
+                           ROLE_FILES_INSIDE),
+            MATCH_INSIDE, slot=(ROLE_FILES_INSIDE, upload_id, what),
+        )
+
+
+# --- At the same time: created-files lines of the log within a few minutes of
+# a flagged one, and the related Spor logs' timeline events then.
+
+TIMING_WINDOW = timedelta(minutes=2)
+# More created files in one minute than this is Windows Update or an
+# installer: that minute ties nothing together.
+_TIMING_CROWDED_MINUTE = 25
+_TIMING_SKIP_PREFIXES = ('c:\\windows\\', 'c:\\program files\\windowsapps\\')
+# Scheduled task files are Windows' files written for whoever made the task.
+_TIMING_KEEP_PREFIXES = ('c:\\windows\\system32\\tasks\\',)
+# A created-files line flagged by its rule verdict, or by its correlations
+# (which flag more lines with '!', so only malware and PUPs count there).
+_TIMING_RULE_ANCHORS = frozenset({'B', 'P', '!'})
+_TIMING_TIME_FORMAT = '%Y-%m-%d %H:%M'
+ROLE_SAME_TIME = 'same time'
+
+# A created / modified files line: its text, created time (to the minute),
+# path key and rule status.
+CreatedLine = namedtuple('CreatedLine', 'text when key status')
+# A Spor TIMELINE item in the PC's local time.
+TimelineEvent = namedtuple('TimelineEvent', 'when upload_id line_no item key')
+
+
+def _created_line(text, key, status):
+    """The CreatedLine of a created / modified files line ('____D' folder
+    lines too: (CreatedLine, is folder)), or (None, False)."""
+    entry = ex.extract_onemonth(text) if text[:1].isdigit() else None
+    if entry is None or not entry.date:
+        return None, False
+    try:
+        when = datetime.fromisoformat(entry.date).replace(second=0)
+    except ValueError:
+        return None, False
+    return CreatedLine(text, when, key, status), 'd' in (entry.attributes or '').lower()
+
+
+def _timed_lines(collectors):
+    """The created lines worth timing: not Windows' own files (task files
+    are), not in a crowded minute."""
+    found = [
+        collector.created for collector in collectors.values()
+        if collector.created is not None and not (
+            collector.created.key.startswith(_TIMING_SKIP_PREFIXES)
+            and not collector.created.key.startswith(_TIMING_KEEP_PREFIXES)
+        )
+    ]
+    per_minute = Counter(line.when for line in found)
+    return [line for line in found if per_minute[line.when] <= _TIMING_CROWDED_MINUTE]
+
+
+def _spor_timeline_events(upload_id, lines, known):
+    """[TimelineEvent] of a Spor log's TIMELINE items in the PC's local time;
+    [] when its header does not tell the time base. Spor names only the
+    offset when it ran: events before a daylight saving change are an hour
+    off (and then seldom matched)."""
+    offset = spor_log.local_offset_minutes(lines)
+    if offset is None:
+        return []
+    events = []
+    for line_no, item in spor_log.iter_timeline_items(lines, known):
+        try:
+            when = datetime.fromisoformat(item.time) + timedelta(minutes=offset)
+        except ValueError:
+            continue
+        key = normalized_path(item.item) if spor_log.is_path(item.item) else ''
+        events.append(TimelineEvent(when, upload_id, line_no, item, key))
+    return events
+
+
+def _add_timing(uploaded_log, collectors, spor_logs, verdicts):
+    """Created-files lines within TIMING_WINDOW of a flagged created-files
+    line (its rule status B / P / !, or correlation status B / P) get that
+    line; those lines and the flagged ones get the timeline events of that
+    time of the related Spor logs of this machine (`spor_logs`: (upload_id,
+    lines, known paths)). Informational: never a status."""
+    created = _timed_lines(collectors)
+    anchors = sorted((
+        line for line in created
+        if line.status in _TIMING_RULE_ANCHORS or correlation_status(collectors[line.text].entries) in MALWARE_STATUSES
+    ), key=lambda line: line.when)
+    if not anchors:
+        return
+    numbers = _first_line_numbers(uploaded_log.content, {anchor.text for anchor in anchors})
+    anchor_times = [anchor.when for anchor in anchors]
+    clustered = {anchor.text for anchor in anchors}
+    for line in created:
+        low = bisect.bisect_left(anchor_times, line.when - TIMING_WINDOW)
+        high = bisect.bisect_right(anchor_times, line.when + TIMING_WINDOW)
+        close = sorted(
+            (anchor for anchor in anchors[low:high] if anchor.text != line.text),
+            key=lambda anchor: abs(anchor.when - line.when),
+        )[:MAX_RELATED_PER_LINE]
+        for anchor in close:
+            collectors[line.text].add(_plain_mention(
+                uploaded_log.upload_id, uploaded_log.log_type, numbers.get(anchor.text, 0), anchor.text,
+                ROLE_SAME_TIME, file_name(anchor.key), time=anchor.when.strftime(_TIMING_TIME_FORMAT),
+            ), MATCH_TIMING)
+            clustered.add(line.text)
+    events = sorted(
+        (event for upload_id, lines, known in spor_logs if verdicts.get(upload_id) != SYSTEM_DIFFERENT
+         for event in _spor_timeline_events(upload_id, lines, known)),
+        key=lambda event: event.when,
+    )
+    times = [event.when for event in events]
+    for line in created:
+        if line.text not in clustered:
+            continue
+        # FRST gives the minute only: the window runs to its last second.
+        low = bisect.bisect_left(times, line.when - TIMING_WINDOW)
+        high = bisect.bisect_right(times, line.when + TIMING_WINDOW + timedelta(seconds=59))
+        added = 0
+        for event in sorted(events[low:high], key=lambda event: abs(event.when - line.when)):
+            if added >= MAX_RELATED_PER_LINE:
+                break
+            if event.key == line.key:
+                continue  # the line's own file: matched by its path already
+            item = event.item
+            added += collectors[line.text].add(_plain_mention(
+                event.upload_id, LOG_TYPE_SPOR, event.line_no, item.text, ROLE_SAME_TIME,
+                file_name(item.item) if spor_log.is_path(item.item) else '', section=spor_log.SECTION_TIMELINE,
+                time=event.when.strftime('%Y-%m-%d %H:%M:%S'), tags=item.tags, extra=[('time in log', item.time)],
+            ), MATCH_TIMING)
+
+
 def _compute(uploaded_log, upload_ids, payload):
     """{line text: [entry]} from scratch."""
     index = {}
@@ -1262,12 +1673,11 @@ def _compute(uploaded_log, upload_ids, payload):
     _detection_entries(upload_ids, index, covered)
     _fixlog_entries(upload_ids, index)
     _addition_entries(upload_ids, index, own=uploaded_log)
-    _spor_entries(upload_ids, index)
+    spor_logs = []
+    _spor_entries(upload_ids, index, spor_logs)
     _frst_search_entries(upload_ids, index)
     _shortcut_entries(upload_ids, index)
     _mau_entries(upload_ids, index)
-    if not index:
-        return {}
     # A scanner that detected a whole folder (e.g. AdwCleaner's Folders
     # section) also speaks for the files and folders inside it, and so does
     # a folder mention (a Defender path exclusion).
@@ -1276,47 +1686,48 @@ def _compute(uploaded_log, upload_ids, payload):
         found = [entry for entry in entries if entry['kind'] == 'detection' or entry.get('folder')]
         if found:
             detections[key] = found
-    result = {}
+    related = _RelatedIndex(index)
+    verdicts = _system_verdicts(uploaded_log, upload_ids)
+    collectors = {}
     for line in payload.get('lines') or []:
         if not isinstance(line, dict):
             continue
         text = (line.get('line') or '').strip()
-        if not text or text in result:
+        if not text or text in collectors:
             continue
-        entries = []
-        seen = set()
-        program = installed_program(text)
-
-        def add(entry, match, in_folder=False):
-            slot = (entry.get('upload_id'), entry.get('line_no'), entry.get('kind'))
-            if slot in seen:
-                return
-            if match == 'app' and program and versions_differ(program[1], entry.get('version')):
-                return  # another version of a program with the same name
-            seen.add(slot)
-            extra = {}
-            if match != MATCH_PATH:
-                extra['match'] = match
-            if in_folder:
-                extra['in_folder'] = True
-            entries.append({**entry, **extra} if extra else entry)
-
-        for key, match in line_keys(line):
+        collector = collectors[text] = _LineEntries(text, verdicts)
+        own_files = []
+        keys = line_keys(line)
+        for key, match in keys:
             for entry in index.get(key) or ():
-                add(entry, match)
-            if not is_path_key(key):
-                continue  # typed keys have no folders
+                collector.add(entry, match)
+            if not is_path_key(key) or match == MATCH_HOST:
+                continue  # typed keys have no folders; a host program speaks for nothing
+            own_files.append(key)
             parent, previous = ntpath.dirname(key), key
-            while detections and parent and parent != previous and len(entries) < MAX_ENTRIES_PER_LINE:
+            while detections and parent and parent != previous and len(collector.entries) < MAX_ENTRIES_PER_LINE:
                 for entry in detections.get(parent, ()):
-                    add(entry, match, in_folder=True)
+                    collector.add(entry, match, in_folder=True)
                 parent, previous = ntpath.dirname(parent), parent
-        if len(entries) > MAX_ENTRIES_PER_LINE:
-            entries.sort(key=lambda entry: (not entry_status(entry), KIND_RANK.get(entry.get('kind'), 9)))
-        if entries:
-            result[text] = entries[:MAX_ENTRIES_PER_LINE]
-    if result:
-        _add_system_badges(uploaded_log, result)
+        for key in own_files:
+            _add_related(collector, related, key)
+        # line_keys gives the line's own file first.
+        main = next((key for key, match in keys if match == MATCH_PATH), '')
+        if main:
+            collector.created, folder = _created_line(text, main, line.get('dominant_status') or '')
+            if folder:
+                _add_inside(collector, related, main)
+    _add_timing(uploaded_log, collectors, spor_logs, verdicts)
+    result = {}
+    for text, collector in collectors.items():
+        entries = collector.entries
+        if not entries:
+            continue
+        # Informational entries last; over the cap, status-giving ones first,
+        # so the cap never drops one of those.
+        capped = len(entries) > MAX_ENTRIES_PER_LINE
+        entries.sort(key=lambda entry: (entry.get('match') in INFO_MATCHES, *(_rank(entry) if capped else ())))
+        result[text] = entries[:MAX_ENTRIES_PER_LINE]
     return result
 
 

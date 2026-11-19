@@ -264,6 +264,10 @@ _MAU_DELETED_RE = re.compile(
 )
 _MAU_FAILED_RE = re.compile(r'^\s*Failed to delete: (.{1,1000})$')
 _MAU_UNINSTALL_KEY_RE = re.compile(r'\\Uninstall\\[^\\]{1,300}$', re.IGNORECASE)
+# A report section's title is the centred line below a dashed line.
+_MAU_SECTION_RULE_RE = re.compile(r'^-{20,}\s*$')
+_MAU_KEY_PATHS_SECTION = 'REGISTRY KEY PATHS'
+MAX_MAU_KEY_PATHS = 500
 _MAU_CONSOLE_KINDS = {
     'file': 'File', 'directory': 'Dir', 'folder': 'Dir', 'dir': 'Dir', 'registry key': 'RegKey', 'key': 'RegKey',
     'registry value': 'RegValue', 'value': 'RegValue', 'service': 'Service', 'task': 'Task',
@@ -284,6 +288,9 @@ class MauProduct:
     install_location: str = ''
     install_source: str = ''
     uninstall_keys: list = field(default_factory=list)
+    # (line_no, path) of the "REGISTRY KEY PATHS" section: the files the
+    # product's MSI components point at (what it installed).
+    key_paths: list = field(default_factory=list)
 
 
 @dataclass
@@ -299,21 +306,41 @@ def _mau_value(value):
     return '' if not value or value.startswith('<') else value
 
 
+def _is_mau_section_title(bodies, index):
+    """True for a report section's title: the one line between two dashed
+    lines (an upper-case path right below a title's lines is none)."""
+    return (0 < index < len(bodies) - 1 and bool(_MAU_SECTION_RULE_RE.match(bodies[index - 1]))
+            and bool(_MAU_SECTION_RULE_RE.match(bodies[index + 1])))
+
+
 def mau_facts(content):
     """(products, deleted items) of a MAU log, report or console form."""
     products, items = [], []
     current = None
     in_deleted = False
-    for index, raw in enumerate(_bodies(content)):
+    section = ''
+    bodies = _bodies(content)
+    for index, raw in enumerate(bodies):
         stamp = _MAU_TIME_RE.match(raw)
         body = raw[stamp.end():] if stamp else raw
         if not body.strip():
+            continue
+        if _MAU_SECTION_RULE_RE.match(body):
+            continue
+        if _is_mau_section_title(bodies, index):
+            section = body.strip()
             continue
         m = _MAU_ANALYZING_RE.match(body)
         if m:
             current = MauProduct(index + 1, m.group(1).strip())
             products.append(current)
             in_deleted = False
+            section = ''
+            continue
+        if section == _MAU_KEY_PATHS_SECTION and current is not None:
+            path = body.strip()
+            if is_path(path) and len(current.key_paths) < MAX_MAU_KEY_PATHS:
+                current.key_paths.append((index + 1, path))
             continue
         if body.startswith('Deleted items'):
             in_deleted = True

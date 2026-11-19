@@ -16,7 +16,17 @@ these keys and look up every key of each analyzed line:
   `msi:<guid>` (an MSI product code, which is also its Uninstall subkey) and
   `app:<display name>` (an installed program by its name: Addition's Installed
   Programs, a Fixlog app investigation, MAU; the versions are compared when
-  the entries are matched, see installed_program).
+  the entries are matched, see installed_program),
+  `regval:<last key part>|<value>` (any other registry value: FRST's
+  "<key>: [<value>] ..." lines, Fixlog's "<key>\\\\<value> => ..." results,
+  scanner "<key>|<value>" targets) and `browser:<browser>:<setting>` (a
+  browser's home page, startup URLs, search URL, ...: "CHR HomePage:" lines,
+  Fixlog's "\"Chrome HomePage\" => removed successfully").
+
+A line whose own file is a host program (wscript.exe, rundll32.exe, ... in
+its Windows folder) that runs a file of its command line gets that program's
+key with `match` 'host': what other logs say about the host says nothing about
+the line (is_host_of_line).
 
 Scanner detections, Fixlog results and hash rows give their keys through
 target_keys(); analyzed lines through line_keys(). Hives and user SIDs are
@@ -31,6 +41,7 @@ from .file_hashes import _as_path, normalized_path
 
 MATCH_PATH = 'path'
 MATCH_ARGUMENT = 'argument'
+MATCH_HOST = 'host'
 # Key prefix -> the `match` an entry found through it gets.
 TYPED_MATCHES = {
     'run': 'registry',
@@ -43,7 +54,39 @@ TYPED_MATCHES = {
     'uninstall': 'uninstall',
     'msi': 'msi',
     'app': 'app',
+    'regval': 'registry',
+    'browser': 'browser',
 }
+
+# Programs a command line runs through: what is said about them is not about
+# what they run (a script, a DLL).
+CMDLINE_HOSTS = frozenset({
+    'cmd.exe', 'powershell.exe', 'pwsh.exe', 'powershell_ise.exe', 'wscript.exe', 'cscript.exe', 'mshta.exe',
+    'rundll32.exe', 'regsvr32.exe', 'conhost.exe', 'explorer.exe', 'msiexec.exe', 'schtasks.exe',
+    'wmic.exe', 'certutil.exe', 'bitsadmin.exe', 'forfiles.exe', 'msbuild.exe', 'installutil.exe',
+    'regasm.exe', 'regsvcs.exe', 'svchost.exe', 'dllhost.exe', 'cmstp.exe', 'odbcconf.exe', 'pcalua.exe',
+})
+# Windows' own binaries (normalized keys).
+SYSTEM_DIR_PREFIXES = ('c:\\windows\\system32\\', 'c:\\windows\\syswow64\\', 'c:\\windows\\microsoft.net\\')
+
+
+# Where the real host programs are: a file named like one anywhere else
+# (AppData\svchost.exe) is no host but a file of its own.
+_HOST_FOLDER_PREFIXES = ('c:\\windows\\', 'c:\\program files\\powershell\\')
+
+
+def is_host_program(key):
+    """True for a host program in its Windows folder or any Windows binary:
+    never what a command-line detection is about."""
+    return is_host_of_line(key) or (key or '').startswith(SYSTEM_DIR_PREFIXES)
+
+
+def is_host_of_line(key):
+    """True when a line's own file is a host program in its Windows folder
+    (C:\\Windows\\System32\\wscript.exe), which then speaks for nothing the
+    line runs. A copy elsewhere, or another Windows binary, is the line's file."""
+    key = key or ''
+    return key.rsplit('\\', 1)[-1] in CMDLINE_HOSTS and key.startswith(_HOST_FOLDER_PREFIXES)
 
 _GUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
@@ -166,6 +209,99 @@ def task_key(path):
     return f'task:{value}' if value else ''
 
 
+# --- Registry values and browser settings ----------------------------------
+# FRST: "HKLM\SOFTWARE\Microsoft\Windows Defender: [DisableAntiSpyware] Restriction",
+# "HKU\S-1-5-21-...\...\Policies\System: [DisableTaskMgr] 1".
+_REG_VALUE_LINE_RE = re.compile(r'^(HK[A-Z_]{1,20}(?:-x32)?\\[^:\[\]\r\n]{1,300}): \[([^\[\]\r\n]{1,200})\]')
+# Key parts that have keys of their own (run:, fw:) or name no value.
+_REGVAL_SKIP_PARTS = frozenset({'', '...', 'run', 'runonce', 'firewallrules'})
+
+
+def regval_key(key_path, value):
+    """`regval:<last part of the key>|<value>` (lowercased): the key's last
+    part only, as FRST shortens keys ("HKLM\\...\\Policies\\System") and
+    other logs spell them in full; '' for none."""
+    part = (key_path or '').strip().strip('"').rstrip('\\').rsplit('\\', 1)[-1].strip().lower()
+    value = (value or '').strip().strip('"').strip().lower()
+    if part in _REGVAL_SKIP_PARTS or not value:
+        return ''
+    return f'regval:{part}|{value}'
+
+
+def _target_regval(text):
+    """The `regval:` key of a registry value target: "<key>\\\\<value>" (a
+    Fixlog result, the value optionally quoted and followed by "=<data>") or
+    "<key>|<value>" (Malwarebytes, MAU)."""
+    if not text.lower().startswith('hk'):
+        return ''
+    if '\\\\' in text:
+        key_path, _sep, rest = text.partition('\\\\')
+    elif '|' in text:
+        key_path, _sep, rest = text.rpartition('|')
+    else:
+        return ''
+    rest = rest.strip()
+    value = rest[1:].split('"', 1)[0] if rest.startswith('"') else rest.split('=', 1)[0]
+    return regval_key(key_path, value)
+
+
+# FRST's browser abbreviations and the names Fixlog results use -> one name.
+_BROWSERS = {
+    'chr': 'chrome', 'chrome': 'chrome', 'edge': 'edge', 'ff': 'firefox', 'firefox': 'firefox',
+    'opr': 'opera', 'opera': 'opera', 'bra': 'brave', 'brave': 'brave', 'vivaldi': 'vivaldi',
+}
+# "CHR HomePage: Default -> ...", "FF NewTab: Mozilla\Firefox\Profiles\x -> ...".
+_BROWSER_LINE_RE = re.compile(r'^(CHR|Edge|FF|OPR|BRA|Vivaldi) ([A-Za-z]{2,40}):', re.IGNORECASE)
+# A Fixlog's '"Chrome HomePage" => removed successfully' (quotes already stripped).
+_BROWSER_TARGET_RE = re.compile(r'^(chrome|edge|firefox|opera|brave|vivaldi) ([a-z]{2,40})$')
+# Lines that name an item, not a setting: their files have keys of their own.
+_BROWSER_ITEMS = frozenset({
+    'extension', 'profile', 'defaultprofile', 'plugin', 'notifications', 'session', 'keywords', 'nativemessaging',
+})
+
+
+def browser_key(browser, setting):
+    """`browser:<browser>:<setting>` (lowercased), '' for an unknown browser or an item line."""
+    name = _BROWSERS.get((browser or '').strip().lower(), '')
+    setting = (setting or '').strip().lower()
+    if not name or not setting or setting in _BROWSER_ITEMS:
+        return ''
+    return f'browser:{name}:{setting}'
+
+
+# --- File names -------------------------------------------------------------
+# Names too common to tie two files together by name alone.
+COMMON_FILE_NAMES = frozenset({
+    'app.config', 'packages.config', 'nuget.config', 'web.config', '.gitignore', '.gitattributes', '.gitkeep',
+    'contributors', 'authors', 'desktop.ini', 'thumbs.db', 'config.json', 'settings.json', 'config.ini',
+    'settings.ini', 'config.xml', 'settings.xml', 'index.js', 'index.html', 'main.js', 'package.json',
+    'manifest.json', 'background.js', 'setup.exe', 'install.exe', 'installer.exe', 'uninstall.exe',
+    'uninst.exe', 'unins000.exe', 'unins000.dat', 'update.exe', 'updater.exe', 'launcher.exe', 'main.exe',
+    'app.exe', 'start.exe', 'run.exe', 'helper.exe', 'service.exe', 'assemblyinfo.cs', 'resources.resx',
+    'directory.build.props', 'log.txt', 'debug.log', 'error.log', 'license.txt', 'readme.txt', 'readme.md',
+    'changelog.md', 'version.txt', 'version.dll', 'data.dat', 'cache.dat', 'icon.ico', 'favicon.ico',
+    'logo.png', 'temp.tmp', 'license', 'readme', 'changelog',
+})
+_COMMON_NAME_PREFIXES = ('readme', 'license', 'licence', 'changelog', 'unins', 'vc_redist', 'vcredist', 'dotnet')
+
+
+def name_key(key):
+    """`name:<file name>` of a path key whose name is uncommon enough to tie
+    two copies of a file together (an extension, not a Windows file, not a
+    host program, not COMMON_FILE_NAMES); '' otherwise."""
+    if not key or not is_path_key(key) or key.startswith('c:\\windows\\'):
+        return ''
+    base = key.rstrip('\\').rsplit('\\', 1)[-1]
+    stem, dot, _ext = base.rpartition('.')
+    if not dot or len(stem) < 3 or not _HAS_EXTENSION_RE.search(base):
+        return ''
+    if base in COMMON_FILE_NAMES or base in CMDLINE_HOSTS or base.startswith(_COMMON_NAME_PREFIXES):
+        return ''
+    if base.endswith('.lnk'):
+        return ''  # shortcuts are copied around by every installer
+    return f'name:{base}'
+
+
 def target_keys(target, result=''):
     """The keys of a scanner detection's or a Fixlog result's target: its
     path, or the typed keys of a registry target, extension ID, ... `result`
@@ -209,6 +345,12 @@ def target_keys(target, result=''):
     if not keys and result and 'service' in result.lower() and re.fullmatch(r'[\w.\- ]{1,100}', text):
         # Fixlog: "<name> => service removed successfully".
         keys.add(f'svc:{lowered}')
+    if not keys:
+        # Any other registry value, or a browser setting ('"Chrome HomePage"').
+        keys.add(_target_regval(text))
+        match = _BROWSER_TARGET_RE.match(lowered)
+        if match:
+            keys.add(browser_key(*match.groups()))
     keys.discard('')
     return keys
 
@@ -318,11 +460,12 @@ def line_keys(line):
     entry_type = line.get('parsed_entry_type') or ''
     result = []
     main = line_main_path(raw, components)
+    arguments = [key for key in argument_paths(components.get('arguments') or '') if key != main]
     if main:
-        result.append((main, MATCH_PATH))
-    for key in argument_paths(components.get('arguments') or ''):
-        if key != main:
-            result.append((key, MATCH_ARGUMENT))
+        # A host program running a file of the command line speaks for nothing.
+        result.append((main, MATCH_HOST if arguments and is_host_of_line(main) else MATCH_PATH))
+    for key in arguments:
+        result.append((key, MATCH_ARGUMENT))
 
     name = (components.get('name') or '').strip()
     typed = set()
@@ -357,7 +500,16 @@ def line_keys(line):
     program = installed_program(text)
     if program:
         typed.add(app_key(program[0]))
+    browser = _BROWSER_LINE_RE.match(text)
+    if browser:
+        typed.add(browser_key(*browser.groups()))
     typed.discard('')
+    if not typed and entry_type != 'runkey':
+        # Any other registry value line ("<key>: [<value>] <data>").
+        registry = _REG_VALUE_LINE_RE.match(text)
+        if registry:
+            typed.add(regval_key(*registry.groups()))
+            typed.discard('')
     # The name of a program is the weakest key: an entry found through its
     # Uninstall key or MSI product code too says so.
     for key in sorted(typed, key=lambda key: (key.startswith('app:'), key)):
