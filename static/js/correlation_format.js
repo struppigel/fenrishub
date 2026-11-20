@@ -101,6 +101,11 @@ window.CorrelationFormat = (function () {
         const parent = text(entry.parent);
         if (entry.role === 'loaded' && parent) return 'loaded by ' + parent;
         if (entry.role === 'registry' && parent) return 'in ' + parent;
+        // Spor 0.6.0 USB DRIVES: what autorun.inf starts, a file a shortcut's arguments name (a worm's hidden copy)
+        if (entry.role === 'target' && /\\autorun\.inf$/i.test(parent)) return 'started by ' + parent;
+        if (entry.role === 'argument file' && parent) return 'in the arguments of ' + parent;
+        if (entry.role === 'icon file' && parent) return 'icon of ' + parent;
+        if (entry.role === 'item list target' && parent) return 'item list target of ' + parent;
         if (entry.role === 'target') return 'pointed at';
         if (entry.role === 'shortcut target') return 'shortcut target';
         if (entry.role === 'shortcut') return 'the shortcut itself';

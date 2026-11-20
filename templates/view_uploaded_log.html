@@ -548,6 +548,13 @@ function buildLineCopyItems(line) {
         if (cls === 'hl-company') value = value.replace(/^\((.*)\)$/, '$1');
         add(key, value, token);
         if (cls === 'hl-path') {
+            // Not through add(): its trim() would drop a decoded blank at the
+            // end (<U+0020>, <U+00A0>), which is part of the name.
+            const real = Fenris.realPath(value);
+            if (real && !seen.has(real)) {
+                seen.add(real);
+                items.push({ key: 'real path', value: real, token });
+            }
             add('filename', lastPathComponent(value));
             add('folder', parentFolder(value));
         }
@@ -1461,6 +1468,9 @@ function openPathMenu(token) {
     const name = lastPathComponent(path);
     const folder = parentFolder(path);
     const items = [{ key: 'copy', value: path, run: () => copyAndFlash(path, token) }];
+    // Spor's <U+00A0> / <RLO> markers as the characters themselves (for a fixlist).
+    const real = Fenris.realPath(path);
+    if (real) items.push({ key: 'copy real path', value: path, run: () => copyAndFlash(real, token) });
     if (name && name !== path) items.push({ key: 'copy name', value: name, run: () => copyAndFlash(name, token) });
     if (folder) items.push({ key: 'copy folder', value: folder, run: () => copyAndFlash(folder, token) });
     items.push({ key: 'google', value: path, run: () => openGoogleSearch(path) });

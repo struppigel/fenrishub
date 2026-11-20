@@ -112,12 +112,19 @@ def _spor_entries(upload_ids, index, spor_logs=None, facts=None):
             index.setdefault(key, []).extend(entries)
 
 
-def spor_log_entries(upload_id, lines, index, known=None):
+# USB DRIVES sub-lines that name a file the item line starts: "target:" (what
+# autorun.inf runs), "argument file:" (a worm's hidden copy, named relative to
+# the drive in a shortcut's arguments), "item list target:", "icon file:".
+_USB_FILE_SUB_KEYS = frozenset({'target', 'argument file', 'item list target', 'icon file'})
+
+
+def spor_log_entries(upload_id, lines, index, known=None, usb_files=None):
     """What one Spor log says, into `index` ({key: [entry]}): Defender
     detections, file facts (FILES, AMCACHE FILES), mentions in the module
     sections (under their path and persistence name), SOFTWARE facts and
     timeline evidence. Pure: the log's lines only (spor_self.py reads a
-    log's own lines with it too)."""
+    log's own lines with it too). `usb_files` (a list) gets (item line no,
+    key) of the files USB DRIVES sub-lines name (_USB_FILE_SUB_KEYS)."""
     if known is None:
         known = spor_log.known_paths(lines)
     _add_defender_entries(index, upload_id, LOG_TYPE_SPOR, spor_log.iter_defender_detections(lines))
@@ -125,7 +132,17 @@ def spor_log_entries(upload_id, lines, index, known=None):
         _add_path_entry(index, path, entry)
     for mention in spor_log.iter_mentions(lines, known):
         entry = _mention_entry(upload_id, LOG_TYPE_SPOR, mention)
-        _add_path_entry(index, mention.path, entry)
+        if mention.folder and mention.section == spor_log.SECTION_USB:
+            # A worm's hidden folder on a drive: speaks for the files inside
+            # (not a broad one, e.g. a hidden C:\ProgramData in the root listing).
+            _add_folder_entry(index, mention.path, entry)
+        else:
+            _add_path_entry(index, mention.path, entry)
+        if (usb_files is not None and mention.parent_line and mention.role in _USB_FILE_SUB_KEYS
+                and mention.section == spor_log.SECTION_USB):
+            key = _path_key(mention.path)
+            if key and is_path_key(key) and not is_host_program(key):
+                usb_files.append((mention.parent_line, key))
         if mention.identity:
             # A persistence entry under its name too: an FRST Run / service /
             # task line whose program differs or is gone still finds it.
@@ -134,7 +151,7 @@ def spor_log_entries(upload_id, lines, index, known=None):
                 index.setdefault(key, []).append(entry)
     _software_entries(upload_id, lines, index)
     for evidence in spor_log.iter_timeline_evidence(lines, known):
-        key = normalized_path(evidence.path)
+        key = _path_key(evidence.path)
         if not key:
             continue
         index.setdefault(key, []).append({
@@ -167,6 +184,12 @@ _BARE_NAME_RE = re.compile(
 _NO_DETAIL_SECTIONS = frozenset({spor_log.SECTION_FILES, spor_log.SECTION_AMCACHE_FILES})
 
 
+def _path_key(path):
+    r"""The key of a file or folder a Spor line names: a folder without its
+    trailing backslash ("E:\x\" keys like "E:\x", like FRST's folders)."""
+    return normalized_path(spor_log.folder_path(path))
+
+
 def _item_severity(item):
     """The severity of an item line: its Defender threat's, else its flags'
     and signature's (case_correlations.evidence_severity)."""
@@ -183,15 +206,16 @@ def _main_key(item):
         paths = spor_log.defender_paths(item.rest)
         return normalized_path(paths[0]) if paths else ''
     if spor_log.is_path(item.item):
-        return normalized_path(item.item)
+        return _path_key(item.item)
     found = argument_paths(item.item)
     return found[0] if found else ''
 
 
 def _file_of(index, key):
-    """The file name of a key as the log spells it (lowercased if unknown)."""
-    for entry in index.get(key, ()):
-        if entry.get('file') and not entry.get('folder'):
+    """The file name of a key as the log spells it (a folder's name when only
+    folder lines name it; lowercased if unknown)."""
+    for entry in sorted(index.get(key, ()), key=lambda entry: bool(entry.get('folder'))):
+        if entry.get('file'):
             return entry['file']
     return ntpath.basename(key.rstrip('\\'))[:120]
 
@@ -308,7 +332,7 @@ def _timeline_entries(upload_id, lines, known, index):
     for no, item in spor_log.iter_timeline_items(lines, known):
         if no in indexed or not spor_log.is_path(item.item):
             continue
-        key = normalized_path(item.item)
+        key = _path_key(item.item)
         if not key:
             continue
         index.setdefault(key, []).append({
@@ -354,6 +378,12 @@ def _detail_keys(item, own):
     return [key for key in keys if not is_host_program(key)]
 
 
+def _own_entry(index, by_line, no):
+    """The entry of line `no` about its own file (not a folder entry), or None."""
+    return next((entry for key in by_line[no] for entry in index[key]
+                 if entry.get('line_no') == no and not entry.get('folder')), None)
+
+
 def _detail_names(lines, known, index, by_line):
     """{line no: [keys]}: the files of the log a line names in its details
     (at most MAX_RELATED_PER_LINE), and {key: [entry]}: the lines naming each
@@ -366,12 +396,28 @@ def _detail_names(lines, known, index, by_line):
         if not keys:
             continue
         names[no] = keys
-        mine = next((entry for key in by_line[no] for entry in index[key]
-                     if entry.get('line_no') == no and not entry.get('folder')), None)
+        mine = _own_entry(index, by_line, no)
         if mine is not None:
             for key in keys:
                 named_in.setdefault(key, []).append(mine)
     return names, named_in
+
+
+def _usb_sub_names(usb_files, index, by_line, names, named_in):
+    """The files a USB DRIVES line's sub-lines name are named by the line too
+    ('detail' / 'named_by', like files in its details): the worm's shortcut and
+    its hidden copy, autorun.inf and what it starts. `usb_files`: (item line
+    no, key) of those sub-lines (spor_log_entries)."""
+    for item_no, key in usb_files:
+        if item_no not in by_line or key in by_line[item_no]:
+            continue
+        listed = names.setdefault(item_no, [])
+        if key in listed or len(listed) >= MAX_RELATED_PER_LINE:
+            continue
+        listed.append(key)
+        mine = _own_entry(index, by_line, item_no)
+        if mine is not None:
+            named_in.setdefault(key, []).append(mine)
 
 
 @dataclass
@@ -396,13 +442,15 @@ def build(upload_id, lines, known=None):
     if known is None:
         known = spor_log.known_paths(lines)
     index = {}
-    spor_log_entries(upload_id, lines, index, known)
+    usb_files = []
+    spor_log_entries(upload_id, lines, index, known, usb_files)
     _defender_event_entries(upload_id, lines, known, index)
     _timeline_entries(upload_id, lines, known, index)
     pairs = _summary_pairs(upload_id, lines, known, index)
     _install_entries(upload_id, lines, known, index)
     by_line = _line_keys(index)
     names, named_in = _detail_names(lines, known, index, by_line)
+    _usb_sub_names(usb_files, index, by_line, names, named_in)
     partners = {}
     for summary, detail in pairs:
         partners.setdefault(summary['line_no'], []).append(detail)

@@ -84,6 +84,13 @@
 .hl-sev-hint { color: var(--la-status-i); }
 .hl-sev-u { color: var(--la-status-unknown); }
 
+/* A path with characters that cannot be seen (Spor writes them as <U+00A0>,
+   <RLO>): marked for good, not only on hover. */
+.hl-oddchar {
+    text-decoration: underline dotted var(--la-status-w);
+    text-underline-offset: 3px;
+}
+
 /* Click-to-copy paths and registry keys (see view_uploaded_log.html). The
    only hover effect is an underline; .hl-copied briefly confirms a copy. */
 .uploaded-content .hl-reg,

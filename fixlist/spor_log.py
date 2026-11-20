@@ -34,6 +34,8 @@ SECTION_PERSISTENCE = 'PERSISTENCE'
 SECTION_FILES = 'FILES'
 SECTION_AMCACHE_FILES = 'AMCACHE FILES'
 SECTION_LEGEND = 'LEGEND'
+# Spor 0.6.0+ (USB worm profile): drive contents, autorun.inf, shortcuts.
+SECTION_USB = 'USB DRIVES'
 # Sections read by their own functions, not as mentions (iter_mentions).
 _NOT_MENTION_SECTIONS = frozenset({
     SECTION_SUMMARY, SECTION_TIMELINE, SECTION_FILES, SECTION_AMCACHE_FILES, SECTION_LEGEND,
@@ -126,8 +128,14 @@ _DEVICE_PREFIX_RE = re.compile(r'^(?:\\\\\?\\|\\\?\?\\)(?=[A-Za-z]:\\)')
 _SOFTWARE_FOLDER_RE = re.compile(r'(?:^|; )folder ([^;]{1,400})')
 # Sub-lines whose value is a file or folder of its own ("module:" an unsigned
 # DLL a program loads or side-loads, "script:" a script file of a runtime
-# launcher: Spor 0.3.0).
-_PATH_SUB_KEYS = frozenset({'loaded', 'path', 'target', 'entry', 'files', 'dll', 'module', 'script'})
+# launcher: Spor 0.3.0; USB DRIVES, Spor 0.6.0: "target:" a file autorun.inf
+# starts, "icon file:" its icon, "argument file:" a file a shortcut's
+# arguments name (a worm's hidden copy), "item list target:" a shortcut's
+# target from its shell items when it differs).
+_PATH_SUB_KEYS = frozenset({
+    'loaded', 'path', 'target', 'entry', 'files', 'dll', 'module', 'script',
+    'argument file', 'icon file', 'item list target',
+})
 # TIMELINE sub-lines that are files with their own time ("path: X [status] =>
 # <time>, ...", "script: X => <created>; N bytes").
 _TIMELINE_SUB_KEYS = frozenset({'path', 'script'})
@@ -175,6 +183,25 @@ def is_path(text):
 def strip_device_prefix(path):
     r"""`path` without a leading device prefix ("\\?\C:\x" -> "C:\x")."""
     return _DEVICE_PREFIX_RE.sub('', path, count=1)
+
+
+def folder_path(path):
+    r"""A folder as Spor lists it ("E:\<U+00A0>\") without the trailing
+    backslash, so it keys like a file path and like FRST's folders; a drive
+    root ("E:\") keeps it."""
+    trimmed = (path or '').rstrip('\\')
+    return trimmed if len(trimmed) > 2 else path
+
+
+# USB DRIVES: a folder's attributes ("attributes hidden, system, folder; ...").
+_HIDDEN_ATTRIBUTES_RE = re.compile(r'(?:^|; )attributes [^;]*\b(?:hidden|system)\b')
+
+
+def is_hidden_folder(item):
+    r"""A USB DRIVES folder line (path ending in "\") that is hidden, system or
+    flagged: it speaks for the files inside it (a worm's hidden folder)."""
+    return (item.item.endswith('\\') and len(item.item.rstrip('\\')) > 2
+            and (bool(_HIDDEN_ATTRIBUTES_RE.search(item.rest)) or bool(item.loud_flags)))
 
 
 def status_words(status):
@@ -578,6 +605,7 @@ class Mention:
     # (kind, name) of a PERSISTENCE entry (persistence_identity), on the first
     # mention of its line only.
     identity: tuple = ()
+    parent_line: int = 0    # a sub-line's item line (its line number), 0 for an item line
 
 
 def _path_at(text):
@@ -661,6 +689,7 @@ def iter_mentions(lines, known=None):
         subsection = ''
         current = []   # the mentions of the item line above (its sub-lines add to them)
         parent = None  # the item line above
+        parent_no = 0  # its line number
         for index in range(start + 1, end):
             body = _body(lines[index])
             stripped = body.strip()
@@ -688,7 +717,7 @@ def iter_mentions(lines, known=None):
                     out.append(Mention(
                         index + 1, item.item, title, subsection, item.time or (parent.time if parent else ''),
                         parent.tags if parent else '', stripped[:300], key,
-                        owner[:200], item.status, item.flags,
+                        owner[:200], item.status, item.flags, parent_line=parent_no if parent else 0,
                     ))
                 elif current and value:
                     for mention in current:
@@ -699,14 +728,19 @@ def iter_mentions(lines, known=None):
                 continue
             item = split_item(body, known)
             current = []
-            parent = item
+            parent, parent_no = item, index + 1
             if not item.trusted or _DEFENDER_RE.match(item.item):
                 continue   # Defender detections are read by iter_defender_detections
             common = dict(section=title, subsection=subsection, time=item.time, tags=item.tags,
                           text=stripped[:300], flags=item.flags)
             if is_path(item.item):
                 folder = title == SECTION_DEFENDER and item.tags == 'Paths' and 'exclusion' in subsection.lower()
-                current.append(Mention(index + 1, item.item, role='item', status=item.status, folder=folder,
+                path = item.item
+                if title == SECTION_USB:
+                    # Folders end in "\"; a hidden or flagged one speaks for its files.
+                    folder = is_hidden_folder(item)
+                    path = folder_path(path)
+                current.append(Mention(index + 1, path, role='item', status=item.status, folder=folder,
                                        **common))
             target = _path_at(item.rest)
             if target and not (title == SECTION_SOFTWARE and _outside_folder(target, item.rest)):

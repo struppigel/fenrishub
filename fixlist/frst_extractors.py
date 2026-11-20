@@ -112,10 +112,44 @@ def normalize_path(path):
     return CHROMIUM_PROFILE_RE.sub(r"\1profile", path)
 
 
+# Spor writes characters that cannot be seen as "<U+00A0>" (invisible or blank
+# characters: a USB worm's folder named with one no-break space) and "<RLO>"
+# (bidi overrides; Spor joins them all under that name, U+202E is by far the
+# most common). '<' cannot be part of a Windows path, so the markers are never
+# a real name: decoded, the path compares equal to FRST's, which writes the
+# characters themselves.
+SPOR_CHAR_RE = re.compile(r"<U\+([0-9A-Fa-f]{4,6})>|<RLO>")
+# Only ASCII blanks are stripped: a no-break space at the end can be the whole name.
+_KEY_BLANKS = " \t\r\n\x0b\x0c"
+# Characters no Windows name holds: a marker for one (only in a hand-made log)
+# stays as written, so it cannot add a separator, NUL or a lone surrogate to a
+# key (PostgreSQL's jsonb refuses the last two).
+_NOT_IN_NAMES = frozenset('\\/:*?"<>|')
+
+
+def _spor_char(m):
+    if not m.group(1):
+        return "‮"
+    code = int(m.group(1), 16)
+    if code < 0x20 or 0xD800 <= code <= 0xDFFF or code > 0x10FFFF or chr(code) in _NOT_IN_NAMES:
+        return m.group(0)
+    return chr(code)
+
+
+def decode_spor_chars(text):
+    """`text` with Spor's "<U+XXXX>" and "<RLO>" markers as the characters."""
+    if not text or "<" not in text:
+        return text
+
+    return SPOR_CHAR_RE.sub(_spor_char, text)
+
+
 def path_key(path):
     """The form filepath rules and cross-log lookups compare paths in: drive,
-    user and browser profile normalized, lowercased and stripped ('' for no path)."""
-    return normalize_path(path).lower().strip() if path else ""
+    user and browser profile normalized, Spor's character markers decoded,
+    lowercased and stripped ('' for no path)."""
+    # Stripped before decoding: a decoded "<U+0020>" at the end is part of the name.
+    return normalize_path(decode_spor_chars(path.strip(_KEY_BLANKS))).lower() if path else ""
 
 
 def _comparable_path(value):

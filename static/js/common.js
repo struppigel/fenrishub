@@ -178,10 +178,26 @@ window.Fenris = (function () {
         },
     };
 
+    /* Spor writes characters that cannot be seen as "<U+00A0>" and bidi
+     * overrides as "<RLO>" ('<' is never part of a Windows path). The real
+     * path, e.g. for a fixlist; null when there is no such marker. */
+    // Markers of characters no Windows name holds (control characters,
+    // surrogates, \ / : * ? " < > |) stay as written, as in frst_extractors.
+    function realPath(text) {
+        if (!text || !/<U\+[0-9A-Fa-f]{4,6}>|<RLO>/.test(text)) return null;
+        return text.replace(/<U\+([0-9A-Fa-f]{4,6})>|<RLO>/g, (all, hex) => {
+            if (!hex) return '‮';
+            const code = parseInt(hex, 16);
+            if (code < 0x20 || (code >= 0xD800 && code <= 0xDFFF) || code > 0x10FFFF) return all;
+            const ch = String.fromCodePoint(code);
+            return '\\/:*?"<>|'.includes(ch) ? all : ch;
+        });
+    }
+
     return {
         status,
         csrfToken, requestJson, postJson,
         copyText, flashButton, copyWithFeedback, flashClass,
-        openUrl, storage,
+        openUrl, storage, realPath,
     };
 })();

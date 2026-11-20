@@ -27,6 +27,7 @@ from html import escape as html_escape
 from django.utils.safestring import mark_safe
 
 from . import spor_log
+from .frst_extractors import SPOR_CHAR_RE
 from .log_types import ANALYZED_LOG_TYPES, DETECTION_LOG_TYPES, LOG_TYPE_SPOR
 from .status_types import STATUS_PAINT
 
@@ -1763,12 +1764,20 @@ def _escape(text):
 _VT_URL_RE = re.compile(r'^https://(?:www\.)?virustotal\.com/[^\s"\'<>]*$', re.I)
 
 
+# Spor writes characters that cannot be seen as "<U+00A0>" / "<RLO>" (a USB
+# worm's folder named with a no-break space). '<' is not allowed in Windows
+# paths, so in a path token they are always such a marker.
+_ODD_CHAR_TITLE = 'contains characters that cannot be seen, written as <U+XXXX> / <RLO>; the path menu copies the real path'
+
+
 def _line_html(line, tag='span', extra_class='', extra_attrs=''):
     parts = []
     for cls, text in line.tokens:
         if not text:
             continue
-        if cls and 'hl-url' in cls.split() and _VT_URL_RE.match(text):
+        if cls and '<' in text and 'hl-path' in cls.split() and SPOR_CHAR_RE.search(text):
+            parts.append(f'<span class="{cls} hl-oddchar" title="{_escape(_ODD_CHAR_TITLE)}">{_escape(text)}</span>')
+        elif cls and 'hl-url' in cls.split() and _VT_URL_RE.match(text):
             href = _escape(text)
             parts.append(f'<a class="{cls} hl-vt" href="{href}" target="_blank" '
                          f'rel="noopener noreferrer">{href}</a>')
