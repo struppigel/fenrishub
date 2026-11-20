@@ -119,7 +119,7 @@ class CasesListOpenButtonTests(TestCase):
         page = self.client.get(reverse('infection_cases')).content.decode()
         self.assertIn('href="https://forum.example/t/1" target="_blank" rel="noopener noreferrer"', page)
         self.assertNotIn('href="ftp://files.example/x"', page)
-        self.assertEqual(page.count('>open</button>'), 1)
+        self.assertEqual(page.count('<button type="button">open</button>'), 1)
 
     def test_extra_usernames_show_as_a_count(self):
         case = InfectionCase.objects.create(owner=self.user, username='main')

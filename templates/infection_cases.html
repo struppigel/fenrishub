@@ -14,18 +14,23 @@
     color: var(--la-status-b);
 }
 
-/* Same box as the <a> wrappers around the other buttons (see .fixlist-actions a
-   in base.html), so all buttons in the row share one height. */
-.fixlist-actions .case-status-form {
+/* The status word itself toggles open/closed: a bare text button. */
+.case-status-form {
+    display: inline;
     margin: 0;
-    padding: 6px 10px;
-    flex-shrink: 0;
 }
 
-/* "open" and "close" differ in length; a fixed width (5 monospace chars plus
-   padding and border) keeps the delete button in the same column on every row. */
-.fixlist-actions .case-status-form button {
-    width: calc(5ch + 22px);
+.case-status-form button {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    cursor: pointer;
+}
+
+.case-status-form button:hover {
+    text-decoration: underline;
 }
 
 </style>
@@ -47,22 +52,12 @@
             <div style="flex: 1;">
                 <div class="fixlist-title">{{ case.case_id }} | {{ case.username }}{% if case.extra_names %} <span class="muted" title="{{ case.extra_names|join:', ' }}">(+{{ case.extra_names|length }})</span>{% endif %}</div>
                 <div class="fixlist-meta">
-                    items {{ case.item_count }} | created {{ case.created_at|date:"Y-m-d H:i" }} | last activity {{ case.last_activity|date:"Y-m-d H:i" }} | status <span class="{% if case.status == 'open' %}case-status-open{% else %}case-status-closed{% endif %}">{{ case.get_status_display|lower }}</span>{% if case.is_training %} | <span style="color: var(--la-status-i);">observe</span>{% endif %}
+                    items {{ case.item_count }} | created {{ case.created_at|date:"Y-m-d H:i" }} | last activity {{ case.last_activity|date:"Y-m-d H:i" }} | status <form method="post" action="{% url 'infection_case_set_status' case.case_id %}" class="case-status-form">{% csrf_token %}<input type="hidden" name="status" value="{% if case.status == 'open' %}closed{% else %}open{% endif %}"><button type="submit" class="{% if case.status == 'open' %}case-status-open{% else %}case-status-closed{% endif %}" title="{% if case.status == 'open' %}close{% else %}reopen{% endif %} case">{{ case.get_status_display|lower }}</button></form>{% if case.is_training %} | <span style="color: var(--la-status-i);">observe</span>{% endif %}
                 </div>
             </div>
             <div class="fixlist-actions">
                 <a href="{% url 'view_infection_case' case.case_id %}"><button type="button">view</button></a>
                 {% if case.open_url %}<a href="{{ case.open_url }}" target="_blank" rel="noopener noreferrer" title="{{ case.open_url }}"><button type="button">open</button></a>{% endif %}
-                <form method="post" action="{% url 'infection_case_set_status' case.case_id %}" class="case-status-form">
-                    {% csrf_token %}
-                    {% if case.status == 'open' %}
-                    <input type="hidden" name="status" value="closed">
-                    <button type="submit">close</button>
-                    {% else %}
-                    <input type="hidden" name="status" value="open">
-                    <button type="submit">open</button>
-                    {% endif %}
-                </form>
                 <a href="{% url 'infection_case_delete' case.case_id %}"><button type="button" class="delete-btn">delete</button></a>
             </div>
         </div>

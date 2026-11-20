@@ -1046,7 +1046,7 @@ class InfectionCaseViewTests(TestCase):
         case.refresh_from_db()
         self.assertEqual(case.status, InfectionCase.STATUS_OPEN)
 
-    def test_cases_list_shows_close_for_open_and_open_for_closed(self):
+    def test_cases_list_status_is_the_toggle_button(self):
         open_case = InfectionCase.objects.create(owner=self.user, username='open_user')
         closed_case = InfectionCase.objects.create(
             owner=self.user, username='closed_user', status=InfectionCase.STATUS_CLOSED,
@@ -1057,10 +1057,14 @@ class InfectionCaseViewTests(TestCase):
         content = response.content.decode()
         open_form = content.split(reverse('infection_case_set_status', args=[open_case.case_id]))[1].split('</form>')[0]
         closed_form = content.split(reverse('infection_case_set_status', args=[closed_case.case_id]))[1].split('</form>')[0]
+        # Clicking the status word flips it: "open" submits closed, "closed" submits open.
         self.assertIn('value="closed"', open_form)
-        self.assertIn('>close</button>', open_form)
+        self.assertIn('>open</button>', open_form)
         self.assertIn('value="open"', closed_form)
-        self.assertIn('>open</button>', closed_form)
+        self.assertIn('>closed</button>', closed_form)
+        # No separate open/close button besides the status itself.
+        self.assertNotIn('>close</button>', content)
+        self.assertEqual(content.count(reverse('infection_case_set_status', args=[open_case.case_id])), 1)
 
     def test_confirm_username_change_updates_mismatched_fixlist_and_links_it(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
