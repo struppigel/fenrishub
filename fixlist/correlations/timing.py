@@ -110,10 +110,14 @@ def _add_timing(uploaded_log, collectors, spor_logs, verdicts):
             key=lambda anchor: abs(anchor.when - line.when),
         )[:MAX_RELATED_PER_LINE]
         for anchor in close:
+            number = numbers.get(anchor.text, 0)
             collectors[line.text].add(_plain_mention(
-                uploaded_log.upload_id, uploaded_log.log_type, numbers.get(anchor.text, 0), anchor.text,
+                uploaded_log.upload_id, uploaded_log.log_type, number, anchor.text,
                 ROLE_SAME_TIME, file_name(anchor.key), time=anchor.when.strftime(_TIMING_TIME_FORMAT),
-            ), MATCH_TIMING)
+            ), MATCH_TIMING,
+                # A line whose number is not found (the payload splits lines
+                # differently): kept under its text, not dropped as "no line".
+                slot=None if number else (ROLE_SAME_TIME, uploaded_log.upload_id, anchor.text))
             clustered.add(line.text)
     events = sorted(
         (event for upload_id, lines, known in spor_logs if verdicts.get(upload_id) != SYSTEM_DIFFERENT

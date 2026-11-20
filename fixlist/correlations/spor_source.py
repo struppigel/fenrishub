@@ -2,6 +2,7 @@
 facts (FILES, AMCACHE FILES), mentions in the module sections (under their
 path and persistence name), SOFTWARE facts and timeline evidence."""
 
+import logging
 import ntpath
 import re
 from dataclasses import dataclass, field
@@ -19,6 +20,8 @@ from .entries import (
     _add_defender_entries, _add_folder_entry, _add_path_entry, _file_info_entry, _mention_entry, _plain_mention,
     evidence_severity, file_name,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # A FILES "<name> <value>" part -> the file_info key it is stored under.
@@ -97,7 +100,12 @@ def _spor_entries(upload_ids, index, spor_logs=None, facts=None):
         known = spor_log.known_paths(lines)
         if spor_logs is not None:
             spor_logs.append((upload.upload_id, lines, known))
-        found = build(upload.upload_id, lines, known)
+        try:
+            found = build(upload.upload_id, lines, known)
+        except Exception:
+            # One odd Spor log costs its own entries, never the other logs' of the case.
+            logger.exception('Reading Spor log %s for correlations failed', upload.upload_id)
+            continue
         if facts is not None:
             facts[upload.upload_id] = found
         for key, entries in found.index.items():
@@ -228,7 +236,7 @@ def _detail_line(item, main, candidates):
     for "[timeline ...]" the TIMELINE line with the same text (or file);
     else a line of the section its first tag names, then of any section,
     with the same file, then with the same text. None if there is none."""
-    word = item.tags.split()[0].lower() if item.tags else ''
+    word = (item.tags.split() or [''])[0].lower()   # "[ ]" gives tags of blanks only
     timeline = [c for c in candidates if c[1] == spor_log.SECTION_TIMELINE]
     if word == 'timeline':
         return (next((c for c in timeline if c[2].text == item.text), None)

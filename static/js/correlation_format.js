@@ -144,9 +144,19 @@ window.CorrelationFormat = (function () {
         if (entry.kind === 'reverse') return reverse(entry);
         if (entry.kind === 'fixlog') return entry.result || 'fixlist result';
         if (entry.kind === 'evidence') return evidence(entry);
-        if (entry.kind === 'file_info') return fileInfo(entry);
         if (entry.kind === 'mention') return mention(entry);
         const result = entry.centralbox && typeof entry.centralbox === 'object' ? entry.centralbox : null;
+        if (entry.kind === 'file_info') {
+            // File facts with a hash row merged in say what the hash row said
+            // (family or detection, verdict, how it matched), then the facts.
+            const named = (result && (result.family || result.malware_type)) || text(entry.detection);
+            const said = result && result.verdict ? 'centralbox: ' + result.verdict
+                : result && result.state === 'unknown' ? 'not in centralbox' : '';
+            const how = MATCH_NOTES[entry.match] || '';
+            if (!named && !said && !how) return fileInfo(entry);
+            const facts = fileInfo(Object.assign({}, entry, { file: '' }));
+            return [text(entry.file), named, said, how, facts === 'file details' ? '' : facts].filter(Boolean).join(DOT);
+        }
         // A bare hash (no detection, no centralbox result) shows the hash itself.
         const name = (result && (result.family || result.malware_type)) || entry.detection || hashText(entry);
         const verdict = result && result.verdict ? 'centralbox: ' + result.verdict
@@ -189,11 +199,18 @@ window.CorrelationFormat = (function () {
         const where = scope === 'user'
             ? `other logs of user ${name} (no case of yours)`
             : 'other logs of this case';
-        if (list.length && list.every((entry) => entry.kind === 'reverse')) {
-            const logs = scope === 'user'
-                ? `FRST / Addition logs of user ${name} (no case of yours)`
-                : 'FRST / Addition logs of this case';
-            return `lines of ${logs} that point here`;
+        // FRST / Addition lines pointing here (a log that is no FRST log): said
+        // after whatever the other entries are (a Spor log's own lines).
+        const pointing = list.filter((entry) => entry.kind === 'reverse');
+        if (pointing.length) {
+            const rest = list.filter((entry) => entry.kind !== 'reverse');
+            if (!rest.length) {
+                const logs = scope === 'user'
+                    ? `FRST / Addition logs of user ${name} (no case of yours)`
+                    : 'FRST / Addition logs of this case';
+                return `lines of ${logs} that point here`;
+            }
+            return `${header(rest, isOwn, { scope, name })}; lines of FRST / Addition logs point here`;
         }
         // Only entries about the line's own file make it "the same file".
         const sameFile = list.filter((entry) => !OTHER_FILE_MATCHES.has(entry.match));
@@ -211,11 +228,7 @@ window.CorrelationFormat = (function () {
         const ownWhere = ownEntries.every((entry) => entry.log_type === 'Addition')
             ? "this log's Addition part" : 'other lines of this log';
         if (ownEntries.length && !others) return `same file in ${ownWhere}`;
-        if (ownEntries.length) {
-            return sameFile.some((entry) => entry.kind === 'reverse')
-                ? `same file in ${ownWhere}; lines of FRST / Addition logs point here`
-                : `same file in ${ownWhere} and in ${where}`;
-        }
+        if (ownEntries.length) return `same file in ${ownWhere} and in ${where}`;
         return `same file in ${where}`;
     }
 
@@ -240,11 +253,12 @@ window.CorrelationFormat = (function () {
     }
 
     // Distinct file hashes of the entries (SHA-256, else the MD5 alone) with
-    // the file each belongs to: [{hash, file}].
+    // the file each belongs to: [{hash, file}]. Hash rows and file facts (a
+    // Spor FILES line, an FRST Search File: entry: their hash row is merged in).
     function hashValues(entries) {
         const hashes = [];
         (Array.isArray(entries) ? entries : []).forEach((entry) => {
-            if (!entry || entry.kind !== 'hash') return;
+            if (!entry || (entry.kind !== 'hash' && entry.kind !== 'file_info')) return;
             const hash = sha256Of(entry) || md5Of(entry);
             if (hash && !hashes.some((known) => known.hash === hash)) {
                 hashes.push({ hash, file: typeof entry.file === 'string' ? entry.file : '' });

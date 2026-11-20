@@ -313,9 +313,7 @@ MATCH_NOTES = {
     MATCH_NAMED_BY: 'names this file in its details',
 }
 # Matches whose note names the file the entry is about.
-_NOTE_FILE_MATCHES = frozenset({
-    MATCH_ARGUMENT, MATCH_SIBLING, MATCH_NAME, MATCH_SAME_HASH, MATCH_INSIDE, MATCH_DETAIL, MATCH_NAMED_BY,
-})
+_NOTE_FILE_MATCHES = frozenset({MATCH_ARGUMENT, MATCH_SIBLING, MATCH_NAME, MATCH_SAME_HASH, MATCH_INSIDE})
 
 
 def summary_note(entries, status, own_upload_id=''):

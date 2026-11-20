@@ -646,7 +646,9 @@ window.CorrelationInfo = (function () {
         intro.appendChild(summary);
         bodyEl.appendChild(intro);
         if (!list.length) {
-            bodyEl.appendChild(el('p', 'cinfo-empty', str(state.emptyText) || 'the other logs say nothing about this line (anymore)'));
+            // emptyText may change while the box is open ("loading...").
+            const empty = typeof state.emptyText === 'function' ? state.emptyText() : state.emptyText;
+            bodyEl.appendChild(el('p', 'cinfo-empty', str(empty) || 'the other logs say nothing about this line (anymore)'));
             return;
         }
         Format().fileGroups(list).forEach((group) => {

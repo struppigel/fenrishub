@@ -4,16 +4,19 @@ FRST / FRST&Addition line (spor_source.SporFacts, forward._add_spor_links).
 Nothing here may call centralbox."""
 
 from collections import Counter
+from datetime import timedelta
 from unittest import mock
 
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from .. import centralbox
-from ..case_correlations import reverse_correlations
+from ..case_correlations import correlation_status, entry_status, reverse_correlations
 from ..correlations.collector import LineEntries
 from ..correlations.sources import merge_same_line
-from ..models import InfectionCase, InfectionCaseLog, UploadedLogFileHash
+from ..correlations.spor_source import build
+from ..models import HashVerdict, InfectionCase, InfectionCaseLog, UploadedLogFileHash
 from . import spor_sample as s
 from .factories import make_uploaded_log, make_user
 from .test_case_correlations import cache_analysis
@@ -158,3 +161,84 @@ class SporLinksViaFrstTests(TestCase):
         summary = str(s.LINES_V4.index(next(t for t in s.LINES_V4 if t.startswith('2026-11-20 03:33:50 [timeline NEW] '
                                                                                   + s.SIDE_HOST))) + 1)
         self.assertIn(QWX_LINE, [entry['text'] for entry in result['lines'][summary]])
+
+
+class ReviewFixTests(SporLinksViaFrstTests):
+    """Fixes from the review of the correlation changes (same case as above)."""
+
+    def add_log(self, upload_id, log_type, content):
+        upload = make_uploaded_log(upload_id, log_type=log_type, content=content, forum_username='nobody')
+        UploadedLogFileHash.rebuild_for(upload)
+        InfectionCaseLog.objects.create(case=InfectionCase.objects.get(owner=self.user), uploaded_log=upload)
+        return upload
+
+    def test_an_empty_tag_group_in_summary_breaks_nothing(self):
+        content = s.SPOR_V4.replace(
+            '==================== TIMELINE', f'2026-11-20 03:33:50 [ ] {s.SIDE_HOST} <==== !known-malware\n\n'
+            '==================== TIMELINE', 1)
+        build('spor-odd', content.split('\n'))   # raised IndexError
+        self.spor.content = content
+        self.spor.save()
+        self.assertTrue(self.spor_lines(self.get(), QWX_LINE))
+
+    def test_a_spor_log_that_fails_costs_only_its_own_entries(self):
+        self.add_log('fix-qwx', 'Fixlog', '\n'.join([
+            'Fix result of Farbar Recovery Scan Tool (x64) Version: 01-11-2026',
+            f'{s.SIDE_HOST} => moved successfully',
+        ]))
+        with mock.patch('fixlist.correlations.spor_source.build', side_effect=RuntimeError('odd log')), \
+                self.assertLogs('fixlist.correlations.spor_source', level='ERROR'):
+            entries = self.get()['correlations'][QWX_LINE]
+        # The Fixlog result, and of the Spor log only its stored hash row (not parsed from the log).
+        self.assertEqual({(entry['upload_id'], entry['kind']) for entry in entries},
+                         {('fix-qwx', 'fixlog'), ('spor-qwx', 'hash')})
+
+    def test_detail_links_carry_the_files_line_centralbox_result(self):
+        now = timezone.now()
+        HashVerdict.objects.create(sha256=s.SIDE_DLL_SHA, state='known', verdict='malicious', family='lumma',
+                                   checked_at=now, next_check_at=now + timedelta(days=7))
+        found = self.spor_lines(self.get(), QWX_LINE)
+        dll = found[s.LINES_V4.index(next(t for t in s.LINES_V4 if t.startswith(s.SIDE_DLL + ' => '))) + 1]
+        self.assertEqual((dll['match'], dll['centralbox']['family']), ('detail', 'lumma'))
+
+    def test_details_never_rate(self):
+        body = self.get()
+        for entries in body['correlations'].values():
+            informational = [entry for entry in entries if entry.get('match') in ('detail', 'named_by')]
+            self.assertTrue(all(entry_status(entry) == '' for entry in informational))
+            self.assertEqual(correlation_status(informational), '')
+        # There are some: the cmd.exe line and providers.dll's lines are flagged.
+        self.assertTrue(any(entry.get('match') in ('detail', 'named_by')
+                            for entry in body['correlations'][QWX_LINE]))
+
+
+class HashInLogTests(TestCase):
+    def test_a_sha256_an_md5_row_of_the_log_stands_for_is_accepted(self):
+        from ..views.centralbox import _hash_in_log
+        search = make_uploaded_log('search-md5', log_type='FRST Search', content='x')
+        UploadedLogFileHash.objects.create(upload=search, md5='ab' * 16, sha256='', path='C:\\x\\a.exe',
+                                           normalized_path='c:\\x\\a.exe', line_no=3, anchor_line_no=3)
+        other = make_uploaded_log('mb-pair', log_type='Malwarebytes', content='x')
+        UploadedLogFileHash.objects.create(upload=other, md5='ab' * 16, sha256='cd' * 32, path='C:\\x\\a.exe',
+                                           normalized_path='c:\\x\\a.exe', line_no=1, anchor_line_no=1)
+        self.assertTrue(_hash_in_log(search, 'ab' * 16))
+        self.assertTrue(_hash_in_log(search, 'cd' * 32))
+        self.assertFalse(_hash_in_log(search, 'ef' * 32))
+
+
+class CopyTests(TestCase):
+    def test_a_copy_with_a_broken_signature_warns(self):
+        from ..correlations.spor_self import self_links, self_status
+        sha = 'ab' * 32
+        content = '\n'.join([
+            '==================== Spor 0.5.0 - forensic triage log ====',
+            '',
+            '==================== FILES - SHA256, signature and version of the files as they are on disk now ====',
+            f'C:\\Users\\Bob\\Desktop\\a.exe => {sha}, signature invalid; signer Evil Ltd',
+            f'C:\\ProgramData\\Upd\\b.exe => {sha}, signature invalid; signer Evil Ltd',
+            '==================== End of log ====',
+        ])
+        links = self_links('spor', content)
+        (copy,) = links['5']
+        self.assertEqual((copy['match'], copy['line_no']), ('same_hash', 4))
+        self.assertEqual(self_status(links['5']), '!')

@@ -239,7 +239,7 @@ def _compute(uploaded_log, upload_ids, payload):
     _frst_search_entries(upload_ids, index)
     _shortcut_entries(upload_ids, index)
     _mau_entries(upload_ids, index)
-    merge_same_line(index)
+    merged = merge_same_line(index)
     # A scanner that detected a whole folder (e.g. AdwCleaner's Folders
     # section) also speaks for the files and folders inside it, and so does
     # a folder mention (a Defender path exclusion).
@@ -274,7 +274,7 @@ def _compute(uploaded_log, upload_ids, payload):
         for key in own_files:
             _add_related(collector, related, key)
         if spor_facts:
-            _add_spor_links(collector, own_files, spor_facts)
+            _add_spor_links(collector, own_files, spor_facts, merged)
         # line_keys gives the line's own file first.
         main = next((key for key, match in keys if match == MATCH_PATH), '')
         if main:
@@ -287,16 +287,23 @@ def _compute(uploaded_log, upload_ids, payload):
     return {text: collector.finish(MAX_ENTRIES_PER_LINE) for text, collector in collectors.items() if len(collector)}
 
 
-def _add_spor_links(collector, own_files, spor_facts):
+def _add_spor_links(collector, own_files, spor_facts, merged=None):
     """What the related Spor logs' own links add to a line (spor_source.SporFacts):
     the Spor lines naming one of its files in their details ('named_by'), and
     for each Spor line about its own file or entry, the line it sums up or is
     summed up by ('summary') and the files it names in its details ('detail').
-    Every Spor line about the file itself is in the index already."""
+    Every Spor line about the file itself is in the index already. `merged`
+    (sources.merge_same_line) gives a FILES line's entry with its hash row, as
+    the index has it."""
+    merged = merged or {}
+
+    def current(entry):
+        return merged.get(id(entry), entry)
+
     for key in own_files:
         for facts in spor_facts.values():
             for entry in facts.named_in.get(key, ()):
-                collector.add(entry, MATCH_NAMED_BY)
+                collector.add(current(entry), MATCH_NAMED_BY)
     typed = match_strength('*typed*')
     for entry, extra in list(collector.links):
         facts = spor_facts.get(entry.get('upload_id'))
@@ -304,8 +311,9 @@ def _add_spor_links(collector, own_files, spor_facts):
             continue   # not about the line's own file or entry
         no = entry.get('line_no')
         for partner in facts.partners.get(no, ()):
-            collector.add(partner, MATCH_SUMMARY)
+            collector.add(current(partner), MATCH_SUMMARY)
         for key in facts.names.get(no, ()):
             for named in facts.index.get(key, ()):
                 if not named.get('folder'):
+                    named = current(named)
                     collector.add(named, MATCH_DETAIL, other_path=named.get('path') or key)

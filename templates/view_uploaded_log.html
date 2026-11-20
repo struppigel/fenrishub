@@ -1033,7 +1033,12 @@ const CaseCorrelations = (function () {
     const selfLinks = {
         codes: data.self_lines && typeof data.self_lines === 'object' ? data.self_lines : {},
         url: typeof data.self_url === 'string' && data.self_url.startsWith('/') ? data.self_url : '',
-        entries: {},
+        // Lines whose linked FILES hashes can still be looked up on centralbox
+        // (the lookup icon before their entries are fetched).
+        lookup: new Set(Array.isArray(data.self_lookup) ? data.self_lookup.map(String) : []),
+        entries: {},    // line no -> its entries, once fetched
+        pending: {},    // line no -> the fetch in flight
+        failed: {},     // line no -> the last fetch failed (the next open tries again)
     };
 
     function lineNo(line) {
@@ -1063,16 +1068,40 @@ const CaseCorrelations = (function () {
         return rank(own) < rank(reverseStatus) ? own : reverseStatus;
     }
 
-    // A line's self-link entries, fetched once (an empty list when that fails).
+    // A line's self-link entries: one fetch at a time per line. A failure
+    // (network, error, a login page after the session ended) is not kept as
+    // "no entries": the box says so and the next open tries again.
     function loadSelf(no) {
-        return fetch(`${selfLinks.url}&line=${encodeURIComponent(no)}`, {
+        if (selfLinks.pending[no]) return selfLinks.pending[no];
+        const done = fetch(`${selfLinks.url}&line=${encodeURIComponent(no)}`, {
             credentials: 'same-origin', headers: { Accept: 'application/json' },
         })
-            .then(response => (response.ok ? response.json() : null))
+            .then(response => (response.ok && !response.redirected ? response.json() : Promise.reject(new Error('status'))))
             .then(answer => {
-                selfLinks.entries[no] = answer && Array.isArray(answer.entries) ? answer.entries : [];
+                if (!answer || !Array.isArray(answer.entries)) throw new Error('answer');
+                selfLinks.entries[no] = answer.entries;
+                delete selfLinks.failed[no];
+                // What the entries say now decides the lookup icon.
+                if (lookupPossible(answer.entries)) selfLinks.lookup.add(no);
+                else selfLinks.lookup.delete(no);
             })
-            .catch(() => { selfLinks.entries[no] = []; });
+            .catch(() => { selfLinks.failed[no] = true; })
+            .finally(() => { delete selfLinks.pending[no]; });
+        selfLinks.pending[no] = done;
+        return done;
+    }
+
+    // The info box's text when it lists nothing (yet).
+    function selfEmptyText(no) {
+        if (!hasSelf(no)) return '';
+        if (selfLinks.pending[no]) return 'loading what the other lines of this log say...';
+        if (selfLinks.failed[no]) return 'could not load what the other lines of this log say; open it again to retry';
+        return 'nothing more is known about this line';
+    }
+
+    // A lookup is possible for a self-link line whose entries are not here yet.
+    function selfLookup(no) {
+        return lookupConfig.can_lookup && hasSelf(no) && !selfLinks.entries[no] && selfLinks.lookup.has(no);
     }
 
     // An entry of this log itself (Defender events of its Addition part).
@@ -1089,12 +1118,19 @@ const CaseCorrelations = (function () {
     // The info box (static/js/correlation_info.js): everything the other logs
     // say about the line's files, with links to them and centralbox lookups.
     // It reads the line's entries again after a lookup refreshed them.
+    // Each open gets a token: entries arriving for a box that was closed or
+    // replaced by another line's are not drawn into it.
+    let openToken = 0;
+
     function openInfo(line, trigger) {
         if (!line || typeof CorrelationInfo !== 'object') return;
         const no = line.dataset ? line.dataset.n : '';
+        const token = ++openToken;
         if (hasSelf(no) && selfLinks.url && !selfLinks.entries[no]) {
-            loadSelf(no).then(() => openInfo(line, trigger));
-            return;
+            // The box opens at once ("loading..."); the entries follow.
+            loadSelf(no).then(() => {
+                if (token === openToken && CorrelationInfo.isOpen()) CorrelationInfo.render();
+            });
         }
         CorrelationInfo.open({
             lineText: line.textContent.trim(),
@@ -1106,13 +1142,16 @@ const CaseCorrelations = (function () {
             scope: data.scope,
             name: data.name,
             status: statusOf(no),
-            emptyText: hasSelf(no) ? 'nothing more is known about this line' : '',
+            emptyText: () => selfEmptyText(no),
             // This log: jump to the line on this page (LineJump marks it).
             onJump: lineNo => LineJump.jump(Number(lineNo), 4000),
             lookup: { canLookup: lookupConfig.can_lookup, urls: LOOKUP_URLS },
-            // After a lookup: the line's own links too (their FILES hashes
-            // carry the stored centralbox result).
-            refresh: () => refresh().then(() => (hasSelf(no) && selfLinks.url ? loadSelf(no) : null)),
+            // After a lookup: the self links too (their FILES hashes carry the
+            // stored centralbox result). Other lines fetch theirs again when opened.
+            refresh: () => {
+                selfLinks.entries = {};
+                return refresh().then(() => (hasSelf(no) && selfLinks.url ? loadSelf(no) : null));
+            },
             trigger,
         });
     }
@@ -1194,7 +1233,7 @@ const CaseCorrelations = (function () {
             button.type = 'button';
             button.tabIndex = -1;
             button.className = 'hl-line-info-trigger';
-            setInfoIcon(button, lookupPossible(item.entries));
+            setInfoIcon(button, lookupPossible(item.entries) || selfLookup(no));
             group.appendChild(button);
             group.dataset.cor = STATUS_CLASS[statusOf(no)] || 'none';
             root.appendChild(group);
@@ -1368,7 +1407,7 @@ const CaseCorrelations = (function () {
 
     return {
         has: line => entriesFor(line).length > 0 || hasSelf(lineNo(line)),
-        canLookup: line => lookupPossible(entriesFor(line)),
+        canLookup: line => lookupPossible(entriesFor(line)) || selfLookup(lineNo(line)),
         hashes: line => correlatedHashes(entriesFor(line)),
         ready,
         // The hover icons cover a line's marker: both are placed in one layout.
@@ -1569,7 +1608,7 @@ function openTokenMenu(token) {
     const searchButton = makeButton('hl-line-search-trigger', '\u2315', 'search component (Google, VirusTotal, CyberChef)');
     // Last, at the right edge where the line's marker is: hovering adds the
     // other icons in front of it, so it never moves under the pointer.
-    const infoButton = makeButton('hl-line-info-trigger', '\u24d8', 'what related logs say about this file');
+    const infoButton = makeButton('hl-line-info-trigger', '\u24d8', 'what other logs and lines say about this line');
     infoButton.hidden = true;
     root.appendChild(actions);
 

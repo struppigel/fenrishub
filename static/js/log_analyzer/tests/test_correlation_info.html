@@ -341,7 +341,9 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
     const md5Only = CentralboxLookup.targets([facts({ kind: 'file_info', source: 'search_file', md5: MD5 })]);
     assert('an MD5 without a SHA-256 is asked for itself', md5Only.length === 1 && md5Only[0].query === MD5);
     assert('a hash another entry has a report for offers none',
-        CentralboxLookup.targets([facts({ sha256: KNOWN_SHA, md5: MD5 }), entries[1]]).length === 0
+        CentralboxLookup.targets([facts({ sha256: KNOWN_SHA, md5: MD5 }), { kind: 'hash', upload_id: 'mb-log',
+            log_type: 'Malwarebytes', line_no: 3, sha256: KNOWN_SHA, md5: '',
+            centralbox: { verdict: 'malicious', report_url: 'https://centralbox.dev/analysis/' + KNOWN_SHA } }]).length === 0
         && CentralboxLookup.targets([facts({ sha256: SHA, centralbox: { verdict: 'clean', report_url: 'https://centralbox.dev/analysis/x' } })]).length === 0);
     entries = [facts({ sha256: SHA, md5: MD5, signature: 'unsigned' })];
     open(true);

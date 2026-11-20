@@ -217,11 +217,16 @@ def centralbox_hash_check_api(request):
 
 
 def _hash_in_log(uploaded_log, value):
-    """A SHA256 of the log, or an MD5 the log lists without a SHA256 (Trojan Killer)."""
+    """A SHA256 of the log, or an MD5 the log lists without a SHA256 (Trojan
+    Killer), or the SHA256 such an MD5 is known to stand for (the correlations
+    show it with the MD5's file: centralbox.resolve_md5s, database only)."""
     rows = UploadedLogFileHash.objects.filter(upload=uploaded_log)
     if is_md5(value):
         return rows.filter(md5=value, sha256='').exists()
-    return rows.filter(sha256=value).exists()
+    if rows.filter(sha256=value).exists():
+        return True
+    md5s = set(rows.filter(sha256='').exclude(md5='').values_list('md5', flat=True))
+    return bool(md5s) and value in centralbox.resolve_md5s(md5s).values()
 
 
 def _json_hash_and_log(request):
@@ -474,9 +479,11 @@ def add_self_link_context(uploaded_log, context):
     """A Spor log page's links between its own lines (correlations/spor_self.py), added
     to its reverse correlation context (or a new one in the same shape):
     `self_lines` {line no: code} (status letter, 'm' for a neutral marker, ''
-    for links from the hover icons only) and `self_url`, which gives one
-    line's entries when its info box opens (all of them would be too big for
-    the page). Never raises; the context unchanged for other logs."""
+    for links from the hover icons only), `self_url`, which gives one line's
+    entries when its info box opens (all of them would be too big for the
+    page), and `self_lookup` [line no]: lines whose linked FILES hashes have
+    no centralbox report yet (their icon offers a lookup). Never raises; the
+    context unchanged for other logs."""
     if uploaded_log.log_type != LOG_TYPE_SPOR:
         return context
     try:
@@ -492,10 +499,36 @@ def add_self_link_context(uploaded_log, context):
             }
         context['self_lines'] = links.codes
         context['self_url'] = f"{reverse('spor_self_links_api')}?upload_id={uploaded_log.upload_id}"
+        if context.get('can_lookup'):
+            context['self_lookup'] = _self_lookup_lines(links.linked_hashes())
         return context
     except Exception:
         logger.exception('Adding Spor self links failed for %s', uploaded_log.upload_id)
         return context
+
+
+# HashVerdict lookups per query (the IN list of one query).
+_VERDICT_CHUNK = 900
+
+
+def _self_lookup_lines(linked):
+    """[line no] of the lines (linked: {no: {SHA-256 or MD5}}) with a hash
+    that has no centralbox report (state known), as CentralboxLookup.targets
+    decides for the hashes it is given. Database only."""
+    shas = {value for hashes in linked.values() for value in hashes if is_sha256(value)}
+    md5_map = centralbox.resolve_md5s({value for hashes in linked.values() for value in hashes if is_md5(value)})
+    wanted = sorted(shas | set(md5_map.values()))
+    known = set()
+    for start in range(0, len(wanted), _VERDICT_CHUNK):
+        known.update(HashVerdict.objects.filter(
+            sha256__in=wanted[start:start + _VERDICT_CHUNK], state=HashVerdict.STATE_KNOWN,
+        ).values_list('sha256', flat=True))
+
+    def open_hash(value):
+        sha = value if is_sha256(value) else md5_map.get(value, '')
+        return not (sha and sha in known)
+
+    return sorted((no for no, hashes in linked.items() if any(open_hash(value) for value in hashes)), key=int)
 
 
 @login_required
@@ -505,8 +538,10 @@ def spor_self_links_api(request):
     of its lines (?upload_id=...&line=N, correlations/spor_self.py)."""
     upload_id = (request.GET.get('upload_id') or '').strip()
     line = (request.GET.get('line') or '').strip()
-    uploaded_log = UploadedLog.objects.filter(upload_id=upload_id, log_type=LOG_TYPE_SPOR).first() \
-        if upload_id else None
+    # The content (up to a few MB) only on a cache miss of for_upload.
+    uploaded_log = UploadedLog.objects.filter(upload_id=upload_id, log_type=LOG_TYPE_SPOR).only(
+        'pk', 'upload_id', 'log_type', 'content_hash',
+    ).first() if upload_id else None
     if uploaded_log is None or not line.isdigit():
         return JsonResponse({'entries': []})
     links = spor_self.for_upload(uploaded_log)

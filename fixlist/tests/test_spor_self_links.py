@@ -3,6 +3,7 @@ in other sections, SUMMARY and detail lines, entries of the same name, files
 named in details, folders, copies; their status; the log page and endpoint."""
 
 from datetime import timedelta
+from unittest import mock
 
 from django.test import TestCase
 from django.urls import reverse
@@ -300,6 +301,25 @@ class PageTests(TestCase):
         self.assertEqual(data['hash_url'], reverse('centralbox_hash_check_api'))
         self.assertTrue(data['fresh_url'] and data['fresh_status_url'])
         self.assertIn('can_lookup', data)
+
+    def test_lines_whose_files_hashes_can_be_looked_up_are_listed(self):
+        from ..views.centralbox import add_self_link_context
+        files_of_dropper = str(no_of(s.LINES, '2026-11-14 07:22:00 [1117]'))   # links the FILES line of dropper.exe
+        with mock.patch('fixlist.views.centralbox.centralbox.is_available', return_value=True):
+            lookup = add_self_link_context(self.spor, {})['self_lookup']
+            self.assertIn(files_of_dropper, lookup)
+            now = timezone.now()
+            HashVerdict.objects.create(sha256=s.DROP_SHA, state='known', verdict='malicious', checked_at=now,
+                                       next_check_at=now + timedelta(days=7))
+            # A known hash has a report: nothing to look up there any more.
+            self.assertNotIn(files_of_dropper, add_self_link_context(self.spor, {})['self_lookup'])
+        with mock.patch('fixlist.views.centralbox.centralbox.is_available', return_value=False):
+            self.assertNotIn('self_lookup', add_self_link_context(self.spor, {}))
+
+    def test_endpoint_needs_a_login(self):
+        self.client.logout()
+        response = self.client.get(reverse('spor_self_links_api'), {'upload_id': 'spor-log', 'line': '1'})
+        self.assertEqual(response.status_code, 302)
 
     def test_endpoint_gives_files_hashes_their_stored_centralbox_result(self):
         now = timezone.now()

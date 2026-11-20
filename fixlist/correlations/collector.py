@@ -114,9 +114,6 @@ class LineEntries:
             self.links[position] = (entry, extra)
         return False
 
-    def has(self, slot):
-        return slot in self._slots
-
     @property
     def entries(self):
         """The line's entries now (copies), in the order they were added."""

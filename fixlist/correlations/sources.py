@@ -268,14 +268,16 @@ def merge_same_line(index):
     file facts (a Spor log's FILES line is both; so is an FRST Search File:
     entry with its MD5) becomes part of the file facts entry - its hashes,
     centralbox result and detection go with the facts. Everywhere that entry
-    is indexed, so every line gets the same one."""
+    is indexed, so every line gets the same one. Returns {id(original file
+    facts entry): merged entry} for entries kept elsewhere too (a Spor log's
+    SporFacts: forward._add_spor_links), empty when nothing was merged."""
     infos = {}
     for entries in index.values():
         for entry in entries:
             if entry['kind'] == 'file_info' and entry.get('upload_id') and entry.get('line_no'):
                 infos.setdefault((entry['upload_id'], entry['line_no']), entry)
     if not infos:
-        return
+        return {}
     merged = {}     # id(file facts entry) -> the merged entry
     absorbed = {}   # id(hash row) -> id(file facts entry)
     for entries in index.values():
@@ -288,7 +290,7 @@ def merge_same_line(index):
             merged[id(info)] = _with_hash_row(merged.get(id(info), info), entry)
             absorbed[id(entry)] = id(info)
     if not merged:
-        return
+        return merged
     for key, entries in index.items():
         # Where the hash row was (hash rows are indexed first: what decides a
         # line's note stays first), else where the facts were.
@@ -305,6 +307,7 @@ def merge_same_line(index):
             else:
                 out.append(merged.get(id(entry), entry))
         index[key] = out
+    return merged
 
 
 def _with_hash_row(info, row):

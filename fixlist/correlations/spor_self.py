@@ -125,6 +125,20 @@ class SelfLinks:
         collector = self._links.get(int(no)) if no.isdigit() else None
         return collector.finish(key=_sort_key) if collector is not None else []
 
+    def linked_hashes(self):
+        """{line no (str): {hash}}: the SHA-256 (else the MD5) of each FILES
+        line a line links to, for its lookup icon (whether the info box can
+        look one up on centralbox)."""
+        found = {}
+        for no, collector in self._links.items():
+            hashes = {
+                entry.get('sha256') or entry.get('md5') for entry, _extra in collector.links
+                if entry.get('kind') == 'file_info'
+            } - {'', None}
+            if hashes:
+                found[str(no)] = hashes
+        return found
+
     def as_dict(self):
         """{line no (str): [entry]} of every linked line."""
         return {str(no): collector.finish(key=_sort_key) for no, collector in self._links.items()}
