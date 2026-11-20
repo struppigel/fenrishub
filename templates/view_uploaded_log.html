@@ -1110,7 +1110,9 @@ const CaseCorrelations = (function () {
             // This log: jump to the line on this page (LineJump marks it).
             onJump: lineNo => LineJump.jump(Number(lineNo), 4000),
             lookup: { canLookup: lookupConfig.can_lookup, urls: LOOKUP_URLS },
-            refresh,
+            // After a lookup: the line's own links too (their FILES hashes
+            // carry the stored centralbox result).
+            refresh: () => refresh().then(() => (hasSelf(no) && selfLinks.url ? loadSelf(no) : null)),
             trigger,
         });
     }

@@ -20,7 +20,7 @@ from ..log_highlighting import SummaryItem
 
 from .. import centralbox, centralbox_auto, spor_self_links
 from ..case_correlations import (
-    cached_correlations, correlations_for_upload, related_upload_ids, reverse_correlations, reverse_note,
+    add_stored_results, cached_correlations, correlations_for_upload, related_upload_ids, reverse_correlations, reverse_note,
     reverse_status, summary_note,
 )
 from ..correlation_keys import line_path_keys
@@ -429,6 +429,17 @@ def _reverse_answer(uploaded_log, user):
     }
 
 
+def _lookup_context():
+    """What the log page's info box needs to look up the hashes it shows on
+    centralbox (check / fresh lookup, each with the log that holds the hash)."""
+    return {
+        'can_lookup': centralbox.is_available(),
+        'hash_url': reverse('centralbox_hash_check_api'),
+        'fresh_url': reverse('centralbox_fresh_start_api'),
+        'fresh_status_url': reverse('centralbox_fresh_status_api', args=['0' * 64]),
+    }
+
+
 def page_reverse_correlation_context(uploaded_log, user):
     """For the log page of any log that is not an FRST / Addition log: the
     lines of its related FRST / Addition logs that point at its lines, in the
@@ -446,7 +457,7 @@ def page_reverse_correlation_context(uploaded_log, user):
             'refresh_url': f"{reverse('case_correlations_api')}?upload_id={uploaded_log.upload_id}",
             'scope': result['scope'], 'name': result['name'], 'reverse': True,
             'upload_id': uploaded_log.upload_id,
-            'can_lookup': False,
+            **_lookup_context(),
             'lines': {
                 no: {'status': reverse_status(entries), 'entries': entries}
                 for no, entries in result['lines'].items()
@@ -476,7 +487,7 @@ def add_self_link_context(uploaded_log, context):
                 'fresh': True,
                 'refresh_url': f"{reverse('case_correlations_api')}?upload_id={uploaded_log.upload_id}",
                 'scope': '', 'name': '', 'reverse': True, 'upload_id': uploaded_log.upload_id,
-                'can_lookup': False, 'lines': {},
+                **_lookup_context(), 'lines': {},
             }
         context['self_lines'] = links.codes
         context['self_url'] = f"{reverse('spor_self_links_api')}?upload_id={uploaded_log.upload_id}"
@@ -498,7 +509,10 @@ def spor_self_links_api(request):
     if uploaded_log is None or not line.isdigit():
         return JsonResponse({'entries': []})
     links = spor_self_links.for_upload(uploaded_log)
-    return JsonResponse({'entries': links.entries(line) if links is not None else []})
+    # The stored centralbox result of each FILES hash (database only): the
+    # info box shows it, and offers a lookup for the hashes without one.
+    entries = add_stored_results(links.entries(line)) if links is not None else []
+    return JsonResponse({'entries': entries})
 
 
 # Summary severity (log_highlighting.SummaryItem) for a correlation status letter.
@@ -526,10 +540,7 @@ def page_correlation_context(uploaded_log, user, highlight):
             'upload_id': uploaded_log.upload_id,
             # Lookups of correlated hashes from the info panel (each with the
             # related log that holds the hash, as the analyzer does).
-            'can_lookup': centralbox.is_available(),
-            'hash_url': reverse('centralbox_hash_check_api'),
-            'fresh_url': reverse('centralbox_fresh_start_api'),
-            'fresh_status_url': reverse('centralbox_fresh_status_api', args=['0' * 64]),
+            **_lookup_context(),
         }
         if result is None:
             return context

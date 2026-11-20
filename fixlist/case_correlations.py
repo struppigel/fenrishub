@@ -232,6 +232,36 @@ def _centralbox_result(sha, md5, verdicts, unknown_md5s):
     return None
 
 
+def add_stored_results(entries):
+    """Give each file_info entry its hash's stored centralbox result (as hash
+    entries have one): what the info box shows, and why it offers no lookup
+    for a hash centralbox knows. Database only; never raises."""
+    from .centralbox import resolve_md5s
+
+    try:
+        infos = [entry for entry in entries if entry.get('kind') == 'file_info'
+                 and (entry.get('sha256') or entry.get('md5'))]
+        if not infos:
+            return entries
+        md5_map = resolve_md5s({entry['md5'] for entry in infos if entry.get('md5') and not entry.get('sha256')})
+        shas = {entry.get('sha256') or md5_map.get(entry.get('md5', ''), '') for entry in infos} - {''}
+        verdicts = {row.sha256: row.as_dict() for row in HashVerdict.objects.filter(sha256__in=shas)}
+        unknown_md5s = {
+            md5: checked.date().isoformat()
+            for md5, checked in HashAlias.objects.filter(
+                md5__in={entry['md5'] for entry in infos if entry.get('md5')}, sha256='',
+            ).values_list('md5', 'checked_at')
+        }
+        for entry in infos:
+            md5 = entry.get('md5', '')
+            result = _centralbox_result(entry.get('sha256') or md5_map.get(md5, ''), md5, verdicts, unknown_md5s)
+            if result:
+                entry['centralbox'] = result
+    except Exception:
+        logger.exception('Adding stored centralbox results failed')
+    return entries
+
+
 def _hash_entries(upload_ids, index):
     from .centralbox import resolve_md5s
 

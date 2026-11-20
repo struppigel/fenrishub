@@ -302,7 +302,8 @@ window.CorrelationInfo = (function () {
     function lookupTargets(group) {
         const lookup = state && state.lookup;
         if (!lookup || !lookup.canLookup || typeof CentralboxLookup !== 'object') return [];
-        return CentralboxLookup.targets(group.entries.filter((entry) => entry.kind === 'hash'));
+        // Every SHA-256 / MD5 of the group: hash rows and file facts alike.
+        return CentralboxLookup.targets(group.entries);
     }
 
     function statusNodeFor(hash) {

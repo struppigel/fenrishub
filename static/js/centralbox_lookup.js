@@ -10,28 +10,59 @@ const CentralboxLookup = (function () {
     const FRESH_POLL_MS = 4000;
     const FRESH_POLL_TRIES = 30;
 
+    const SHA256_RE = /^[0-9a-f]{64}$/;
+    const MD5_RE = /^[0-9a-f]{32}$/;
+
+    function hashOf(value, re) {
+        const text = typeof value === 'string' ? value.toLowerCase() : '';
+        return re.test(text) ? text : '';
+    }
+
+    function resultOf(item) {
+        return item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
+    }
+
     // Correlated hashes without a centralbox verdict (never checked, or not in
-    // centralbox): [{hash, uploadId, file, short}]. Known hashes have a report entry.
+    // centralbox): [{hash, query, uploadId, file, short}]. Every SHA-256 and MD5
+    // the entries name counts: hash rows ('hash') and file facts ('file_info':
+    // a Spor log's FILES, an FRST Search File: entry), which are hash rows of
+    // their log too. `hash` is the hash as shown, `query` the one sent: a
+    // file's SHA-256 also for its MD5 (the server takes an MD5 only for a file
+    // without one). A hash any entry has a report for is known already.
     function targets(items) {
+        const list = (Array.isArray(items) ? items : []).filter((item) => item
+            && (item.kind === 'hash' || item.kind === 'file_info'));
+        const known = new Set();
+        list.forEach((item) => {
+            const result = resultOf(item);
+            if (!result || !result.report_url) return;
+            [hashOf(item.sha256, SHA256_RE), hashOf(item.md5, MD5_RE)].forEach((hash) => { if (hash) known.add(hash); });
+        });
         const found = [];
         const seen = new Set();
-        (Array.isArray(items) ? items : []).forEach((item) => {
-            if (!item || item.kind !== 'hash') return;
-            const result = item.centralbox && typeof item.centralbox === 'object' ? item.centralbox : null;
-            if (result && result.report_url) return;
-            const sha = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/.test(item.sha256) ? item.sha256 : '';
-            const md5 = typeof item.md5 === 'string' && /^[0-9a-f]{32}$/.test(item.md5) ? item.md5 : '';
-            const hash = sha || md5;
+        list.forEach((item) => {
+            const sha = hashOf(item.sha256, SHA256_RE);
+            const md5 = hashOf(item.md5, MD5_RE);
             const uploadId = String(item.upload_id || '');
-            if (!hash || seen.has(hash) || !/^[A-Za-z0-9_-]+$/.test(uploadId)) return;
-            seen.add(hash);
-            // The file the hash belongs to: a line can name several (its own
-            // file, a script in its command line, ...).
-            const file = typeof item.file === 'string' ? item.file : '';
-            const short = (sha ? 'SHA-256 ' : 'MD5 ') + hash.slice(0, 12) + '…';
-            found.push({ hash, uploadId, file, short: file ? `of ${file} (${short})` : short });
+            if (!/^[A-Za-z0-9_-]+$/.test(uploadId) || (sha && known.has(sha))) return;
+            // A hash row names its file by one hash; file facts show both.
+            const shown = item.kind === 'hash' ? [sha || md5] : [sha, md5];
+            shown.forEach((hash) => {
+                if (!hash || seen.has(hash) || known.has(hash)) return;
+                seen.add(hash);
+                // The file the hash belongs to: a line can name several (its
+                // own file, a script in its command line, ...).
+                const file = typeof item.file === 'string' ? item.file : '';
+                const short = (hash.length === 64 ? 'SHA-256 ' : 'MD5 ') + hash.slice(0, 12) + '…';
+                found.push({ hash, query: sha || md5, uploadId, file, short: file ? `of ${file} (${short})` : short });
+            });
         });
         return found;
+    }
+
+    // The hash a lookup asks centralbox about.
+    function queryOf(target) {
+        return target.query || target.hash;
     }
 
     function verdictText(verdict) {
@@ -48,7 +79,7 @@ const CentralboxLookup = (function () {
     // "check this hash": the stored or cached answer. urls: {check}.
     async function check(target, urls, onProgress) {
         onProgress('centralbox: checking…');
-        const { status, body } = await post(urls.check, { sha256: target.hash, upload_id: target.uploadId });
+        const { status, body } = await post(urls.check, { sha256: queryOf(target), upload_id: target.uploadId });
         if (status !== 200 || !body || typeof body !== 'object') {
             return { message: 'centralbox: the check failed, try again later', refresh: false };
         }
@@ -62,7 +93,7 @@ const CentralboxLookup = (function () {
     // urls: {fresh, freshStatus (with 64 zeros for the hash)}.
     async function fresh(target, urls, onProgress) {
         onProgress('centralbox: starting a fresh lookup…');
-        const { status, body } = await post(urls.fresh, { sha256: target.hash, upload_id: target.uploadId });
+        const { status, body } = await post(urls.fresh, { sha256: queryOf(target), upload_id: target.uploadId });
         if (status !== 200 || !body || body.ok !== true) {
             const message = body && typeof body.message === 'string' && body.message ? body.message : 'the lookup could not be started';
             return { message: 'centralbox: ' + message, refresh: false };
@@ -71,7 +102,7 @@ const CentralboxLookup = (function () {
             return { message: verdictText(body.verdict) || 'centralbox: ' + body.state, refresh: true };
         }
         onProgress('centralbox: looking up…');
-        const url = urls.freshStatus.replace('0'.repeat(64), encodeURIComponent(target.hash));
+        const url = urls.freshStatus.replace('0'.repeat(64), encodeURIComponent(queryOf(target)));
         for (let attempt = 0; attempt < FRESH_POLL_TRIES; attempt += 1) {
             await new Promise((resolve) => setTimeout(resolve, FRESH_POLL_MS));
             let state = null;

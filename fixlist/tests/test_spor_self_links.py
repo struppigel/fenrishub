@@ -2,11 +2,14 @@
 in other sections, SUMMARY and detail lines, entries of the same name, files
 named in details, folders, copies; their status; the log page and endpoint."""
 
+from datetime import timedelta
+
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from .. import spor_self_links
-from ..models import LogTypeDetectionRule
+from ..models import HashVerdict, LogTypeDetectionRule
 from ..spor_self_links import compute, self_links, self_status
 from ..views.centralbox import add_self_link_context
 from . import spor_sample as s
@@ -271,6 +274,29 @@ class PageTests(TestCase):
             {int(no) for no in [no_of(s.LINES, '2026-11-14 07:22:00 [1117]'), no_of(s.LINES, '2026-11-14 07:21:07 [1116]'),
                                 no_of(s.LINES, '2026-11-14 07:21:07 [Defender]')]},
         )
+
+    def test_page_offers_centralbox_lookups(self):
+        data = self.client.get(reverse('view_uploaded_log', args=['spor-log'])).context['correlations']
+        self.assertEqual(data['hash_url'], reverse('centralbox_hash_check_api'))
+        self.assertTrue(data['fresh_url'] and data['fresh_status_url'])
+        self.assertIn('can_lookup', data)
+
+    def test_endpoint_gives_files_hashes_their_stored_centralbox_result(self):
+        now = timezone.now()
+        HashVerdict.objects.create(sha256=s.DROP_SHA, state='known', verdict='malicious', family='asyncrat',
+                                   checked_at=now, next_check_at=now + timedelta(days=7))
+        url = reverse('spor_self_links_api')
+        # The Defender event of dropper.exe: its FILES line has the hash.
+        action = str(no_of(s.LINES, '2026-11-14 07:22:00 [1117]'))
+        entries = self.client.get(url, {'upload_id': 'spor-log', 'line': action}).json()['entries']
+        info = next(entry for entry in entries if entry['kind'] == 'file_info')
+        self.assertEqual((info['sha256'], info['centralbox']['family']), (s.DROP_SHA, 'asyncrat'))
+        # A hash centralbox was never asked about has no result (the box offers a lookup).
+        evil = str(no_of(s.LINES, '2026-11-18 07:48:46 [PF PCA BAM]'))
+        entries = self.client.get(url, {'upload_id': 'spor-log', 'line': evil}).json()['entries']
+        info = next(entry for entry in entries if entry['kind'] == 'file_info')
+        self.assertEqual(info['sha256'], s.EVIL_SHA)
+        self.assertNotIn('centralbox', info)
 
     def test_endpoint_answers_nothing_for_other_logs_and_bad_lines(self):
         make_uploaded_log('fix-log', log_type='Fixlog', content='Fix result of Farbar Recovery Scan Tool')

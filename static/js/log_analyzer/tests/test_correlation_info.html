@@ -330,6 +330,25 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
         ['host', 'sibling', 'name', 'timing'].every((match) => CorrelationFormat.INFO_MATCHES.has(match))
         && !CorrelationFormat.INFO_MATCHES.has('same_hash') && !CorrelationFormat.INFO_MATCHES.has('inside'));
 
+    // Every SHA-256 and MD5 the box shows can be looked up, file facts too.
+    const MD5 = 'c3'.repeat(16);
+    const facts = (extra) => Object.assign({ kind: 'file_info', upload_id: 'spor-log', log_type: 'Spor', line_no: 47,
+        file: 'evil.exe' }, extra);
+    const both = CentralboxLookup.targets([facts({ sha256: SHA, md5: MD5 })]);
+    assert('a file\'s SHA-256 and MD5 both offer a lookup, the MD5 one asking for the SHA-256',
+        both.length === 2 && both[0].hash === SHA && both[1].hash === MD5
+        && both.every((target) => target.query === SHA && target.uploadId === 'spor-log'), JSON.stringify(both));
+    const md5Only = CentralboxLookup.targets([facts({ kind: 'file_info', source: 'search_file', md5: MD5 })]);
+    assert('an MD5 without a SHA-256 is asked for itself', md5Only.length === 1 && md5Only[0].query === MD5);
+    assert('a hash another entry has a report for offers none',
+        CentralboxLookup.targets([facts({ sha256: KNOWN_SHA, md5: MD5 }), entries[1]]).length === 0
+        && CentralboxLookup.targets([facts({ sha256: SHA, centralbox: { verdict: 'clean', report_url: 'https://centralbox.dev/analysis/x' } })]).length === 0);
+    entries = [facts({ sha256: SHA, md5: MD5, signature: 'unsigned' })];
+    open(true);
+    assert('the info box offers lookups for file facts\' hashes',
+        document.querySelectorAll('.cinfo-hash-lookup').length === 2, String(document.querySelectorAll('.cinfo-hash-lookup').length));
+    CorrelationInfo.close();
+
     // A Spor log's links between its own lines (spor_self_links).
     const sporOwn = (extra) => Object.assign({ kind: 'file_info', upload_id: 'spor-log', log_type: 'Spor', line_no: 70,
         file: 'evil.exe', severity: 'w' }, extra || {});
