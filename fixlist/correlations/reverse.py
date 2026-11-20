@@ -49,18 +49,19 @@ def _frst_line_facts(frst, texts):
 
 
 def reverse_correlations(uploaded_log, user=None, compute=False):
-    """{scope, name, fresh, lines: {line no: [entry]}, texts: {line no:
-    stripped text}} for a log that is not an FRST / Addition log: the lines
+    """{scope, name, fresh, missing, lines: {line no: [entry]}, texts: {line
+    no: stripped text}} for a log that is not an FRST / Addition log: the lines
     of its related FRST / Addition logs (related_upload_ids) whose
     correlations name one of its lines, under that line's number.
 
     Read from those logs' correlations: the stored ones only (`fresh` False
-    when one of them is outdated or missing), or computed when needed with
-    `compute` (the endpoint). Each entry: kind 'reverse', the FRST log's
+    when one of them is outdated or missing, and `missing` True when one of
+    them has nothing stored at all), or computed when needed with `compute`
+    (the endpoint). Each entry: kind 'reverse', the FRST log's
     upload_id / log_type, its line_no and text, its rule status
     (`line_status`), `what` this log says there, and the forward entry's
     match, in_folder and system. Never raises."""
-    answer = {'scope': '', 'name': '', 'fresh': True, 'lines': {}, 'texts': {}}
+    answer = _empty_answer()
     try:
         if uploaded_log.log_type in UploadedLog.ANALYZED_LOG_TYPES:
             return answer
@@ -80,6 +81,7 @@ def reverse_correlations(uploaded_log, user=None, compute=False):
             else:
                 forward, fresh = cached_correlations(frst, user)
             answer['fresh'] = answer['fresh'] and bool(fresh)
+            answer['missing'] = answer['missing'] or (forward is None and not fresh)
             texts = (forward or {}).get('lines') if isinstance(forward, dict) else None
             if not isinstance(texts, dict):
                 continue
@@ -128,7 +130,11 @@ def reverse_correlations(uploaded_log, user=None, compute=False):
         return answer
     except Exception:
         logger.exception('Reverse correlations failed for %s', getattr(uploaded_log, 'upload_id', '?'))
-        return {'scope': '', 'name': '', 'fresh': True, 'lines': {}, 'texts': {}}
+        return _empty_answer()
+
+
+def _empty_answer():
+    return {'scope': '', 'name': '', 'fresh': True, 'missing': False, 'lines': {}, 'texts': {}}
 
 
 def reverse_status(entries):
@@ -136,9 +142,13 @@ def reverse_status(entries):
     verdict among REVERSE_MARKER_STATUSES (logs of another system and
     informational matches left out: a flagged task says nothing about the
     wscript.exe it runs through), else ''."""
-    return dominant_status([
-        entry.get('line_status') for entry in entries if _reverse_rates(entry)
-    ], default='')
+    return dominant_status([reverse_entry_status(entry) for entry in entries], default='')
+
+
+def reverse_entry_status(entry):
+    """The marker status one reverse entry stands for: its FRST line's rule
+    verdict when that may colour the line (see reverse_status), else ''."""
+    return entry.get('line_status') or '' if _reverse_rates(entry) else ''
 
 
 def _reverse_rates(entry):

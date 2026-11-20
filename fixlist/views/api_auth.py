@@ -40,7 +40,7 @@ logger = logging.getLogger('fixlist.api')
 
 # Endpoints that hand out one upload's content or verdicts. Distinct uploads
 # read through these count against API_MAX_UPLOADS_PER_DAY.
-UPLOAD_READ_ENDPOINTS = ('api_v1_upload', 'api_v1_upload_analysis')
+UPLOAD_READ_ENDPOINTS = ('api_v1_upload', 'api_v1_upload_analysis', 'api_v1_upload_correlations')
 
 TOKEN_QUERY_PARAMS = ('token', 'access_token', 'api_key', 'key')
 LAST_USED_REFRESH_SECONDS = 60
@@ -50,7 +50,10 @@ TARGET_MAX_CHARS = 200
 # deployment would silently ignore, so a newer MCP client can refuse to use
 # them against an older server instead of getting unfiltered results.
 # Version 3: case correlations in the analysis (correlations / correlated).
-API_VERSION = 3
+# Version 4: the correlations endpoint for every log type (reverse
+# correlations, a Spor log's links between its own lines) and get_case
+# linked_findings.
+API_VERSION = 4
 API_VERSION_HEADER = 'X-FenrisHub-Api-Version'
 
 

@@ -85,6 +85,7 @@ from .views.llm_api import (
     api_tags,
     api_upload,
     api_upload_analysis,
+    api_upload_correlations,
     api_upload_speeches,
     api_uploads,
     api_user,
@@ -209,6 +210,10 @@ urlpatterns = [
     path('api/v1/uploads/', api_uploads, name='api_v1_uploads'),
     path('api/v1/uploads/<str:upload_id>/', api_upload, name='api_v1_upload'),
     path('api/v1/uploads/<str:upload_id>/analysis/', api_upload_analysis, name='api_v1_upload_analysis'),
+    path(
+        'api/v1/uploads/<str:upload_id>/correlations/', api_upload_correlations,
+        name='api_v1_upload_correlations',
+    ),
     path('api/v1/uploads/<str:upload_id>/speeches/', api_upload_speeches, name='api_v1_upload_speeches'),
     path('api/v1/search/', api_search, name='api_v1_search'),
     path('api/v1/users/<str:forum_username>/', api_user, name='api_v1_user'),

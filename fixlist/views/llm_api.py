@@ -18,7 +18,9 @@ instructions.
 Version 2 of the API (see api_auth.API_VERSION) only added parameters, fields
 and endpoints: a request without the new parameters gets the same response as
 before. Search, the rule dry run and rule matching also take a POST with a JSON
-body, for input that does not fit a URL.
+body, for input that does not fit a URL. Versions 3 (correlations in the
+analysis and get_case) and 4 (the correlations endpoint for every log type,
+get_case linked_findings) are additive the same way.
 """
 
 import re
@@ -40,7 +42,11 @@ from ..api_line_search import (
     parse_components,
     serialize_hit,
 )
-from ..case_correlations import cached_correlations, correlations_for_upload, entry_status
+from ..case_correlations import (
+    _fresh_payload, add_stored_results, cached_correlations, correlations_for_upload, entry_status, evidence_text,
+    mention_text, related_upload_ids, reverse_correlations, reverse_entry_status, reverse_note, reverse_status,
+)
+from ..correlations import spor_self
 from ..api_params import (
     ParamError,
     apply_upload_scope,
@@ -51,7 +57,7 @@ from ..api_params import (
     scope_cache_part,
     text_param,
 )
-from ..log_types import ANALYZED_LOG_TYPES
+from ..log_types import ANALYZED_LOG_TYPES, LOG_TYPE_SPOR
 from ..models import ClassificationRule, FixlistSnippet, InfectionCase, InfectionCaseLog, RuleTag, Speech, UploadedLog
 from ..rule_sets import resolve_user_rule_set_key, rule_set_label
 from ..status_types import STATUS_LABELS, VALID_STATUSES
@@ -432,7 +438,7 @@ def _correlation_mode_param(params):
     return value if value in CORRELATION_MODES else None
 
 
-def _served_correlations(request, uploaded_log, refresh=False):
+def _served_correlations(request, uploaded_log, refresh=False, analyze=False):
     """``(correlations, fresh, error_response)``: what the related logs say
     about the upload's lines (case_correlations), the caller's own cases with
     the log first, else the forum user's other logs - the same logs as the log
@@ -441,10 +447,15 @@ def _served_correlations(request, uploaded_log, refresh=False):
     Like the log page, the stored answer is served even when outdated (`fresh`
     False), at no cost. One never stored is computed now, and an outdated one
     with `refresh`; both cost extra units. Never a centralbox call. Run after
-    _served_analysis: the computation reads the upload's cached analysis.
+    _served_analysis (the computation reads the upload's cached analysis), or
+    with `analyze`, which serves the analysis first when computing.
     """
     result, fresh = cached_correlations(uploaded_log, request.user)
     if result is None or (refresh and not fresh):
+        if analyze:
+            _analysis, _rule_set_key, error = _served_analysis(request, uploaded_log)
+            if error:
+                return None, False, error
         if not charge_api_units(request, CORRELATION_RECOMPUTE_EXTRA_UNITS):
             return None, False, rate_limited_response(60)
         result, fresh = correlations_for_upload(uploaded_log, request.user), True
@@ -463,29 +474,38 @@ def _add_correlations(page, correlations, full=False):
     by_text = correlations.get('lines') or {}
     statuses = correlations.get('statuses') or {}
     notes = correlations.get('notes') or {}
-    tags_by_sha = {}
-    if full:
-        shas = {
-            entry['sha256']
-            for line in page for entry in by_text.get(_correlation_text(line), ())
-            if entry.get('sha256')
-        }
-        tags_by_sha = _tags_by_sha(shas) if shas else {}
+    tags_by_sha = _entry_tags([by_text.get(_correlation_text(line), ()) for line in page]) if full else None
     for line in page:
         text = _correlation_text(line)
         entries = by_text.get(text)
         if not entries:
             continue
-        correlation = {'status': statuses.get(text, ''), 'note': notes.get(text, ''), 'entry_count': len(entries)}
-        if full:
-            rows = []
-            for entry in entries:
-                row = {**entry, 'status': entry_status(entry)}
-                if entry.get('sha256'):
-                    row['tags'] = tags_by_sha.get(entry['sha256'], [])
-                rows.append(row)
-            correlation['entries'] = rows
-        line['correlation'] = correlation
+        line['correlation'] = _correlation_block(
+            entries, statuses.get(text, ''), notes.get(text, ''), tags_by_sha,
+        )
+
+
+def _entry_tags(entry_lists):
+    """{sha256: [tag name]} for the hashes of the given entries (_tags_by_sha)."""
+    shas = {entry['sha256'] for entries in entry_lists for entry in entries if entry.get('sha256')}
+    return _tags_by_sha(shas) if shas else {}
+
+
+def _correlation_block(entries, status, note, tags_by_sha=None, entry_status_of=entry_status):
+    """{status, note, entry_count} of a line's entries; with `tags_by_sha`
+    (full) also the entries, each with the status letter it stands for
+    (`entry_status_of`) and, for a hash, the tags its centralbox family /
+    malware type matches."""
+    block = {'status': status, 'note': note, 'entry_count': len(entries)}
+    if tags_by_sha is not None:
+        rows = []
+        for entry in entries:
+            row = {**entry, 'status': entry_status_of(entry)}
+            if entry.get('sha256'):
+                row['tags'] = tags_by_sha.get(entry['sha256'], [])
+            rows.append(row)
+        block['entries'] = rows
+    return block
 
 
 def _correlated_findings(request, uploaded_log):
@@ -651,6 +671,253 @@ def api_upload_analysis(request, upload_id):
         'offset': offset,
         'limit': limit,
         'untrusted_lines': page,
+    })
+    return JsonResponse(payload)
+
+
+# get_correlations: what is known about the lines of any log.
+CORRELATION_LINES_DEFAULT_LIMIT = 200
+CORRELATION_LINES_MAX_LIMIT = 1000
+# Reading a Spor log's links between its own lines when this worker has not
+# got them yet: the whole log is parsed.
+SPOR_SELF_EXTRA_UNITS = 9
+SELF_LINK_MODES = ('marked', 'all', 'off')
+DIRECTION_FORWARD = 'forward'
+DIRECTION_REVERSE = 'reverse'
+
+
+def _served_reverse(request, uploaded_log, refresh=False):
+    """``(answer, error_response)``: the FRST / Addition lines of the related
+    logs that point at the lines of a log that is not one
+    (reverse_correlations). The stored answers are served even when outdated
+    (`fresh` False), at no cost; when one was never stored, or with `refresh`
+    an outdated one, they are computed for extra units, after serving the
+    analysis of each related FRST / Addition log that has none (their
+    correlations read it, as _served_correlations with `analyze`). Never a
+    centralbox call."""
+    answer = reverse_correlations(uploaded_log, request.user)
+    if answer['missing'] or (refresh and not answer['fresh']):
+        error = _analyze_related(request, uploaded_log)
+        if error:
+            return None, error
+        if not charge_api_units(request, CORRELATION_RECOMPUTE_EXTRA_UNITS):
+            return None, rate_limited_response(60)
+        answer = reverse_correlations(uploaded_log, request.user, compute=True)
+    return answer, None
+
+
+def _analyze_related(request, uploaded_log):
+    """Serve an analysis (_served_analysis: extra units each) for every related
+    FRST / Addition log without a fresh one under any rule set. The error
+    response, or None."""
+    upload_ids, _scope, _name = related_upload_ids(uploaded_log, request.user)
+    if not upload_ids:
+        return None
+    for related in UploadedLog.objects.live().filter(pk__in=upload_ids, log_type__in=ANALYZED_LOG_TYPES):
+        if _fresh_payload(related) is None:
+            _analysis, _rule_set_key, error = _served_analysis(request, related)
+            if error:
+                return error
+    return None
+
+
+def _served_self_links(request, uploaded_log):
+    """``(SelfLinks or None, error_response)``: the links between a Spor log's
+    own lines (correlations/spor_self.py); None for other logs or on an error.
+    Extra units when this worker has not read the log yet."""
+    if uploaded_log.log_type != LOG_TYPE_SPOR:
+        return None, None
+    if not spor_self.is_cached(uploaded_log) and not charge_api_units(request, SPOR_SELF_EXTRA_UNITS):
+        return None, rate_limited_response(60)
+    return spor_self.for_upload(uploaded_log), None
+
+
+def _forward_by_line(content, correlations):
+    """{line no: (text, entries, status, note)} of an FRST / Addition log's
+    correlations (keyed by line text), numbered like the log page."""
+    by_text = correlations.get('lines') or {}
+    statuses = correlations.get('statuses') or {}
+    notes = correlations.get('notes') or {}
+    found = {}
+    if not by_text:
+        return found
+    for no, raw in enumerate((content or '').split('\n'), start=1):
+        for piece in raw.splitlines():
+            text = piece.strip()
+            if text in by_text:
+                found[no] = (text, by_text[text], statuses.get(text, ''), notes.get(text, ''))
+    return found
+
+
+def _reverse_by_line(answer):
+    """{line no: (text, entries, status, note)} of a reverse_correlations answer."""
+    found = {}
+    for no, entries in answer['lines'].items():
+        status = reverse_status(entries)
+        found[int(no)] = (
+            answer['texts'].get(no, ''), entries, status, reverse_note(entries, status) if status else '',
+        )
+    return found
+
+
+def _self_links_block(links, no, code, full):
+    """{status, notable, entry_count} of a Spor line's links to the log's other
+    lines; with `full` the entries too, each with the status it gives the line
+    (as `status` was decided: from the log alone) and, for a FILES hash, its
+    stored centralbox result and tags."""
+    entries = links.entries(no)
+    block = {
+        'status': code if code in spor_self.SELF_STATUSES else '',
+        'notable': bool(code),
+        'entry_count': len(entries),
+    }
+    if full:
+        # Rated before the stored results are added: they never rate a self link.
+        statuses = [spor_self.rating_status(entry) for entry in entries]
+        entries = add_stored_results(entries)
+        tags_by_sha = _entry_tags([entries])
+        rows = []
+        for entry, status in zip(entries, statuses):
+            row = {**entry, 'status': status}
+            if entry.get('sha256'):
+                row['tags'] = tags_by_sha.get(entry['sha256'], [])
+            rows.append(row)
+        block['entries'] = rows
+    return block
+
+
+def _self_note(entries, status):
+    """What the linked line that gave a Spor line its status says, in a few words."""
+    for entry in entries:
+        if spor_self.rating_status(entry) != status:
+            continue
+        kind = entry.get('kind')
+        if kind == 'evidence':
+            what = evidence_text(entry)
+        elif kind == 'mention':
+            what = mention_text(entry)
+        else:
+            what = entry.get('detection') or (
+                f"signature {entry['signature']}" if entry.get('signature') else 'file details'
+            )
+        where = ' '.join(part for part in (f"L{entry.get('line_no') or '?'}", entry.get('section') or '') if part)
+        return f'{where}: {what}'[:200]
+    return ''
+
+
+@api_token_required('api_v1_upload_correlations')
+def api_upload_correlations(request, upload_id):
+    """What is known about the lines of any log, by line number (`n`, as in
+    get_upload and the log page), without running the analyzer.
+
+    `direction` 'forward' (an FRST / Addition log): what the other logs of the
+    caller's own cases with it (else the forum user's other logs) say about
+    its lines, as in api_upload_analysis. 'reverse' (any other log, e.g. Spor
+    or a scanner log): the lines of those FRST / Addition logs that point at
+    its lines; the status is the FRST line's rule verdict when B, P, ! or G
+    (never from another machine), each entry carrying it as `line_status`.
+    Lines carry `correlation`: {status, note, entry_count}.
+
+    A Spor log's lines also carry `self_links`: {status, notable,
+    entry_count}, the other lines of the same log about the same file or
+    entry (correlations/spor_self.py). Its status is only B, P or !; notable
+    means the line or a linked line has a finding or flag. `self_links`
+    'marked' (default) lists the lines with a status or notable, 'all' every
+    linked line, 'off' none.
+
+    Only lines with something are listed, in line order, paged with offset /
+    limit. `line=N` gives that line alone with its entries; `full=1` adds the
+    entries to every line; `rated=1` keeps the lines with a status. Stored
+    correlations are served even when outdated (`correlation_scope.fresh`
+    false); `fresh=1` recomputes them, and ones never stored are computed at
+    once, both for extra units, as is a Spor log this worker has not read
+    yet. Centralbox is never asked.
+    """
+    try:
+        line = optional_int_param(request.GET, 'line')
+        full = flag_param(request.GET, 'full')
+        rated = flag_param(request.GET, 'rated')
+        refresh = flag_param(request.GET, 'fresh')
+        limit = int_param(
+            request.GET, 'limit', CORRELATION_LINES_DEFAULT_LIMIT, 1, CORRELATION_LINES_MAX_LIMIT,
+        )
+        offset = int_param(request.GET, 'offset', 0, 0, LINES_MAX_OFFSET)
+    except ParamError as exc:
+        return _error(str(exc))
+    if line is not None and line < 1:
+        return _error('line must be a line number (1 or more).')
+    self_mode = (request.GET.get('self_links') or 'marked').strip().lower()
+    if self_mode not in SELF_LINK_MODES:
+        return _error(f"self_links must be one of: {', '.join(SELF_LINK_MODES)}.")
+
+    uploaded_log = _get_live_upload(upload_id, with_content=True)
+    if uploaded_log is None:
+        return _not_found()
+
+    if uploaded_log.log_type in ANALYZED_LOG_TYPES:
+        direction = DIRECTION_FORWARD
+        correlations, fresh, error = _served_correlations(request, uploaded_log, refresh=refresh, analyze=True)
+        if error:
+            return error
+        scope, name = correlations.get('scope', ''), correlations.get('name', '')
+        found = _forward_by_line(uploaded_log.content, correlations)
+        status_of = entry_status
+    else:
+        direction = DIRECTION_REVERSE
+        answer, error = _served_reverse(request, uploaded_log, refresh=refresh)
+        if error:
+            return error
+        scope, name, fresh = answer['scope'], answer['name'], answer['fresh']
+        found = _reverse_by_line(answer)
+        status_of = reverse_entry_status
+
+    links = None
+    if self_mode != 'off':
+        links, error = _served_self_links(request, uploaded_log)
+        if error:
+            return error
+    codes = links.codes if links is not None else {}
+    if line is not None:
+        # One line: whatever links it has, with its entries.
+        full = True
+        linked = {line} if str(line) in codes else set()
+    elif self_mode == 'all':
+        linked = {int(no) for no in codes}
+    else:
+        linked = {int(no) for no, code in codes.items() if code}
+
+    numbers = set(found) | linked
+    if line is not None:
+        numbers &= {line}
+    if rated:
+        numbers = {
+            no for no in numbers
+            if (no in found and found[no][2]) or codes.get(str(no)) in spor_self.SELF_STATUSES
+        }
+    ordered = sorted(numbers)
+    page = ordered[offset:offset + limit]
+
+    content_lines = (uploaded_log.content or '').split('\n')
+    tags_by_sha = _entry_tags([found[no][1] for no in page if no in found]) if full else None
+    rows = []
+    for no in page:
+        row = {'n': no, 'text': content_lines[no - 1].strip() if no <= len(content_lines) else ''}
+        if no in found:
+            text, entries, status, note = found[no]
+            row['text'] = text or row['text']
+            row['correlation'] = _correlation_block(entries, status, note, tags_by_sha, entry_status_of=status_of)
+        if no in linked:
+            row['self_links'] = _self_links_block(links, no, codes.get(str(no), ''), full)
+        rows.append(row)
+
+    payload = _uploads_metadata(request.user, [uploaded_log])[0]
+    payload.update({
+        'direction': direction,
+        'correlation_scope': {'scope': scope, 'untrusted_forum_username': name, 'fresh': bool(fresh)},
+        'matching_line_count': len(ordered),
+        'offset': offset,
+        'limit': limit,
+        'untrusted_lines': rows,
     })
     return JsonResponse(payload)
 
@@ -1017,8 +1284,47 @@ def api_user(request, forum_username):
     })
 
 
-def _timeline_entry(item, user, case_ids, duplicates=None, findings=None):
-    """`findings` maps upload pk -> its correlated findings (_correlated_findings)."""
+LINKED_FINDINGS_MAX = 100
+LINKED_FINDINGS_UNAVAILABLE = 'Rate limit reached while reading them; retry later or use get_correlations.'
+
+
+def _linked_findings(request, uploaded_log):
+    """``(findings, error_response)`` for a log that is not an FRST / Addition
+    log (None for those): {items, total}, its lines given a status by the
+    lines of related FRST / Addition logs pointing at them (source 'frst',
+    the FRST line's rule verdict, see api_upload_correlations) or, in a Spor
+    log, by its own linked lines (source 'spor': B, P or !), [{n, text,
+    source, status, note}] in line order, at most LINKED_FINDINGS_MAX."""
+    if uploaded_log.log_type in ANALYZED_LOG_TYPES:
+        return None, None
+    answer, error = _served_reverse(request, uploaded_log)
+    if error:
+        return None, error
+    findings = [
+        {'n': no, 'text': text, 'source': 'frst', 'status': status, 'note': note}
+        for no, (text, _entries, status, note) in _reverse_by_line(answer).items() if status
+    ]
+    links, error = _served_self_links(request, uploaded_log)
+    if error:
+        return None, error
+    codes = links.codes if links is not None else {}
+    rated = [(no, code) for no, code in codes.items() if code in spor_self.SELF_STATUSES]
+    if rated:
+        content_lines = (uploaded_log.content or '').split('\n')
+        for no, code in rated:
+            number = int(no)
+            findings.append({
+                'n': number,
+                'text': content_lines[number - 1].strip() if number <= len(content_lines) else '',
+                'source': 'spor', 'status': code, 'note': _self_note(links.entries(no), code),
+            })
+    findings.sort(key=lambda finding: (finding['n'], finding['source']))
+    return {'items': findings[:LINKED_FINDINGS_MAX], 'total': len(findings)}, None
+
+
+def _timeline_entry(item, user, case_ids, duplicates=None, findings=None, linked=None):
+    """`findings` maps upload pk -> its correlated findings (_correlated_findings),
+    `linked` upload pk -> its linked findings (_linked_findings)."""
     item_type = item['item_type']
     entry = {'type': item_type, 'created_at': _iso(item['created_at'])}
     if item_type == 'log':
@@ -1026,6 +1332,12 @@ def _timeline_entry(item, user, case_ids, duplicates=None, findings=None):
         entry['upload'] = _upload_metadata(uploaded_log, case_ids, duplicates)
         if findings and findings.get(uploaded_log.pk) is not None:
             entry['correlated_findings'] = findings[uploaded_log.pk]
+        found = (linked or {}).get(uploaded_log.pk)
+        if found is not None and 'unavailable' in found:
+            entry['linked_findings_unavailable'] = found['unavailable']
+        elif found is not None:
+            entry['linked_findings'] = found['items']
+            entry['linked_findings_total'] = found['total']
     elif item_type == 'fixlist':
         # Same text the share link serves to any logged-in helper. The owner's
         # internal note is never included.
@@ -1052,6 +1364,9 @@ def api_case(request, case_id):
     related logs gave a correlation status (see api_upload_analysis), read for
     the caller like the log page - their own cases with the log, else the
     forum user's other logs; another helper's case never counts.
+
+    Every other log (Spor, scanner logs, Fixlogs, ...) comes with
+    `linked_findings` (see _linked_findings) and `linked_findings_total`.
     """
     if not CASE_ID_RE.fullmatch(case_id or ''):
         return _not_found()
@@ -1068,18 +1383,26 @@ def api_case(request, case_id):
     case_ids = _own_case_ids_by_upload(request.user, [uploaded_log.pk for uploaded_log in case_uploads])
     duplicates = duplicate_info_for(case_uploads, _live_upload_rows())
     findings = {}
+    linked = {}
     for uploaded_log in case_uploads:
         if uploaded_log.pk in findings:
             continue
         findings[uploaded_log.pk], error = _correlated_findings(request, uploaded_log)
         if error:
             return error
+        # Added in version 4: when over the budget, the case is still served
+        # and the log says why it has no linked findings.
+        linked[uploaded_log.pk], error = _linked_findings(request, uploaded_log)
+        if error:
+            linked[uploaded_log.pk] = {'unavailable': LINKED_FINDINGS_UNAVAILABLE}
 
     payload = _case_summary(infection_case, request.user)
     payload.update({
         'untrusted_symptom_description': infection_case.symptom_description,
         'reference_url': infection_case.reference_url,
-        'timeline': [_timeline_entry(item, request.user, case_ids, duplicates, findings) for item in timeline],
+        'timeline': [
+            _timeline_entry(item, request.user, case_ids, duplicates, findings, linked) for item in timeline
+        ],
     })
     return JsonResponse(payload)
 

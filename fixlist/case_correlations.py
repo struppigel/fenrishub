@@ -63,5 +63,5 @@ from .correlations.forward import (
 )
 from .correlations.reverse import (
     _frst_line_facts, reverse_correlations, REVERSE_MARKER_STATUSES, reverse_note, _reverse_rates,
-    reverse_status, _REVERSE_WHAT, _reverse_what,
+    reverse_entry_status, reverse_status, _REVERSE_WHAT, _reverse_what,
 )

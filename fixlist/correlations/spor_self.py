@@ -71,12 +71,17 @@ def rates(entry):
     return isinstance(entry, dict) and _rates(entry, {})
 
 
+def rating_status(entry):
+    """The strong status (B / P / !) an entry gives its line, '' for none."""
+    if not rates(entry):
+        return ''
+    status = finding_status(entry)
+    return status if status in SELF_STATUSES else ''
+
+
 def self_status(entries):
     """The worst strong status (B / P / !) of a line's self links, '' for none."""
-    return dominant_status([
-        status for status in (finding_status(entry) for entry in entries or () if rates(entry))
-        if status in SELF_STATUSES
-    ], default='')
+    return dominant_status([rating_status(entry) for entry in entries or ()], default='')
 
 
 def _status(collector):
@@ -152,10 +157,21 @@ _cache = OrderedDict()
 _cache_lock = threading.Lock()
 
 
+def _cache_key(uploaded_log):
+    return (uploaded_log.pk, uploaded_log.content_hash or '')
+
+
+def is_cached(uploaded_log):
+    """True when this worker process has the log's SelfLinks already (for_upload
+    answers at once, without reading the log)."""
+    with _cache_lock:
+        return _cache_key(uploaded_log) in _cache
+
+
 def for_upload(uploaded_log):
     """The SelfLinks of a Spor log, from the cache when it has them. Never
     raises (None on an error)."""
-    key = (uploaded_log.pk, uploaded_log.content_hash or '')
+    key = _cache_key(uploaded_log)
     with _cache_lock:
         found = _cache.get(key)
         if found is not None:
