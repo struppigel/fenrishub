@@ -6,6 +6,7 @@
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/log_analyzer.css' %}">
 <link rel="stylesheet" href="{% static 'css/line_copy_menu.css' %}">
+<link rel="stylesheet" href="{% static 'css/log_highlight.css' %}">
 <link rel="stylesheet" href="{% static 'css/correlation_info.css' %}">
 <link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
@@ -591,6 +592,7 @@ window.logAnalyzerConfig = {
 <script defer src="{% static 'js/log_analyzer/centralbox_suggestions.js' %}"></script>
 <script defer src="{% static 'js/centralbox_lookup.js' %}"></script>
 <script defer src="{% static 'js/correlation_format.js' %}"></script>
+<script defer src="{% static 'js/log_tokens.js' %}"></script>
 <script defer src="{% static 'js/correlation_info.js' %}"></script>
 <script defer src="{% static 'js/popup_menu.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/case_correlations.js' %}"></script>

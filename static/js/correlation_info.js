@@ -11,6 +11,9 @@
  *
  * CorrelationInfo.open({
  *     lineText,            the line, shown on top
+ *     lineStatus,          the line's verdict letter as the page shows it ('' for none)
+ *     lineIsFrst,          false when the line is not an FRST / Addition line
+ *                          (no FRST-only token colours); default true
  *     getEntries(),        the line's entries now (called again after a lookup)
  *     isOwn(entry),        an entry of the shown log itself
  *     scope, name,         'case' / 'user' and the forum user (header text)
@@ -20,7 +23,8 @@
  *     refresh(),           fetch the correlations again (after a lookup)
  *     trigger,             focus returns here when the box closes
  * })
- * Needs correlation_format.js; centralbox_lookup.js for the lookups. */
+ * Needs correlation_format.js; centralbox_lookup.js for the lookups;
+ * log_tokens.js (+ log_highlight.css) for the log page's token colours. */
 window.CorrelationInfo = (function () {
     const Format = () => window.CorrelationFormat;
     const VT_FILE_URL = 'https://www.virustotal.com/gui/file/';
@@ -54,6 +58,49 @@ window.CorrelationInfo = (function () {
 
     function sevClass(severity) {
         return SEVERITIES.includes(severity) ? 'cinfo-sev-' + severity : '';
+    }
+
+    // Log text in the log page's token colours (log_tokens.js), plain text
+    // without it; `frst` for FRST / Addition lines. The text stays the text.
+    function appendTokens(node, text, frst = false) {
+        const value = str(text);
+        if (window.LogTokens && typeof window.LogTokens.append === 'function') window.LogTokens.append(node, value, frst);
+        else node.appendChild(document.createTextNode(value));
+        return node;
+    }
+
+    function tokenized(tag, className, text, frst = false) {
+        return appendTokens(el(tag, className), text, frst);
+    }
+
+    // The colour suffix of a rule status letter ('B' -> 'b', '!' -> 'w'), '' for none.
+    function statusPaint(letter) {
+        return Format().STATUS_CLASS[str(letter)] || '';
+    }
+
+    // The status letter in front of a line, left out of a copied selection.
+    function statusLetter(letter) {
+        const paint = statusPaint(letter);
+        return paint ? el('span', 'cinfo-status-letter cinfo-sev-' + paint, letter) : null;
+    }
+
+    // The strongest of the given status letters (rule precedence), '' for none.
+    function worstStatus(letters) {
+        const order = (window.Fenris && Fenris.status && Fenris.status.precedence) || [];
+        const known = letters.filter((letter) => statusPaint(letter));
+        known.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+        return known[0] || '';
+    }
+
+    // A log line in a box: the status letter, then the line in token colours;
+    // the box's left edge in the status colour.
+    function lineNode(text, status, frst) {
+        const paint = statusPaint(status);
+        const node = el('pre', 'cinfo-line' + (paint ? ' cinfo-edge-' + paint : ''));
+        const letter = statusLetter(status);
+        if (letter) node.appendChild(letter);
+        node.appendChild(tokenized('span', 'cinfo-line-text', text, frst));
+        return node;
     }
 
     function ensure() {
@@ -156,14 +203,20 @@ window.CorrelationInfo = (function () {
     // Sources: which log a row comes from, and a link to its line
     // ------------------------------------------------------------------
 
-    function sourceNode(entry) {
-        const wrap = el('span', 'cinfo-src');
+    // Which log a row comes from: "this log" or its type, and "other system?".
+    function sourceLabel(wrap, entry) {
         const own = isOwn(entry);
         wrap.appendChild(el('span', 'cinfo-src-type', own ? 'this log' : str(entry.log_type) || 'log'));
         if (!own && entry.system === 'different') wrap.appendChild(el('span', 'cinfo-src-other', 'other system?'));
+        return wrap;
+    }
+
+    // "L<n>": jumps to the line of the shown log, or opens the other log at
+    // the line in a new tab. null when there is nowhere to go.
+    function lineLink(entry) {
         const lineNo = Number(entry.anchor_line_no || entry.line_no);
         const label = Number.isInteger(lineNo) && lineNo > 0 ? 'L' + lineNo : 'open';
-        if (own) {
+        if (isOwn(entry)) {
             const jump = el('button', 'cinfo-link cinfo-jump', label);
             jump.type = 'button';
             jump.title = 'go to the line in this log';
@@ -172,18 +225,22 @@ window.CorrelationInfo = (function () {
                 close();
                 if (typeof onJump === 'function') onJump(lineNo, entry);
             });
-            wrap.appendChild(jump);
-        } else {
-            const url = Format().logUrl(entry);
-            if (url) {
-                const link = el('a', 'cinfo-link', label);
-                link.href = url;
-                link.target = '_blank';
-                link.rel = 'noopener noreferrer';
-                link.title = `open the ${str(entry.log_type) || 'log'} at this line`;
-                wrap.appendChild(link);
-            }
+            return jump;
         }
+        const url = Format().logUrl(entry);
+        if (!url) return null;
+        const link = el('a', 'cinfo-link', label);
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.title = `open the ${str(entry.log_type) || 'log'} at this line`;
+        return link;
+    }
+
+    function sourceNode(entry) {
+        const wrap = sourceLabel(el('span', 'cinfo-src'), entry);
+        const link = lineLink(entry);
+        if (link) wrap.appendChild(link);
         return wrap;
     }
 
@@ -378,7 +435,7 @@ window.CorrelationInfo = (function () {
         const list = section(parent, 'file');
         infos.forEach((entry) => {
             const li = row('cinfo-facts');
-            if (str(entry.path)) li.appendChild(el('div', 'cinfo-path', entry.path));
+            if (str(entry.path)) li.appendChild(tokenized('div', 'cinfo-path', entry.path));
             const grid = el('dl', 'cinfo-grid');
             FACTS.forEach(([key, label]) => {
                 const value = str(entry[key]);
@@ -388,6 +445,7 @@ window.CorrelationInfo = (function () {
                 let cls = '';
                 if (key === 'signature') cls = sevClass(SIGNATURE_SEVERITY[value.split(' ')[0]] || '');
                 if (key === 'signed' && value === 'not signed') cls = 'cinfo-sev-w';
+                if (key === 'company') cls = 'hl-company';
                 dd.appendChild(el('span', cls, value));
                 if (key === 'original_name' && entry.original_name_differs) {
                     dd.appendChild(el('span', 'cinfo-note cinfo-sev-w', ' differs from the file name'));
@@ -428,25 +486,48 @@ window.CorrelationInfo = (function () {
     }
 
     // The FRST / Addition lines that point at the shown line (reverse
-    // entries): the line, its rule verdict, what the shown log says there and
-    // a link to it.
+    // entries). Lines of the same log that point here the same way share one
+    // row and one box: per line its link, rule verdict and text.
+    function reverseGroups(items) {
+        const groups = new Map();
+        items.forEach((entry) => {
+            const key = JSON.stringify([str(entry.upload_id), str(entry.log_type), str(entry.system),
+                str(entry.what), str(entry.match), Boolean(entry.in_folder)]);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(entry);
+        });
+        // In log order within a box.
+        const lineNo = (entry) => Number(entry.anchor_line_no || entry.line_no) || 0;
+        return [...groups.values()].map((entries) => entries.slice().sort((a, b) => lineNo(a) - lineNo(b)));
+    }
+
     function renderReverse(parent, group) {
         const items = group.entries.filter((entry) => entry.kind === 'reverse');
         if (!items.length) return;
         const list = section(parent, 'FRST / Addition lines');
-        items.forEach((entry) => {
-            const li = row();
+        reverseGroups(items).forEach((entries) => {
+            const first = entries[0];
+            const li = row('cinfo-reverse');
             const head = el('div', 'cinfo-finding');
-            const letter = str(entry.line_status);
-            const cls = Format().STATUS_CLASS[letter];
-            if (cls) head.appendChild(el('span', 'cinfo-status-letter cinfo-sev-' + cls, letter));
-            if (str(entry.what)) head.appendChild(el('span', 'cinfo-key', 'via ' + entry.what));
-            const how = Format().MATCH_NOTES[entry.match];
+            if (str(first.what)) head.appendChild(el('span', 'cinfo-key', 'via ' + first.what));
+            const how = Format().MATCH_NOTES[first.match];
             if (how) head.appendChild(el('span', 'cinfo-note', how));
-            if (entry.in_folder) head.appendChild(el('span', 'cinfo-note', 'in this folder'));
-            li.appendChild(head);
-            if (str(entry.text)) li.appendChild(el('pre', 'cinfo-line', entry.text));
-            li.appendChild(sourceNode(entry));
+            if (first.in_folder) head.appendChild(el('span', 'cinfo-note', 'in this folder'));
+            if (head.childNodes.length) li.appendChild(head);
+            const paint = statusPaint(worstStatus(entries.map((entry) => str(entry.line_status))));
+            const box = el('div', 'cinfo-lines' + (paint ? ' cinfo-edge-' + paint : ''));
+            entries.forEach((entry) => {
+                const line = el('div', 'cinfo-lines-row');
+                const gutter = el('span', 'cinfo-lines-no');
+                const link = lineLink(entry);
+                if (link) gutter.appendChild(link);
+                line.appendChild(gutter);
+                line.appendChild(statusLetter(str(entry.line_status)) || el('span', 'cinfo-status-letter'));
+                line.appendChild(tokenized('span', 'cinfo-line-text', entry.text, true));
+                box.appendChild(line);
+            });
+            li.appendChild(box);
+            li.appendChild(sourceLabel(el('span', 'cinfo-src'), first));
             list.appendChild(li);
         });
     }
@@ -475,7 +556,7 @@ window.CorrelationInfo = (function () {
                 link.rel = 'noopener noreferrer';
                 dd.appendChild(link);
             } else {
-                dd.textContent = value;
+                appendTokens(dd, value);
             }
             list.appendChild(dd);
         });
@@ -516,7 +597,7 @@ window.CorrelationInfo = (function () {
             head.appendChild(flagsNode(entry.flags));
             li.appendChild(head);
             const detail = entry.kind === 'evidence' ? str(entry.details) : str(entry.text);
-            if (detail) li.appendChild(el('div', 'cinfo-text', detail));
+            if (detail) li.appendChild(tokenized('div', 'cinfo-text', detail));
             const extra = extraNode(entry.extra);
             if (extra) li.appendChild(extra);
             li.appendChild(sourceNode(entry));
@@ -534,7 +615,7 @@ window.CorrelationInfo = (function () {
         const scrollTop = bodyEl.scrollTop;
         bodyEl.innerHTML = '';
         const intro = el('div', 'cinfo-intro');
-        if (str(state.lineText)) intro.appendChild(el('pre', 'cinfo-line', state.lineText));
+        if (str(state.lineText)) intro.appendChild(lineNode(state.lineText, state.lineStatus, state.lineIsFrst !== false));
         const summary = el('p', 'cinfo-summary');
         summary.appendChild(document.createTextNode(Format().header(list, isOwn, { scope: state.scope, name: state.name })));
         const letter = str(state.status);
@@ -552,7 +633,8 @@ window.CorrelationInfo = (function () {
         Format().fileGroups(list).forEach((group) => {
             const box = el('section', 'cinfo-file');
             const heading = el('h3', 'cinfo-file-title');
-            heading.appendChild(el('span', 'cinfo-file-name', group.file || 'this line'));
+            heading.appendChild(group.file ? tokenized('span', 'cinfo-file-name', group.file)
+                : el('span', 'cinfo-file-name', 'this line'));
             if (group.how === 'folder') heading.appendChild(el('span', 'cinfo-note', 'a folder this file is in'));
             else if (group.how === 'reverse') heading.appendChild(el('span', 'cinfo-note', 'pointed at by'));
             else if (group.how) heading.appendChild(el('span', 'cinfo-note', group.how));

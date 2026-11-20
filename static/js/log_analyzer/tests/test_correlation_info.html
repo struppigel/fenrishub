@@ -32,6 +32,7 @@
 <script src="../../common.js"></script>
 <script src="../../centralbox_lookup.js"></script>
 <script src="../../correlation_format.js"></script>
+<script src="../../log_tokens.js"></script>
 <script src="../../correlation_info.js"></script>
 
 <script>
@@ -86,6 +87,7 @@ const trigger = document.getElementById('trigger');
 function open(canLookup) {
     CorrelationInfo.open({
         lineText: 'HKU\\...\\Run: [evil] => C:\\x\\evil.exe',
+        lineStatus: 'B',
         getEntries: () => entries,
         isOwn: (entry) => entry.upload_id === 'frst-log',
         scope: 'case', name: '', status: 'B',
@@ -126,6 +128,20 @@ const links = [...document.querySelectorAll('a.cinfo-link')].map((node) => node.
 assert('rows of other logs link to their line', links.includes('/uploads/spor-log/#L47') && links.includes('/uploads/mb-log/#L3'),
     links.join(' '));
 assert('another system is marked', text().includes('other system?'));
+
+// Lines, paths and activity text in the log page's token colours.
+const topLine = document.querySelector('.cinfo-intro .cinfo-line');
+assert('the line is in token colours, its text unchanged', !!topLine.querySelector('.hl-reg')
+    && topLine.querySelector('.hl-path').textContent === 'C:\\x\\evil.exe'
+    && topLine.querySelector('.cinfo-line-text').textContent === 'HKU\\...\\Run: [evil] => C:\\x\\evil.exe');
+assert('the line shows its rule verdict: letter and coloured edge', topLine.classList.contains('cinfo-edge-b')
+    && topLine.querySelector('.cinfo-status-letter.cinfo-sev-b').textContent === 'B');
+assert('file paths and activity text are highlighted',
+    !!document.querySelector('.cinfo-path .hl-path') && !!document.querySelector('.cinfo-text .hl-path'));
+assert('the company fact takes the company colour',
+    [...document.querySelectorAll('.cinfo-grid .hl-company')].some((node) => node.textContent === 'Microsoft Corporation'));
+assert('other addresses in extra values are coloured text, no link',
+    !!document.querySelector('.cinfo-extra .hl-url') && !document.querySelector('.cinfo-extra a[href^="https://evil"]'));
 
 // A row of the shown log itself jumps instead.
 const jump = document.querySelector('.cinfo-jump');
@@ -234,7 +250,39 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
     assert('reverse rows link to the FRST line', reverseLinks.includes('/uploads/frst-a/#L636')
         && reverseLinks.includes('/uploads/frst-a/#L40'), reverseLinks.join(' '));
     assert('the FRST verdict is shown', !!document.querySelector('.cinfo-list .cinfo-status-letter.cinfo-sev-b'));
+    assert('lines pointing here differently are separate rows', document.querySelectorAll('.cinfo-reverse').length === 2);
     CorrelationInfo.close();
+
+    // Several lines of one log pointing here the same way share one box.
+    const firewall = (no, guid, status, upload = 'frst-a') => ({
+        kind: 'reverse', upload_id: upload, log_type: 'FRST&Addition', line_no: no, system: 'same',
+        text: `FirewallRules: [{${guid}}] => (Allow) D:\\Steam\\Amnesia.exe () [File not signed]`,
+        line_status: status, what: 'timeline', match: '' });
+    const G1 = 'D6E4629E-386F-4A12-BE84-547D4D0BE5EB';
+    const G2 = '760211FB-FEF1-43AD-B96F-2DECBB775160';
+    // Out of order on purpose: a box lists its lines in log order.
+    entries = [firewall(976, G1, 'C'), firewall(937, G1, 'C'), firewall(977, G2, ''), firewall(938, G2, 'B'),
+        firewall(12, G1, '!', 'frst-log')];
+    jumped = null;
+    open(true);
+    const groups = [...document.querySelectorAll('.cinfo-reverse')];
+    assert('lines of one log pointing here the same way form one row', groups.length === 2, String(groups.length));
+    const rows = groups[0] ? [...groups[0].querySelectorAll('.cinfo-lines .cinfo-lines-row')] : [];
+    assert('one box with a row per line, each with its own link',
+        groups[0].querySelectorAll('.cinfo-lines').length === 1 && rows.length === 4
+        && rows.map((row) => row.querySelector('.cinfo-link').getAttribute('href')).join()
+            === ['937', '938', '976', '977'].map((no) => '/uploads/frst-a/#L' + no).join(),
+        rows.map((row) => row.textContent).join(' | '));
+    assert('the head and the log type are shown once', groups[0].querySelectorAll('.cinfo-key').length === 1
+        && groups[0].querySelectorAll('.cinfo-src-type').length === 1);
+    assert('every row has its letter and highlighted text',
+        rows[1].querySelector('.cinfo-status-letter').textContent === 'B'
+        && rows[3].querySelector('.cinfo-status-letter').textContent === ''
+        && rows.every((row) => row.querySelector('.cinfo-line-text .hl-guid') && row.querySelector('.hl-path')
+            && row.querySelector('.hl-sev-w')));
+    assert('the box edge takes the worst verdict', groups[0].querySelector('.cinfo-lines').classList.contains('cinfo-edge-b'));
+    groups[1].querySelector('.cinfo-jump').click();
+    assert('a grouped row of the shown log jumps to its line', !CorrelationInfo.isOpen() && jumped === 12, String(jumped));
 
     // Related files and times: a host program, a detected sibling, a file of
     // the same name, the files inside a folder line, a line at the same time.

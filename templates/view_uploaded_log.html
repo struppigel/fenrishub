@@ -336,6 +336,7 @@
 {# Lookups of correlated hashes, shared with the analyzer. #}
 <script src="{% static 'js/centralbox_lookup.js' %}"></script>
 <script src="{% static 'js/correlation_format.js' %}"></script>
+<script src="{% static 'js/log_tokens.js' %}"></script>
 <script src="{% static 'js/correlation_info.js' %}"></script>
 <script src="{% static 'js/popup_menu.js' %}"></script>
 <script>
@@ -1050,6 +1051,9 @@ const CaseCorrelations = (function () {
         const no = line.dataset ? line.dataset.n : '';
         CorrelationInfo.open({
             lineText: line.textContent.trim(),
+            lineStatus: line.dataset.st || '',
+            // The reverse view is a log that is no FRST / Addition log.
+            lineIsFrst: !data.reverse,
             getEntries: () => entriesFor(document.getElementById('L' + no) || line),
             isOwn,
             scope: data.scope,

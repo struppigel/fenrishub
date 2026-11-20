@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!--
+  Tests for the token highlighting of single log lines (static/js/log_tokens.js),
+  a port of fixlist/log_highlighting.py's _inline / _frst_tokens used by the
+  correlation info box. Same classes as the log page, same stop rules.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>log token tests</title>
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>log token tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<script src="../log_tokens.js"></script>
+
+<script>
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '\u2713 ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '\u2717 ' + description + (detail ? ' - ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+// FRST lines unless `frst` is false.
+const tokens = (text, frst = true) => LogTokens.tokens(text, frst);
+const of = (text, cls, frst = true) => tokens(text, frst).filter((token) => token[0] === cls).map((token) => token[1]);
+const show = (text) => JSON.stringify(tokens(text));
+
+const LINES = [
+    'FirewallRules: [{D6E4629E-386F-4A12-BE84-547D4D0BE5EB}] => (Allow) D:\\Steam\\Amnesia.exe () [File not signed]',
+    'HKLM\\...\\Run: [Updater] => C:\\Users\\bob\\upd.exe [12345 2026-01-02] (Microsoft Windows -> Microsoft Corporation)',
+    '2026-01-02 10:11 - 2026-01-03 10:12 - 000012345 _____ C:\\Program Files (x86)\\a b\\x.exe',
+    'Task: {ABC} - \\Foo => C:\\Lec 7-8 (1).pptx <==== ATTENTION',
+    'plain text', '',
+];
+assert('the tokens give the line back', LINES.every((line) => tokens(line).map((t) => t[1]).join('') === line));
+assert('no empty tokens', LINES.every((line) => tokens(line).every((t) => t[1].length > 0)));
+
+assert('"Program Files (x86)" stays in the path',
+    of(LINES[2], 'hl-path').join() === 'C:\\Program Files (x86)\\a b\\x.exe', show(LINES[2]));
+assert('a file of "(1).pptx" stays in the path', of(LINES[3], 'hl-path').join() === 'C:\\Lec 7-8 (1).pptx', show(LINES[3]));
+assert('a path stops before " (Company)"', of('C:\\x.exe (Company)', 'hl-path').join() === 'C:\\x.exe');
+assert('both sides of "->" are paths', of('C:\\a.lnk -> C:\\b.exe', 'hl-path').join('|') === 'C:\\a.lnk|C:\\b.exe');
+assert('a path stops at a quote, ", " and "; "',
+    of('"C:\\a.exe" -arg', 'hl-path').join() === 'C:\\a.exe'
+    && of('C:\\a.exe, more', 'hl-path').join() === 'C:\\a.exe'
+    && of('file:_C:\\x.dll; next', 'hl-path').join() === 'C:\\x.dll');
+assert('"\\\\?\\" paths', of('\\\\?\\C:\\Windows\\x.sys', 'hl-path').join() === '\\\\?\\C:\\Windows\\x.sys');
+assert('no path after a letter ("ABC:\\")', of('ABC:\\no path', 'hl-path').length === 0);
+assert('registry keys', of(LINES[1], 'hl-reg').join() === 'HKLM\\...\\Run:'
+    && of('HKU\\S-1-5-21\\Software, other', 'hl-reg').join() === 'HKU\\S-1-5-21\\Software');
+assert('GUIDs', of(LINES[0], 'hl-guid').join() === '{D6E4629E-386F-4A12-BE84-547D4D0BE5EB}');
+const SHA = 'e5'.repeat(32);
+assert('hashes and URLs', of('see https://www.virustotal.com/gui/file/abc and ' + SHA, 'hl-url').join()
+    === 'https://www.virustotal.com/gui/file/abc' && of('x ' + SHA + ' y', 'hl-hash').join() === SHA);
+assert('FRST companies', of(LINES[1], 'hl-company').join() === '(Microsoft Windows -> Microsoft Corporation)');
+assert('FRST size / date and the created-files prefix are dim', of(LINES[1], 'hl-dim').join() === '[12345 2026-01-02]'
+    && of(LINES[2], 'hl-dim').join() === '2026-01-02 10:11 - 2026-01-03 10:12 - 000012345 _____ ');
+assert('not signed, no file and ATTENTION warn', of(LINES[0], 'hl-sev-w').join() === '[File not signed]'
+    && of('S3 svc; C:\\x.sys [1 2020-01-01] (No File)', 'hl-sev-w').join() === '(No File)'
+    && of(LINES[3], 'hl-sev-w').join() === '<==== ATTENTION');
+
+const MULTI = 'C:\\a\\x.exe\nDetected: Trojan <==== ATTENTION\r\nnext';
+assert('text is tokenized line by line, like the log page', tokens(MULTI, true).map((t) => t[1]).join('') === MULTI
+    && of(MULTI, 'hl-path').join() === 'C:\\a\\x.exe'
+    && tokens(MULTI, true).some((t) => t[0] === 'hl-sev-w' && t[1] === '<==== ATTENTION'), show(MULTI));
+assert('FRST-only tokens only for FRST lines', of(LINES[1], 'hl-company', false).length === 0
+    && of(LINES[0], 'hl-sev-w', false).length === 0
+    && of(LINES[1], 'hl-path', false).join() === 'C:\\Users\\bob\\upd.exe'
+    && tokens(LINES[2], false).map((t) => t[1]).join('') === LINES[2]);
+
+const target = document.createElement('div');
+LogTokens.append(target, LINES[0], true);
+assert('append() writes spans and text, the text unchanged',
+    target.textContent === LINES[0] && target.querySelector('span.hl-path').textContent === 'D:\\Steam\\Amnesia.exe');
+const evil = document.createElement('div');
+LogTokens.append(evil, 'C:\\<img src=x onerror=alert(1)>');
+assert('log text is never parsed as markup', !evil.querySelector('img') && evil.textContent === 'C:\\<img src=x onerror=alert(1)>');
+
+const summary = document.getElementById('summary');
+summary.textContent = `${passed} passed, ${failed} failed`;
+summary.className = failed ? 'fail' : 'pass';
+</script>
+</body>
+</html>

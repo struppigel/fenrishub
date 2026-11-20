@@ -110,7 +110,8 @@
     outline-offset: 1px;
 }
 
-.cinfo-line {
+.cinfo-line,
+.cinfo-lines {
     margin: 0 0 6px;
     padding: 6px 8px;
     font-family: var(--la-font-mono);
@@ -120,6 +121,68 @@
     border: 1px solid var(--la-border-muted);
     color: var(--la-text-primary);
 }
+
+/* A log line (and a box of several, .cinfo-lines) in the log page's token
+   colours (log_tokens.js + log_highlight.css). The left edge takes the rule
+   verdict's colour (the worst one for a box). */
+.cinfo-line,
+.cinfo-lines {
+    border-left-width: 3px;
+}
+
+.cinfo-lines {
+    margin: 0;
+    padding: 4px 8px;
+}
+
+/* One line per row: line link, status letter, then the text, which wraps
+   under itself (like the log page's hanging indent). */
+.cinfo-lines-row {
+    display: grid;
+    grid-template-columns: max-content 1ch minmax(0, 1fr);
+    column-gap: 1ch;
+    align-items: baseline;
+    padding: 1px 0;
+}
+
+.cinfo-lines-row + .cinfo-lines-row {
+    border-top: 1px solid var(--la-border-muted);
+}
+
+/* Like the log page's gutter, the line link is not part of a copied
+   selection: copying the box gives the log lines. */
+.cinfo-lines-no {
+    min-width: 5ch;
+    text-align: right;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.cinfo-line-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* The letter in front of a line is not part of a copied selection. */
+.cinfo-line .cinfo-status-letter,
+.cinfo-lines .cinfo-status-letter {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.cinfo-line .cinfo-status-letter {
+    margin-right: 1ch;
+}
+
+.cinfo-edge-b { border-left-color: var(--la-status-b); }
+.cinfo-edge-p { border-left-color: var(--la-status-p); }
+.cinfo-edge-c { border-left-color: var(--la-status-c); }
+.cinfo-edge-a { border-left-color: var(--la-status-a); }
+.cinfo-edge-w { border-left-color: var(--la-status-w); }
+.cinfo-edge-g { border-left-color: var(--la-status-g); }
+.cinfo-edge-s { border-left-color: var(--la-status-s); }
+.cinfo-edge-i { border-left-color: var(--la-status-i); }
+.cinfo-edge-j { border-left-color: var(--la-status-j); }
 
 .cinfo-summary {
     margin: 0 0 12px;
@@ -315,6 +378,8 @@
 .cinfo-sev-c { color: var(--la-status-c); }
 .cinfo-sev-i { color: var(--la-status-i); }
 .cinfo-sev-j { color: var(--la-status-j); }
+.cinfo-sev-a { color: var(--la-status-a); }
+.cinfo-sev-s { color: var(--la-status-s); }
 
 /* A malicious hash: the whole row in the verdict colour, its value too. */
 .cinfo-hash.cinfo-sev-b .cinfo-hash-value { color: var(--la-status-b); }

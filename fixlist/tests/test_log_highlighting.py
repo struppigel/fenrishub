@@ -438,6 +438,25 @@ def _headers(result):
     return [section.header.text.strip() for section in result.sections if section.header is not None]
 
 
+class CorrelationTokensParityTests(SimpleTestCase):
+    """static/js/log_tokens.js (the correlation info box's token colours) uses
+    this module's patterns verbatim; the two must not drift."""
+
+    def test_js_patterns_match_python(self):
+        import re
+        from pathlib import Path
+        from .. import log_highlighting
+        source = (Path(__file__).resolve().parents[2] / 'static' / 'js' / 'log_tokens.js').read_text(encoding='utf-8')
+        for js_name, py_name in (('INLINE_RE', '_INLINE_RE'), ('PATH_STOP_RE', '_PATH_STOP_RE'),
+                                 ('FRST_FILE_DATES_RE', '_FRST_FILE_DATES_RE'),
+                                 ('FRST_SPECIAL_RE', '_FRST_SPECIAL_RE')):
+            with self.subTest(js_name):
+                found = re.search(rf'const {js_name} = new RegExp\(String\.raw`([^`]*)`', source)
+                self.assertIsNotNone(found, f'{js_name} not found in log_tokens.js')
+                python = getattr(log_highlighting, py_name).pattern.replace('(?P<', '(?<')
+                self.assertEqual(found.group(1), python)
+
+
 class HighlightRoundTripTests(SimpleTestCase):
 
     def test_every_fixture_round_trips_to_the_original_text(self):

@@ -294,6 +294,7 @@ function openCorrelationInfo(entry, trigger) {
     const lineText = entry.line.trim();
     CorrelationInfo.open({
         lineText,
+        lineStatus: entry.dominant_status || '',
         getEntries: () => caseCorrelations.get(lineText) || [],
         isOwn: isOwnCorrelation,
         scope: caseCorrelationsScope,
