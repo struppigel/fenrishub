@@ -628,6 +628,9 @@ window.CorrelationInfo = (function () {
         const list = entries();
         const scrollTop = bodyEl.scrollTop;
         bodyEl.innerHTML = '';
+        // A Spor log's own lines (spor_self_links): no other log involved.
+        const ownLines = list.length > 0 && list.every((entry) => isOwn(entry) && str(entry.log_type) !== 'Addition');
+        if (titleEl) titleEl.textContent = ownLines ? 'what other lines of this log say about this line' : 'what other logs say about this line';
         const intro = el('div', 'cinfo-intro');
         if (str(state.lineText)) intro.appendChild(lineNode(state.lineText, state.lineStatus, state.lineIsFrst !== false));
         const summary = el('p', 'cinfo-summary');
@@ -641,7 +644,7 @@ window.CorrelationInfo = (function () {
         intro.appendChild(summary);
         bodyEl.appendChild(intro);
         if (!list.length) {
-            bodyEl.appendChild(el('p', 'cinfo-empty', 'the other logs say nothing about this line (anymore)'));
+            bodyEl.appendChild(el('p', 'cinfo-empty', str(state.emptyText) || 'the other logs say nothing about this line (anymore)'));
             return;
         }
         Format().fileGroups(list).forEach((group) => {

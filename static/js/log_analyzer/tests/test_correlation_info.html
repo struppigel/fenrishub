@@ -330,6 +330,24 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
         ['host', 'sibling', 'name', 'timing'].every((match) => CorrelationFormat.INFO_MATCHES.has(match))
         && !CorrelationFormat.INFO_MATCHES.has('same_hash') && !CorrelationFormat.INFO_MATCHES.has('inside'));
 
+    // A Spor log's links between its own lines (spor_self_links).
+    const sporOwn = (extra) => Object.assign({ kind: 'file_info', upload_id: 'spor-log', log_type: 'Spor', line_no: 70,
+        file: 'evil.exe', severity: 'w' }, extra || {});
+    const isSpor = (entry) => entry.upload_id === 'spor-log';
+    const addition = { kind: 'detection', upload_id: 'spor-log', log_type: 'Addition', line_no: 9, file: 'evil.exe' };
+    assert('a Spor log\'s own lines are other lines of this log, an Addition part stays one',
+        CorrelationFormat.header([sporOwn()], isSpor, { scope: 'case' }) === 'same file in other lines of this log'
+        && CorrelationFormat.header([addition], isSpor, { scope: 'case' }) === "same file in this log's Addition part"
+        && CorrelationFormat.header([sporOwn({ match: 'detail' })], isSpor, { scope: 'case' })
+            === 'related files in other lines of this log');
+    assert('details links only inform and name another file',
+        CorrelationFormat.INFO_MATCHES.has('detail') && CorrelationFormat.INFO_MATCHES.has('named_by')
+        && CorrelationFormat.MATCH_NOTES.summary === 'summary line');
+    CorrelationInfo.open({ lineText: 'C:\\x\\evil.exe', getEntries: () => [sporOwn()], isOwn: isSpor, onJump: () => {} });
+    assert('the info box of a Spor line speaks of this log\'s lines',
+        document.getElementById('cinfoTitle').textContent === 'what other lines of this log say about this line');
+    CorrelationInfo.close();
+
     const summary = document.getElementById('summary');
     summary.textContent = `${passed} passed, ${failed} failed`;
     summary.className = failed ? 'fail' : 'pass';

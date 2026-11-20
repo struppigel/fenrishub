@@ -17,6 +17,7 @@ from .views.centralbox import (
     centralbox_hash_check_api,
     centralbox_suggestions_api,
     centralbox_upload_check_api,
+    spor_self_links_api,
 )
 from .views.tags import (
     rule_tag_add_view,
@@ -166,6 +167,7 @@ urlpatterns = [
     path('api/centralbox/hash/', centralbox_hash_check_api, name='centralbox_hash_check_api'),
     path('api/centralbox/suggestions/', centralbox_suggestions_api, name='centralbox_suggestions_api'),
     path('api/cases/correlations/', case_correlations_api, name='case_correlations_api'),
+    path('api/spor/self-links/', spor_self_links_api, name='spor_self_links_api'),
     path('api/centralbox/fresh/', centralbox_fresh_start_api, name='centralbox_fresh_start_api'),
     path('api/centralbox/fresh/<str:sha256>/', centralbox_fresh_status_api, name='centralbox_fresh_status_api'),
     path('api/fixlist/rules-preview/', preview_pending_rule_changes_api, name='preview_pending_rule_changes_api'),

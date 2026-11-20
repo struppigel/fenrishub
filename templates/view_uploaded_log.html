@@ -1026,10 +1026,53 @@ const CaseCorrelations = (function () {
     const root = document.getElementById('uploadedContent');
     const hasLog = !!(root && root.classList.contains('hl-log'));
 
+    // Links between a Spor log's own lines (views/centralbox.py
+    // add_self_link_context): a code per line (status letter, 'm' for a
+    // neutral marker, '' for the hover icon only); a line's entries are
+    // fetched when its info box opens. Kept when the correlations are refreshed.
+    const selfLinks = {
+        codes: data.self_lines && typeof data.self_lines === 'object' ? data.self_lines : {},
+        url: typeof data.self_url === 'string' && data.self_url.startsWith('/') ? data.self_url : '',
+        entries: {},
+    };
+
+    function lineNo(line) {
+        return line && line.dataset ? line.dataset.n || '' : '';
+    }
+
+    function hasSelf(no) {
+        return Boolean(no) && Object.prototype.hasOwnProperty.call(selfLinks.codes, no);
+    }
+
     function entriesFor(line) {
-        const no = line && line.dataset ? line.dataset.n : '';
+        const no = lineNo(line);
         const item = no ? data.lines[no] : null;
-        return item && Array.isArray(item.entries) ? item.entries : [];
+        const own = no && Array.isArray(selfLinks.entries[no]) ? selfLinks.entries[no] : [];
+        return (item && Array.isArray(item.entries) ? item.entries : []).concat(own);
+    }
+
+    // The line's marker status: the worse of the FRST lines' verdict
+    // (reverse) and the self links' letter.
+    function statusOf(no) {
+        const reverseStatus = (data.lines[no] || {}).status || '';
+        const code = hasSelf(no) ? String(selfLinks.codes[no] || '') : '';
+        const own = STATUS_CLASS[code] ? code : '';
+        if (!reverseStatus || !own) return reverseStatus || own;
+        const order = (window.Fenris && Fenris.status && Fenris.status.precedence) || [];
+        const rank = letter => (order.indexOf(letter) === -1 ? order.length : order.indexOf(letter));
+        return rank(own) < rank(reverseStatus) ? own : reverseStatus;
+    }
+
+    // A line's self-link entries, fetched once (an empty list when that fails).
+    function loadSelf(no) {
+        return fetch(`${selfLinks.url}&line=${encodeURIComponent(no)}`, {
+            credentials: 'same-origin', headers: { Accept: 'application/json' },
+        })
+            .then(response => (response.ok ? response.json() : null))
+            .then(answer => {
+                selfLinks.entries[no] = answer && Array.isArray(answer.entries) ? answer.entries : [];
+            })
+            .catch(() => { selfLinks.entries[no] = []; });
     }
 
     // An entry of this log itself (Defender events of its Addition part).
@@ -1049,6 +1092,10 @@ const CaseCorrelations = (function () {
     function openInfo(line, trigger) {
         if (!line || typeof CorrelationInfo !== 'object') return;
         const no = line.dataset ? line.dataset.n : '';
+        if (hasSelf(no) && selfLinks.url && !selfLinks.entries[no]) {
+            loadSelf(no).then(() => openInfo(line, trigger));
+            return;
+        }
         CorrelationInfo.open({
             lineText: line.textContent.trim(),
             lineStatus: line.dataset.st || '',
@@ -1058,7 +1105,8 @@ const CaseCorrelations = (function () {
             isOwn,
             scope: data.scope,
             name: data.name,
-            status: (data.lines[no] || {}).status || '',
+            status: statusOf(no),
+            emptyText: hasSelf(no) ? 'nothing more is known about this line' : '',
             // This log: jump to the line on this page (LineJump marks it).
             onJump: lineNo => LineJump.jump(Number(lineNo), 4000),
             lookup: { canLookup: lookupConfig.can_lookup, urls: LOOKUP_URLS },
@@ -1129,7 +1177,10 @@ const CaseCorrelations = (function () {
             line.classList.remove('hl-cor-line');
         });
         markers = [];
-        Object.keys(data.lines).forEach(no => {
+        // Self-link lines with code '' have no marker: only the hover icon.
+        const numbers = new Set(Object.keys(data.lines));
+        Object.keys(selfLinks.codes).forEach(no => { if (selfLinks.codes[no]) numbers.add(no); });
+        numbers.forEach(no => {
             if (!/^\d+$/.test(no)) return;
             const line = document.getElementById('L' + no);
             if (!line) return;
@@ -1143,7 +1194,7 @@ const CaseCorrelations = (function () {
             button.className = 'hl-line-info-trigger';
             setInfoIcon(button, lookupPossible(item.entries));
             group.appendChild(button);
-            group.dataset.cor = STATUS_CLASS[item.status] || 'none';
+            group.dataset.cor = STATUS_CLASS[statusOf(no)] || 'none';
             root.appendChild(group);
             // Only these lines keep room on the right (for the marker).
             line.classList.add('hl-cor-line');
@@ -1308,13 +1359,13 @@ const CaseCorrelations = (function () {
     const ready = data.fresh === false ? refresh() : Promise.resolve();
 
     function statusClass(line) {
-        const no = line && line.dataset ? line.dataset.n : '';
-        const item = no ? data.lines[no] : null;
-        return item ? (STATUS_CLASS[item.status] || 'none') : '';
+        const no = lineNo(line);
+        if (!no || !(data.lines[no] || hasSelf(no))) return '';
+        return STATUS_CLASS[statusOf(no)] || 'none';
     }
 
     return {
-        has: line => entriesFor(line).length > 0,
+        has: line => entriesFor(line).length > 0 || hasSelf(lineNo(line)),
         canLookup: line => lookupPossible(entriesFor(line)),
         hashes: line => correlatedHashes(entriesFor(line)),
         ready,

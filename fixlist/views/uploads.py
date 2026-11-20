@@ -41,7 +41,8 @@ from ..upload_utils import (
 )
 from .. import centralbox_auto
 from .centralbox import (
-    add_hash_summary, page_correlation_context, page_hash_context, page_reverse_correlation_context,
+    add_hash_summary, add_self_link_context, page_correlation_context, page_hash_context,
+    page_reverse_correlation_context,
 )
 from .guest import deny_guests
 from .upload_actions import (
@@ -491,8 +492,11 @@ def view_uploaded_log(request, upload_id):
         # What related logs say about the files of these lines (cached).
         correlation_context = page_correlation_context(uploaded_log, request.user, highlight)
     elif highlight is not None and request.user.is_authenticated:
-        # Any other log: the FRST / Addition lines that point at its lines.
-        correlation_context = page_reverse_correlation_context(uploaded_log, request.user)
+        # Any other log: the FRST / Addition lines that point at its lines;
+        # a Spor log's lines also link to each other.
+        correlation_context = add_self_link_context(
+            uploaded_log, page_reverse_correlation_context(uploaded_log, request.user),
+        )
     if uploaded_log.log_type == 'Fixlog':
         # Same numbers as the Fixlog chips in the uploads / cases lists.
         fixlog_stats = [

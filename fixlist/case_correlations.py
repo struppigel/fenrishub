@@ -851,37 +851,48 @@ def _spor_entries(upload_ids, index, spor_logs=None):
         known = spor_log.known_paths(lines)
         if spor_logs is not None:
             spor_logs.append((upload.upload_id, lines, known))
-        _add_defender_entries(index, upload.upload_id, LOG_TYPE_SPOR, spor_log.iter_defender_detections(lines))
-        for path, entry in _spor_file_infos(upload.upload_id, lines):
-            _add_path_entry(index, path, entry)
-        for mention in spor_log.iter_mentions(lines, known):
-            entry = _mention_entry(upload.upload_id, LOG_TYPE_SPOR, mention)
-            _add_path_entry(index, mention.path, entry)
-            if mention.identity:
-                # A persistence entry under its name too: an FRST Run / service /
-                # task line whose program differs or is gone still finds it.
-                key = identity_key(*mention.identity)
-                if key:
-                    index.setdefault(key, []).append(entry)
-        _software_entries(upload.upload_id, lines, index)
-        for evidence in spor_log.iter_timeline_evidence(lines, known):
-            key = normalized_path(evidence.path)
-            if not key:
-                continue
-            index.setdefault(key, []).append({
-                'kind': 'evidence',
-                'upload_id': upload.upload_id,
-                'log_type': LOG_TYPE_SPOR,
-                'line_no': evidence.line_no,
-                'time': evidence.time,
-                'sources': evidence.sources[:80],
-                # Not `status`: the API gives every entry its status letter under that name.
-                'file_status': evidence.file_status,
-                'details': evidence.details[:200],
-                'flags': evidence.flags[:10],
-                'severity': evidence_severity(evidence.flags, evidence.file_status),
-                'file': file_name(evidence.path),
-            })
+        spor_log_entries(upload.upload_id, lines, index, known)
+
+
+def spor_log_entries(upload_id, lines, index, known=None):
+    """What one Spor log says, into `index` ({key: [entry]}): Defender
+    detections, file facts (FILES, AMCACHE FILES), mentions in the module
+    sections (under their path and persistence name), SOFTWARE facts and
+    timeline evidence. Pure: the log's lines only (spor_self_links reads a
+    log's own lines with it too)."""
+    if known is None:
+        known = spor_log.known_paths(lines)
+    _add_defender_entries(index, upload_id, LOG_TYPE_SPOR, spor_log.iter_defender_detections(lines))
+    for path, entry in _spor_file_infos(upload_id, lines):
+        _add_path_entry(index, path, entry)
+    for mention in spor_log.iter_mentions(lines, known):
+        entry = _mention_entry(upload_id, LOG_TYPE_SPOR, mention)
+        _add_path_entry(index, mention.path, entry)
+        if mention.identity:
+            # A persistence entry under its name too: an FRST Run / service /
+            # task line whose program differs or is gone still finds it.
+            key = identity_key(*mention.identity)
+            if key:
+                index.setdefault(key, []).append(entry)
+    _software_entries(upload_id, lines, index)
+    for evidence in spor_log.iter_timeline_evidence(lines, known):
+        key = normalized_path(evidence.path)
+        if not key:
+            continue
+        index.setdefault(key, []).append({
+            'kind': 'evidence',
+            'upload_id': upload_id,
+            'log_type': LOG_TYPE_SPOR,
+            'line_no': evidence.line_no,
+            'time': evidence.time,
+            'sources': evidence.sources[:80],
+            # Not `status`: the API gives every entry its status letter under that name.
+            'file_status': evidence.file_status,
+            'details': evidence.details[:200],
+            'flags': evidence.flags[:10],
+            'severity': evidence_severity(evidence.flags, evidence.file_status),
+            'file': file_name(evidence.path),
+        })
 
 
 def _frst_search_entries(upload_ids, index):
@@ -1063,6 +1074,11 @@ MATCH_NOTES = {
     MATCH_SAME_HASH: 'same file content elsewhere',
     MATCH_INSIDE: 'inside this folder',
     MATCH_TIMING: 'at the same time',
+    # Links within one Spor log (spor_self_links): a SUMMARY line and its
+    # detail line, a file named in a line's details and the other way round.
+    'summary': 'summary line',
+    'detail': 'named in the details',
+    'named_by': 'names this file in its details',
 }
 # Matches whose note names the file the entry is about.
 _NOTE_FILE_MATCHES = frozenset({MATCH_ARGUMENT, MATCH_SIBLING, MATCH_NAME, MATCH_SAME_HASH, MATCH_INSIDE})

@@ -227,6 +227,25 @@ class AutodetectTests(SimpleTestCase):
         # the heuristic lines keep their warning
         self.assertEqual(next(item for item in result.summary if item.name == SIDE_DLL).severity, 'w')
 
+    def test_a_timeline_line_carries_it_to_the_correlations(self):
+        # Spor 0.4.0 marks the file's own timeline line; correlations read the timeline, not SUMMARY
+        timeline_line = (f'2026-11-20 03:33:52 [PROC NEW] {AUTODETECT_PATH} => known malware RenLoader: payload in a'
+                         ' Node.js tmp folder; zone 0; running, pid 7716 <==== !motw-removed !known-malware')
+        lines = SPOR_V4.split('\n')
+        index = lines.index('(line: time [sources] file or event [status] => details <==== flags)') + 2
+        content = '\n'.join(lines[:index] + [timeline_line] + lines[index:])
+        evidence = {entry.path: entry for entry in spor_log.iter_timeline_evidence(content.split('\n'))}[AUTODETECT_PATH]
+        self.assertEqual(evidence.flags, ['!motw-removed', '!known-malware'])
+        self.assertTrue(evidence.details.startswith('known malware RenLoader: '))
+        self.assertEqual(evidence_severity(evidence.flags, evidence.file_status), 'b')
+
+    def test_a_timeline_line_in_the_summary_rates_malware(self):
+        summary_line = (f'2026-11-20 03:33:52 [timeline PROC NEW] {AUTODETECT_PATH} => known malware RenLoader: payload'
+                        ' <==== !motw-removed !known-malware')
+        result = highlight_log('Spor', with_autodetect().replace(AUTODETECT_LINE, summary_line))
+        item = next(item for item in result.summary if item.name == AUTODETECT_PATH)
+        self.assertEqual(item.severity, 'b')
+
     def test_the_flag_is_painted_as_malware(self):
         content = with_autodetect()
         result = highlight_log('Spor', content)

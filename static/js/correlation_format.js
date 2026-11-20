@@ -26,14 +26,18 @@ window.CorrelationFormat = (function () {
         same_hash: 'same file content elsewhere',
         inside: 'inside this folder',
         timing: 'at the same time',
+        // Links within one Spor log (spor_self_links).
+        summary: 'summary line',
+        detail: 'named in the details',
+        named_by: 'names this file in its details',
     };
 
     // Matches that only inform and never give a status
     // (case_correlations.INFO_MATCHES): their groups come last.
-    const INFO_MATCHES = new Set(['host', 'sibling', 'name', 'timing']);
+    const INFO_MATCHES = new Set(['host', 'sibling', 'name', 'timing', 'detail', 'named_by']);
     // Matches about another file than the line's (each names it in
     // `other_path`), or about another line: never compared as one file.
-    const OTHER_FILE_MATCHES = new Set(['sibling', 'name', 'same_hash', 'inside', 'timing']);
+    const OTHER_FILE_MATCHES = new Set(['sibling', 'name', 'same_hash', 'inside', 'timing', 'detail', 'named_by']);
 
     // Line-verdict status letter -> the marker / icon colour class.
     const STATUS_CLASS = { B: 'b', P: 'p', C: 'c', A: 'a', '!': 'w', G: 'g', S: 's', I: 'i', J: 'j' };
@@ -194,12 +198,24 @@ window.CorrelationFormat = (function () {
         // Only entries about the line's own file make it "the same file".
         const sameFile = list.filter((entry) => !OTHER_FILE_MATCHES.has(entry.match));
         if (list.length && !sameFile.length) {
-            return list.every(isOwn) ? 'lines of this log created at the same time' : `related files and times in ${where}`;
+            if (list.every(isOwn)) {
+                return list.every((entry) => entry.match === 'timing')
+                    ? 'lines of this log created at the same time' : 'related files in other lines of this log';
+            }
+            return `related files and times in ${where}`;
         }
-        const own = sameFile.some(isOwn);
+        const ownEntries = sameFile.filter(isOwn);
         const others = sameFile.some((entry) => !isOwn(entry));
-        if (own && !others) return "same file in this log's Addition part";
-        if (own) return `same file in this log's Addition part and in ${where}`;
+        // A merged FRST&Addition log's own entries come from its Addition part;
+        // a Spor log's from its other lines (spor_self_links).
+        const ownWhere = ownEntries.every((entry) => entry.log_type === 'Addition')
+            ? "this log's Addition part" : 'other lines of this log';
+        if (ownEntries.length && !others) return `same file in ${ownWhere}`;
+        if (ownEntries.length) {
+            return sameFile.some((entry) => entry.kind === 'reverse')
+                ? `same file in ${ownWhere}; lines of FRST / Addition logs point here`
+                : `same file in ${ownWhere} and in ${where}`;
+        }
         return `same file in ${where}`;
     }
 

@@ -436,6 +436,19 @@ def _defender_path(entry):
     return path if is_path(path) else ''
 
 
+def defender_threat(item_text):
+    """The threat of a "Defender detected: / action taken: / action FAILED:"
+    item, '' for any other item."""
+    m = _DEFENDER_RE.match(item_text or '')
+    return m.group(2).strip() if m else ''
+
+
+def defender_paths(rest):
+    """The files a Defender line's details name ("<path>; action ...; process ...")."""
+    return [path for path in (_defender_path(part) for part in (rest or '').split('; ')
+                              if not part.strip().startswith(('action ', 'process '))) if path]
+
+
 def iter_defender_detections(lines):
     """(line_no, threat, action, path) for every file the DEFENDER section's
     "Defender detected:" / "Defender action taken:" lines name, one per
@@ -841,6 +854,43 @@ def iter_software(lines):
         out.append(SoftwareFact(index + 1, kind, name[:200], subsection, item.time, item.tags, item.status,
                                 item.flags, stripped[:300], details))
     return out
+
+
+# ---------------------------------------------------------------------------
+# SUMMARY, and item lines by section
+# ---------------------------------------------------------------------------
+
+def iter_summary_items(lines, known=None):
+    """(line_no, SporItem) of the SUMMARY section's item lines. Flags written
+    inline ("[Prefetch] C:\\...\\x.pdf.lnk  !double-extension  (loaded by ...)")
+    are moved from the item to its flags."""
+    ranges = section_ranges(lines)
+    if SECTION_SUMMARY not in ranges:
+        return
+    start, end = ranges[SECTION_SUMMARY]
+    for index in range(start + 1, end):
+        body = _body(lines[index])
+        if not _is_item_line(body):
+            continue
+        item = split_item(body, known)
+        if not item.flags:
+            m = INLINE_FLAG_RE.search(item.item)
+            if m:
+                item.flags = INLINE_FLAG_RE.findall(item.item)
+                item.item = item.item[:m.start()].rstrip()
+        yield index + 1, item
+
+
+def iter_section_items(lines, known=None, skip=frozenset({SECTION_SUMMARY, SECTION_LEGEND})):
+    """(line_no, section title, SporItem) of the item lines of every section
+    but `skip` (sub-lines left out)."""
+    for title, start, end in iter_sections(lines):
+        if title in skip or title.startswith(('Spor', 'End of log')):
+            continue
+        for index in range(start + 1, end):
+            body = _body(lines[index])
+            if _is_item_line(body):
+                yield index + 1, title, split_item(body, known)
 
 
 # ---------------------------------------------------------------------------

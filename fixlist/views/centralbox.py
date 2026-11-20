@@ -18,7 +18,7 @@ from django.views.decorators.http import require_http_methods
 
 from ..log_highlighting import SummaryItem
 
-from .. import centralbox, centralbox_auto
+from .. import centralbox, centralbox_auto, spor_self_links
 from ..case_correlations import (
     cached_correlations, correlations_for_upload, related_upload_ids, reverse_correlations, reverse_note,
     reverse_status, summary_note,
@@ -456,6 +456,49 @@ def page_reverse_correlation_context(uploaded_log, user):
     except Exception:
         logger.exception('Building the reverse correlation page context failed for %s', uploaded_log.upload_id)
         return {}
+
+
+def add_self_link_context(uploaded_log, context):
+    """A Spor log page's links between its own lines (spor_self_links), added
+    to its reverse correlation context (or a new one in the same shape):
+    `self_lines` {line no: code} (status letter, 'm' for a neutral marker, ''
+    for links from the hover icons only) and `self_url`, which gives one
+    line's entries when its info box opens (all of them would be too big for
+    the page). Never raises; the context unchanged for other logs."""
+    if uploaded_log.log_type != LOG_TYPE_SPOR:
+        return context
+    try:
+        links = spor_self_links.for_upload(uploaded_log)
+        if links is None or not links.codes:
+            return context
+        if not context:
+            context = {
+                'fresh': True,
+                'refresh_url': f"{reverse('case_correlations_api')}?upload_id={uploaded_log.upload_id}",
+                'scope': '', 'name': '', 'reverse': True, 'upload_id': uploaded_log.upload_id,
+                'can_lookup': False, 'lines': {},
+            }
+        context['self_lines'] = links.codes
+        context['self_url'] = f"{reverse('spor_self_links_api')}?upload_id={uploaded_log.upload_id}"
+        return context
+    except Exception:
+        logger.exception('Adding Spor self links failed for %s', uploaded_log.upload_id)
+        return context
+
+
+@login_required
+@require_http_methods(['GET'])
+def spor_self_links_api(request):
+    """{entries: [entry]}: what the other lines of a Spor log say about one
+    of its lines (?upload_id=...&line=N, spor_self_links)."""
+    upload_id = (request.GET.get('upload_id') or '').strip()
+    line = (request.GET.get('line') or '').strip()
+    uploaded_log = UploadedLog.objects.filter(upload_id=upload_id, log_type=LOG_TYPE_SPOR).first() \
+        if upload_id else None
+    if uploaded_log is None or not line.isdigit():
+        return JsonResponse({'entries': []})
+    links = spor_self_links.for_upload(uploaded_log)
+    return JsonResponse({'entries': links.entries(line) if links is not None else []})
 
 
 # Summary severity (log_highlighting.SummaryItem) for a correlation status letter.
