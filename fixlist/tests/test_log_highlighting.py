@@ -10,7 +10,7 @@ from ..log_highlighting import (
 from ..templatetags.rule_tags import stat_class
 from ..models import LogTypeDetectionRule, UploadedLog, count_fixlog_results
 from .uploaded_log_shared_setup import UploadedLogSharedSetupMixin
-from .spor_sample import SPOR, SPOR_V2, SPOR_V3
+from .spor_sample import SPOR, SPOR_V2, SPOR_V3, SPOR_V4
 
 # Sanitized excerpts of real logs (usernames, machine names and SIDs replaced).
 
@@ -401,7 +401,7 @@ FIXTURES = {
     'AdwCleaner': [ADWCLEANER_SCAN, ADWCLEANER_CLEAN],
     'Emsisoft': [EMSISOFT],
     'Trojan Killer': [TROJAN_KILLER],
-    'Spor': [SPOR, SPOR_V2, SPOR_V3],
+    'Spor': [SPOR, SPOR_V2, SPOR_V3, SPOR_V4],
     'Fixlog': [FIXLOG],
     'Shortcut': [SHORTCUT],
 }

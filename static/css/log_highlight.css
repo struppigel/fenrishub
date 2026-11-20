@@ -80,6 +80,8 @@
 .hl-sev-c { color: var(--la-status-c); }
 .hl-sev-j { color: var(--la-status-j); }
 .hl-sev-i { color: var(--la-status-s); }
+/* A Spor hint flag (!renamed-program): the colour of status I, like in the correlation info box. */
+.hl-sev-hint { color: var(--la-status-i); }
 .hl-sev-u { color: var(--la-status-unknown); }
 
 /* Click-to-copy paths and registry keys (see view_uploaded_log.html). The

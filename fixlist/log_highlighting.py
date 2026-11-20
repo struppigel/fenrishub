@@ -814,11 +814,27 @@ def _spor_marked(text, files=False, defender=False):
     return out
 
 
+# The colour of a Spor flag by its tier (spor_log.flag_tier). Hints have the
+# colour of status I, as in the correlation info box; a known malware family
+# (Autodetect) the colour of B.
+_SPOR_FLAG_TIER_CLASS = {'malware': 'hl-sev-b', 'strong': 'hl-sev-w', 'hint': 'hl-sev-hint', 'quiet': 'hl-sev-g'}
+
+
 def _spor_flag_tokens(flags_text):
-    """'<==== !flag !flag': a warning, unless only flags normal on many PCs."""
+    """'<==== !flag !flag': a warning for strong flags, the info colour for
+    hints, grey for flags normal on many PCs. Flags of one tier are one token;
+    mixed tiers colour each flag, the marker in the worst tier's colour."""
     flags = flags_text[len('<===='):].split()
-    loud = any(flag not in spor_log.QUIET_FLAGS for flag in flags)
-    return [('hl-sev-w' if loud else 'hl-sev-g', flags_text)]
+    worst = spor_log.worst_tier(flags) or 'quiet'
+    if len({spor_log.flag_tier(flag) for flag in flags}) <= 1:
+        return [(_SPOR_FLAG_TIER_CLASS[worst], flags_text)]
+    out = [(_SPOR_FLAG_TIER_CLASS[worst], '<====')]
+    for part in re.split(r'(\s+)', flags_text[len('<===='):]):
+        if part.strip():
+            out.append((_SPOR_FLAG_TIER_CLASS[spor_log.flag_tier(part)], part))
+        elif part:
+            out.append(('', part))
+    return out
 
 
 # SOFTWARE's Windows Installer events: a failed install, a removal.
@@ -877,7 +893,7 @@ def _spor_inline_flag_tokens(text):
         if not part:
             continue
         if index % 2:
-            out.append(('hl-sev-g' if part in spor_log.QUIET_FLAGS else 'hl-sev-w', part))
+            out.append((_SPOR_FLAG_TIER_CLASS[spor_log.flag_tier(part)], part))
             continue
         m = _SPOR_LOADED_BY_RE.match(part)
         if m:
@@ -914,7 +930,10 @@ def _spor_summary_item(b, no, body):
         target = _first_path(item.rest)
     else:
         name = item.item
-        if item.loud_flags or spor_log.is_bad_signature(item.status):
+        if item.malware_flags:
+            # "[Autodetect] <item> => <family>: <note> <==== !known-malware"
+            severity = 'b'
+        elif item.strong_flags or spor_log.is_bad_signature(item.status):
             severity = 'w'
         elif 'unsigned' in spor_log.status_words(item.status):
             severity = 'g'

@@ -20,6 +20,7 @@ Lines are `content.split('\\n')` with a trailing CR removed; line numbers
 count from 1 like the log page's L<no> ids.
 """
 
+import ntpath
 import re
 from dataclasses import dataclass, field
 
@@ -46,6 +47,34 @@ BAD_SIGNATURE_STATUSES = frozenset({'invalid signature', 'revoked signature', 'e
 BAD_SIGNATURES = frozenset({'invalid', 'revoked', 'expired'})
 # Flags that are normal on many PCs: no warning by themselves.
 QUIET_FLAGS = frozenset({'!lolbin'})
+# Hints (Spor 0.3.0+): weak flags that Spor puts in its SUMMARY only together
+# with a strong flag nearby. On their own they are shown in the info colour and
+# rate a line I, not !; they still get their files looked up.
+HINT_FLAGS = frozenset({'!renamed-program'})
+# Spor 0.4.0+ Autodetect: the item matches a known malware family (Spor's
+# curated pattern database). Stronger than any heuristic flag: malware (B).
+MALWARE_FLAGS = frozenset({'!known-malware'})
+
+
+FLAG_TIERS = ('malware', 'strong', 'hint', 'quiet')   # worst first
+
+
+def flag_tier(flag):
+    """'quiet' (normal on many PCs), 'hint' (weak), 'malware' (a known
+    family) or 'strong'."""
+    if flag in QUIET_FLAGS:
+        return 'quiet'
+    if flag in HINT_FLAGS:
+        return 'hint'
+    if flag in MALWARE_FLAGS:
+        return 'malware'
+    return 'strong'
+
+
+def worst_tier(flags):
+    """The worst tier of some flags (FLAG_TIERS order); '' for none."""
+    tiers = {flag_tier(flag) for flag in flags or ()}
+    return next((tier for tier in FLAG_TIERS if tier in tiers), '')
 # A path made to look like log text (" => ", "[gone]"): its line cannot be split as usual.
 SYNTAX_FLAG = '!log-syntax-in-name'
 # SUMMARY lines that write their flags between double blanks, without "<====":
@@ -59,6 +88,9 @@ _STATUS_WORD_RE = re.compile(STATUS_WORD)
 # "[> 600 MB, not hashed, unsigned]".
 STATUS_RE = re.compile(r' \[(' + STATUS_WORD + r'(?:, ' + STATUS_WORD + r'){0,5})\]')
 _TIME_RE = re.compile(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?= |$)')
+# The own time of a timeline sub-line's file, after its " => ": "<time>",
+# "<time>, first <time>, N times" (path:), "<time>; N bytes" (script:).
+_SUB_TIME_RE = re.compile(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?=[ ,;]|$)')
 # One tag group, a "[user] " inside it allowed (multi-user logs of Spor 0.1.1
 # and older: "[[anna] Brave]").
 TAG_GROUP = r'\[(?:[^\[\]\r\n]|\[[^\[\]\r\n]{1,40}\]){1,80}\]'
@@ -92,8 +124,13 @@ _PATH_END_RE = re.compile(r'(?= \[' + STATUS_WORD + r'[,\]])| => |, |; | \(svcho
 _DEVICE_PREFIX_RE = re.compile(r'^(?:\\\\\?\\|\\\?\?\\)(?=[A-Za-z]:\\)')
 # SOFTWARE Uninstall entries: "...; folder C:\...\" (the install folder).
 _SOFTWARE_FOLDER_RE = re.compile(r'(?:^|; )folder ([^;]{1,400})')
-# Sub-lines whose value is a file or folder of its own.
-_PATH_SUB_KEYS = frozenset({'loaded', 'path', 'target', 'entry', 'files', 'dll'})
+# Sub-lines whose value is a file or folder of its own ("module:" an unsigned
+# DLL a program loads or side-loads, "script:" a script file of a runtime
+# launcher: Spor 0.3.0).
+_PATH_SUB_KEYS = frozenset({'loaded', 'path', 'target', 'entry', 'files', 'dll', 'module', 'script'})
+# TIMELINE sub-lines that are files with their own time ("path: X [status] =>
+# <time>, ...", "script: X => <created>; N bytes").
+_TIMELINE_SUB_KEYS = frozenset({'path', 'script'})
 MAX_EXTRA = 6
 
 
@@ -114,7 +151,17 @@ class SporItem:
 
     @property
     def loud_flags(self):
+        """Flags other than the quiet ones: strong flags and hints."""
         return [flag for flag in self.flags if flag not in QUIET_FLAGS]
+
+    @property
+    def strong_flags(self):
+        """Strong flags, the known-malware flag included."""
+        return [flag for flag in self.flags if flag_tier(flag) in ('malware', 'strong')]
+
+    @property
+    def malware_flags(self):
+        return [flag for flag in self.flags if flag_tier(flag) == 'malware']
 
     @property
     def trusted(self):
@@ -231,11 +278,21 @@ def split_item(body, known=None):
         item.status = m.group(1)
         head = head[:m.start()]
     else:
+        # Without a status of its own, the item takes its target's ("[run] X =>
+        # C:\a.exe [unsigned], ...", also "C:\Foo, Inc\a.exe" or a quoted
+        # path), never a status further on in the details ("side-loads x.dll",
+        # a parent chain, a command line).
         m = STATUS_RE.search(item.rest)
-        if m:
+        if m and _is_target_prefix(item.rest[:m.start()]):
             item.status = m.group(1)
     item.item = strip_device_prefix(head.strip())
     return item
+
+
+def _is_target_prefix(text):
+    """The text before a status bracket is the line's target: a path from the
+    start of the rest (maybe quoted), not yet in the details ("; ", " => ")."""
+    return is_path(strip_device_prefix(text.lstrip('"'))) and '; ' not in text and ' => ' not in text
 
 
 def _body(raw):
@@ -461,13 +518,21 @@ def iter_timeline_evidence(lines, known=None):
         sub = _sub_line(body)
         if sub is not None:
             key, value = sub
-            if key != 'path' or parent is None:
+            if key not in _TIMELINE_SUB_KEYS or parent is None:
                 continue
             item = split_item(value, known)
             if not item.trusted or not is_path(item.item):
                 continue
-            time = item.rest[:19] if _TIME_RE.match(item.rest) else parent.time
-            add(index + 1, item.item, time, item.status, parent.rest, item.flags or parent.flags)
+            own_time = _SUB_TIME_RE.match(item.rest)
+            time = item.rest[:19] if own_time else parent.time
+            if key == 'script':
+                # A script file of a runtime launcher: its own details, and only
+                # its own flags (Spor flags the launcher, not its data files).
+                rest = item.rest[19:].lstrip(';, ') if own_time else item.rest
+                details = '; '.join(part for part in (rest, 'script of ' + ntpath.basename(parent.item)) if part)
+                add(index + 1, item.item, time, item.status, details, item.flags)
+            else:
+                add(index + 1, item.item, time, item.status, parent.rest, item.flags or parent.flags)
             continue
         if not _is_item_line(body):
             parent = None
@@ -603,10 +668,14 @@ def iter_mentions(lines, known=None):
                         and any(mention.path.lower() == item.item.lower() for mention in current)):
                     continue   # a registry line's target already is the DLL
                 if item is not None and item.trusted and is_path(item.item):
+                    owner = parent.item if parent else ''
+                    if key == 'module':
+                        # loaded by the program of the line (a Run value's or task's target), not the registry entry
+                        owner = next((mention.path for mention in current if mention.role == 'target'), owner)
                     out.append(Mention(
                         index + 1, item.item, title, subsection, item.time or (parent.time if parent else ''),
                         parent.tags if parent else '', stripped[:300], key,
-                        parent.item[:200] if parent else '', item.status, item.flags,
+                        owner[:200], item.status, item.flags,
                     ))
                 elif current and value:
                     for mention in current:
@@ -821,13 +890,14 @@ def iter_timeline_items(lines, known=None):
         body = _body(lines[index])
         sub = _sub_line(body)
         if sub is not None:
-            # A merged line's "path: X [status] => <time>[, first <time>, N times]":
-            # each path at its own time, with the sources of its line.
+            # A merged line's "path: X [status] => <time>[, first <time>, N times]"
+            # (and a launcher's "script: X => <created>; ..."): each path at its
+            # own time, with the sources of its line.
             key, value = sub
-            if key != 'path' or parent is None:
+            if key not in _TIMELINE_SUB_KEYS or parent is None:
                 continue
             item = split_item(value, known)
-            m = _TIME_RE.match(item.rest)
+            m = _SUB_TIME_RE.match(item.rest)
             if not m or not item.trusted or not is_path(item.item):
                 continue
             item.time, item.tags = m.group(0), parent.tags

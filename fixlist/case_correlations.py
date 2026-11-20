@@ -96,7 +96,7 @@ MAX_ENTRIES_PER_LINE = 60
 # entries before all others), so what decides the line's status is never cut.
 KIND_RANK = {'detection': 0, 'hash': 1, 'fixlog': 2, 'file_info': 3, 'evidence': 4, 'mention': 5}
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 19
+CORRELATION_VERSION = 20
 # Detections are read from the summary boxes of DETECTION_LOG_TYPES logs
 # (log_highlighting); Defender events from the "Windows Defender:" section of
 # ADDITION_LOG_TYPES logs (both in log_types).
@@ -554,10 +554,16 @@ def _addition_entries(upload_ids, index, own=None):
 
 
 def evidence_severity(flags, file_status):
-    """'w' for a Spor timeline entry with a flag that is not normal on many
-    PCs, or a file whose signature does not hold; '' otherwise."""
-    loud = any(flag not in spor_log.QUIET_FLAGS for flag in flags or ())
-    return 'w' if loud or spor_log.is_bad_signature(file_status) else ''
+    """'b' for a Spor entry of a known malware family (!known-malware); 'w'
+    for one with a strong flag (not normal on many PCs, not a hint) or a file
+    whose signature does not hold; 'i' with only a hint (!renamed-program);
+    '' otherwise."""
+    tier = spor_log.worst_tier(flags)
+    if tier == 'malware':
+        return 'b'
+    if tier == 'strong' or spor_log.is_bad_signature(file_status):
+        return 'w'
+    return 'i' if tier == 'hint' else ''
 
 
 # A FILES "<name> <value>" part -> the file_info key it is stored under.

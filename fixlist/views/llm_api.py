@@ -554,7 +554,10 @@ def api_upload_analysis(request, upload_id):
     `uninstall entry` / `installer event` / `package` for Spor's SOFTWARE
     section and `removed by MAU` for MAU products, found through an Installed
     Programs line's uninstall key or MSI product code: `match` `uninstall` /
-    `msi`; role `dll` for a svchost service's DLL and `entry` for a Spor
+    `msi`; role `dll` for a svchost service's DLL, `module` for an unsigned
+    DLL a running process or persisted program loads (Spor 0.3.0, flagged
+    !sideload when side-loaded), `script` for a script file of a Spor
+    script-runtime launcher, and `entry` for a Spor
     persistence entry without a file, e.g. a deleted task; Spor's Run values,
     services and tasks also match by name: `match` `registry` / `service` /
     `task`; file_info carries `size`, `created`, `modified` and `md5` when the

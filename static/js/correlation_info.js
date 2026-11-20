@@ -532,10 +532,24 @@ window.CorrelationInfo = (function () {
         });
     }
 
+    // Spor flag tiers (spor_log.QUIET_FLAGS, HINT_FLAGS, MALWARE_FLAGS): normal
+    // on many PCs grey, hints in the info colour, a known malware family
+    // (Autodetect) malware, every other flag a warning.
+    const QUIET_FLAGS = new Set(['!lolbin']);
+    const HINT_FLAGS = new Set(['!renamed-program']);
+    const MALWARE_FLAGS = new Set(['!known-malware']);
+
+    function flagClass(flag) {
+        if (QUIET_FLAGS.has(flag)) return 'cinfo-flag cinfo-sev-g';
+        if (HINT_FLAGS.has(flag)) return 'cinfo-flag cinfo-sev-i';
+        if (MALWARE_FLAGS.has(flag)) return 'cinfo-flag cinfo-sev-b';
+        return 'cinfo-flag cinfo-sev-w';
+    }
+
     function flagsNode(flags) {
         const wrap = el('span', 'cinfo-flags');
         (Array.isArray(flags) ? flags : []).filter((flag) => typeof flag === 'string').forEach((flag) => {
-            wrap.appendChild(el('span', flag === '!lolbin' ? 'cinfo-flag cinfo-sev-g' : 'cinfo-flag cinfo-sev-w', flag));
+            wrap.appendChild(el('span', flagClass(flag), flag));
         });
         return wrap;
     }

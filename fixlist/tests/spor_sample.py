@@ -337,3 +337,109 @@ SHORTCUT = '\n'.join([
     f'Shortcut: C:\\Users\\Bob\\Desktop\\Evil.lnk -> {EVIL} (No File)',
     'Shortcut: C:\\Users\\Bob\\Desktop\\Ok.lnk -> C:\\Program Files\\Ok\\ok.exe (Ok Inc.)',
 ])
+
+# Spor 0.3.0: a side-loading loader run by a script-runtime launcher. New
+# flags (!motw-removed, !sideload, !renamed-program as a hint, !proxy-exec,
+# !runtime-loader, !padded), the RUNNING PROCESSES section with "module:"
+# lines, "script:" lines of a launcher, the 4688 / SYSMON / PROC sources and
+# the DNS categories, as Spor writes them.
+DROP_DIR = 'C:\\Users\\Bob\\AppData\\Local\\Temp\\tmp-1-abc'
+SIDE_HOST = DROP_DIR + '\\qwXyZaB.exe'
+SIDE_DLL = DROP_DIR + '\\providers.dll'
+GAME_DIR = 'C:\\Users\\Bob\\Downloads\\Game'
+LAUNCHER = GAME_DIR + '\\Setup.exe'
+PADDED = GAME_DIR + '\\data\\libpython.rpmc'
+SCRIPT_RPA = GAME_DIR + '\\data\\libwin.rpa'
+SCRIPT_DOT = GAME_DIR + '\\data\\.VD6'
+LURE = 'C:\\Users\\Bob\\Downloads\\Invoice_2026.exe'
+CHILD = 'C:\\Users\\Bob\\Apps\\child.exe'
+SIDE_HOST_SHA = '5a' * 32
+SIDE_DLL_SHA = '5b' * 32
+LURE_SHA = '5c' * 32
+SIDE_DETAILS = ('loaded by qwXyZaB.exe (signed by Some Developer); proxy DLL, forwards to providersxyzzy.dll'
+                ' (original name providers.dll)')
+
+SPOR_V4 = '\n'.join([
+    '==================== Spor 0.3.0 - forensic triage log ==============================================',
+    'Created:   2026-11-20 03:44:44 UTC (local time 04:44, UTC+01:00)',
+    'Computer:  PC-BOB, Windows 10 Pro 22H2, build 19045.3803, 64-bit',
+    'Run by:    Bob (administrator)',
+    'Times:     UTC',
+    '',
+    '==================== SUMMARY - flagged items; details in the sections below ========================',
+    '(line: time [from] item [status] => details <==== flags)',
+    '',
+    f'2026-11-20 03:33:38 [timeline NEW TSK] {LAUNCHER} [unsigned] => task \\Run created; script runtime'
+    f' Ren\'Py (Python); padded file {PADDED} <==== !runtime-loader',
+    f'2026-11-20 03:33:50 [timeline NEW] {SIDE_HOST} => zone 0; side-loads providers.dll'
+    ' <==== !motw-removed !renamed-program',
+    f'2026-11-20 03:33:50 [timeline NEW] {SIDE_DLL} [unsigned] => zone 0; {SIDE_DETAILS} <==== !motw-removed !sideload',
+    f'2026-11-20 03:33:50 [Files] DLL side-loading: {SIDE_DLL} (unsigned) imported by {SIDE_HOST} (signed by Some Developer)',
+    '',
+    '==================== TIMELINE - last 7 days, oldest first ==========================================',
+    '(line: time [sources] file or event [status] => details <==== flags)',
+    '',
+    f'2026-11-20 03:33:38 [NEW TSK] {LAUNCHER} [unsigned] => task \\Run created; script runtime Ren\'Py (Python);'
+    f' padded file {PADDED} <==== !runtime-loader',
+    f'    script: {SCRIPT_DOT} => 2026-11-20 03:33:18; 341 bytes; hidden',
+    f'    script: {SCRIPT_RPA} => 2026-11-20 03:33:19; 2048 bytes',
+    f'2026-11-20 03:33:40 [NEW] {PADDED} => padded: 324 MB of byte 0x00 <==== !padded',
+    f'2026-11-20 03:33:50 [NEW] {SIDE_HOST} => zone 0; side-loads providers.dll; original name EventEmitter.pdb'
+    ' (from the PDB path) <==== !motw-removed !renamed-program',
+    f'2026-11-20 03:33:50 [NEW] {SIDE_DLL} [unsigned] => zone 0; {SIDE_DETAILS} <==== !motw-removed !sideload',
+    f'2026-11-20 03:33:52 [SYSMON] C:\\Windows\\System32\\cmd.exe => parent forfiles.exe; command line cmd /c call'
+    f' {SIDE_HOST} <==== !lolbin',
+    f'2026-11-20 03:33:53 [4688] {SIDE_HOST} => parent cmd.exe; command line {SIDE_HOST} <==== !proxy-exec',
+    f'2026-11-20 03:40:00 [NEW] {LURE} => original name putty.exe <==== !renamed-program',
+    '',
+    '==================== EXECUTION EVIDENCE - PCA, UserAssist, BAM, ShimCache, Compatibility Assistant ====',
+    '(No process creation auditing and no Sysmon: program starts only from Prefetch, BAM and Amcache.)',
+    '',
+    '==================== PERSISTENCE - Run keys, services, scheduled tasks, Startup folders, WMI, with times ====',
+    '',
+    '--- Run keys (all entries) ---',
+    '(line: time [kind] entry => program [status], arguments; value <==== flags)',
+    '',
+    f'2026-11-20 03:35:00 [run] HKU\\Bob\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Host => {SIDE_HOST},'
+    ' value Host <==== !renamed-program',
+    f'    module: {SIDE_DLL} [unsigned] => {SIDE_DETAILS} <==== !sideload',
+    '',
+    '==================== RUNNING PROCESSES - programs running now from user-writable folders, unsigned, or with unsigned modules ====',
+    '(84 processes checked.)',
+    '(line: started [pid] program [status] => parent; command line <==== flags)',
+    '',
+    f'2026-11-20 03:33:53 [4321] {SIDE_HOST} => parent cmd.exe (4300) < pid 4200 (exited); command line "{SIDE_HOST}"'
+    ' <==== !proxy-exec !renamed-program',
+    f'    module: {SIDE_DLL} [unsigned] => {SIDE_DETAILS} <==== !sideload',
+    f'2026-11-20 03:41:30 [5557] {CHILD} => parent unsigned.exe (5556) < explorer.exe (100); command line {CHILD} --log [unsigned]',
+    '    modules: no access',
+    '',
+    '==================== NETWORK - data sent per program (SRUM), connections now, DNS cache ============',
+    '',
+    '--- DNS cache: remote access, tunnel, paste/file sharing, bot API and IP lookup services, victim IDs, abused TLDs ---',
+    '(12 names cached)',
+    '(line: [category] name)',
+    '',
+    '[victim ID in name] 0800272a1b3c.example.click',
+    '[abused TLD] 0800272a1b3c.example.click',
+    '',
+    '==================== FILES - SHA256, signature and version of the files as they are on disk now ====',
+    '(line: file => sha256, signature; version; amcache sha1; md5; size; created; modified)',
+    '',
+    f'{LURE} => {LURE_SHA}, signature valid; signer Simon Tatham; original name putty.exe',
+    f'{SIDE_DLL} => {SIDE_DLL_SHA}, signature unsigned; original name providers.dll',
+    f'{SIDE_HOST} => {SIDE_HOST_SHA}, signature valid; signer Some Developer',
+    '',
+    '==================== LEGEND ========================================================================',
+    'Sources (timeline, in brackets after the time):',
+    '    PF      Prefetch: program run',
+    '    4688    Security event 4688: process created (only with process creation auditing)',
+    '    SYSMON  Sysmon event 1: process created',
+    '    PROC    process running now (time = when it started)',
+    '',
+    'Flags (after <====):',
+    '    !sideload                   unsigned DLL next to a validly signed program that imports it',
+    '    !renamed-program            hint: a signed program under a random-looking or lure name',
+    '==================== End of log. Scan took 9.9 s ====',
+])
+LINES_V4 = SPOR_V4.split('\n')

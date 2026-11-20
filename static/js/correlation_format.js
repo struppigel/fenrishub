@@ -112,6 +112,9 @@ window.CorrelationFormat = (function () {
         // A summary of the files inside a folder line, a line or event at the same time.
         if (entry.role === 'files inside' || entry.role === 'same time') return text(entry.text);
         if (entry.role === 'dll' && parent) return 'service DLL of ' + parent;
+        // Spor 0.3.0: an unsigned DLL a process or persisted program loads, a runtime launcher's script file
+        if (entry.role === 'module' && parent) return 'module of ' + parent;
+        if (entry.role === 'script' && parent) return 'script of ' + parent;
         if (entry.folder && entry.in_folder) return 'in this folder';
         return parent ? 'under ' + parent : '';
     }
