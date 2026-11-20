@@ -18,7 +18,8 @@ from django.views.decorators.http import require_http_methods
 
 from ..log_highlighting import SummaryItem
 
-from .. import centralbox, centralbox_auto, spor_self_links
+from .. import centralbox, centralbox_auto
+from ..correlations import spor_self
 from ..case_correlations import (
     add_stored_results, cached_correlations, correlations_for_upload, related_upload_ids, reverse_correlations, reverse_note,
     reverse_status, summary_note,
@@ -470,7 +471,7 @@ def page_reverse_correlation_context(uploaded_log, user):
 
 
 def add_self_link_context(uploaded_log, context):
-    """A Spor log page's links between its own lines (spor_self_links), added
+    """A Spor log page's links between its own lines (correlations/spor_self.py), added
     to its reverse correlation context (or a new one in the same shape):
     `self_lines` {line no: code} (status letter, 'm' for a neutral marker, ''
     for links from the hover icons only) and `self_url`, which gives one
@@ -479,7 +480,7 @@ def add_self_link_context(uploaded_log, context):
     if uploaded_log.log_type != LOG_TYPE_SPOR:
         return context
     try:
-        links = spor_self_links.for_upload(uploaded_log)
+        links = spor_self.for_upload(uploaded_log)
         if links is None or not links.codes:
             return context
         if not context:
@@ -501,14 +502,14 @@ def add_self_link_context(uploaded_log, context):
 @require_http_methods(['GET'])
 def spor_self_links_api(request):
     """{entries: [entry]}: what the other lines of a Spor log say about one
-    of its lines (?upload_id=...&line=N, spor_self_links)."""
+    of its lines (?upload_id=...&line=N, correlations/spor_self.py)."""
     upload_id = (request.GET.get('upload_id') or '').strip()
     line = (request.GET.get('line') or '').strip()
     uploaded_log = UploadedLog.objects.filter(upload_id=upload_id, log_type=LOG_TYPE_SPOR).first() \
         if upload_id else None
     if uploaded_log is None or not line.isdigit():
         return JsonResponse({'entries': []})
-    links = spor_self_links.for_upload(uploaded_log)
+    links = spor_self.for_upload(uploaded_log)
     # The stored centralbox result of each FILES hash (database only): the
     # info box shows it, and offers a lookup for the hashes without one.
     entries = add_stored_results(links.entries(line)) if links is not None else []

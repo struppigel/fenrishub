@@ -46,7 +46,7 @@ class RelatedLogsTests(TestCase):
     def test_page_counts_the_related_logs_without_computing_correlations(self):
         self.add('mb-log', 'Malwarebytes', MB_SAME, minutes_ago=20)
         self.add('fix-log', 'Fixlog', 'Fix result of Farbar Recovery Scan Tool', minutes_ago=10)
-        with mock.patch('fixlist.case_correlations._compute', side_effect=AssertionError('computed during render')):
+        with mock.patch('fixlist.correlations.forward._compute', side_effect=AssertionError('computed during render')):
             html = self.page().content.decode()
         self.assertIn('related logs (2)', html)
         self.assertIn(reverse('uploaded_log_related', args=['frst-log']), html)
@@ -107,7 +107,7 @@ class RelatedLogsTests(TestCase):
     def test_correlated_lines_from_another_log_page_use_stored_correlations_only(self):
         self.add('mb-log', 'Malwarebytes', MB_EVIL)
         # Nothing stored for the FRST log yet: no count, and nothing is computed.
-        with mock.patch('fixlist.case_correlations._compute', side_effect=AssertionError('computed')):
+        with mock.patch('fixlist.correlations.forward._compute', side_effect=AssertionError('computed')):
             self.assertNotIn('correlated line', self.fragment('mb-log').content.decode())
         correlations_for_upload(self.frst, self.user)
         self.assertTrue(CorrelationCache.objects.filter(upload=self.frst).exists())

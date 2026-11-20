@@ -10,6 +10,7 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from .. import case_correlations, centralbox, spor_log
+from ..correlations import forward
 from ..file_hashes import extract_file_hashes
 from ..log_highlighting import highlight_log, iter_lines
 from ..models import InfectionCase, InfectionCaseLog, UploadedLogFileHash
@@ -169,9 +170,12 @@ class InfoBoxCorrelationTests(TestCase):
         body = self.get()
         entries = body['correlations'][RUN_LINE]
         kinds = {(entry['kind'], entry['upload_id']) for entry in entries}
-        self.assertTrue({('hash', 'spor-v2'), ('file_info', 'spor-v2'), ('mention', 'spor-v2'),
-                         ('hash', 'search-log'), ('file_info', 'search-log'), ('mention', 'search-log'),
+        # A FILES line and an FRST Search File: entry are one entry each: their
+        # facts with the hash row of the same line.
+        self.assertTrue({('file_info', 'spor-v2'), ('mention', 'spor-v2'),
+                         ('file_info', 'search-log'), ('mention', 'search-log'),
                          ('mention', 'shortcut-log')} <= kinds)
+        self.assertFalse({('hash', 'spor-v2'), ('hash', 'search-log')} & kinds)
         spor_file = next(entry for entry in entries if entry['kind'] == 'file_info' and entry['upload_id'] == 'spor-v2')
         self.assertEqual((spor_file['original_name'], spor_file['company'], spor_file['signature'], spor_file['sha1']),
                          ('svchost.exe', 'Microsoft Corporation', 'unsigned', SHA1))
@@ -209,7 +213,7 @@ class EntryCapTests(TestCase):
         UploadedLogFileHash.rebuild_for(spor)
         for upload in (frst, spor):
             InfectionCaseLog.objects.create(case=case, uploaded_log=upload)
-        with mock.patch.object(case_correlations, 'MAX_ENTRIES_PER_LINE', 1):
+        with mock.patch.object(forward, 'MAX_ENTRIES_PER_LINE', 1):
             body = self.client.get(reverse('case_correlations_api'), {'upload_id': 'frst-cap'}).json()
         (entry,) = body['correlations'][line]
         self.assertEqual((entry['kind'], entry['detection']), ('detection', 'Trojan:Win32/Malgent!MSR'))
@@ -519,7 +523,8 @@ class SporLinkCorrelationTests(TestCase):
 
     def test_frst_search_md5_finds_spors_sha256(self):
         entries = self.get()[self.evil]
-        (search,) = [entry for entry in entries if entry['upload_id'] == 'search-link' and entry['kind'] == 'hash']
+        # The FRST Search File: entry, with the SHA-256 its hash row found for the MD5.
+        (search,) = [entry for entry in entries if entry['upload_id'] == 'search-link' and entry['kind'] == 'file_info']
         self.assertEqual((search['md5'], search['sha256']), (SEARCH_MD5, EVIL_SHA))
         (info,) = [entry for entry in entries if entry['upload_id'] == 'spor-link' and entry['kind'] == 'file_info']
         self.assertEqual((info['md5'], info['size'], info['modified']), (SEARCH_MD5, '123456', '2026-10-22 08:00:10'))

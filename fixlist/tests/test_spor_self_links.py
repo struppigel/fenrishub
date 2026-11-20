@@ -1,4 +1,4 @@
-"""Links between the lines of one Spor log (spor_self_links): the same file
+"""Links between the lines of one Spor log (correlations/spor_self.py): the same file
 in other sections, SUMMARY and detail lines, entries of the same name, files
 named in details, folders, copies; their status; the log page and endpoint."""
 
@@ -8,9 +8,9 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .. import spor_self_links
+from ..correlations import spor_self
 from ..models import HashVerdict, LogTypeDetectionRule
-from ..spor_self_links import compute, self_links, self_status
+from ..correlations.spor_self import compute, self_links, self_status
 from ..views.centralbox import add_self_link_context
 from . import spor_sample as s
 from .factories import make_uploaded_log, make_user
@@ -39,9 +39,17 @@ SPOR_LINKS = '\n'.join([
     'Created:   2026-11-18 12:45:48 UTC (local time 13:45, UTC+01:00)',
     'Times:     UTC',
     '',
+    '==================== SUMMARY - flagged items; details in the sections below ========================',
+    '(line: time [from] item [status] => details <==== flags)',
+    '',
+    '2026-11-18 07:59:00 [timeline DEF] Defender paths exclusions changed (now 1: C:\\Users\\Bob\\Downloads)'
+    ' <==== !defender-exclusion',
+    '',
     '==================== TIMELINE - last 30 days, newest first =========================================',
     '(line: time [sources] file or event [status] => details <==== flags)',
     '',
+    '2026-11-18 07:59:00 [DEF] Defender paths exclusions changed (now 1: C:\\Users\\Bob\\Downloads)'
+    ' <==== !defender-exclusion',
     f'2026-11-18 08:00:00 [NEW] {UPD} => Upd: loader <==== !known-malware',
     f'2026-11-18 08:01:00 [PF] C:\\Windows\\System32\\cmd.exe => command line cmd /c {UPD} <==== !lolbin',
     '2026-11-18 08:02:00 [PF] C:\\Windows\\System32\\cmd.exe => command line cmd /c dir <==== !hidden-window',
@@ -133,20 +141,32 @@ class SameFileTests(TestCase):
 
 
 class SummaryTests(TestCase):
-    def test_summary_and_detail_lines_link_both_ways(self):
+    def test_summary_and_detail_lines_of_one_file_link_as_that_file(self):
+        # Both name dropper.exe: the strongest link wins, the same file.
         links = self_links('spor', s.SPOR)
         summary = no_of(s.LINES, '2026-11-14 07:21:07 [Defender]')
         detail = no_of(s.LINES, '2026-11-14 07:21:07 [1116]')
-        self.assertEqual(linked(links, summary)[detail], 'summary')
-        self.assertEqual(linked(links, detail)[summary], 'summary')
+        self.assertIsNone(linked(links, summary)[detail])
+        self.assertIsNone(linked(links, detail)[summary])
         entry = next(entry for entry in links[str(detail)] if entry['line_no'] == summary)
+        self.assertEqual(entry['section'], 'SUMMARY')
+
+    def test_a_summary_without_a_file_finds_its_line(self):
+        links = self_links('spor', SPOR_LINKS)
+        summary = no_of(LINES_LINKS, '2026-11-18 07:59:00 [timeline DEF]')
+        detail = no_of(LINES_LINKS, '2026-11-18 07:59:00 [DEF]')
+        self.assertEqual(linked(links, summary), {detail: 'summary'})
+        self.assertEqual(linked(links, detail), {summary: 'summary'})
+        entry = links[str(detail)][0]
         self.assertEqual((entry['role'], entry['section']), ('in SUMMARY', 'SUMMARY'))
+        # !defender-exclusion is strong: the pair colours both lines.
+        self.assertEqual(self_status(links[str(summary)]), '!')
 
     def test_a_timeline_summary_finds_its_timeline_line(self):
         links = self_links('spor', s.SPOR_V4)
         summary = no_of(s.LINES_V4, '2026-11-20 03:33:38 [timeline NEW TSK]')
         detail = no_of(s.LINES_V4, '2026-11-20 03:33:38 [NEW TSK]')
-        self.assertEqual(linked(links, summary)[detail], 'summary')
+        self.assertIn(detail, linked(links, summary))
         # !runtime-loader is strong: the pair colours both lines.
         self.assertEqual(self_status(links[str(summary)]), '!')
         self.assertEqual(self_status(links[str(detail)]), '!')
@@ -250,7 +270,7 @@ class CodesTests(TestCase):
 
 class PageTests(TestCase):
     def setUp(self):
-        spor_self_links._cache.clear()
+        spor_self._cache.clear()
         # The page detects the log type again (a database rule in production).
         LogTypeDetectionRule.objects.create(
             name='Spor', log_type='Spor', pattern=r'Spor [\d.]+ - forensic triage log',
@@ -316,8 +336,8 @@ class PageTests(TestCase):
         self.assertEqual(add_self_link_context(fix, {}), {})
 
     def test_the_cache_follows_the_content(self):
-        first = spor_self_links.for_upload(self.spor)
-        self.assertIs(spor_self_links.for_upload(self.spor), first)
+        first = spor_self.for_upload(self.spor)
+        self.assertIs(spor_self.for_upload(self.spor), first)
         self.spor.content = s.SPOR_V2
         self.spor.content_hash = 'other'
-        self.assertIsNot(spor_self_links.for_upload(self.spor), first)
+        self.assertIsNot(spor_self.for_upload(self.spor), first)

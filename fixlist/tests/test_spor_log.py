@@ -328,12 +328,15 @@ class CorrelationTests(TestCase):
     def test_hash_and_timeline_evidence_of_the_same_file(self):
         body = self.get()
         entries = body['correlations'][RUN_LINE]
-        # The hash row, the timeline, the FILES facts and the Prefetch "loaded:" line.
+        # The FILES line (its facts with its hash row: one entry), the timeline
+        # and the Prefetch "loaded:" line.
         self.assertEqual({(entry['kind'], entry['upload_id']) for entry in entries},
-                         {('hash', 'spor-log'), ('evidence', 'spor-log'), ('file_info', 'spor-log'),
-                          ('mention', 'spor-log')})
-        sha = next(entry for entry in entries if entry['kind'] == 'hash')
+                         {('evidence', 'spor-log'), ('file_info', 'spor-log'), ('mention', 'spor-log')})
+        sha = next(entry for entry in entries if entry['kind'] == 'file_info')
         self.assertEqual((sha['sha256'], sha['log_type']), (EVIL_SHA, 'Spor'))
+        # No line of the Spor log twice.
+        lines = [entry['line_no'] for entry in entries]
+        self.assertEqual(len(lines), len(set(lines)))
         evidence = next(entry for entry in entries if entry['kind'] == 'evidence')
         self.assertEqual(
             (evidence['line_no'], evidence['time'], evidence['sources'], evidence['file_status'], evidence['flags']),
@@ -349,7 +352,8 @@ class CorrelationTests(TestCase):
         detection = next(entry for entry in entries if entry['kind'] == 'detection')
         self.assertEqual((detection['detection'], detection['action'], detection['source'], detection['log_type']),
                          ('Trojan:Win32/Malgent!MSR', 'Quarantine', 'defender', 'Spor'))
-        sha = next(entry for entry in entries if entry['kind'] == 'hash')
+        # The FILES line: its facts with the hash row's SHA-256 and detection.
+        sha = next(entry for entry in entries if entry['kind'] == 'file_info')
         self.assertEqual((sha['sha256'], sha['detection']), (DROP_SHA, 'Trojan:Win32/Malgent!MSR'))
         self.assertEqual(body['statuses'][DROPPER_LINE], 'B')
         self.assertEqual(body['notes'][DROPPER_LINE], 'Trojan:Win32/Malgent!MSR · Spor')

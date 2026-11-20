@@ -460,8 +460,9 @@ window.CorrelationInfo = (function () {
     }
 
     function renderFindings(parent, group) {
+        // Hash rows with a detection, and file facts a hash row was merged into.
         const findings = group.entries.filter((entry) => entry.kind === 'detection' || entry.kind === 'fixlog'
-            || (entry.kind === 'hash' && str(entry.detection)));
+            || ((entry.kind === 'hash' || entry.kind === 'file_info') && str(entry.detection)));
         if (!findings.length) return;
         const list = section(parent, 'detections and results');
         const seen = new Set();
@@ -629,7 +630,7 @@ window.CorrelationInfo = (function () {
         const list = entries();
         const scrollTop = bodyEl.scrollTop;
         bodyEl.innerHTML = '';
-        // A Spor log's own lines (spor_self_links): no other log involved.
+        // A Spor log's own lines (correlations/spor_self.py): no other log involved.
         const ownLines = list.length > 0 && list.every((entry) => isOwn(entry) && str(entry.log_type) !== 'Addition');
         if (titleEl) titleEl.textContent = ownLines ? 'what other lines of this log say about this line' : 'what other logs say about this line';
         const intro = el('div', 'cinfo-intro');

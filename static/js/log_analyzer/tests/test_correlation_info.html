@@ -349,7 +349,7 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
         document.querySelectorAll('.cinfo-hash-lookup').length === 2, String(document.querySelectorAll('.cinfo-hash-lookup').length));
     CorrelationInfo.close();
 
-    // A Spor log's links between its own lines (spor_self_links).
+    // A Spor log's links between its own lines (correlations/spor_self.py).
     const sporOwn = (extra) => Object.assign({ kind: 'file_info', upload_id: 'spor-log', log_type: 'Spor', line_no: 70,
         file: 'evil.exe', severity: 'w' }, extra || {});
     const isSpor = (entry) => entry.upload_id === 'spor-log';

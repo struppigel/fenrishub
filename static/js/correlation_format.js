@@ -26,7 +26,7 @@ window.CorrelationFormat = (function () {
         same_hash: 'same file content elsewhere',
         inside: 'inside this folder',
         timing: 'at the same time',
-        // Links within one Spor log (spor_self_links).
+        // Links within one Spor log (correlations/spor_self.py).
         summary: 'summary line',
         detail: 'named in the details',
         named_by: 'names this file in its details',
@@ -207,7 +207,7 @@ window.CorrelationFormat = (function () {
         const ownEntries = sameFile.filter(isOwn);
         const others = sameFile.some((entry) => !isOwn(entry));
         // A merged FRST&Addition log's own entries come from its Addition part;
-        // a Spor log's from its other lines (spor_self_links).
+        // a Spor log's from its other lines (correlations/spor_self.py).
         const ownWhere = ownEntries.every((entry) => entry.log_type === 'Addition')
             ? "this log's Addition part" : 'other lines of this log';
         if (ownEntries.length && !others) return `same file in ${ownWhere}`;

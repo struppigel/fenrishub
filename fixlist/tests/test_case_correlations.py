@@ -343,7 +343,7 @@ class CorrelationCacheTests(TestCase):
         InfectionCaseLog.objects.create(case=self.case, uploaded_log=self.mb)
 
     def run_counted(self):
-        from .. import case_correlations
+        from ..correlations import forward as case_correlations
 
         with mock.patch.object(case_correlations, '_compute', wraps=case_correlations._compute) as compute:
             result = correlations_for_upload(self.frst, self.user)
@@ -494,7 +494,7 @@ class LogViewNeverWaitsTests(TestCase):
         self.run_line_no = FRST.split('\n').index(RUN_LINE) + 1
 
     def page_without_computing(self):
-        from .. import case_correlations
+        from ..correlations import forward as case_correlations
 
         with mock.patch.object(case_correlations, '_compute', side_effect=AssertionError('computed during render')):
             return self.client.get(reverse('view_uploaded_log', args=['frst-log']))
