@@ -57,7 +57,7 @@
             </div>
             <div class="fixlist-actions">
                 <a href="{% url 'view_infection_case' case.case_id %}"><button type="button">view</button></a>
-                {% if case.open_url %}<a href="{{ case.open_url }}" target="_blank" rel="noopener noreferrer" title="{{ case.open_url }}"><button type="button">open</button></a>{% endif %}
+                {% if case.open_url %}<a href="{{ case.open_url }}" target="_blank" rel="noopener noreferrer" title="{{ case.open_url }}"><button type="button">link</button></a>{% endif %}
                 <a href="{% url 'infection_case_delete' case.case_id %}"><button type="button" class="delete-btn">delete</button></a>
             </div>
         </div>

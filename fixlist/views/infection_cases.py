@@ -375,7 +375,7 @@ def infection_cases_view(request):
 
     for case in cases:
         case.extra_names = [row.username for row in case.extra_usernames.all()]
-        # Only web links get an "open" button (the field also allows ftp).
+        # Only web links get a "link" button (the field also allows ftp).
         case.open_url = case.reference_url if case.reference_url.lower().startswith(('http://', 'https://')) else ''
         visible_logs = [
             link.uploaded_log
