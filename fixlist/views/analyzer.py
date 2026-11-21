@@ -44,6 +44,11 @@ from .snippets import analyzer_snippets_for, shared_tag_snippets_for
 from .speeches import analyzer_speeches_for, shared_tag_speeches_for
 from .utils import get_action_scoped_uploads
 
+# Analysis payloads with sorted keys: the cached one comes back from the
+# database (Postgres JSONB reorders keys), the fresh one from the analyzer, and
+# the page compares their JSON text to skip redrawing an unchanged analysis.
+ANALYSIS_JSON_PARAMS = {'sort_keys': True}
+
 
 @guest_or_login_required
 @require_http_methods(["GET"])
@@ -190,7 +195,7 @@ def analyze_log_api(request):
             except Exception:
                 logger.exception('Failed to refresh cached analysis for upload_id=%s', upload_id)
     # After the cache write: tags are looked up per request, never cached.
-    return JsonResponse(attach_rule_tags(analysis))
+    return JsonResponse(attach_rule_tags(analysis), json_dumps_params=ANALYSIS_JSON_PARAMS)
 
 
 @deny_guests
@@ -218,7 +223,7 @@ def uploaded_log_cached_analysis_api(request, upload_id):
         'has_cache': True,
         'payload': attach_rule_tags(payload),
         'source_content_hash': uploaded_log.content_hash,
-    })
+    }, json_dumps_params=ANALYSIS_JSON_PARAMS)
 
 
 @guest_or_login_required

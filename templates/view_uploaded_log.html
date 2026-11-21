@@ -238,7 +238,8 @@
     {% if highlight.summary %}
     <ul class="hl-summary-list" style="--hl-summary-line: {{ highlight.summary_line_ch }}ch">
         {% for item in highlight.summary_shown %}
-        <li data-line="{{ item.line_no }}"{% if item.correlation_added %} data-cor-added{% endif %}><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}" title="{{ item.name }}"><span class="hl-jump-line">L{{ item.line_no }}</span> {% if item.status %}<span class="hl-jump-status hl-sev-{{ item.severity }}">{{ item.status }}</span> {% endif %}<span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}{% if item.correlation %} <span class="hl-jump-cor">{{ item.correlation }}</span>{% endif %}</a></li>
+        {# Entries that say the same are shown once: "also L22 L23" links to their other lines (HighlightResult.summary_groups). #}
+        <li data-line="{{ item.line_no }}"{% if item.also_lines %} data-lines="{{ item.all_lines|join:' ' }}" class="hl-summary-group"{% endif %}{% if item.correlation_added %} data-cor-added{% endif %}><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}" title="{{ item.name }}"><span class="hl-jump-line">L{{ item.line_no }}</span> {% if item.status %}<span class="hl-jump-status hl-sev-{{ item.severity }}">{{ item.status }}</span> {% endif %}<span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}{% if item.correlation %} <span class="hl-jump-cor">{{ item.correlation }}</span>{% endif %}</a>{% if item.also_lines %} <span class="hl-jump-also-label">also</span>{% for no in item.also_lines %} <a href="#L{{ no }}" class="hl-jump hl-jump-also" data-line="{{ no }}">L{{ no }}</a>{% endfor %}{% endif %}</li>
         {% endfor %}
     </ul>
     {% if highlight.summary_hidden_count %}<div class="hl-summary-more">and {{ highlight.summary_hidden_count }} more</div>{% endif %}
@@ -820,9 +821,12 @@ const Centralbox = (function () {
             if (row && row.sha256) add(row.anchor_line_no, row.sha256);
         });
         if (!byAnchor.size) return;
-        document.querySelectorAll('#highlightSummary a.hl-jump').forEach(link => {
-            const hashes = byAnchor.get(Number(link.dataset.line));
-            if (!hashes) return;
+        // The entry's main link (not its "also L<n>" links), with the hashes of all its lines.
+        document.querySelectorAll('#highlightSummary a.hl-jump:not(.hl-jump-also)').forEach(link => {
+            const li = link.closest('li');
+            const lines = (li && li.dataset.lines ? li.dataset.lines.split(' ') : [link.dataset.line]).map(Number);
+            const hashes = lines.flatMap(no => byAnchor.get(no) || []);
+            if (!hashes.length) return;
             const found = hashes.map(h => verdictFor(h)).filter(v => v && VERDICTS.includes(v.verdict));
             const v = VERDICTS.map(name => found.find(f => f.verdict === name)).find(Boolean);
             if (!v) return;
@@ -1314,7 +1318,9 @@ const CaseCorrelations = (function () {
                 pane.appendChild(list);
             }
             const items = Array.from(list.children);
-            const existing = items.find(li => Number(li.dataset.line) === no);
+            // An entry shown once for several lines lists them all in data-lines.
+            const linesOf = li => (li.dataset.lines ? li.dataset.lines.split(' ') : [li.dataset.line]).map(Number);
+            const existing = items.find(li => linesOf(li).includes(no));
             if (existing) {
                 const link = existing.querySelector('a.hl-jump');
                 if (link) link.append(' ', span('hl-jump-cor', note));

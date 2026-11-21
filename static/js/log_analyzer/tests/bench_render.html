@@ -7,6 +7,9 @@
     apply   - applyAnalysisPayload (keying, pending overrides, full line render)
     layout  - the forced layout of the rendered lines
     tokens  - queueing 3 lookup-menu substring rules and repainting every line
+    statusHide / statusShow - a legend status chip hiding, then showing the
+              unknown lines again (with the layout it causes)
+    tagFilter - a legend tag chip: lines re-marked in place, with layout
 
   Produce a payload with
     python manage.py benchmark_analyzer --upload-id <id> --dump-payload payload.js
@@ -69,7 +72,11 @@ function runBenchmark() {
         return;
     }
     const container = document.getElementById('logLines');
-    const samples = { parse: [], apply: [], layout: [], tokens: [], tokensLayout: [] };
+    const samples = {
+        parse: [], apply: [], layout: [], tokens: [], tokensLayout: [], statusHide: [], statusShow: [], tagFilter: [],
+    };
+    // speech_suggestions.js is not loaded: the tag filter matches every line with a verdict.
+    window.lineMatchesTagFilter = (entry) => entry.dominant_status !== '?';
     let lineCount = 0;
     let tokenLines = 0;
 
@@ -88,6 +95,25 @@ function runBenchmark() {
         samples.tokensLayout.push(time(() => container.offsetHeight));
         tokenLines = analyzedLines.filter((entry) => BENCH_TOKENS.some((t) => entry.line.includes(t))).length;
         pendingTokenRules.clear();
+
+        // A legend status chip: hide the unknown lines, then show them again
+        // (the expensive way: every line comes back into the layout).
+        samples.statusHide.push(time(() => {
+            container.classList.add(HIDE_CLASS_PREFIX + 'status-unknown');
+            return container.scrollHeight;
+        }));
+        samples.statusShow.push(time(() => {
+            container.classList.remove(HIDE_CLASS_PREFIX + 'status-unknown');
+            return container.scrollHeight;
+        }));
+        // A legend tag chip (speech_suggestions.js setTagFilter): the lines are
+        // re-marked in place, here "every line with a verdict".
+        samples.tagFilter.push(time(() => {
+            container.classList.add('tag-filter-active');
+            applyTagFilterMatches();
+            return container.scrollHeight;
+        }));
+        container.classList.remove('tag-filter-active');
     }
 
     const result = { lines: lineCount, tokenLines, runs: RUNS };

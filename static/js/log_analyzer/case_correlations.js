@@ -433,7 +433,9 @@ async function refreshCaseCorrelations(uploadId) {
         || previousLookups !== JSON.stringify(correlationLookupLines());
     if (changed && typeof renderLogLines === 'function' && analyzedLines.length) {
         try {
-            renderLogLines();
+            // Only the info icons change: in place, not a redraw of every line.
+            if (typeof refreshLineExtras === 'function') refreshLineExtras();
+            else renderLogLines();
             // The legend's "correlated (n)" filter (speech_suggestions.js).
             if (typeof renderRuleTagsLine === 'function') renderRuleTagsLine(lastAnalysisPayload);
         } catch (error) {

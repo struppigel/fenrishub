@@ -465,26 +465,56 @@ window.CorrelationInfo = (function () {
             || ((entry.kind === 'hash' || entry.kind === 'file_info') && str(entry.detection)));
         if (!findings.length) return;
         const list = section(parent, 'detections and results');
-        const seen = new Set();
-        findings.forEach((entry) => {
-            const key = `${entry.upload_id}:${entry.line_no}:${entry.kind}`;
-            if (seen.has(key)) return;
-            seen.add(key);
+        findingGroups(findings).forEach((entries) => {
+            const first = entries[0];
             const li = row();
             const line = el('div', 'cinfo-finding');
-            if (entry.kind === 'fixlog') {
+            if (first.kind === 'fixlog') {
                 line.appendChild(el('span', 'cinfo-key', 'fixlist'));
-                line.appendChild(el('span', '', str(entry.result) || 'fixlist result'));
+                line.appendChild(el('span', '', str(first.result) || 'fixlist result'));
             } else {
-                line.appendChild(el('span', 'cinfo-key', entry.source === 'defender' ? 'Defender' : 'detection'));
-                line.appendChild(el('span', sevClass(entry.severity), str(entry.detection) || 'detection'));
-                if (str(entry.action)) line.appendChild(el('span', 'cinfo-muted', str(entry.action)));
-                if (entry.in_folder) line.appendChild(el('span', 'cinfo-note', 'the folder was detected'));
+                line.appendChild(el('span', 'cinfo-key', first.source === 'defender' ? 'Defender' : 'detection'));
+                line.appendChild(el('span', sevClass(first.severity), str(first.detection) || 'detection'));
+                const actions = [...new Set(entries.map((entry) => str(entry.action)).filter(Boolean))];
+                if (actions.length) line.appendChild(el('span', 'cinfo-muted', actions.join(', ')));
+                if (first.in_folder) line.appendChild(el('span', 'cinfo-note', 'the folder was detected'));
             }
             li.appendChild(line);
-            li.appendChild(sourceNode(entry));
+            // One source label, then a link per line ("this log L5130 L5134 ...").
+            const source = sourceLabel(el('span', 'cinfo-src'), first);
+            const linked = new Set();
+            entries.forEach((entry) => {
+                // Lines that jump to the same line (their anchor) get one link.
+                const target = Number(entry.anchor_line_no || entry.line_no) || 0;
+                if (linked.has(target)) return;
+                linked.add(target);
+                const link = lineLink(entry);
+                if (link) source.appendChild(link);
+            });
+            li.appendChild(source);
             list.appendChild(li);
         });
+    }
+
+    // Findings that say the same in the same log share one row: the same
+    // detection (or fixlist result) on several lines, e.g. one Defender
+    // threat detected and removed again and again. Its lines in log order,
+    // each once; the actions of all of them.
+    function findingGroups(findings) {
+        const groups = new Map();
+        const lines = new Set();
+        findings.forEach((entry) => {
+            const lineKey = `${entry.upload_id}:${entry.line_no}:${entry.kind}`;
+            if (lines.has(lineKey)) return;
+            lines.add(lineKey);
+            const key = JSON.stringify([str(entry.upload_id), str(entry.log_type), str(entry.system), str(entry.kind),
+                str(entry.source), str(entry.detection), str(entry.severity), Boolean(entry.in_folder),
+                entry.kind === 'fixlog' ? str(entry.result) : '']);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(entry);
+        });
+        const lineNo = (entry) => Number(entry.anchor_line_no || entry.line_no) || 0;
+        return [...groups.values()].map((entries) => entries.slice().sort((a, b) => lineNo(a) - lineNo(b)));
     }
 
     // The FRST / Addition lines that point at the shown line (reverse

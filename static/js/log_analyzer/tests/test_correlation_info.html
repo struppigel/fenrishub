@@ -369,6 +369,27 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
         document.getElementById('cinfoTitle').textContent === 'what other lines of this log say about this line');
     CorrelationInfo.close();
 
+    // One Defender threat detected and removed again and again: one row, a link per line.
+    const wacatac = (lineNo, action) => ({ kind: 'detection', upload_id: 'spor-log', log_type: 'Spor', line_no: lineNo,
+        source: 'defender', detection: 'Trojan:Script/Wacatac.B!ml', action: action || '', severity: 'b',
+        file: 'ETWProviders.dll', system: 'same' });
+    const repeated = [wacatac(5136), wacatac(5130), wacatac(5134, 'Remove'), wacatac(5135), wacatac(5136),
+        Object.assign(wacatac(5129), { detection: 'HackTool:MSIL/AutoKMS.I!MTB' })];
+    let jumpedTo = 0;
+    CorrelationInfo.open({ lineText: 'C:\\x\\ETWProviders.dll', getEntries: () => repeated, isOwn: isSpor,
+        onJump: (lineNo) => { jumpedTo = lineNo; } });
+    const findingRows = [...document.querySelectorAll('.cinfo-finding')].map((node) => node.closest('li'));
+    const wacatacRow = findingRows.find((li) => li.textContent.includes('Wacatac'));
+    const wacatacLinks = wacatacRow ? [...wacatacRow.querySelectorAll('.cinfo-jump')].map((node) => node.textContent) : [];
+    assert('the same detection on several lines is one row with a link per line, in log order',
+        findingRows.length === 2 && wacatacLinks.join(' ') === 'L5130 L5134 L5135 L5136', wacatacLinks.join(' '));
+    assert('the row names the actions of its lines once',
+        wacatacRow && wacatacRow.querySelector('.cinfo-muted').textContent === 'Remove'
+        && wacatacRow.querySelectorAll('.cinfo-src-type').length === 1);
+    wacatacRow.querySelectorAll('.cinfo-jump')[1].click();
+    assert('each line link of a grouped finding jumps to its own line', jumpedTo === 5134, String(jumpedTo));
+    CorrelationInfo.close();
+
     const summary = document.getElementById('summary');
     summary.textContent = `${passed} passed, ${failed} failed`;
     summary.className = failed ? 'fail' : 'pass';

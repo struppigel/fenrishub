@@ -128,7 +128,9 @@ async function refreshCentralboxSuggestions(uploadId, attempt = 0) {
     centralboxSuggestions = next;
     if (changed && typeof renderLogLines === 'function' && analyzedLines.length) {
         try {
-            renderLogLines();
+            // Only the suggestion chips change: in place, not a redraw of every line.
+            if (typeof refreshLineExtras === 'function') refreshLineExtras();
+            else renderLogLines();
         } catch (error) {
             // Never let suggestions break the analyzer.
         }

@@ -351,6 +351,14 @@ body.panel-resizing * {
     min-height: 0;
 }
 
+/* The analyzer's log list is sized by its panel, never by its lines: with
+   that promised, a change inside it (hovering a line shows its icons) lays
+   out only the list, not the whole page. With word wrap off (the default)
+   every hover otherwise cost a layout of everything (~24 ms on a big log). */
+#logLines.log-lines-container {
+    contain: strict;
+}
+
 .log-line {
     padding: 2px 8px;
     border-bottom: 1px solid var(--la-border-muted);
@@ -399,6 +407,20 @@ body.panel-resizing * {
     border-bottom: 1px solid var(--la-border-muted);
     cursor: default;
     user-select: none;
+}
+
+/* A big log has thousands of rows: the browser skips the layout and paint of
+   those out of view, so showing a legend status again or re-rendering costs
+   about a tenth. 21px is one unwrapped row (12px * 1.35 + padding + border);
+   "auto" remembers a row's real height once it was laid out. Keep the rows
+   free of :has() rules: with them this makes rendering slower, not faster.
+   Word wrap on only: with it off, rows are as wide as their text
+   (base.html), and rows out of view would not count for the horizontal
+   scrollbar. */
+body:not(.no-word-wrap) #logLines > .log-line,
+body:not(.no-word-wrap) #logLines > .log-blank-line {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 21px;
 }
 
 /* While a filter narrows the view, spacers would only pile up. */
@@ -996,6 +1018,12 @@ textarea.speech-capture-field {
     display: none;
 }
 
+/* A status shown again with thousands of lines: they come back in batches,
+   one per frame (shared.js showStatusClasses), so the page never blocks. */
+.log-lines-container > .log-line.reveal-pending {
+    display: none;
+}
+
 .log-line.copied .status-badge,
 .log-line.copied .line-text {
     color: var(--la-text-disabled);
@@ -1437,7 +1465,7 @@ body.no-word-wrap #logLines .line-actions {
     padding-left: 0;
 }
 
-#logLines .log-line:not(:hover) .line-actions:has(.line-correlation-trigger) {
+#logLines .log-line:not(:hover) .line-actions.has-correlation {
     padding-left: 6px;
 }
 
@@ -1462,7 +1490,7 @@ body:not(.no-word-wrap) #logLines .line-actions {
     background-color: inherit;
 }
 
-body:not(.no-word-wrap) #logLines .log-line:has(.line-correlation-trigger) .line-text {
+body:not(.no-word-wrap) #logLines .log-line.has-correlation .line-text {
     padding-right: 31px;  /* the info box (1.2em + 10px) and the 6px in front */
 }
 
@@ -1470,21 +1498,21 @@ body:not(.no-word-wrap) #logLines .log-line:has(.line-correlation-trigger) .line
    the first row, so the buttons keep their own column there instead of
    covering them. The hidden copy / search icons keep their place (invisible),
    so hovering never re-wraps the line. */
-body:not(.no-word-wrap) #logLines .log-line:has(.line-tag-chips, .centralbox-suggestion-chip) .line-actions {
+body:not(.no-word-wrap) #logLines .log-line.has-chips .line-actions {
     position: static;
     padding-left: 0;
 }
 
-body:not(.no-word-wrap) #logLines .log-line:has(.line-tag-chips, .centralbox-suggestion-chip) .line-text {
+body:not(.no-word-wrap) #logLines .log-line.has-chips .line-text {
     padding-right: 0;
 }
 
-body:not(.no-word-wrap) #logLines .log-line:has(.line-tag-chips, .centralbox-suggestion-chip):not(:hover) .line-copy-trigger:not([aria-expanded="true"]):not(:focus-visible),
-body:not(.no-word-wrap) #logLines .log-line:has(.line-tag-chips, .centralbox-suggestion-chip):not(:hover) .line-search-trigger:not([aria-expanded="true"]):not(:focus-visible) {
+body:not(.no-word-wrap) #logLines .log-line.has-chips:not(:hover) .line-copy-trigger:not([aria-expanded="true"]):not(:focus-visible),
+body:not(.no-word-wrap) #logLines .log-line.has-chips:not(:hover) .line-search-trigger:not([aria-expanded="true"]):not(:focus-visible) {
     display: inline-block;
 }
 
-body:not(.no-word-wrap) #logLines .log-line:has(.line-tag-chips, .centralbox-suggestion-chip):not(:hover) .line-correlation-trigger {
+body:not(.no-word-wrap) #logLines .log-line.has-chips:not(:hover) .line-correlation-trigger {
     margin-left: -11px;
 }
 

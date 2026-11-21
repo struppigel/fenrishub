@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<!--
+  Tests for clearing or switching a legend tag filter on a big log
+  (speech_suggestions.js setTagFilter + shared.js queueReveal): the lines it
+  brings back come back in batches, one per frame, instead of all at once.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>tag filter reveal tests</title>
+<link rel="stylesheet" href="../../../css/log_analyzer.css">
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #logLines { height: 300px; }
+</style>
+</head>
+<body>
+<h1>tag filter reveal tests</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+<textarea id="logInput" style="display: none"></textarea>
+<div id="logLines" class="log-lines-container"></div>
+
+<script src="../../common.js"></script>
+<script src="../../rule_tag_picker.js"></script>
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+<script src="../speech_suggestions.js"></script>
+<script>
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+const container = document.getElementById('logLines');
+const visibleCount = () => [...container.querySelectorAll(':scope > .log-line')]
+    .filter((el) => getComputedStyle(el).display !== 'none').length;
+const pendingCount = () => container.querySelectorAll('.reveal-pending').length;
+// Runs the remaining batches now instead of in the next frames.
+const flushReveal = () => { while (revealQueue.length) revealNextBatch(REVEAL_BATCH); };
+
+// 10 lines with tag 5, the rest (more than shown at once) without.
+const UNTAGGED = REVEAL_AT_ONCE_MAX + REVEAL_BATCH / 2;
+analyzedLines = [];
+for (let i = 0; i < 10; i++) analyzedLines.push({ line: `tagged ${i}`, dominant_status: 'P', css_class: 'status-p', tag_ids: [5] });
+for (let i = 0; i < UNTAGGED; i++) analyzedLines.push({ line: `plain ${i}`, dominant_status: '?', css_class: 'status-unknown', tag_ids: [] });
+renderLogLines();
+const total = analyzedLines.length;
+
+(function testTurningAFilterOnHidesAtOnce() {
+    setTagFilter(5);
+    assert('turning the filter on shows only its 10 lines, nothing pending', visibleCount() === 10 && pendingCount() === 0,
+        `${visibleCount()} visible, ${pendingCount()} pending`);
+})();
+
+(function testClearingRevealsInBatches() {
+    setTagFilter(null);
+    assert('clearing the filter shows the first batch at once and keeps the rest pending',
+        visibleCount() === 10 + REVEAL_BATCH && pendingCount() === UNTAGGED - REVEAL_BATCH,
+        `${visibleCount()} visible, ${pendingCount()} pending`);
+    assert('the filter class is gone at once', !container.classList.contains('tag-filter-active'));
+    flushReveal();
+    assert('the next frames show every line, nothing left pending',
+        visibleCount() === total && pendingCount() === 0, `${visibleCount()} visible`);
+})();
+
+(function testFilterOnAgainDuringReveal() {
+    setTagFilter(5);
+    setTagFilter(null);
+    setTagFilter(5);
+    assert('turning the filter on again during the reveal shows only its lines',
+        visibleCount() === 10, `${visibleCount()} visible`);
+    flushReveal();
+    assert('and stays that way after the remaining frames', visibleCount() === 10, `${visibleCount()} visible`);
+    setTagFilter(null);
+    flushReveal();
+    assert('clearing it again brings every line back', visibleCount() === total && pendingCount() === 0);
+})();
+
+(function testHiddenStatusLinesAreNotRevealed() {
+    setTagFilter(5);
+    hiddenStatuses.add('status-unknown');
+    hideStatusClasses(container, ['status-unknown']);
+    setTagFilter(null);
+    assert('lines a legend status hides are not queued when the tag filter is cleared',
+        pendingCount() === 0 && visibleCount() === 10, `${visibleCount()} visible, ${pendingCount()} pending`);
+    hiddenStatuses.delete('status-unknown');
+    showStatusClasses(container, ['status-unknown']);
+    flushReveal();
+    assert('showing the status again brings them back', visibleCount() === total);
+})();
+
+(function testRenderDropsPendingLines() {
+    setTagFilter(5);
+    setTagFilter(null);
+    renderLogLines();
+    assert('a redraw leaves nothing pending and shows every line',
+        revealQueue.length === 0 && pendingCount() === 0 && visibleCount() === total, `${visibleCount()} visible`);
+})();
+
+const summary = document.getElementById('summary');
+summary.textContent = passed + ' passed, ' + failed + ' failed';
+summary.style.color = failed === 0 ? '#6f9' : '#f66';
+</script>
+</body>
+</html>

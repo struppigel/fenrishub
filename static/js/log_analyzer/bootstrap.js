@@ -421,12 +421,13 @@ function toggleStatusVisibility(statusClass) {
     const hideClass = HIDE_CLASS_PREFIX + statusClass;
     const isCurrentlyHidden = hiddenStatuses.has(statusClass);
 
+    // Many lines come back in batches, one per frame (shared.js showStatusClasses).
     if (isCurrentlyHidden) {
         hiddenStatuses.delete(statusClass);
-        container.classList.remove(hideClass);
+        showStatusClasses(container, [statusClass]);
     } else {
         hiddenStatuses.add(statusClass);
-        container.classList.add(hideClass);
+        hideStatusClasses(container, [statusClass]);
     }
 
     const legendItem = document.querySelector(
@@ -445,16 +446,13 @@ function toggleAllStatusVisibility() {
 
     const allHidden = ALL_LEGEND_STATUS_CLASSES.every((sc) => hiddenStatuses.has(sc));
 
-    ALL_LEGEND_STATUS_CLASSES.forEach((statusClass) => {
-        const hideClass = HIDE_CLASS_PREFIX + statusClass;
-        if (allHidden) {
-            hiddenStatuses.delete(statusClass);
-            container.classList.remove(hideClass);
-        } else {
-            hiddenStatuses.add(statusClass);
-            container.classList.add(hideClass);
-        }
-    });
+    if (allHidden) {
+        ALL_LEGEND_STATUS_CLASSES.forEach((statusClass) => hiddenStatuses.delete(statusClass));
+        showStatusClasses(container, ALL_LEGEND_STATUS_CLASSES);
+    } else {
+        ALL_LEGEND_STATUS_CLASSES.forEach((statusClass) => hiddenStatuses.add(statusClass));
+        hideStatusClasses(container, ALL_LEGEND_STATUS_CLASSES);
+    }
 
     document.querySelectorAll('.legend-item[data-status-class]').forEach((item) => {
         item.classList.toggle('legend-hidden', !allHidden);

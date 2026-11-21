@@ -375,12 +375,46 @@ function applyTagFilterClass() {
     }
 }
 
+// The lines the current tag filter hides that `nextFilterId` shows (all of
+// them when the filter is cleared), leaving out lines a legend status hides.
+function linesShownByTagFilterChange(container, nextFilterId) {
+    if (!container || !container.classList.contains('tag-filter-active')) {
+        return [];
+    }
+    const previousFilterId = activeTagFilterId;
+    activeTagFilterId = nextFilterId;
+    try {
+        return [...container.querySelectorAll(':scope > .log-line:not(.tag-filter-match)')].filter((row) => {
+            if (hiddenStatuses.has(row.dataset.verdictClass)) return false;
+            if (nextFilterId === null) return true;
+            const entry = analyzedLines[Number(row.dataset.lineIndex)];
+            return Boolean(entry) && lineMatchesTagFilter(entry);
+        });
+    } finally {
+        activeTagFilterId = previousFilterId;
+    }
+}
+
 function setTagFilter(tagId) {
-    activeTagFilterId = tagId;
+    const container = document.getElementById('logLines');
+    // Clearing a filter can bring back thousands of lines: they come back in
+    // batches, one per frame (shared.js queueReveal), so the page never blocks.
+    const canReveal = typeof queueReveal === 'function' && typeof applyTagFilterMatches === 'function';
     refreshSpeechTagIdsForFilter();
+    if (canReveal) {
+        queueReveal(container, linesShownByTagFilterChange(container, tagId));
+    }
+    activeTagFilterId = tagId;
     applyTagFilterClass();
-    if (typeof renderLogLines === 'function') {
+    // Only the lines' tag-filter-match class depends on the filter: re-mark
+    // them in place (a full re-render of a big log froze the page).
+    if (typeof applyTagFilterMatches === 'function') {
+        applyTagFilterMatches();
+    } else if (typeof renderLogLines === 'function') {
         renderLogLines();
+    }
+    if (canReveal) {
+        startReveal();
     }
     renderRuleTagsLine(lastAnalysisPayload);
 }
@@ -539,7 +573,12 @@ function updateSpeechSuggestionsFromAnalysis(payload) {
 // above shrink by its height so the legend stays inside the window.
 function syncLegendExtraHeight(line) {
     const height = line && !line.hidden ? line.offsetHeight + 6 : 0;
-    document.documentElement.style.setProperty('--legend-extra', `${height}px`);
+    const value = `${height}px`;
+    // A write restyles the whole page (thousands of log lines): only on a change.
+    const root = document.documentElement.style;
+    if (root.getPropertyValue('--legend-extra') !== value) {
+        root.setProperty('--legend-extra', value);
+    }
 }
 
 function renderRuleTagsLine(payload) {

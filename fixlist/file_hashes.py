@@ -258,10 +258,17 @@ def _spor_flagged_paths(bodies, detections):
     """Normalized paths Spor itself points at: Defender detections, lines
     with a flag other than the ones normal on many PCs, and the SUMMARY."""
     flagged = {normalized_path(path) for _no, _threat, _action, path in detections}
+    # Spor 0.7.0+: a line's details back on the line (its sub-lines stay below it)
+    bodies = spor_log.unfold(bodies)
     summary = spor_log.section_ranges(bodies).get(spor_log.SECTION_SUMMARY)
     known = None
     for index, body in enumerate(bodies):
         in_summary = summary is not None and summary[0] < index < summary[1]
+        if in_summary and spor_log.is_sub_line(body):
+            # A SUMMARY line's sub-lines (a download's addresses, a Defender
+            # detection's items) are on the unfolded line already; a
+            # "process:" item touched the file and is not flagged itself.
+            continue
         cut = body.find(spor_log.FLAGS_MARK)
         loud = cut != -1 and any(flag not in spor_log.QUIET_FLAGS for flag in body[cut:].split()[1:])
         if (in_summary or loud) and cut != -1 and spor_log.SYNTAX_FLAG in body[cut:].split():

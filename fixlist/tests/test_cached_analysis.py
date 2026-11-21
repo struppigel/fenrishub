@@ -201,3 +201,24 @@ class AnalyzeLogApiCacheWriteTests(TestCase):
         cached = UploadedLogAnalysis.objects.get(upload=log)
         self.assertEqual(cached.source_content_hash, log.content_hash)
         self.assertIn('lines', cached.payload)
+
+    def test_fresh_and_cached_payloads_have_the_same_json_text(self):
+        # The page skips redrawing a re-scan that matches the cached analysis it
+        # shows by comparing their JSON text: the database (Postgres JSONB)
+        # reorders keys, so both responses sort them.
+        log = UploadedLog.objects.create(
+            forum_username='forum_user', original_filename='frst.txt', content=FRST_LOG_CONTENT, log_type='FRST',
+        )
+        self.client.login(username='analyzer', password='pw')
+        fresh = self.client.post(
+            reverse('analyze_log_api'),
+            data=json.dumps({'log': FRST_LOG_CONTENT, 'upload_id': log.upload_id}),
+            content_type='application/json',
+        )
+        cached = self.client.get(reverse('uploaded_log_cached_analysis_api', args=[log.upload_id]))
+        cached_payload = cached.json()['payload']
+        self.assertEqual(json.dumps(cached_payload), json.dumps(fresh.json()))
+        # Sorted at every level, e.g. a line's keys.
+        line = fresh.json()['lines'][0]
+        self.assertEqual(list(line), sorted(line))
+        self.assertEqual(list(fresh.json()), sorted(fresh.json()))

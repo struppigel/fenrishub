@@ -706,7 +706,11 @@ async function parseLogs() {
         }
         _lineDetailsCache.clear();
         const payload = await requestLogAnalysis(logInput, selectedUploadId);
-        applyAnalysisPayload(payload, { resetCopied: true, preservePendingChanges: true });
+        // The background re-scan after a cached analysis mostly comes back the
+        // same: drawing thousands of lines again would only freeze the page.
+        if (!analysisPayloadIsShown(payload)) {
+            applyAnalysisPayload(payload, { resetCopied: true, preservePendingChanges: true });
+        }
 
         if (analyzedLines.length === 0) {
             alert('No non-empty lines were found.');
@@ -722,7 +726,7 @@ async function parseLogs() {
         }
     }
 
-    renderLogLines();
+    // applyAnalysisPayload has drawn the lines (or they are unchanged).
     if (typeof refreshCentralboxSuggestions === 'function') {
         refreshCentralboxSuggestions(selectedUploadId);
     }
@@ -1760,6 +1764,8 @@ function buildLineTooltip(line, reasons, tags = []) {
 function renderLogLines() {
     const container = document.getElementById('logLines');
     const savedScrollTop = container.scrollTop;
+    // Lines still waiting to be shown (shared.js queueReveal) are replaced.
+    if (typeof dropFromReveal === 'function') dropFromReveal(() => true);
     container.innerHTML = '';
     // Blank lines of the log, put back between entries as inert spacer rows
     // (the analysis itself has none). They carry no index, so every
@@ -1792,6 +1798,8 @@ function renderLogLines() {
         // rather than cssClass -- a line coloured only in part is styled
         // 'status-unknown' but its verdict (and its legend count) is the badge's status.
         lineDiv.dataset.verdictClass = badgeClass;
+        // The tag filter re-marks lines in place by this (applyTagFilterMatches).
+        lineDiv.dataset.lineIndex = String(index);
 
         const badge = document.createElement('button');
         badge.type = 'button';
@@ -1866,23 +1874,33 @@ function renderLogLines() {
         lineDiv.title = buildLineTooltip(line, reasons, lineTags);
         // The line's tags as chips, so they show without hovering; clicking
         // one lists the tag's speeches and snippets.
+        // has-chips / has-correlation: what the line holds, as classes for
+        // log_analyzer.css (cheaper than :has() rules on thousands of lines).
         if (lineTags.length && typeof buildLineTagChips === 'function') {
             const chipBox = document.createElement('span');
             chipBox.className = 'line-tag-chips';
             buildLineTagChips(entry.tag_ids).forEach((chip) => chipBox.appendChild(chip));
             lineDiv.insertBefore(chipBox, actions);
+            lineDiv.classList.add('has-chips');
         }
         // What other logs of the case say about the line's file (case_correlations.js).
         // Last, at the right edge: the copy / search icons appear in front of
         // it on hover, so it never moves under the pointer.
         if (typeof buildCaseCorrelationButton === 'function') {
             const correlationButton = buildCaseCorrelationButton(entry);
-            if (correlationButton) actions.appendChild(correlationButton);
+            if (correlationButton) {
+                actions.appendChild(correlationButton);
+                actions.classList.add('has-correlation');
+                lineDiv.classList.add('has-correlation');
+            }
         }
         // A "suggested B" from centralbox (centralbox_suggestions.js), if any.
         if (typeof buildCentralboxSuggestionChip === 'function') {
             const suggestionChip = buildCentralboxSuggestionChip(entry, index);
-            if (suggestionChip) lineDiv.insertBefore(suggestionChip, actions);
+            if (suggestionChip) {
+                lineDiv.insertBefore(suggestionChip, actions);
+                lineDiv.classList.add('has-chips');
+            }
         }
         // The tag filter (speech_suggestions.js) hides lines without this class.
         if (typeof lineMatchesTagFilter === 'function' && lineMatchesTagFilter(entry)) {
@@ -1911,6 +1929,54 @@ function renderLogLines() {
         container.appendChild(lineDiv);
     });
     container.scrollTop = savedScrollTop;
+}
+
+// Case correlations or centralbox suggestions arrived (case_correlations.js,
+// centralbox_suggestions.js): each line gets its info icon and suggestion
+// chip anew, in place, like renderLogLines would draw them; the rest of the
+// lines stays. A big log has thousands: rebuilding them all froze the page.
+function refreshLineExtras() {
+    const container = document.getElementById('logLines');
+    if (!container) {
+        return;
+    }
+    container.querySelectorAll(':scope > .log-line').forEach((lineDiv) => {
+        const index = Number(lineDiv.dataset.lineIndex);
+        const entry = analyzedLines[index];
+        const actions = lineDiv.querySelector(':scope > .line-actions');
+        if (!entry || !actions) {
+            return;
+        }
+        const oldButton = actions.querySelector(':scope > .line-correlation-trigger');
+        if (oldButton) oldButton.remove();
+        const button = typeof buildCaseCorrelationButton === 'function' ? buildCaseCorrelationButton(entry) : null;
+        if (button) actions.appendChild(button);
+        actions.classList.toggle('has-correlation', Boolean(button));
+        lineDiv.classList.toggle('has-correlation', Boolean(button));
+
+        const oldChip = lineDiv.querySelector(':scope > .centralbox-suggestion-chip');
+        if (oldChip) oldChip.remove();
+        const chip = typeof buildCentralboxSuggestionChip === 'function'
+            ? buildCentralboxSuggestionChip(entry, index) : null;
+        if (chip) lineDiv.insertBefore(chip, actions);
+        lineDiv.classList.toggle('has-chips', Boolean(chip || lineDiv.querySelector(':scope > .line-tag-chips')));
+    });
+    // The "correlated" tag filter depends on the correlations.
+    applyTagFilterMatches();
+}
+
+// The tag filter (speech_suggestions.js setTagFilter): re-marks the rendered
+// lines in place instead of rebuilding them all (a big log has thousands).
+function applyTagFilterMatches() {
+    const container = document.getElementById('logLines');
+    if (!container) {
+        return;
+    }
+    const matches = typeof lineMatchesTagFilter === 'function' ? lineMatchesTagFilter : () => false;
+    container.querySelectorAll(':scope > .log-line').forEach((lineDiv) => {
+        const entry = analyzedLines[Number(lineDiv.dataset.lineIndex)];
+        lineDiv.classList.toggle('tag-filter-match', Boolean(entry) && matches(entry));
+    });
 }
 
 function setCopiedState(index, isCopied) {

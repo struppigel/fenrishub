@@ -1,5 +1,9 @@
 let analyzedLines = [];
 let copiedLineIndexes = new Set();
+// The payload the shown lines were drawn from, as JSON, taken before
+// applyAnalysisPayload changes its entries: a fresh analysis that comes back
+// the same (the background re-scan after a cached one) is not drawn again.
+let appliedAnalysisText = null;
 const EDITABLE_STATUSES = ['B', 'P', 'C', '!', 'G', 'S', 'J', '?'];
 // Status codes come from common.js (kept in step with fixlist/status_types.py).
 const STATUS_CLASS_MAP = Fenris.status.cssClass;
@@ -691,6 +695,127 @@ function updateLegendCounts() {
     });
 }
 
+// Showing a legend status again: thousands of lines coming back at once (the
+// 7000 unknown lines of a big log) block the page while the browser styles
+// and lays them all out. Many lines are kept hidden by .reveal-pending
+// instead and come back in batches, one per frame, starting at the view.
+// A frame costs ~35-50 ms on a 7500-line log whatever the batch (the list's
+// own layout): bigger batches only finish sooner (600: ~0.4 s for 7000 lines).
+const REVEAL_AT_ONCE_MAX = 600;
+const REVEAL_BATCH = 600;
+let revealQueue = [];
+let revealFrame = 0;
+let revealWaiters = [];
+let revealSchedule = (callback) => requestAnimationFrame(callback);
+
+function finishReveal() {
+    revealFrame = 0;
+    const waiters = revealWaiters;
+    revealWaiters = [];
+    waiters.forEach((resolve) => resolve());
+}
+
+// One batch now, the next in the next frame. A hidden-again status empties
+// the queue (hideStatusClasses): the scheduled frame then just finishes.
+function revealNextBatch(batch) {
+    revealFrame = 0;
+    revealQueue.splice(0, batch).forEach((row) => row.classList.remove('reveal-pending'));
+    if (revealQueue.length) {
+        revealFrame = revealSchedule(() => revealNextBatch(batch)) || 1;
+    } else {
+        finishReveal();
+    }
+}
+
+// The lines below the top of the view first (the view fills at once), then
+// the ones above it, nearest first.
+function revealOrder(container, rows) {
+    const top = container.scrollTop;
+    // At the very top the browser keeps no line in place (scroll anchoring
+    // starts below 0): lines shown come in at the top of the view, in order.
+    if (top <= 0) {
+        return rows;
+    }
+    const wanted = new Set(rows);
+    const below = [];
+    const above = [];
+    let pastTop = false;
+    // One pass in document order (comparing positions row by row is quadratic).
+    for (const child of container.children) {
+        if (!pastTop && child.offsetHeight > 0 && child.offsetTop + child.offsetHeight > top) {
+            pastTop = true;
+        }
+        if (wanted.has(child)) {
+            (pastTop ? below : above).push(child);
+        }
+    }
+    return below.concat(above.reverse());
+}
+
+// Lines about to be shown by a filter change (still hidden now): many of them
+// are kept hidden by .reveal-pending, to come back in batches. Call it before
+// the change, then the change, then startReveal(). `options.atOnceMax`,
+// `options.batch` and `options.schedule` (instead of requestAnimationFrame) for tests.
+function queueReveal(container, rows, options = {}) {
+    const atOnceMax = options.atOnceMax ?? REVEAL_AT_ONCE_MAX;
+    revealSchedule = options.schedule || ((callback) => requestAnimationFrame(callback));
+    if (rows.length <= atOnceMax) {
+        return;
+    }
+    // The order reads the layout: before anything changes it.
+    const ordered = revealOrder(container, rows);
+    // Still hidden by the filter: marking them costs no layout.
+    ordered.forEach((row) => row.classList.add('reveal-pending'));
+    revealQueue = revealQueue.concat(ordered);
+}
+
+// Resolves once every queued line is shown.
+function startReveal(options = {}) {
+    if (!revealQueue.length) {
+        return Promise.resolve();
+    }
+    const done = new Promise((resolve) => revealWaiters.push(resolve));
+    if (!revealFrame) {
+        // The first batch right away: the lines in view come back in this frame.
+        revealNextBatch(options.batch ?? REVEAL_BATCH);
+    }
+    return done;
+}
+
+// Shows the lines of `statusClasses` (legend status classes) again; resolves
+// once all are shown. `options` as for queueReveal.
+function showStatusClasses(container, statusClasses, options = {}) {
+    const selector = statusClasses.map((sc) => `:scope > .log-line[data-verdict-class="${sc}"]`).join(', ');
+    queueReveal(container, selector ? [...container.querySelectorAll(selector)] : [], options);
+    statusClasses.forEach((sc) => container.classList.remove(HIDE_CLASS_PREFIX + sc));
+    return startReveal(options);
+}
+
+// Takes `rows` out of the reveal queue (they are hidden again some other way).
+function dropFromReveal(predicate) {
+    if (!revealQueue.length) {
+        return;
+    }
+    revealQueue = revealQueue.filter((row) => {
+        if (!predicate(row)) {
+            return true;
+        }
+        row.classList.remove('reveal-pending');
+        return false;
+    });
+    if (!revealQueue.length && !revealFrame) {
+        finishReveal();
+    }
+}
+
+// Hides the lines of `statusClasses` again; any of them still waiting to be
+// shown stop waiting (the legend class hides them anyway).
+function hideStatusClasses(container, statusClasses) {
+    statusClasses.forEach((sc) => container.classList.add(HIDE_CLASS_PREFIX + sc));
+    const hidden = new Set(statusClasses);
+    dropFromReveal((row) => hidden.has(row.dataset.verdictClass));
+}
+
 function summarizeEffectiveStatuses(lines) {
     let matchedLines = 0;
     let unknownLines = 0;
@@ -890,7 +1015,23 @@ function computeBlankLineGaps(rawText, entries) {
     return result;
 }
 
+// The analysis payload as JSON, '' when it cannot be serialized.
+function analysisPayloadText(payload) {
+    try {
+        return JSON.stringify(payload);
+    } catch (error) {
+        return '';
+    }
+}
+
+// True when `payload` is the analysis the shown lines were drawn from.
+function analysisPayloadIsShown(payload) {
+    const text = analysisPayloadText(payload);
+    return Boolean(text) && text === appliedAnalysisText && analyzedLines.length > 0;
+}
+
 function applyAnalysisPayload(payload, options = {}) {
+    appliedAnalysisText = analysisPayloadText(payload) || null;
     const nextLines = Array.isArray(payload.lines) ? payload.lines : [];
     const shouldResetCopied = Boolean(options.resetCopied);
     const preservePendingChanges = Boolean(options.preservePendingChanges);

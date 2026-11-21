@@ -262,6 +262,128 @@ class MoreShapesTests(SimpleTestCase):
         self.assertIn(('hl-key', 'PF'), lines[more_no('    PF ')])
 
 
+ROBLOX = 'C:\\Users\\patri\\AppData\\Local\\Roblox\\Versions\\version-11f1\\robloxplayerbeta.exe'
+PCA_EXE = 'C:\\Users\\patri\\AppData\\Local\\Temp\\7zS8EDDFED4\\HD-CheckCpu.exe'
+# Shapes of Spor 0.6.x (real logs) that bent the format.
+V06_SHAPES = '\n'.join([
+    '==================== Spor 0.6.0 - forensic triage log ===========',
+    'Users:     patri, WsiAccount',
+    'Times:     UTC',
+    '',
+    '==================== SUMMARY - flagged items =======================',
+    '2026-10-18 14:39:18 [Accounts] account CodexSandboxOffline (user)  !hidden-account, password set 2026-10-18'
+    ' 14:39, never signed in',
+    '2026-11-14 14:57:54 [Downloads and opened files] download C:\\Users\\patri\\Downloads\\FRST64.exe [gone]'
+    '  !kept-despite-warning from https://download.bleepingcomputer.com/dl/x/FRST64.exe',
+    f'2026-10-22 01:34:00 [Network] {ROBLOX} [gone] sent 126839092 bytes (10-22 to 10-22, SRUM)',
+    '2024-04-19 13:00:20 [Execution evidence] C:\\T\\x.dll\\bag\\vc.exe [gone]  !in-folder-named-like-file'
+    '  (ShimCache: file modified)',
+    '',
+    '==================== TIMELINE - last 30 days, oldest first ========',
+    f'2026-10-24 14:13:07 [PCA] %USERPROFILE%\\AppData\\Local\\Temp\\7zS8EDDFED4\\HD-CheckCpu.exe'
+    ' => PCA: Abnormal process exit with code 0x1',
+    f'2026-10-24 14:20:00 [SC] {PCA_EXE.upper()} [gone] => ShimCache entry',
+    '',
+    '==================== PERSISTENCE - Run keys ========================',
+    '2026-07-30 10:05:39 [service] PlanetVPNService => D:/Program Files (x86)/PlanetVPN/PlanetVPNService.exe'
+    ' [unsigned], start auto',
+    '',
+    '==================== REMOTE ACCESS - remote access tools ===========',
+    '2026-07-30 12:39:12 [RMM folder] C:\\Program Files (x86)\\Radmin VPN\\ => 1 exe, 1 log/config files',
+    '    exe: C:\\Program Files (x86)\\Radmin VPN\\Radmin.exe',
+    '    file: 2026-07-30 12:39:12 C:\\Program Files (x86)\\Radmin VPN\\CHATLOGS\\info.txt',
+    '',
+    '==================== FILES - SHA256 ================================',
+    f'{PCA_EXE} => {"A" * 64}, signature valid; signer X',
+    '==================== End of log. Scan took 1.0 s ====',
+])
+V06_LINES = V06_SHAPES.split('\n')
+
+
+def v06_no(needle):
+    return next(index + 1 for index, line in enumerate(V06_LINES) if needle in line)
+
+
+class Spor06ShapesTests(SimpleTestCase):
+    def summary(self, needle):
+        return dict(spor_log.iter_summary_items(V06_LINES))[v06_no(needle)]
+
+    def test_inline_flags_followed_by_a_comma_or_text(self):
+        item = self.summary('CodexSandboxOffline')
+        self.assertEqual((item.item, item.flags), ('account CodexSandboxOffline (user)', ['!hidden-account']))
+        item = self.summary('FRST64.exe')
+        self.assertEqual((item.item, item.status, item.flags),
+                         ('download C:\\Users\\patri\\Downloads\\FRST64.exe', 'gone', ['!kept-despite-warning']))
+
+    def test_inline_flags_after_a_status_stay_flags(self):
+        item = self.summary('vc.exe')
+        self.assertEqual((item.item, item.status, item.flags),
+                         ('C:\\T\\x.dll\\bag\\vc.exe', 'gone', ['!in-folder-named-like-file']))
+
+    def test_status_followed_by_text_without_an_arrow(self):
+        item = self.summary('robloxplayerbeta')
+        self.assertEqual((item.item, item.status), (ROBLOX, 'gone'))
+        self.assertTrue(item.rest.startswith('sent 126839092 bytes'))
+
+    def test_forward_slash_targets_are_paths(self):
+        self.assertEqual(spor_log.normalize_path('D:/a b/c.exe'), 'D:\\a b\\c.exe')
+        self.assertEqual(spor_log.normalize_path('\\\\?\\C:\\x.exe'), 'C:\\x.exe')
+        targets = {m.line_no: (m.path, m.status) for m in spor_log.iter_mentions(V06_LINES) if m.role == 'target'}
+        self.assertEqual(targets[v06_no('PlanetVPNService =>')],
+                         ('D:\\Program Files (x86)\\PlanetVPN\\PlanetVPNService.exe', 'unsigned'))
+
+    def test_user_profile_of_the_only_user(self):
+        known = spor_log.known_paths(V06_LINES)
+        self.assertEqual(spor_log.user_profile(V06_LINES, known), 'C:\\Users\\patri')
+        self.assertEqual(spor_log.user_profile(['Users:     anna, bob']), '')
+        self.assertEqual(spor_log.user_profile(['Users:     Anna, defaultuser1'],
+                                               {'d:\\users\\anna\\x.exe': 'D:\\Users\\ANNA\\x.exe'}),
+                         'D:\\Users\\ANNA')
+        # No file in FILES confirms the folder: the account's folder can be named otherwise.
+        self.assertEqual(spor_log.user_profile(['Users:     anna']), '')
+        self.assertEqual(spor_log.user_profile(['Times:     UTC']), '')
+
+    def test_a_status_of_another_path_further_on_stays_in_the_line(self):
+        item = spor_log.summary_item('2026-11-01 00:00:00 [Prefetch] C:\\U\\x.pdf.lnk  !double-extension'
+                                     '  (loaded by C:\\W\\host.exe [unsigned])')
+        self.assertEqual((item.item, item.status, item.flags), ('C:\\U\\x.pdf.lnk', '', ['!double-extension']))
+        item = spor_log.split_item('[Network] C:\\a\\b.exe sent 5 bytes (by C:\\x\\y.exe [gone])')
+        self.assertEqual(item.status, '')
+        self.assertTrue(item.item.startswith('C:\\a\\b.exe sent'))
+        # The bracket must follow something that ends like a file or folder.
+        self.assertEqual(spor_log.split_item('[Network] C:\\a\\b.exe sent 5 bytes [gone] (SRUM)').status, '')
+        item = spor_log.split_item('C:\\a b\\c.exe [unsigned], start auto')
+        self.assertEqual((item.item, item.status, item.rest), ('C:\\a b\\c.exe', 'unsigned', 'start auto'))
+
+    def test_inline_flags_keep_the_text_after_them(self):
+        self.assertEqual(self.summary('CodexSandboxOffline').rest, 'password set 2026-10-18 14:39, never signed in')
+        self.assertEqual(self.summary('FRST64.exe').rest,
+                         'from https://download.bleepingcomputer.com/dl/x/FRST64.exe')
+
+    def test_forward_slashes_of_a_url_after_the_path_stay(self):
+        self.assertEqual(spor_log.normalize_path('D:/a/x.exe sent to http://1.2.3.4/a'),
+                         'D:\\a\\x.exe sent to http://1.2.3.4/a')
+
+    def test_user_profile_prefers_the_system_drive(self):
+        known = {'e:\\users\\anna\\old\\a.exe': 'E:\\Users\\anna\\old\\a.exe',
+                 'c:\\users\\anna\\b.exe': 'C:\\Users\\anna\\b.exe'}
+        self.assertEqual(spor_log.user_profile(['Users:     anna'], known), 'C:\\Users\\anna')
+
+    def test_userprofile_paths_are_expanded_and_keep_a_later_status(self):
+        evidence = {e.path.lower(): e for e in spor_log.iter_timeline_evidence(V06_LINES)}
+        found = evidence[PCA_EXE.lower()]
+        self.assertEqual((found.line_no, found.path, found.file_status), (v06_no('[PCA]'), PCA_EXE, 'gone'))
+        items = [item.item for _no, item in spor_log.iter_timeline_items(V06_LINES)]
+        self.assertIn(PCA_EXE, items)
+        self.assertEqual(spor_log.split_item('%USERPROFILE%\\a.exe').item, '%USERPROFILE%\\a.exe')
+
+    def test_rmm_folder_files_are_mentions(self):
+        mentions = {(m.role, m.path): m for m in spor_log.iter_mentions(V06_LINES)}
+        self.assertIn(('exe', 'C:\\Program Files (x86)\\Radmin VPN\\Radmin.exe'), mentions)
+        info = mentions[('file', 'C:\\Program Files (x86)\\Radmin VPN\\CHATLOGS\\info.txt')]
+        self.assertEqual(info.time, '2026-07-30 12:39:12')
+
+
 class FileHashTests(SimpleTestCase):
     def test_files_section_rows(self):
         rows = {row.path: row for row in extract_file_hashes('Spor', SPOR) if row.source == 'spor'}

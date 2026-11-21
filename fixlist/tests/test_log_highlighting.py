@@ -1088,11 +1088,83 @@ class RenderHighlightedHtmlTests(SimpleTestCase):
         self.assertEqual(render_highlighted_html(None), '')
 
 
+HWINFO = 'service installed: HWiNFO Kernel Driver (v215): C:\\Users\\nakht\\AppData\\Local\\Temp\\HWiNFO_x64_215.sys'
+# Spor 0.2.0 writes the same SUMMARY entry for every time a driver was installed again.
+SPOR_REPEATS = '\n'.join([
+    '==================== Spor 0.2.0 - forensic triage log ===========',
+    'Times:     UTC',
+    '',
+    '==================== SUMMARY - flagged items =======================',
+    f'2026-10-24 12:08:06 [Persistence] {HWINFO}',
+    '2026-10-24 12:18:48 [Persistence] service installed: XVDD Port Driver: C:\\Windows\\x\\xvdd.sys [gone]',
+    f'2026-10-24 12:34:11 [Persistence] {HWINFO}',
+    f'2026-10-24 12:40:47 [Persistence] {HWINFO}',
+    '',
+    '==================== End of log. Scan took 1.0 s ====',
+])
+
+
+class SummaryGroupTests(SimpleTestCase):
+    def test_entries_that_say_the_same_are_shown_once_with_their_lines(self):
+        result = highlight_log('Spor', SPOR_REPEATS)
+        first, second, third = (_no(SPOR_REPEATS, needle) for needle in ('12:08:06', '12:34:11', '12:40:47'))
+        # One item per line stays (correlations read it); the box groups them.
+        self.assertEqual(len(result.summary), 4)
+        self.assertEqual([(item.line_no, item.also_lines) for item in result.summary_groups],
+                         [(first, [second, third]), (_no(SPOR_REPEATS, 'XVDD'), [])])
+        self.assertEqual(result.summary_groups[0].all_lines, [first, second, third])
+        self.assertTrue(all(not item.also_lines for item in result.summary))
+        self.assertIn(Stat('Flagged', '4', 'w'), result.stats)
+
+    def test_correlation_entries_and_other_notes_stay_single(self):
+        from ..log_highlighting import SummaryItem
+        result = HighlightResult([], [
+            SummaryItem(1, 'w', 'x'), SummaryItem(2, 'w', 'x', correlation='correlated: a'),
+            SummaryItem(3, 'w', 'x'), SummaryItem(4, 'w', 'x', correlation_added=True),
+            SummaryItem(5, 'w', 'x', correlation_added=True),
+        ])
+        self.assertEqual([(item.line_no, item.also_lines) for item in result.summary_groups],
+                         [(1, [3]), (2, []), (4, []), (5, [])])
+
+    def test_the_limit_counts_groups(self):
+        from ..log_highlighting import SUMMARY_LIMIT, SummaryItem
+        items = [SummaryItem(no, 'w', 'same') for no in range(1, SUMMARY_LIMIT + 50)]
+        items += [SummaryItem(1000 + no, 'w', f'other {no}') for no in range(SUMMARY_LIMIT + 3)]
+        result = HighlightResult([], items)
+        self.assertEqual(len(result.summary_shown), SUMMARY_LIMIT)
+        self.assertEqual(result.summary_hidden_count, 4)
+        self.assertEqual(len(result.summary_shown[0].also_lines), SUMMARY_LIMIT + 48)
+
+
 class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
 
     def _get(self, upload):
         self.client.login(username='alice', password='password123')
         return self.client.get(reverse('view_uploaded_log', args=[upload.upload_id]))
+
+    def test_spor_summary_shows_repeated_entries_once_with_links_to_all_lines(self):
+        # The page detects the log type again (a database rule in production).
+        LogTypeDetectionRule.objects.create(
+            name='Spor', log_type='Spor', pattern=r'Spor [\d.]+ - forensic triage log',
+            scope=LogTypeDetectionRule.SCOPE_START,
+        )
+        upload = UploadedLog.objects.create(
+            upload_id='repeat-driver', forum_username='forum_user', original_filename='Spor.txt',
+            content=SPOR_REPEATS, log_type='Spor',
+        )
+        response = self._get(upload)
+        self.assertEqual(response.status_code, 200)
+        first, second, third = (_no(SPOR_REPEATS, needle) for needle in ('12:08:06', '12:34:11', '12:40:47'))
+        html = response.content.decode()
+        summary = html[html.index('id="highlightSummary"'):html.index('</ul>', html.index('id="highlightSummary"'))]
+        self.assertEqual(summary.count('HWiNFO_x64_215.sys'), 2)   # the entry's title and its text, once
+        self.assertIn(f'<li data-line="{first}" data-lines="{first} {second} {third}" class="hl-summary-group">', summary)
+        self.assertIn(f'href="#L{first}" class="hl-jump" data-line="{first}"', summary)
+        self.assertIn(f'<span class="hl-jump-also-label">also</span> <a href="#L{second}" class="hl-jump hl-jump-also"'
+                      f' data-line="{second}">L{second}</a> <a href="#L{third}"', summary)
+        # A single entry keeps its plain row.
+        xvdd = _no(SPOR_REPEATS, 'XVDD')
+        self.assertIn(f'<li data-line="{xvdd}"><a href="#L{xvdd}" class="hl-jump"', summary)
 
     def test_malwarebytes_upload_renders_highlighted_lines_and_summary(self):
         upload = UploadedLog.objects.create(

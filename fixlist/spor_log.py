@@ -7,7 +7,8 @@ The format, from Spor's README ("Log format (for parsers)"):
   "--- title ---": a sub-section; "(...)": a comment.
 - an item line: "[time] [tags] item [=> target] [ [status]] [=> | , details; ...]
   [<==== !flag !flag]", each part left out when empty. The time is the first
-  19 characters when the line starts with a digit; "<==== " splits off the
+  19 characters when they are a time ("2026-11-20 12:00:00"; CLICKFIX lines
+  start with a number instead: "1 [suspicious] ..."); "<==== " splits off the
   flags; the first " => " splits the item from the rest. Paths cannot
   contain "<". They can contain " => " and text like "[gone]": such paths get
   the flag !log-syntax-in-name, and their line is only trusted when the path
@@ -36,6 +37,7 @@ SECTION_AMCACHE_FILES = 'AMCACHE FILES'
 SECTION_LEGEND = 'LEGEND'
 # Spor 0.6.0+ (USB worm profile): drive contents, autorun.inf, shortcuts.
 SECTION_USB = 'USB DRIVES'
+SECTION_REMOTE = 'REMOTE ACCESS'
 # Sections read by their own functions, not as mentions (iter_mentions).
 _NOT_MENTION_SECTIONS = frozenset({
     SECTION_SUMMARY, SECTION_TIMELINE, SECTION_FILES, SECTION_AMCACHE_FILES, SECTION_LEGEND,
@@ -79,9 +81,11 @@ def worst_tier(flags):
     return next((tier for tier in FLAG_TIERS if tier in tiers), '')
 # A path made to look like log text (" => ", "[gone]"): its line cannot be split as usual.
 SYNTAX_FLAG = '!log-syntax-in-name'
-# SUMMARY lines that write their flags between double blanks, without "<====":
-# "[Prefetch] C:\...\x.pdf.lnk  !double-extension  (loaded by C:\...\host.exe)".
-INLINE_FLAG_RE = re.compile(r'(?<=  )(![a-zA-Z][a-zA-Z0-9-]{1,40})(?=  |\s*$)')
+# SUMMARY lines that write their flags after a double blank, without "<====":
+# "[Prefetch] C:\...\x.pdf.lnk  !double-extension  (loaded by C:\...\host.exe)",
+# also followed by a comma or a single blank and more text (Spor 0.6.x:
+# "(user)  !hidden-account, password set ...", "x.exe  !kept-despite-warning from https://...").
+INLINE_FLAG_RE = re.compile(r'(?<=  )(![a-zA-Z][a-zA-Z0-9-]{1,40})(?=[ ,]|\s*$)')
 
 # One status word (also "> 600 MB, not hashed").
 STATUS_WORD = r'(?:' + '|'.join(re.escape(word) for word in STATUS_WORDS) + r'|> \d{1,9} MB, not hashed)'
@@ -101,6 +105,10 @@ _TAGS_RE = re.compile(r'^((?:' + TAG_GROUP + r' ){0,4}' + TAG_GROUP + r')(?: |$)
 _TAG_GROUP_RE = re.compile(TAG_GROUP)
 FLAGS_MARK = ' <==== '
 _PATH_START_RE = re.compile(r'^(?:[A-Za-z]:\\|\\\\)')
+# Spor writes some service / task targets with forward slashes as the registry
+# holds them ("D:/Program Files (x86)/PlanetVPN/x.exe"): normalize_path makes
+# them paths where items and targets are split.
+_FORWARD_SLASH_PATH_RE = re.compile(r'^[A-Za-z]:/')
 _SUB_LINE_RE = re.compile(r'^( {2,}|\t+)([a-z][a-z0-9 ]{0,30}):(?: (.*)|)$')
 # FILES: " => <hash>" or " => not hashed", the last one on the line (a path may contain " => ").
 _FILES_VALUE_RE = re.compile(r' => ([0-9A-Fa-f]{64}|[0-9A-Fa-f]{40}|[0-9A-Fa-f]{32}|not hashed)(?=,|;|$)')
@@ -136,6 +144,8 @@ _PATH_SUB_KEYS = frozenset({
     'loaded', 'path', 'target', 'entry', 'files', 'dll', 'module', 'script',
     'argument file', 'icon file', 'item list target',
 })
+# REMOTE ACCESS "[RMM folder]" lines (Spor 0.6.0): "exe: <path>", "file: <time> <path>".
+_REMOTE_PATH_SUB_KEYS = frozenset({'exe', 'file'})
 # TIMELINE sub-lines that are files with their own time ("path: X [status] =>
 # <time>, ...", "script: X => <created>; N bytes").
 _TIMELINE_SUB_KEYS = frozenset({'path', 'script'})
@@ -183,6 +193,61 @@ def is_path(text):
 def strip_device_prefix(path):
     r"""`path` without a leading device prefix ("\\?\C:\x" -> "C:\x")."""
     return _DEVICE_PREFIX_RE.sub('', path, count=1)
+
+
+def normalize_path(text):
+    r"""`text` without a device prefix and, when it starts with a drive and a
+    forward slash, with backslashes ("D:/a/b.exe" -> "D:\a\b.exe"; one
+    character for one, so positions in the text stay the same), up to a URL
+    further on ("D:/a.exe sent to http://x/y" keeps its URL)."""
+    text = strip_device_prefix(text)
+    if not _FORWARD_SLASH_PATH_RE.match(text):
+        return text
+    url = text.find('://')
+    end = text.rfind(' ', 0, url) + 1 if url != -1 else len(text)
+    return text[:end].replace('/', '\\') + text[end:]
+
+
+# "%USERPROFILE%\AppData\..." (Spor's PCA lines up to 0.6.1 at least).
+_PROFILE_VAR_RE = re.compile(r'^%USERPROFILE%(?=\\)', re.IGNORECASE)
+# Accounts of Windows itself that the header's "Users:" can list.
+_SYSTEM_ACCOUNTS = frozenset({'wsiaccount', 'wdagutilityaccount', 'defaultaccount', 'guest'})
+_DEFAULT_USER_RE = re.compile(r'^defaultuser\d{1,9}$')
+
+
+def _is_system_account(name):
+    lower = name.lower()
+    return lower in _SYSTEM_ACCOUNTS or bool(_DEFAULT_USER_RE.match(lower))
+
+
+def user_profile(lines, known=None):
+    r"""The profile folder "%USERPROFILE%" stands for: that of the only user
+    the header's "Users:" lists (accounts of Windows itself left out), as a
+    FILES path (`known`, known_paths; read when None) spells it. '' when the
+    header lists none or several users, or FILES has no file in such a
+    folder (an account's folder can be named otherwise: no guessing)."""
+    names = []
+    for raw in lines[:_HEADER_LINES]:
+        body = _body(raw)
+        if body.startswith('Users:'):
+            names = [name.strip() for name in body.split(':', 1)[1].split(',')]
+            break
+    names = [name for name in names if name and not _is_system_account(name)]
+    if len(names) != 1:
+        return ''
+    if known is None:
+        known = known_paths(lines)
+    tail = ':\\users\\' + names[0] + '\\'
+    found = [path for path in known.values() if path[1:len(tail) + 1].lower() == tail.lower()]
+    # The system drive's profile before one on another disk (an old install, a USB drive).
+    path = next((path for path in found if path[:1] in 'cC'), found[0] if found else '')
+    return path[:len(tail)]
+
+
+def _expand_profile(item, profile):
+    if profile and item.item[:1] == '%':
+        item.item = _PROFILE_VAR_RE.sub(lambda _m: profile, item.item, count=1)
+    return item
 
 
 def folder_path(path):
@@ -261,9 +326,14 @@ def resolve_item_path(text, known):
     return text[:len(best)]
 
 
-def split_item(body, known=None):
+def split_item(body, known=None, profile=''):
     """The parts of an item line (see the module docstring). `known`
-    ({lowercased path: path}, known_paths) resolves !log-syntax-in-name lines."""
+    ({lowercased path: path}, known_paths) resolves !log-syntax-in-name lines;
+    `profile` (user_profile) stands in for a leading "%USERPROFILE%"."""
+    return _expand_profile(_split_item(body, known), profile)
+
+
+def _split_item(body, known):
     item = SporItem()
     text = body.rstrip()
     m = _TIME_RE.match(text)
@@ -287,7 +357,7 @@ def split_item(body, known=None):
         path = resolve_item_path(text, known) if known else ''
         if path:
             item.resolved = True
-            item.item = strip_device_prefix(path)
+            item.item = normalize_path(path)
             remainder = text[len(path):]
             m = STATUS_RE.match(remainder)
             if m:
@@ -304,6 +374,13 @@ def split_item(body, known=None):
     if m and not head[m.end():].strip():
         item.status = m.group(1)
         head = head[:m.start()]
+    elif m and not sep and _is_lone_path(head[:m.start()]) and not INLINE_FLAG_RE.search(head):
+        # A path's status followed by text without " => " (SUMMARY of Spor
+        # 0.6.x: "C:\...\robloxplayerbeta.exe [gone] sent N bytes (...)"); not
+        # "path [gone]  !flag  (...)", whose flags iter_summary_items reads.
+        item.status = m.group(1)
+        item.rest = head[m.end():].strip().lstrip(',;').strip()
+        head = head[:m.start()]
     else:
         # Without a status of its own, the item takes its target's ("[run] X =>
         # C:\a.exe [unsigned], ...", also "C:\Foo, Inc\a.exe" or a quoted
@@ -312,14 +389,31 @@ def split_item(body, known=None):
         m = STATUS_RE.search(item.rest)
         if m and _is_target_prefix(item.rest[:m.start()]):
             item.status = m.group(1)
-    item.item = strip_device_prefix(head.strip())
+    item.item = normalize_path(head.strip())
     return item
+
+
+# Where a second path starts inside a text: " C:\", "(C:\", " \\server".
+_INNER_PATH_RE = re.compile(r'[ (](?:[A-Za-z]:[\\/]|\\\\)')
+
+
+# A path's end: a file's extension or a folder's backslash.
+_FILE_END_RE = re.compile(r'(?:\.[A-Za-z0-9]{1,10}|\\)$')
+
+
+def _is_lone_path(text):
+    """`text` is one path and nothing else: no double blank, no second path,
+    ending in an extension or a backslash ("C:\\a.exe sent 5 bytes (by
+    C:\\b.exe" and "C:\\a.exe sent 5 bytes" are not)."""
+    text = normalize_path(text)
+    return (is_path(text) and '  ' not in text and not _INNER_PATH_RE.search(text)
+            and bool(_FILE_END_RE.search(text)))
 
 
 def _is_target_prefix(text):
     """The text before a status bracket is the line's target: a path from the
     start of the rest (maybe quoted), not yet in the details ("; ", " => ")."""
-    return is_path(strip_device_prefix(text.lstrip('"'))) and '; ' not in text and ' => ' not in text
+    return is_path(normalize_path(text.lstrip('"'))) and '; ' not in text and ' => ' not in text
 
 
 def _body(raw):
@@ -339,6 +433,107 @@ def _sub_line(body):
 
 def _subsection_title(stripped):
     return stripped.strip('-').strip()
+
+
+def is_sub_line(body):
+    """`body` is an indented "key: value" line (it belongs to the item above)."""
+    return _sub_line(body) is not None
+
+
+# ---------------------------------------------------------------------------
+# Spor 0.7.0+: details on sub-lines of their own, folded back for the readers
+# ---------------------------------------------------------------------------
+# Spor 0.7.0 writes long details on indented sub-lines instead of the line: a
+# Run value's or task's program and arguments ("program:", "arguments:",
+# "value:"), a Defender detection's items ("file:", "process:",
+# "resource:"), a download's addresses under TIMELINE and SUMMARY lines
+# ("from:", "page:", "referrer:") and a SOFTWARE entry's "folder:", "key:"
+# and "signer:". unfold() writes them back into their line as Spor 0.6 did,
+# so the readers below read logs of every version the same way.
+
+_RUN_TASK_KINDS = frozenset({'run', 'runonce', 'policy-run', 'task'})
+_DEFENDER_ITEM_KEYS = ('file', 'process', 'resource')
+_DOWNLOAD_KEYS = ('from', 'page', 'referrer')
+_FOLD_KEYS = frozenset({'program', 'arguments', 'value', 'folder', 'key', 'signer', *_DEFENDER_ITEM_KEYS, *_DOWNLOAD_KEYS})
+
+
+def _folded_rest(title, item, subs):
+    """The rest of `item` (an item line of section `title`) with its sub-lines
+    `subs` ([(key, value)]) folded in as Spor 0.6 wrote it on the line; None
+    when none of them belongs there."""
+    keys = [key for key, _value in subs]
+    kind = (item.tags.split() or [''])[0].lower()
+    if title == SECTION_PERSISTENCE and kind in _RUN_TASK_KINDS and 'program' in keys:
+        # "=> C:\x.exe [unsigned], changed <time>; arguments -a; value Name"
+        program = next(value for key, value in subs if key == 'program')
+        details = [item.rest] if item.rest else []
+        details += [f'arguments {value}' for key, value in subs if key == 'arguments'][:1]
+        if kind != 'task':
+            # Without a "value:" line the value name is the entry's last part.
+            value = next((value for key, value in subs if key == 'value'), '') or item.item.rsplit('\\', 1)[-1]
+            details.append(f'value {value}')
+        return program + (', ' + '; '.join(details) if details else '')
+    if _DEFENDER_RE.match(item.item) and any(key in _DEFENDER_ITEM_KEYS for key in keys):
+        # "=> C:\a.zip; C:\a.zip->b.exe; process: C:\c.exe, pid:5:1; action Remove"
+        parts = [f'process: {value}' if key == 'process' else value for key, value in subs if key in _DEFENDER_ITEM_KEYS]
+        return '; '.join(parts + ([item.rest] if item.rest else []))
+    added = []
+    if title in (SECTION_TIMELINE, SECTION_SUMMARY):
+        added += [f'{key} {value}' for key, value in subs if key in _DOWNLOAD_KEYS]
+    if title == SECTION_SOFTWARE or (title == SECTION_TIMELINE and 'INS' in item.tags.split()):
+        # Several "key:" lines are the entries of a collapsed group: facts of their own.
+        single_key = keys.count('key') == 1
+        added += [f'{key} {value}' for key, value in subs if key in ('folder', 'signer') or (key == 'key' and single_key)]
+    if not added:
+        return None
+    return '; '.join(([item.rest] if item.rest else []) + added)
+
+
+def _with_rest(raw, rest):
+    """Item line `raw` with `rest` after its first " => " (its flags kept at the end)."""
+    cr = '\r' if raw.endswith('\r') else ''
+    body = _body(raw).rstrip()
+    cut = body.find(FLAGS_MARK)
+    head, tail = (body[:cut], body[cut:]) if cut != -1 else (body, '')
+    return f"{head.partition(' => ')[0]} => {rest}{tail}{cr}"
+
+
+def unfold(lines):
+    """`lines` with the sub-lines of Spor 0.7.0+ folded back into their item
+    line (_folded_rest), line numbers unchanged: the sub-lines stay where they
+    are (the readers skip them or keep them as extra). `lines` itself when
+    there is nothing to fold (logs of Spor 0.6 and older)."""
+    out = None
+    title = ''
+    count = len(lines)
+    index = 0
+    while index < count:
+        body = _body(lines[index])
+        found = section_title(body)
+        if found:
+            title = found
+            index += 1
+            continue
+        if not _is_item_line(body):
+            index += 1
+            continue
+        subs = []
+        following = index + 1
+        while following < count:
+            sub = _sub_line(_body(lines[following]))
+            if sub is None:
+                break
+            subs.append((sub[0], sub[1].strip()))
+            following += 1
+        if any(key in _FOLD_KEYS for key, _value in subs):
+            item = split_item(body)
+            rest = _folded_rest(title, item, subs) if item.trusted else None
+            if rest is not None:
+                if out is None:
+                    out = list(lines)
+                out[index] = _with_rest(lines[index], rest)
+        index = following
+    return out if out is not None else lines
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +675,7 @@ def iter_defender_detections(lines):
     """(line_no, threat, action, path) for every file the DEFENDER section's
     "Defender detected:" / "Defender action taken:" lines name, one per
     (path, threat): a line with a real action wins over the detection."""
+    lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
     ranges = section_ranges(lines)
     if SECTION_DEFENDER not in ranges:
         return []
@@ -536,22 +732,28 @@ def iter_timeline_evidence(lines, known=None):
     ("path:" sub-lines, one per real path) gives each path its own entry,
     with its own time and status. One entry per path (case-insensitive).
     A !log-syntax-in-name line counts only when its path is in FILES."""
+    lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
     ranges = section_ranges(lines)
     if SECTION_TIMELINE not in ranges:
         return []
     if known is None:
         known = known_paths(lines)
+    profile = user_profile(lines, known)
     start, end = ranges[SECTION_TIMELINE]
     out = []
-    seen = set()
+    seen = {}   # lowercased path: its Evidence
     parent = None
 
     def add(line_no, path, time, file_status, details, flags):
         key = path.lower()
         if key in seen:
+            # The first line wins; a later one can still tell the file's status
+            # (a PCA line names "%USERPROFILE%\..." files without one).
+            if file_status and not seen[key].file_status:
+                seen[key].file_status = file_status
             return
-        seen.add(key)
-        out.append(Evidence(line_no, path, time, parent.tags, file_status, details.strip()[:300], flags))
+        seen[key] = Evidence(line_no, path, time, parent.tags, file_status, details.strip()[:300], flags)
+        out.append(seen[key])
 
     for index in range(start + 1, end):
         body = _body(lines[index])
@@ -560,7 +762,7 @@ def iter_timeline_evidence(lines, known=None):
             key, value = sub
             if key not in _TIMELINE_SUB_KEYS or parent is None:
                 continue
-            item = split_item(value, known)
+            item = split_item(value, known, profile)
             if not item.trusted or not is_path(item.item):
                 continue
             own_time = _SUB_TIME_RE.match(item.rest)
@@ -577,7 +779,7 @@ def iter_timeline_evidence(lines, known=None):
         if not _is_item_line(body):
             parent = None
             continue
-        parent = split_item(body, known)
+        parent = split_item(body, known, profile)
         if parent.tags and parent.trusted and is_path(parent.item):
             add(index + 1, parent.item, parent.time, parent.status, parent.rest, parent.flags)
     return out
@@ -610,13 +812,14 @@ class Mention:
 
 def _path_at(text):
     """The path `text` starts with, up to its status, " => " or the next part."""
+    text = normalize_path(text)
     if not is_path(text):
         return ''
-    return strip_device_prefix(text[:_PATH_END_RE.search(text).start()].strip())
+    return text[:_PATH_END_RE.search(text).start()].strip()
 
 
 def _status_after(text, path):
-    text = strip_device_prefix(text)
+    text = normalize_path(text)
     if not text.startswith(path):
         return ''
     position = len(path)
@@ -680,8 +883,10 @@ def iter_mentions(lines, known=None):
     the item, the target it points at, and paths of its sub-lines ("loaded:",
     "path:", "target:"). The item's other sub-lines ("from:", "page:",
     "info:") are its `extra`. New modules need no code."""
+    lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
     if known is None:
         known = known_paths(lines)
+    profile = user_profile(lines, known)
     out = []
     for title, start, end in iter_sections(lines):
         if title in _NOT_MENTION_SECTIONS or title.startswith(('Spor', 'End of log')):
@@ -705,10 +910,15 @@ def iter_mentions(lines, known=None):
             sub = _sub_line(body)
             if sub is not None:
                 key, value = sub
-                item = split_item(value, known) if key in _PATH_SUB_KEYS else None
+                path_key = key in _PATH_SUB_KEYS or (title == SECTION_REMOTE and key in _REMOTE_PATH_SUB_KEYS)
+                item = split_item(value, known, profile) if path_key else None
                 if (key == 'dll' and item is not None
                         and any(mention.path.lower() == item.item.lower() for mention in current)):
                     continue   # a registry line's target already is the DLL
+                if (key == 'files' and item is not None and parent is not None
+                        and any(mention.parent_line == parent_no and mention.role == 'files'
+                                and mention.path.lower() == item.item.lower() for mention in out[-MAX_EXTRA:])):
+                    continue   # Spor 0.7.0+: a long list of one folder on several "files:" lines
                 if item is not None and item.trusted and is_path(item.item):
                     owner = parent.item if parent else ''
                     if key == 'module':
@@ -726,7 +936,7 @@ def iter_mentions(lines, known=None):
                 continue
             if body[:1].isspace() or not _is_item_line(body):
                 continue
-            item = split_item(body, known)
+            item = split_item(body, known, profile)
             current = []
             parent, parent_no = item, index + 1
             if not item.trusted or _DEFENDER_RE.match(item.item):
@@ -823,6 +1033,7 @@ def iter_software(lines):
     code {GUID}") and Store / MSIX operations (with the package "folder").
     The "key:" sub-lines of a collapsed group ("27 entries from ...") are
     facts too. TIMELINE's [INS] lines repeat these and are not read."""
+    lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
     ranges = section_ranges(lines)
     if SECTION_SOFTWARE not in ranges:
         return []
@@ -898,33 +1109,59 @@ def iter_summary_items(lines, known=None):
     """(line_no, SporItem) of the SUMMARY section's item lines. Flags written
     inline ("[Prefetch] C:\\...\\x.pdf.lnk  !double-extension  (loaded by ...)")
     are moved from the item to its flags."""
+    lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
     ranges = section_ranges(lines)
     if SECTION_SUMMARY not in ranges:
         return
     start, end = ranges[SECTION_SUMMARY]
+    if known is None:
+        known = known_paths(lines)
+    profile = user_profile(lines, known)
     for index in range(start + 1, end):
         body = _body(lines[index])
         if not _is_item_line(body):
             continue
-        item = split_item(body, known)
-        if not item.flags:
-            m = INLINE_FLAG_RE.search(item.item)
-            if m:
-                item.flags = INLINE_FLAG_RE.findall(item.item)
-                item.item = item.item[:m.start()].rstrip()
-        yield index + 1, item
+        yield index + 1, summary_item(body, known, profile)
+
+
+def summary_item(body, known=None, profile=''):
+    r"""A SUMMARY line's SporItem (split_item), with flags written inline
+    ("[Prefetch] C:\...\x.pdf.lnk  !double-extension  (loaded by ...)") moved
+    from the item to its flags, and a status in front of them ("download
+    C:\...\x.exe [gone]  !kept-despite-warning from ...") to its status."""
+    item = split_item(body, known, profile)
+    if item.flags:
+        return item
+    m = INLINE_FLAG_RE.search(item.item)
+    if m:
+        item.flags = INLINE_FLAG_RE.findall(item.item)
+        # What follows the flags ("password set ...", "from https://...", "(loaded by ...)").
+        # (From the double blank in front: the flags' pattern looks back at it.)
+        details = INLINE_FLAG_RE.sub('', item.item[m.start() - 2:]).strip().lstrip(',;').strip()
+        if details and not item.rest:
+            item.rest = details
+        item.item = item.item[:m.start()].rstrip()
+        status = STATUS_RE.search(item.item)
+        if status and not item.status and not item.item[status.end():].strip():
+            item.status = status.group(1)
+            item.item = item.item[:status.start()]
+    return item
 
 
 def iter_section_items(lines, known=None, skip=frozenset({SECTION_SUMMARY, SECTION_LEGEND})):
     """(line_no, section title, SporItem) of the item lines of every section
     but `skip` (sub-lines left out)."""
+    lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
+    if known is None:
+        known = known_paths(lines)
+    profile = user_profile(lines, known)
     for title, start, end in iter_sections(lines):
         if title in skip or title.startswith(('Spor', 'End of log')):
             continue
         for index in range(start + 1, end):
             body = _body(lines[index])
             if _is_item_line(body):
-                yield index + 1, title, split_item(body, known)
+                yield index + 1, title, split_item(body, known, profile)
 
 
 # ---------------------------------------------------------------------------
@@ -963,11 +1200,13 @@ def iter_timeline_items(lines, known=None):
     time, and of the "path:" sub-lines of a merged line at their own time
     (tags of their line). `known` (known_paths) resolves !log-syntax-in-name
     lines; one that stays unresolved is left out, as in iter_timeline_evidence."""
+    lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
     ranges = section_ranges(lines)
     if SECTION_TIMELINE not in ranges:
         return
     if known is None:
         known = known_paths(lines)
+    profile = user_profile(lines, known)
     start, end = ranges[SECTION_TIMELINE]
     parent = None
     for index in range(start + 1, end):
@@ -980,7 +1219,7 @@ def iter_timeline_items(lines, known=None):
             key, value = sub
             if key not in _TIMELINE_SUB_KEYS or parent is None:
                 continue
-            item = split_item(value, known)
+            item = split_item(value, known, profile)
             m = _SUB_TIME_RE.match(item.rest)
             if not m or not item.trusted or not is_path(item.item):
                 continue
@@ -992,7 +1231,7 @@ def iter_timeline_items(lines, known=None):
         if not _is_item_line(body) or not _TIME_RE.match(body):
             parent = None
             continue
-        item = split_item(body, known)
+        item = split_item(body, known, profile)
         parent = item if item.trusted else None
         if item.trusted:
             yield index + 1, item

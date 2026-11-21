@@ -322,6 +322,28 @@
     text-decoration: none;
 }
 
+/* An entry shown once for several lines: it wraps, so its "also L<n>" links
+   after a long path stay visible. */
+.hl-summary-list li.hl-summary-group {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    /* Hanging indent: wrapped lines start under the entry, not under "L<n>". */
+    padding-left: calc(var(--hl-summary-line, 5ch) + 1ch);
+    text-indent: calc(-1 * (var(--hl-summary-line, 5ch) + 1ch));
+}
+
+.hl-summary-list li.hl-summary-group .hl-jump-line {
+    text-indent: 0;
+}
+
+.hl-summary-list .hl-jump-also-label {
+    color: var(--la-text-muted);
+}
+
+.hl-summary-list a.hl-jump.hl-jump-also {
+    color: var(--la-text-disabled);
+}
+
 .hl-summary-list a.hl-jump:hover {
     text-decoration: underline;
 }

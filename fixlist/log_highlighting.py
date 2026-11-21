@@ -21,7 +21,7 @@ text.
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from html import escape as html_escape
 
 from django.utils.safestring import mark_safe
@@ -78,6 +78,13 @@ class SummaryItem:
     # listed because of that (the page script redraws those).
     correlation: str = ''
     correlation_added: bool = False
+    # The summary box only (HighlightResult.summary_groups): the later lines of
+    # entries that say exactly the same, shown once at this item's line.
+    also_lines: list = field(default_factory=list)
+
+    @property
+    def all_lines(self):
+        return [self.line_no] + self.also_lines
 
 
 @dataclass
@@ -101,12 +108,34 @@ class HighlightResult:
     stats: list = field(default_factory=list)
 
     @property
+    def summary_groups(self):
+        """The summary as the box shows it: entries that say exactly the same
+        (a Spor service installed again and again) once, at their first line,
+        with the later lines in `also_lines`. `summary` itself stays one item
+        per line (correlations read it). Entries only listed because of a
+        correlation (`correlation_added`) stay single: the page redraws them."""
+        groups = []
+        by_key = {}
+        for item in self.summary:
+            if item.correlation_added:
+                groups.append(item)
+                continue
+            key = (item.severity, item.name, item.target, item.action, item.status, item.correlation)
+            first = by_key.get(key)
+            if first is None:
+                by_key[key] = first = replace(item, also_lines=[])
+                groups.append(first)
+            elif item.line_no not in first.all_lines:
+                first.also_lines.append(item.line_no)
+        return groups
+
+    @property
     def summary_shown(self):
-        return self.summary[:SUMMARY_LIMIT]
+        return self.summary_groups[:SUMMARY_LIMIT]
 
     @property
     def summary_hidden_count(self):
-        return max(0, len(self.summary) - SUMMARY_LIMIT)
+        return max(0, len(self.summary_groups) - SUMMARY_LIMIT)
 
     @property
     def has_summary(self):
@@ -915,14 +944,9 @@ def _first_path(text):
     return ''
 
 
-def _spor_summary_item(b, no, body):
-    """A SUMMARY line as a summary-box item."""
-    item = spor_log.split_item(body)
-    m = spor_log.INLINE_FLAG_RE.search(item.item) if not item.flags else None
-    if m:
-        # "[Prefetch] C:\...\x.pdf.lnk  !double-extension  (loaded by ...)": flags inline.
-        item.flags = spor_log.INLINE_FLAG_RE.findall(item.item)
-        item.item = item.item[:m.start()].rstrip()
+def _spor_summary_item(b, no, body, profile=''):
+    """A SUMMARY line as a summary-box item (`profile`: spor_log.user_profile)."""
+    item = spor_log.summary_item(body, profile=profile)
     m = _SPOR_DEFENDER_RE.match(item.item)
     target = ''
     if m:
@@ -952,6 +976,10 @@ def _spor_banner_tokens(body, title):
 
 def _highlight_spor(lines):
     b = _Builder('Spor flagged items')
+    profile = spor_log.user_profile(lines)
+    # The summary box reads a SUMMARY line with its sub-lines folded back
+    # (Spor 0.7.0+); the log itself is shown as it is.
+    unfolded = spor_log.unfold(lines)
     section = ''
     unsigned = bad_signature = 0
     for i, raw in enumerate(lines):
@@ -1020,7 +1048,7 @@ def _highlight_spor(lines):
             continue
         b.add(_mk(no, _spor_item_tokens(body, files, defender, section), cr))
         if section == spor_log.SECTION_SUMMARY:
-            _spor_summary_item(b, no, body)
+            _spor_summary_item(b, no, _split_cr(unfolded[i])[0], profile)
         elif files:
             m = _SPOR_SIGNATURE_RE.search(body)
             if m and m.group(1) == 'unsigned':

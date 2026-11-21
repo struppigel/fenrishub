@@ -168,6 +168,208 @@ renderLogLines();
 })();
 
 // ---------------------------------------------------------------------------
+// The tag filter re-marks the rendered lines in place (no re-render)
+// ---------------------------------------------------------------------------
+(function testTagFilterMarksLinesInPlace() {
+    ALL_LEGEND_STATUS_CLASSES.forEach((sc) => container.classList.remove(HIDE_CLASS_PREFIX + sc));
+    const before = [...container.querySelectorAll('.log-line')];
+    window.lineMatchesTagFilter = (entry) => entry.line.startsWith('B');
+    applyTagFilterMatches();
+    const after = [...container.querySelectorAll('.log-line')];
+    assert(
+        'applyTagFilterMatches keeps the same line elements',
+        before.length === after.length && before.every((el, i) => el === after[i])
+    );
+    assert(
+        'applyTagFilterMatches marks exactly the matching lines',
+        after.filter((el) => el.classList.contains('tag-filter-match')).length === 5
+            && after.every((el) => el.classList.contains('tag-filter-match')
+                === el.querySelector('.line-text').textContent.startsWith('B')),
+        after.map((el) => el.className).join(' | ')
+    );
+    window.lineMatchesTagFilter = () => false;
+    applyTagFilterMatches();
+    assert(
+        'clearing the filter unmarks every line',
+        !container.querySelector('.tag-filter-match')
+    );
+    delete window.lineMatchesTagFilter;
+})();
+
+// ---------------------------------------------------------------------------
+// Lines say what they hold as classes (the CSS has no :has() rules on lines)
+// ---------------------------------------------------------------------------
+(function testLineClassesForCorrelationsAndChips() {
+    window.buildCaseCorrelationButton = (entry) => {
+        if (entry.line !== 'clean line') return null;
+        const button = document.createElement('button');
+        button.className = 'line-correlation-trigger';
+        return button;
+    };
+    window.buildCentralboxSuggestionChip = (entry) => {
+        if (entry.line !== 'mystery line') return null;
+        const chip = document.createElement('span');
+        chip.className = 'centralbox-suggestion-chip';
+        return chip;
+    };
+    renderLogLines();
+    const byText = (text) => [...container.querySelectorAll('.log-line')]
+        .find((el) => el.querySelector('.line-text').textContent === text);
+    const clean = byText('clean line');
+    const mystery = byText('mystery line');
+    assert(
+        'a line with a correlation icon has has-correlation on the line and its actions',
+        clean.classList.contains('has-correlation') && clean.querySelector('.line-actions').classList.contains('has-correlation')
+            && !clean.classList.contains('has-chips')
+    );
+    assert(
+        'a line with a centralbox suggestion has has-chips',
+        mystery.classList.contains('has-chips') && !mystery.classList.contains('has-correlation')
+    );
+    assert(
+        'other lines have neither',
+        !byText('B direct').classList.contains('has-chips') && !byText('B direct').classList.contains('has-correlation')
+    );
+    assert(
+        'every line knows its index for the in-place tag filter',
+        [...container.querySelectorAll('.log-line')].every((el, i) => el.dataset.lineIndex === String(i))
+    );
+    let hasRules = 0;
+    for (const sheet of document.styleSheets) {
+        try {
+            for (const rule of sheet.cssRules) if (rule.selectorText && rule.selectorText.includes(':has(')) hasRules++;
+        } catch (error) { /* another origin */ }
+    }
+    assert('log_analyzer.css has no :has() rules (they make big logs slow)', hasRules === 0, String(hasRules));
+    delete window.buildCaseCorrelationButton;
+    delete window.buildCentralboxSuggestionChip;
+    renderLogLines();
+})();
+
+// ---------------------------------------------------------------------------
+// Correlations / centralbox suggestions arriving update the lines in place
+// ---------------------------------------------------------------------------
+(function testRefreshLineExtrasInPlace() {
+    renderLogLines();
+    const before = [...container.querySelectorAll('.log-line')];
+    const byText = (text) => [...container.querySelectorAll('.log-line')]
+        .find((el) => el.querySelector('.line-text').textContent === text);
+    window.buildCaseCorrelationButton = (entry) => {
+        if (entry.line !== 'clean line') return null;
+        const button = document.createElement('button');
+        button.className = 'line-correlation-trigger';
+        return button;
+    };
+    window.buildCentralboxSuggestionChip = (entry) => {
+        if (entry.line !== 'mystery line') return null;
+        const chip = document.createElement('span');
+        chip.className = 'centralbox-suggestion-chip';
+        return chip;
+    };
+    refreshLineExtras();
+    const after = [...container.querySelectorAll('.log-line')];
+    assert('refreshLineExtras keeps the same line elements',
+        before.length === after.length && before.every((el, i) => el === after[i]));
+    const clean = byText('clean line');
+    assert('an arriving correlation adds the info icon last in the line actions, with has-correlation',
+        clean.querySelector('.line-actions').lastElementChild.className === 'line-correlation-trigger'
+            && clean.classList.contains('has-correlation')
+            && clean.querySelector('.line-actions').classList.contains('has-correlation'));
+    const mystery = byText('mystery line');
+    assert('an arriving suggestion adds the chip right before the line actions, with has-chips',
+        mystery.querySelector('.centralbox-suggestion-chip').nextElementSibling === mystery.querySelector('.line-actions')
+            && mystery.classList.contains('has-chips'));
+
+    refreshLineExtras();
+    assert('refreshing again keeps one icon and one chip, not two',
+        clean.querySelectorAll('.line-correlation-trigger').length === 1
+            && mystery.querySelectorAll('.centralbox-suggestion-chip').length === 1);
+
+    window.buildCaseCorrelationButton = () => null;
+    window.buildCentralboxSuggestionChip = () => null;
+    refreshLineExtras();
+    assert('a correlation or suggestion that is gone takes its icon, chip and classes along',
+        !container.querySelector('.line-correlation-trigger, .centralbox-suggestion-chip, .has-correlation, .has-chips'));
+    delete window.buildCaseCorrelationButton;
+    delete window.buildCentralboxSuggestionChip;
+})();
+
+// ---------------------------------------------------------------------------
+// A fresh analysis that matches the shown one is recognized (not redrawn)
+// ---------------------------------------------------------------------------
+(function testShownAnalysisIsRecognized() {
+    if (typeof window.scheduleDraftSave !== 'function') window.scheduleDraftSave = () => {};
+    if (!document.getElementById('analysisWarnings')) {
+        const warnings = document.createElement('div');
+        warnings.id = 'analysisWarnings';
+        warnings.hidden = true;
+        document.body.appendChild(warnings);
+    }
+    const payload = () => ({
+        lines: [
+            { line: 'B direct', dominant_status: 'B', css_class: 'status-b' },
+            { line: 'clean line', dominant_status: 'C', css_class: 'status-c' },
+        ],
+        warnings: [],
+        summary: { total_lines: 2 },
+    });
+    applyAnalysisPayload(payload(), { resetCopied: true });
+    assert('the same analysis, as a new object, counts as shown', analysisPayloadIsShown(payload()));
+    const changed = payload();
+    changed.lines[1].dominant_status = 'P';
+    assert('an analysis with a changed verdict does not', !analysisPayloadIsShown(changed));
+    const reordered = payload();
+    reordered.lines[0] = { css_class: 'status-b', dominant_status: 'B', line: 'B direct' };
+    assert('key order matters (the server sorts keys, so equal analyses have equal text)',
+        !analysisPayloadIsShown(reordered));
+})();
+
+// ---------------------------------------------------------------------------
+// Showing a status with many lines brings them back in batches, view first
+// ---------------------------------------------------------------------------
+(function testProgressiveReveal() {
+    analyzedLines = [];
+    for (let i = 0; i < 12; i++) analyzedLines.push({ line: `unknown ${i}`, dominant_status: '?', css_class: 'status-unknown' });
+    analyzedLines.push({ line: 'clean line', dominant_status: 'C', css_class: 'status-c' });
+    renderLogLines();
+    const visibleCount = () => [...container.querySelectorAll(':scope > .log-line')]
+        .filter((el) => getComputedStyle(el).display !== 'none').length;
+    const frames = [];
+    const schedule = (callback) => { frames.push(callback); return frames.length; };
+    const options = { atOnceMax: 3, batch: 5, schedule };
+    const runFrame = () => frames.shift()();
+
+    hideStatusClasses(container, ['status-unknown']);
+    assert('hiding ? leaves the clean line', visibleCount() === 1, String(visibleCount()));
+    let done = false;
+    showStatusClasses(container, ['status-unknown'], options).then(() => { done = true; });
+    assert('the legend class is gone at once', !container.classList.contains('hide-status-unknown'));
+    assert('the first batch shows right away, the rest waits', visibleCount() === 1 + 5
+        && container.querySelectorAll('.reveal-pending').length === 7, String(visibleCount()));
+    assert('the unknown lines at the top come first', container.querySelector('.log-line .line-text').textContent === 'unknown 0'
+        && getComputedStyle(container.querySelector('.log-line')).display !== 'none');
+    runFrame();
+    assert('the next frame shows the next batch', visibleCount() === 1 + 10, String(visibleCount()));
+    runFrame();
+    assert('the last frame shows the rest and nothing is left pending',
+        visibleCount() === 13 && !container.querySelector('.reveal-pending') && frames.length === 0, String(visibleCount()));
+
+    // Hidden again before all came back: the rest stop waiting.
+    hideStatusClasses(container, ['status-unknown']);
+    showStatusClasses(container, ['status-unknown'], options);
+    hideStatusClasses(container, ['status-unknown']);
+    while (frames.length) runFrame();
+    assert('hiding during the reveal leaves no line pending and the status hidden',
+        !container.querySelector('.reveal-pending') && visibleCount() === 1, String(visibleCount()));
+
+    // Few lines come back at once, without frames.
+    hideStatusClasses(container, ['status-c']);
+    showStatusClasses(container, ['status-c'], options);
+    assert('a status with few lines shows at once', frames.length === 0 && visibleCount() === 1, String(visibleCount()));
+    showStatusClasses(container, ['status-unknown']);
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 const summary = document.getElementById('summary');
