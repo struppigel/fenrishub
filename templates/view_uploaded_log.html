@@ -1133,6 +1133,29 @@ const CaseCorrelations = (function () {
     // replaced by another line's are not drawn into it.
     let openToken = 0;
 
+    // A Spor line's indented "key: value" sub-lines (Spor 0.7.0+ writes a
+    // Run value's program, a detection's files, a download's addresses there);
+    // as spor_log._SUB_LINE_RE.
+    const SUB_LINE_RE = /^(?: {2,}|\t+)[a-z][a-z0-9 ]{0,30}:(?: |$)/;
+    const MAX_SHOWN_SUB_LINES = 6;
+
+    // The line on top of the info box: on a Spor page an item line with its
+    // sub-lines, as the log shows them (the line's links are on it, not on its
+    // sub-lines). A sub-line with links of its own ("loaded:", "path:") alone.
+    function shownLineText(line) {
+        const text = line.textContent.trim();
+        const no = Number(lineNo(line));
+        if (!selfLinks.url || !no || SUB_LINE_RE.test(line.textContent)) return text;
+        const subs = [];
+        for (let next = document.getElementById('L' + (no + 1)); next && subs.length < MAX_SHOWN_SUB_LINES;
+            next = document.getElementById('L' + (no + 1 + subs.length))) {
+            const sub = next.textContent.replace(/\s+$/, '');
+            if (!SUB_LINE_RE.test(sub)) break;
+            subs.push(sub);
+        }
+        return [text].concat(subs).join('\n');
+    }
+
     function openInfo(line, trigger) {
         if (!line || typeof CorrelationInfo !== 'object') return;
         const no = line.dataset ? line.dataset.n : '';
@@ -1144,7 +1167,7 @@ const CaseCorrelations = (function () {
             });
         }
         CorrelationInfo.open({
-            lineText: line.textContent.trim(),
+            lineText: shownLineText(line),
             lineStatus: line.dataset.st || '',
             // The reverse view is a log that is no FRST / Addition log.
             lineIsFrst: !data.reverse,

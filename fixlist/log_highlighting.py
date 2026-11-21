@@ -790,11 +790,12 @@ def _highlight_trojan_killer(lines):
 # ---------------------------------------------------------------------------
 
 # A status word in brackets, FILES' "signature <state>" and Defender's
-# "; action <what>": each coloured by what it says.
+# "; action <what>" (Spor 0.7.0+: "=> action <what>", its files on sub-lines):
+# each coloured by what it says.
 _SPOR_MARK_RE = re.compile(
     r'(?P<status> \[(?P<word>' + spor_log.STATUS_WORD + r'(?:, ' + spor_log.STATUS_WORD + r'){0,5})\])'
     r'|\bsignature (?P<sig>valid|invalid|revoked|expired|unsigned)\b'
-    r'|(?:^|(?<=; ))action (?P<action>[^;]{1,60})'
+    r'|(?:^|(?<=; )|(?<= => ))action (?P<action>[^;]{1,60})'
 )
 _SPOR_TIME_RE = re.compile(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?= |$)')
 # One tag group ("[PF PCA]", "[[anna] Brave]"); an item can start with several.
@@ -820,13 +821,16 @@ def _spor_status_class(status):
     return 'hl-dim'
 
 
-def _spor_marked(text, files=False, defender=False):
-    """Tokenize the part of a line after its time and tags."""
+def _spor_marked(text, files=False, defender=False, detection=False):
+    """Tokenize the part of a line after its time and tags. `detection`: the
+    rest of a "Defender ...:" item, whose action can follow its " => "."""
     out = []
     pos = 0
     for m in _SPOR_MARK_RE.finditer(text):
         if (m.group('sig') and not files) or (m.group('action') and not defender):
             continue
+        if m.group('action') and not detection and text.endswith(' => ', 0, m.start()):
+            continue   # "=> action ..." of any other line is just its text
         if m.start() > pos:
             out += _inline(text[pos:m.start()])
         if m.group('status'):
@@ -906,13 +910,15 @@ def _spor_item_tokens(text, files=False, defender=False, section=''):
             # Flags between double blanks, then e.g. "(loaded by <path>)".
             flag_tokens = _spor_inline_flag_tokens(text[m.start() - 2:])
             text = text[:m.start() - 2]
+    detection = False
     if defender:
         m = _SPOR_DEFENDER_RE.match(text)
         if m:
             threat = m.group(2)
             tokens += [('', m.group(1)), (_THREAT + defender_severity(threat), threat)]
             text = text[m.end():]
-    return tokens + _spor_marked(text, files, defender) + flag_tokens
+            detection = True
+    return tokens + _spor_marked(text, files, defender, detection) + flag_tokens
 
 
 def _spor_inline_flag_tokens(text):

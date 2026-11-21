@@ -226,6 +226,13 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
         && CorrelationFormat.fileChanges({ ...group(entries), how: 'folder' }, '') === '');
     assert('a service DLL says whose it is', CorrelationFormat.mentionRole({ role: 'dll', parent: 'EvilSvc' })
         === 'service DLL of EvilSvc');
+    // Spor 0.7.0 writes a download's addresses on sub-lines: the entry's extra rows.
+    const download = CorrelationFormat.finding({ kind: 'evidence', file: 'setup.exe', sources: 'NEW DL', details: 'Edge',
+        extra: [['from', 'dl.example.com/setup.exe'], ['page', 'www.example.com/download'], ['bad'], ['info', '']] });
+    assert('a timeline entry names the addresses of its sub-lines',
+        download.includes('Edge') && download.includes('from dl.example.com/setup.exe')
+        && download.includes('page www.example.com/download') && !download.includes('bad') && !download.includes('info'),
+        download);
     assert('installed apps and MAU deletions are named',
         CorrelationFormat.mentionRole({ role: 'installed app' }) === 'installed app'
         && CorrelationFormat.mentionRole({ role: 'deleted by MAU' }) === 'deleted by MAU'

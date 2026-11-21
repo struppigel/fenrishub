@@ -67,7 +67,7 @@ def _software_entries(upload_id, lines, index):
             'kind': 'mention', 'upload_id': upload_id, 'log_type': LOG_TYPE_SPOR, 'line_no': fact.line_no,
             'section': spor_log.SECTION_SOFTWARE, 'subsection': fact.subsection[:160], 'time': fact.time,
             'tags': fact.tags[:80], 'text': fact.text[:300], 'role': SOFTWARE_ROLES[fact.kind], 'parent': '',
-            'file_status': fact.status, 'flags': fact.flags[:10], 'extra': [],
+            'file_status': fact.status, 'flags': fact.flags[:10], 'extra': fact.extra[:spor_log.MAX_EXTRA],
             # Packages by their full name: not every operation names the app.
             'severity': evidence_severity(fact.flags, fact.status),
             'file': (details.get('package') or fact.name)[:120],
@@ -164,6 +164,8 @@ def spor_log_entries(upload_id, lines, index, known=None, usb_files=None):
             # Not `status`: the API gives every entry its status letter under that name.
             'file_status': evidence.file_status,
             'details': evidence.details[:200],
+            # Spor 0.7.0+: its "from:", "page:", ... sub-lines, as written.
+            'extra': evidence.extra[:spor_log.MAX_EXTRA],
             'flags': evidence.flags[:10],
             'severity': evidence_severity(evidence.flags, evidence.file_status),
             'file': file_name(evidence.path),
@@ -232,9 +234,13 @@ def _summary_pairs(upload_id, lines, known, index):
         if not item.trusted:
             continue
         main = _main_key(item)
+        # The line as the log shows it, its Spor 0.7.0+ sub-lines ("file:" of a
+        # Defender detection, "from:" of a download) as its extra.
+        text, extra = spor_log.as_written(lines, no)
         entry = _plain_mention(
-            upload_id, LOG_TYPE_SPOR, no, lines[no - 1].strip(), 'item', _file_of(index, main) if main else '',
-            section=spor_log.SECTION_SUMMARY, time=item.time, tags=item.tags, severity=_item_severity(item),
+            upload_id, LOG_TYPE_SPOR, no, text, 'item', _file_of(index, main) if main else '',
+            section=spor_log.SECTION_SUMMARY, time=item.time, tags=item.tags, extra=extra,
+            severity=_item_severity(item),
         )
         entry['flags'] = item.flags[:10]
         entry['file_status'] = item.status
@@ -244,10 +250,11 @@ def _summary_pairs(upload_id, lines, known, index):
         if detail is None:
             continue
         detail_no, title, detail_item, detail_key = detail
+        text, extra = spor_log.as_written(lines, detail_no)
         detail_entry = _plain_mention(
-            upload_id, LOG_TYPE_SPOR, detail_no, lines[detail_no - 1].strip(), 'details',
+            upload_id, LOG_TYPE_SPOR, detail_no, text, 'details',
             _file_of(index, detail_key) if detail_key else '', section=title, time=detail_item.time,
-            tags=detail_item.tags, severity=_item_severity(detail_item),
+            tags=detail_item.tags, extra=extra, severity=_item_severity(detail_item),
         )
         detail_entry['flags'] = detail_item.flags[:10]
         detail_entry['file_status'] = detail_item.status
@@ -285,9 +292,10 @@ def _install_entries(upload_id, lines, known, index):
         keys = {key for key in software_keys(details.get('key', '')) if key.startswith(('uninstall:', 'msi:'))}
         if not keys:
             continue
+        text, extra = spor_log.as_written(lines, no)
         entry = _plain_mention(
-            upload_id, LOG_TYPE_SPOR, no, lines[no - 1].strip(), 'item', item.item[:120],
-            section=spor_log.SECTION_TIMELINE, time=item.time, tags=item.tags,
+            upload_id, LOG_TYPE_SPOR, no, text, 'item', item.item[:120],
+            section=spor_log.SECTION_TIMELINE, time=item.time, tags=item.tags, extra=extra,
             severity=evidence_severity(item.flags, item.status),
         )
         entry['flags'] = item.flags[:10]
@@ -335,10 +343,16 @@ def _timeline_entries(upload_id, lines, known, index):
         key = _path_key(item.item)
         if not key:
             continue
+        details, extra = item.rest, []
+        if not spor_log.is_sub_line(lines[no - 1]):
+            # An item line as written (Spor 0.7.0+: its "from:", ... sub-lines as extra);
+            # a merged line's "path:" sub-line is its own.
+            details = spor_log.rest_as_written(lines, no, known)
+            extra = spor_log.sub_details(lines, no - 1)
         index.setdefault(key, []).append({
             'kind': 'evidence', 'upload_id': upload_id, 'log_type': LOG_TYPE_SPOR, 'line_no': no,
-            'time': item.time, 'sources': item.tags[:80], 'file_status': item.status, 'details': item.rest[:200],
-            'flags': item.flags[:10], 'severity': evidence_severity(item.flags, item.status),
+            'time': item.time, 'sources': item.tags[:80], 'file_status': item.status, 'details': details[:200],
+            'extra': extra, 'flags': item.flags[:10], 'severity': evidence_severity(item.flags, item.status),
             'file': file_name(item.item),
         })
 

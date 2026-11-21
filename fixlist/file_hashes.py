@@ -243,7 +243,10 @@ def _extract_trojan_killer(bodies, out):
     _extract_sha256_lines(bodies, out, 'trojan_killer')
 
 
-_SPOR_PROCESS_RE = re.compile(r'; process [^;]*')
+# Defender lines name the process that touched the file ("; process C:\x.exe")
+# and a process resource ("process: C:\x.exe, pid:N:M", Spor 0.4.0+; after
+# unfold() also right after " => "): not flagged files.
+_SPOR_PROCESS_RE = re.compile(r'(?:; |(?<= => ))process:? [^;]*')
 # SUMMARY: "... .pdf.lnk  !double-extension  (loaded by C:\...\host.exe)" names the
 # program that loaded the flagged file: not flagged itself.
 # At the end of the line: the path itself can hold parens ("Program Files (x86)").
@@ -266,8 +269,7 @@ def _spor_flagged_paths(bodies, detections):
         in_summary = summary is not None and summary[0] < index < summary[1]
         if in_summary and spor_log.is_sub_line(body):
             # A SUMMARY line's sub-lines (a download's addresses, a Defender
-            # detection's items) are on the unfolded line already; a
-            # "process:" item touched the file and is not flagged itself.
+            # detection's items) are on its unfolded line already.
             continue
         cut = body.find(spor_log.FLAGS_MARK)
         loud = cut != -1 and any(flag not in spor_log.QUIET_FLAGS for flag in body[cut:].split()[1:])

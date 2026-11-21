@@ -1361,3 +1361,39 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         # Maximize works for every log type, plain view included.
         self.assertContains(response, 'id="maximizeLogToggle"')
         self.assertNotContains(response, '>maximize</button>')
+
+
+# Spor 0.7.0 writes a Defender line's files on sub-lines: the action follows " => ".
+SPOR_V7_DEFENDER = '\n'.join([
+    '==================== Spor 0.7.0 - forensic triage log ===========',
+    'Times:     UTC',
+    '',
+    '==================== DEFENDER - detections ==========================',
+    '2026-11-19 16:13:22 [1117] Defender action taken: HackTool:MSIL/AutoKMS.I!MTB => action Remove',
+    r'    file: F:\A\KMSAuto x64.exe',
+    r'2026-11-19 16:13:23 [1117] Defender action taken: HackTool:MSIL/AutoKMS.I!MTB => F:\A\b.exe; action Quarantine',
+    '',
+    '==================== End of log. Scan took 1.0 s ====',
+])
+
+
+class SporSplitLineHighlightTests(SimpleTestCase):
+    def test_action_after_the_arrow_is_coloured(self):
+        result = highlight_log('Spor', SPOR_V7_DEFENDER)
+        tokens = _line(result, SPOR_V7_DEFENDER, '16:13:22').tokens
+        self.assertIn(('hl-key', 'action '), tokens)
+        self.assertIn(('hl-sev-w', 'Remove'), tokens)
+        self.assertEqual(_classes(_line(result, SPOR_V7_DEFENDER, '    file:'))['hl-path'], r'F:\A\KMSAuto x64.exe')
+
+    def test_action_after_a_semicolon_still_is(self):
+        result = highlight_log('Spor', SPOR_V7_DEFENDER)
+        self.assertIn(('hl-key', 'action '), _line(result, SPOR_V7_DEFENDER, '16:13:23').tokens)
+
+    def test_other_lines_starting_their_details_with_action_are_plain_text(self):
+        log = SPOR_V7_DEFENDER.replace(
+            '==================== DEFENDER',
+            '==================== TIMELINE - last 30 days ====\n'
+            r'2026-11-19 10:00:00 [NEW] C:\x\notes.txt => action items for monday' + '\n\n'
+            '==================== DEFENDER')
+        tokens = _line(highlight_log('Spor', log), log, 'notes.txt').tokens
+        self.assertNotIn(('hl-key', 'action '), tokens)

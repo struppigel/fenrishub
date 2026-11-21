@@ -36,7 +36,9 @@ ROLE_SAME_TIME = 'same time'
 # path key and rule status.
 CreatedLine = namedtuple('CreatedLine', 'text when key status')
 # A Spor TIMELINE item in the PC's local time.
-TimelineEvent = namedtuple('TimelineEvent', 'when upload_id line_no item key')
+# `text` / `extra`: the item's text as the log writes it and its detail
+# sub-lines (spor_log.sub_details; none for a merged line's "path:" sub-line).
+TimelineEvent = namedtuple('TimelineEvent', 'when upload_id line_no item key text extra')
 
 
 def _created_line(text, key, status):
@@ -82,7 +84,13 @@ def _spor_timeline_events(upload_id, lines, known):
         except ValueError:
             continue
         key = normalized_path(item.item) if spor_log.is_path(item.item) else ''
-        events.append(TimelineEvent(when, upload_id, line_no, item, key))
+        text, extra = item.text, []
+        if not spor_log.is_sub_line(lines[line_no - 1]):
+            # Its text as written (without time, tags and flags, as item.text);
+            # Spor 0.7.0+ sub-lines ("from:", ...) as extra.
+            text = spor_log.split_item(lines[line_no - 1].rstrip('\r'), known).text
+            extra = spor_log.sub_details(lines, line_no - 1)
+        events.append(TimelineEvent(when, upload_id, line_no, item, key, text, extra))
     return events
 
 
@@ -139,7 +147,9 @@ def _add_timing(uploaded_log, collectors, spor_logs, verdicts):
                 continue  # the line's own file: matched by its path already
             item = event.item
             added += collectors[line.text].add(_plain_mention(
-                event.upload_id, LOG_TYPE_SPOR, event.line_no, item.text, ROLE_SAME_TIME,
+                event.upload_id, LOG_TYPE_SPOR, event.line_no, event.text, ROLE_SAME_TIME,
                 file_name(item.item) if spor_log.is_path(item.item) else '', section=spor_log.SECTION_TIMELINE,
-                time=event.when.strftime('%Y-%m-%d %H:%M:%S'), tags=item.tags, extra=[('time in log', item.time)],
+                time=event.when.strftime('%Y-%m-%d %H:%M:%S'), tags=item.tags,
+                # Its own time first: the sub-line rows get the places left.
+                extra=[('time in log', item.time)] + event.extra[:spor_log.MAX_EXTRA - 1],
             ), MATCH_TIMING)

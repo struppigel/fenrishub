@@ -454,7 +454,10 @@ def is_sub_line(body):
 _RUN_TASK_KINDS = frozenset({'run', 'runonce', 'policy-run', 'task'})
 _DEFENDER_ITEM_KEYS = ('file', 'process', 'resource')
 _DOWNLOAD_KEYS = ('from', 'page', 'referrer')
-_FOLD_KEYS = frozenset({'program', 'arguments', 'value', 'folder', 'key', 'signer', *_DEFENDER_ITEM_KEYS, *_DOWNLOAD_KEYS})
+_FOLD_KEYS = frozenset({'program', 'arguments', 'value', 'folder', 'key', 'signer', 'version', *_DEFENDER_ITEM_KEYS, *_DOWNLOAD_KEYS})
+# FILES: "    file: md5 M; size N; created T; modified T; amcache sha1 S" and
+# "    version: file version X; ...; thumbprint T" under the hash line.
+_FILES_SUB_KEYS = ('file', 'version')
 
 
 def _folded_rest(title, item, subs):
@@ -463,6 +466,10 @@ def _folded_rest(title, item, subs):
     when none of them belongs there."""
     keys = [key for key, _value in subs]
     kind = (item.tags.split() or [''])[0].lower()
+    if title == SECTION_FILES:
+        # "=> <hash>, signature valid; signer X; md5 M; size N; ...; file version V; ...; thumbprint T"
+        added = [value for key, value in subs if key in _FILES_SUB_KEYS and value]
+        return '; '.join(([item.rest] if item.rest else []) + added) if added else None
     if title == SECTION_PERSISTENCE and kind in _RUN_TASK_KINDS and 'program' in keys:
         # "=> C:\x.exe [unsigned], changed <time>; arguments -a; value Name"
         program = next(value for key, value in subs if key == 'program')
@@ -498,11 +505,35 @@ def _with_rest(raw, rest):
     return f"{head.partition(' => ')[0]} => {rest}{tail}{cr}"
 
 
+class _Unfolded(list):
+    """Lines unfold() has folded already: folding them again would put their
+    sub-lines on the line a second time (and cost a pass over the log)."""
+
+
 def unfold(lines):
     """`lines` with the sub-lines of Spor 0.7.0+ folded back into their item
     line (_folded_rest), line numbers unchanged: the sub-lines stay where they
     are (the readers skip them or keep them as extra). `lines` itself when
-    there is nothing to fold (logs of Spor 0.6 and older)."""
+    there is nothing to fold (logs of Spor 0.6 and older) or when they are
+    unfold()'s own result already. The readers of one log (spor_source.build)
+    each ask for it: the last result is kept for the same list (never changed
+    in place by the readers)."""
+    global _last_unfold
+    if isinstance(lines, _Unfolded):
+        return lines
+    last = _last_unfold
+    if last[0] is lines and last[1] == len(lines):
+        return last[2]
+    out = _unfold(lines)
+    _last_unfold = (lines, len(lines), out)
+    return out
+
+
+# (lines, their count, unfold's result) of the last log unfolded.
+_last_unfold = (None, 0, None)
+
+
+def _unfold(lines):
     out = None
     title = ''
     count = len(lines)
@@ -527,13 +558,51 @@ def unfold(lines):
             following += 1
         if any(key in _FOLD_KEYS for key, _value in subs):
             item = split_item(body)
-            rest = _folded_rest(title, item, subs) if item.trusted else None
+            # A FILES line's sub-lines only add to the end of its rest, so a
+            # !log-syntax-in-name line (its path not resolved here) gets them too.
+            rest = _folded_rest(title, item, subs) if item.trusted or title == SECTION_FILES else None
             if rest is not None:
                 if out is None:
-                    out = list(lines)
+                    out = _Unfolded(lines)
                 out[index] = _with_rest(lines[index], rest)
         index = following
     return out if out is not None else lines
+
+
+def sub_details(lines, index):
+    """[[key, value]] of the sub-lines right under item line `index` (0-based)
+    that are details of it, not files of their own (_PATH_SUB_KEYS,
+    _TIMELINE_SUB_KEYS): Spor 0.7.0's "program:", "arguments:", "file:",
+    "from:", "folder:", ... and "info:" (at most MAX_EXTRA, values cut at 200)."""
+    out = []
+    for following in range(index + 1, len(lines)):
+        sub = _sub_line(_body(lines[following]))
+        if sub is None:
+            break
+        key, value = sub[0], sub[1].strip()
+        if key in _PATH_SUB_KEYS or key in _TIMELINE_SUB_KEYS or not value:
+            continue
+        if len(out) < MAX_EXTRA:
+            out.append([key, value[:200]])
+    return out
+
+
+def as_written(lines, line_no):
+    """(text, extra) of item line `line_no` (from 1) as the log shows it: the
+    line itself (stripped, at most 300 characters) and its detail sub-lines
+    (sub_details), not the line unfold() makes of them."""
+    index = line_no - 1
+    if not 0 <= index < len(lines):
+        return '', []
+    return _body(lines[index]).strip()[:300], sub_details(lines, index)
+
+
+def rest_as_written(lines, line_no, known=None, profile=''):
+    """The part after " => " of item line `line_no` as the log writes it."""
+    index = line_no - 1
+    if not 0 <= index < len(lines):
+        return ''
+    return split_item(_body(lines[index]), known, profile).rest
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +673,7 @@ def _parse_files_line(index, body):
 
 def iter_file_lines(lines):
     """A FileLine per line of the FILES section."""
+    lines = unfold(lines)   # Spor 0.7.0+: md5, size, times and version on sub-lines
     ranges = section_ranges(lines)
     if SECTION_FILES not in ranges:
         return
@@ -724,6 +794,9 @@ class Evidence:
     file_status: str
     details: str
     flags: list
+    # The line's detail sub-lines (Spor 0.7.0+: "from:", "page:", ...), as
+    # written; `details` is its rest as written.
+    extra: list = field(default_factory=list)
 
 
 def iter_timeline_evidence(lines, known=None):
@@ -732,6 +805,7 @@ def iter_timeline_evidence(lines, known=None):
     ("path:" sub-lines, one per real path) gives each path its own entry,
     with its own time and status. One entry per path (case-insensitive).
     A !log-syntax-in-name line counts only when its path is in FILES."""
+    written = lines         # as the log shows them (the entries' details)
     lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
     ranges = section_ranges(lines)
     if SECTION_TIMELINE not in ranges:
@@ -743,8 +817,9 @@ def iter_timeline_evidence(lines, known=None):
     out = []
     seen = {}   # lowercased path: its Evidence
     parent = None
+    parent_details, parent_extra = '', []   # the item line's rest and detail sub-lines, as written
 
-    def add(line_no, path, time, file_status, details, flags):
+    def add(line_no, path, time, file_status, details, flags, extra=()):
         key = path.lower()
         if key in seen:
             # The first line wins; a later one can still tell the file's status
@@ -752,7 +827,7 @@ def iter_timeline_evidence(lines, known=None):
             if file_status and not seen[key].file_status:
                 seen[key].file_status = file_status
             return
-        seen[key] = Evidence(line_no, path, time, parent.tags, file_status, details.strip()[:300], flags)
+        seen[key] = Evidence(line_no, path, time, parent.tags, file_status, details.strip()[:300], flags, list(extra))
         out.append(seen[key])
 
     for index in range(start + 1, end):
@@ -774,14 +849,17 @@ def iter_timeline_evidence(lines, known=None):
                 details = '; '.join(part for part in (rest, 'script of ' + ntpath.basename(parent.item)) if part)
                 add(index + 1, item.item, time, item.status, details, item.flags)
             else:
-                add(index + 1, item.item, time, item.status, parent.rest, item.flags or parent.flags)
+                # A merged line's path: the details of its line, as written.
+                add(index + 1, item.item, time, item.status, parent_details, item.flags or parent.flags, parent_extra)
             continue
         if not _is_item_line(body):
             parent = None
             continue
         parent = split_item(body, known, profile)
+        parent_details = parent.rest if written is lines else rest_as_written(written, index + 1, known, profile)
+        parent_extra = sub_details(written, index)
         if parent.tags and parent.trusted and is_path(parent.item):
-            add(index + 1, parent.item, parent.time, parent.status, parent.rest, parent.flags)
+            add(index + 1, parent.item, parent.time, parent.status, parent_details, parent.flags, parent_extra)
     return out
 
 
@@ -882,7 +960,10 @@ def iter_mentions(lines, known=None):
     PERSISTENCE, SOFTWARE, NETWORK, DOWNLOADS, DEFENDER exclusions, ...):
     the item, the target it points at, and paths of its sub-lines ("loaded:",
     "path:", "target:"). The item's other sub-lines ("from:", "page:",
-    "info:") are its `extra`. New modules need no code."""
+    "info:") are its `extra`. New modules need no code. A mention's `text`
+    is its line as the log writes it (Spor 0.7.0+: without the sub-lines
+    unfold() puts on it; they are its `extra`)."""
+    written = lines
     lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
     if known is None:
         known = known_paths(lines)
@@ -942,7 +1023,7 @@ def iter_mentions(lines, known=None):
             if not item.trusted or _DEFENDER_RE.match(item.item):
                 continue   # Defender detections are read by iter_defender_detections
             common = dict(section=title, subsection=subsection, time=item.time, tags=item.tags,
-                          text=stripped[:300], flags=item.flags)
+                          text=_body(written[index]).strip()[:300], flags=item.flags)
             if is_path(item.item):
                 folder = title == SECTION_DEFENDER and item.tags == 'Paths' and 'exclusion' in subsection.lower()
                 path = item.item
@@ -993,6 +1074,9 @@ class SoftwareFact:
     flags: list = field(default_factory=list)
     text: str = ''
     details: dict = field(default_factory=dict)   # SOFTWARE_LABELS, plus program / user / event / display name
+    # `text` is the line as written; Spor 0.7.0+ puts "folder:", "key:" and
+    # "signer:" on sub-lines of their own: [[key, value]] (sub_details).
+    extra: list = field(default_factory=list)
 
 
 def _software_kind(subsection):
@@ -1033,6 +1117,7 @@ def iter_software(lines):
     code {GUID}") and Store / MSIX operations (with the package "folder").
     The "key:" sub-lines of a collapsed group ("27 entries from ...") are
     facts too. TIMELINE's [INS] lines repeat these and are not read."""
+    written = lines
     lines = unfold(lines)   # Spor 0.7.0+ sub-lines, back on their line
     ranges = section_ranges(lines)
     if SECTION_SOFTWARE not in ranges:
@@ -1057,7 +1142,9 @@ def iter_software(lines):
         sub = _sub_line(body)
         if sub is not None:
             key, value = sub
-            if key == 'key' and parent is not None and kind == 'uninstall' and value.strip():
+            # Only under a collapsed group's line (no details of its own): the
+            # "key:" line of a single entry (Spor 0.7.0+) is on its unfolded line.
+            if key == 'key' and parent is not None and kind == 'uninstall' and not parent.rest and value.strip():
                 # "key: HKLM\...\{GUID}; name <DisplayName>; version <DisplayVersion>"
                 # (older logs: the key alone). Named by its own entry, else the group.
                 details, unlabelled = parse_labelled(value, SOFTWARE_LABELS)
@@ -1096,8 +1183,9 @@ def iter_software(lines):
         name = details.get('display name') or details.get('name') or item.item
         if not item.rest and kind == 'uninstall':
             continue   # a collapsed group's own line: its "key:" sub-lines are the facts
+        text, extra = as_written(written, index + 1)
         out.append(SoftwareFact(index + 1, kind, name[:200], subsection, item.time, item.tags, item.status,
-                                item.flags, stripped[:300], details))
+                                item.flags, text, details, extra))
     return out
 
 

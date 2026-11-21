@@ -67,7 +67,11 @@ window.CorrelationFormat = (function () {
         const text = (value) => (typeof value === 'string' ? value : '');
         const seen = [text(entry.time).slice(0, 16), text(entry.sources)].filter(Boolean).join(' ');
         const flags = Array.isArray(entry.flags) ? entry.flags.filter((flag) => typeof flag === 'string').join(' ') : '';
-        return [text(entry.file), seen, text(entry.file_status), flags, text(entry.details)]
+        // Spor 0.7.0+ writes a line's addresses on sub-lines ("from:", "page:"): its `extra` rows.
+        const extra = (Array.isArray(entry.extra) ? entry.extra : [])
+            .filter((pair) => Array.isArray(pair) && pair.length >= 2 && text(pair[1]))
+            .map((pair) => text(pair[0]) + ' ' + text(pair[1]));
+        return [text(entry.file), seen, text(entry.file_status), flags, text(entry.details)].concat(extra)
             .filter(Boolean).join(DOT) || 'seen in timeline';
     }
 
