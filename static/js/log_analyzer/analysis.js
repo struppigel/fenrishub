@@ -1229,13 +1229,9 @@ function refangUrl(v) {
 const DNS_DOMAIN_CTX_RE = /\[Dhcp(?:Domain(?:SearchList)?)\]\s*/g;
 const BARE_DOMAIN_RE = /\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b/gi;
 
-const IP_LOOKUP_ITEMS = [
-    { label: 'virustotal', url: (v) => `https://www.virustotal.com/gui/ip-address/${encodeURIComponent(v)}` },
-    { label: 'who.is', url: (v) => `https://who.is/whois-ip/ip-address/${encodeURIComponent(v)}` },
-    { label: 'abuseipdb', url: (v) => `https://www.abuseipdb.com/check/${encodeURIComponent(v)}` },
-    { label: 'urlscan.io', url: (v) => `https://urlscan.io/ip/${encodeURIComponent(v)}` },
-    { label: 'copy ip instead', copy: true },
-];
+// The lookups themselves are shared with the log page and the correlation
+// info box (common.js: Fenris.lookups).
+const IP_LOOKUP_ITEMS = [...Fenris.lookups.ip, { label: 'copy ip instead', copy: true }];
 
 const LOOKUP_KINDS = {
     'chrome-ext-id': {
@@ -1276,27 +1272,12 @@ const LOOKUP_KINDS = {
     'url': {
         title: (v) => `URL: ${v}`,
         menuHeader: 'open url in',
-        items: [
-            { label: 'virustotal', url: (v) => Fenris.virusTotal.urlSearch(v) },
-            { label: 'who.is', url: (v) => {
-                const refanged = refangUrl(v);
-                let host = refanged;
-                try { host = new URL(refanged).hostname || refanged; } catch (e) { /* keep raw */ }
-                return `https://who.is/whois/${encodeURIComponent(host)}`;
-            } },
-            { label: 'urlscan.io', url: (v) => Fenris.urlscan.search(v) },
-            { label: 'copy url instead', copy: refangUrl },
-        ],
+        items: [...Fenris.lookups.url, { label: 'copy url instead', copy: refangUrl }],
     },
     'domain': {
         title: (v) => `domain: ${v}`,
         menuHeader: 'open domain in',
-        items: [
-            { label: 'virustotal', url: (v) => Fenris.virusTotal.domain(v) },
-            { label: 'who.is', url: (v) => `https://who.is/whois/${encodeURIComponent(v)}` },
-            { label: 'urlscan.io', url: (v) => Fenris.urlscan.domain(v) },
-            { label: 'copy domain instead', copy: true },
-        ],
+        items: [...Fenris.lookups.domain, { label: 'copy domain instead', copy: true }],
     },
 };
 
@@ -1687,10 +1668,13 @@ function renderLookupItemsMenu(menu, trigger, value, kind) {
             menu.appendChild(btn);
             return;
         }
+        // A lookup that doesn't apply to this value (a URL without a host).
+        const href = item.url(value);
+        if (!href) return;
         const link = document.createElement('a');
         link.className = 'lookup-menu-item';
         link.setAttribute('role', 'menuitem');
-        link.href = item.url(value);
+        link.href = href;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.textContent = item.label;

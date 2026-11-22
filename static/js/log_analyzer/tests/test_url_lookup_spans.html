@@ -235,6 +235,35 @@ function lookupItemsFor(entry) {
 })();
 
 // ---------------------------------------------------------------------------
+// One set of lookups (common.js: Fenris.lookups), shared with the log page
+// ---------------------------------------------------------------------------
+(function testSharedLookups() {
+    const labels = (items) => items.filter((i) => !i.copy).map((i) => i.label).join(' | ');
+    assert('URL lookups are the shared ones',
+        labels(LOOKUP_KINDS.url.items) === 'virustotal | virustotal domain | who.is | urlscan.io',
+        labels(LOOKUP_KINDS.url.items));
+    assert('IP lookups are the shared ones',
+        labels(LOOKUP_KINDS.ipv4.items) === labels(Fenris.lookups.ip)
+        && labels(LOOKUP_KINDS.ipv6.items) === 'virustotal | who.is | abuseipdb | urlscan.io',
+        labels(LOOKUP_KINDS.ipv4.items));
+    assert('domain lookups are the shared ones', labels(LOOKUP_KINDS.domain.items) === labels(Fenris.lookups.domain));
+    const item = (label) => LOOKUP_KINDS.url.items.find((i) => i.label === label);
+    assert('who.is looks up the host of a defanged URL',
+        item('who.is').url('hxxps://a.example/x?y=1') === 'https://who.is/whois/a.example',
+        item('who.is').url('hxxps://a.example/x?y=1'));
+    assert('an IP host goes to the IP pages',
+        item('who.is').url('http://1.2.3.4/x') === 'https://who.is/whois-ip/ip-address/1.2.3.4'
+        && item('virustotal domain').url('http://1.2.3.4:8080/x') === 'https://www.virustotal.com/gui/ip-address/1.2.3.4',
+        item('virustotal domain').url('http://1.2.3.4:8080/x'));
+    assert('a Spor address without scheme still has its host',
+        item('virustotal domain').url('mega.nz/folder/s0lRhSzI') === 'https://www.virustotal.com/gui/domain/mega.nz');
+    const links = Fenris.lookupLinks('url', 'https://evil.example/x');
+    assert('lookupLinks names the host it looks up',
+        links.length === 4 && links[1].detail === 'evil.example' && links[0].detail === '',
+        JSON.stringify(links));
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 const summary = document.getElementById('summary');

@@ -156,6 +156,7 @@ window.Fenris = (function () {
     const virusTotal = {
         urlSearch: (url) => 'https://www.virustotal.com/gui/search?query=' + encodeURIComponent(refangUrl(url)),
         domain: (host) => 'https://www.virustotal.com/gui/domain/' + encodeURIComponent(host),
+        ip: (ip) => 'https://www.virustotal.com/gui/ip-address/' + encodeURIComponent(ip),
         // VT Intelligence: the files whose signature names this certificate
         // (its SHA-1 thumbprint); '' for anything but 40 hex digits.
         thumbprint: (thumb) => (THUMBPRINT_RE.test(String(thumb || '').trim())
@@ -166,7 +167,58 @@ window.Fenris = (function () {
     const urlscan = {
         search: (url) => 'https://urlscan.io/search/#' + encodeURIComponent(refangUrl(url)),
         domain: (host) => 'https://urlscan.io/domain/' + encodeURIComponent(host),
+        ip: (ip) => 'https://urlscan.io/ip/' + encodeURIComponent(ip),
     };
+    const whoIs = {
+        domain: (host) => 'https://who.is/whois/' + encodeURIComponent(host),
+        ip: (ip) => 'https://who.is/whois-ip/ip-address/' + encodeURIComponent(ip),
+    };
+    const abuseIpDb = {
+        ip: (ip) => 'https://www.abuseipdb.com/check/' + encodeURIComponent(ip),
+    };
+
+    // A URL's host is an IP address ("1.2.3.4", "[::1]" without its brackets).
+    const IP_HOST_RE = /^(?:\d{1,3}(?:\.\d{1,3}){3}|\[?[0-9a-f:]*:[0-9a-f:.]*\]?)$/i;
+
+    // `ip` / `domain` service URL for the host of URL text `v`, '' without a host.
+    function hostLookup(v, ip, domain) {
+        const host = lookupUrl(v).host;
+        if (!host) return '';
+        return IP_HOST_RE.test(host) ? ip(host.replace(/^\[|\]$/g, '')) : domain(host);
+    }
+
+    /* The one set of lookups of each kind, for the analyzer's menus
+     * (LOOKUP_KINDS), the log page's menus and the correlation info box.
+     * Items: { label, url(value) -> lookup address ('' = not for this value),
+     * detail(value) -> what it looks up when that is not the value itself }. */
+    const lookups = {
+        url: [
+            { label: 'virustotal', url: (v) => virusTotal.urlSearch(lookupUrl(v).value) },
+            { label: 'virustotal domain', url: (v) => hostLookup(v, virusTotal.ip, virusTotal.domain),
+              detail: (v) => lookupUrl(v).host },
+            { label: 'who.is', url: (v) => hostLookup(v, whoIs.ip, whoIs.domain), detail: (v) => lookupUrl(v).host },
+            { label: 'urlscan.io', url: (v) => urlscan.search(lookupUrl(v).value) },
+        ],
+        domain: [
+            { label: 'virustotal', url: (v) => virusTotal.domain(v) },
+            { label: 'who.is', url: (v) => whoIs.domain(v) },
+            { label: 'urlscan.io', url: (v) => urlscan.domain(v) },
+        ],
+        ip: [
+            { label: 'virustotal', url: (v) => virusTotal.ip(v) },
+            { label: 'who.is', url: (v) => whoIs.ip(v) },
+            { label: 'abuseipdb', url: (v) => abuseIpDb.ip(v) },
+            { label: 'urlscan.io', url: (v) => urlscan.ip(v) },
+        ],
+    };
+
+    // [{ label, href, detail }] of the lookups of `kind` for `value` ('' detail:
+    // the value itself), without those that don't apply to it.
+    function lookupLinks(kind, value) {
+        return (lookups[kind] || [])
+            .map((item) => ({ label: item.label, href: item.url(value), detail: item.detail ? item.detail(value) : '' }))
+            .filter((link) => link.href);
+    }
 
     /* localStorage that never throws (private windows, disabled storage). */
     const storage = {
@@ -243,6 +295,6 @@ window.Fenris = (function () {
         csrfToken, requestJson, postJson,
         copyText, flashButton, copyWithFeedback, flashClass,
         openUrl, storage, realPath,
-        refangUrl, lookupUrl, virusTotal, urlscan,
+        refangUrl, lookupUrl, virusTotal, urlscan, whoIs, abuseIpDb, lookups, lookupLinks,
     };
 })();

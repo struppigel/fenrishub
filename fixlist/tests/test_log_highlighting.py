@@ -1183,10 +1183,11 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, "const HASH_KINDS = { 32: 'MD5', 40: 'SHA-1', 64: 'SHA-256' };")
         self.assertContains(response, "'https://www.virustotal.com/gui/file/' + hash.toLowerCase()")
         self.assertContains(response, "encodeURIComponent('sectionmd5:' + hash.toLowerCase()) + '&section=IoCs&type=files'")
-        # URLs get a VirusTotal (address, domain) / urlscan / copy menu; Spor's
+        # URLs get the analyzer's lookups (VirusTotal address and domain, who.is,
+        # urlscan: common.js Fenris.lookups.url) and copy; Spor's
         # certificate thumbprints a VirusTotal search for the files signed with them.
         self.assertContains(response, "if (token.matches('.hl-url')) return openUrlMenu(token);")
-        self.assertContains(response, "run: () => openUrl(Fenris.virusTotal.urlSearch(url.value))")
+        self.assertContains(response, "return Fenris.lookupLinks('url', url.value).map(link => ({")
         self.assertContains(response, "if (token.matches('.hl-thumbprint')) return openThumbprintMenu(token);")
         self.assertContains(response, "const url = Fenris.virusTotal.thumbprint(thumb);")
         # Detection names get a copy / Google menu.

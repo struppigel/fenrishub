@@ -591,7 +591,7 @@ window.CorrelationInfo = (function () {
 
     const DOWNLOAD_KEYS = new Set(['from', 'page', 'referrer']);
 
-    // A lookup action link (VirusTotal), opened in a new tab without a handle on this page.
+    // A lookup action link (VirusTotal, who.is, ...), opened in a new tab without a handle on this page.
     function lookupLink(href, text, title = '') {
         const link = el('a', 'cinfo-action', text);
         link.href = href;
@@ -619,9 +619,14 @@ window.CorrelationInfo = (function () {
             } else {
                 appendTokens(dd, value);
                 // A download's address (Spor "from" / "page" / "referrer"): looked
-                // up on VirusTotal, never opened itself.
+                // up like a URL in the analyzer and on the log page (Fenris.lookups.url),
+                // never opened itself.
                 const url = DOWNLOAD_KEYS.has(str(pair[0])) ? Fenris.lookupUrl(value) : null;
-                if (url && url.value) dd.append(' ', lookupLink(Fenris.virusTotal.urlSearch(url.value), 'VirusTotal'));
+                if (url && url.value) {
+                    Fenris.lookupLinks('url', url.value).forEach((link) => {
+                        dd.append(' ', lookupLink(link.href, link.label, link.detail));
+                    });
+                }
             }
             list.appendChild(dd);
         });

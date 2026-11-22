@@ -1470,6 +1470,8 @@ function openHashMenu(token) {
 // URL tokens (a download's "from:" / "page:" / "referrer:" in a Spor log, any
 // http(s) address elsewhere): look the address or its domain up. The URL
 // itself is never opened; it only goes, escaped, into the lookup addresses.
+const URL_LIKE_RE = /^(?:[a-z][a-z0-9+.-]*:\/\/\S+|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+(?::\d+)?(?:[\/?#]\S*)?)$/i;
+
 function urlLookup(token) {
     if (!token || !token.classList.contains('hl-url') || token.matches('a')) return null;
     const url = Fenris.lookupUrl(token.textContent);
@@ -1478,15 +1480,12 @@ function urlLookup(token) {
     return URL_LIKE_RE.test(url.value) ? url : null;
 }
 
-const URL_LIKE_RE = /^(?:[a-z][a-z0-9+.-]*:\/\/\S+|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+(?::\d+)?(?:[\/?#]\S*)?)$/i;
-
+// The analyzer's URL lookups (common.js: Fenris.lookups.url): the address,
+// its domain (or IP) and its whois.
 function urlMenuItems(url, value = url.value) {
-    const items = [{ key: 'virustotal', value, run: () => openUrl(Fenris.virusTotal.urlSearch(url.value)) }];
-    if (url.host) {
-        items.push({ key: 'virustotal', value: 'domain ' + url.host, run: () => openUrl(Fenris.virusTotal.domain(url.host)) });
-    }
-    items.push({ key: 'urlscan.io', value, run: () => openUrl(Fenris.urlscan.search(url.value)) });
-    return items;
+    return Fenris.lookupLinks('url', url.value).map(link => ({
+        key: link.label, value: link.detail || value, run: () => openUrl(link.href),
+    }));
 }
 
 function openUrlMenu(token) {

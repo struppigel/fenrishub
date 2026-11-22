@@ -128,6 +128,8 @@ assert('a VirusTotal address is a link, other addresses stay text',
 assert('a download address gets a VirusTotal lookup (the address itself still no link)',
     !!document.querySelector('.cinfo-extra a.cinfo-action[href="https://www.virustotal.com/gui/search?query='
         + encodeURIComponent('https://evil.example/x') + '"]'));
+assert('a download address gets the other URL lookups too (who.is of its host)',
+    !!document.querySelector('.cinfo-extra a.cinfo-action[href="https://who.is/whois/evil.example"]'));
 assert('a certificate thumbprint gets a VirusTotal search for the files signed with it',
     !!document.querySelector('a.cinfo-action[href="https://www.virustotal.com/gui/search?query=signature%3A'
         + '4FACB7032C7D66A9791DE4B457EA5E70140D21F2&type=files"]'));

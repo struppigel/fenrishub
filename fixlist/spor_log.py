@@ -457,8 +457,7 @@ _DEFENDER_ITEM_KEYS = ('file', 'process', 'resource')
 # "host/path" without scheme and query (TIMELINE, SUMMARY: Spor's Host()).
 # log_highlighting marks each value as one URL.
 DOWNLOAD_KEYS = ('from', 'page', 'referrer')
-_DOWNLOAD_KEYS = DOWNLOAD_KEYS
-_FOLD_KEYS = frozenset({'program', 'arguments', 'value', 'folder', 'key', 'signer', 'version', *_DEFENDER_ITEM_KEYS, *_DOWNLOAD_KEYS})
+_FOLD_KEYS = frozenset({'program', 'arguments', 'value', 'folder', 'key', 'signer', 'version', *_DEFENDER_ITEM_KEYS, *DOWNLOAD_KEYS})
 # FILES: "    file: md5 M; size N; created T; modified T; amcache sha1 S" and
 # "    version: file version X; ...; thumbprint T" under the hash line.
 _FILES_SUB_KEYS = ('file', 'version')
@@ -490,7 +489,7 @@ def _folded_rest(title, item, subs):
         return '; '.join(parts + ([item.rest] if item.rest else []))
     added = []
     if title in (SECTION_TIMELINE, SECTION_SUMMARY):
-        added += [f'{key} {value}' for key, value in subs if key in _DOWNLOAD_KEYS]
+        added += [f'{key} {value}' for key, value in subs if key in DOWNLOAD_KEYS]
     if title == SECTION_SOFTWARE or (title == SECTION_TIMELINE and 'INS' in item.tags.split()):
         # Several "key:" lines are the entries of a collapsed group: facts of their own.
         single_key = keys.count('key') == 1
