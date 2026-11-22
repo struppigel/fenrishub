@@ -67,8 +67,8 @@
                 <span>
                     <span class="fact-name">{{ fact.name }}</span>
                     <span class="tag-row-meta">
-                        - {{ fact.fact_rule_count }} fact rule{{ fact.fact_rule_count|pluralize }},
-                        {{ fact.tag_source_count }} tag source{{ fact.tag_source_count|pluralize }}
+                        - {{ fact.fact_rule_count }} fact rule{{ fact.fact_rule_count|pluralize }}{% if fact.tag_source_count %},
+                        {{ fact.tag_source_count }} tag source{{ fact.tag_source_count|pluralize }}{% endif %}
                         {% if fact.updated_by %}, edited by {{ fact.updated_by.username }}{% endif %}
                     </span>
                 </span>
@@ -79,7 +79,7 @@
                         <input type="hidden" name="action" value="delete">
                         <input type="hidden" name="pk" value="{{ fact.pk }}">
                         <input type="hidden" name="return_q" value="{{ current_query_string }}">
-                        <button type="submit" class="delete-btn" onclick="return confirm('Delete fact &quot;{{ fact.name|escapejs }}&quot; with its {{ fact.fact_rule_count }} fact rule(s) and {{ fact.tag_source_count }} tag source(s)?');">delete</button>
+                        <button type="submit" class="delete-btn" onclick="return confirm('Delete fact &quot;{{ fact.name|escapejs }}&quot; with its {{ fact.fact_rule_count }} fact rule(s){% if fact.tag_source_count %} and {{ fact.tag_source_count }} tag source(s){% endif %}?');">delete</button>
                     </form>
                 </div>
             </div>

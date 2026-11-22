@@ -27,7 +27,7 @@ class FactViewTests(LogAnalyzerApiBaseTestCase):
         self._fact_rule(fact)
         response = self.client.get(reverse("facts"))
         self.assertContains(response, "Kaspersky installed")
-        self.assertContains(response, "1 fact rule,")
+        self.assertContains(response, "1 fact rule")
 
     def test_create_fact_with_tag_sources(self):
         sources = [{"tag_id": self.tag.pk, "statuses": ["S", "C"], "mode": "decided",
