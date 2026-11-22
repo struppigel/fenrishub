@@ -264,6 +264,13 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
             },
         ),
         (
+            'Log types',
+            {
+                'description': 'Leave "all log types" off to apply the rule only to the listed log type names.',
+                'fields': ('all_log_types', 'log_types'),
+            },
+        ),
+        (
             'Parsed Metadata',
             {
                 'fields': (

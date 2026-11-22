@@ -53,7 +53,10 @@ TARGET_MAX_CHARS = 200
 # Version 4: the correlations endpoint for every log type (reverse
 # correlations, a Spor log's links between its own lines) and get_case
 # linked_findings.
-API_VERSION = 4
+# Version 5: rule log types (log_types on rule create / update / output, the
+# log_type filter of the rule list) and tag categories (the tag-categories
+# endpoint, a category by name on tag create / update).
+API_VERSION = 5
 API_VERSION_HEADER = 'X-FenrisHub-Api-Version'
 
 

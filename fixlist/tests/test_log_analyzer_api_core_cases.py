@@ -203,11 +203,12 @@ class LogAnalyzerApiCoreTests(LogAnalyzerApiBaseTestCase):
             match_type=ClassificationRule.MATCH_EXACT,
             source_text="MALICIOUS-LINE",
         )
+        # The analyzer text is the upload's own: edited text never updates its stats.
         selected_upload = UploadedLog.objects.create(
             upload_id='swift-river',
             forum_username='stats_user',
             original_filename='one.txt',
-            content='placeholder',
+            content='MALICIOUS-LINE\nUNKNOWN-LINE',
         )
         other_upload = UploadedLog.objects.create(
             upload_id='quiet-harbor',

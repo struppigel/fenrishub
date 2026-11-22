@@ -10,12 +10,14 @@ from .analyzer import (
     STATUS_LABELS,
     STATUS_PRECEDENCE,
     _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY,
+    _get_cached_rule_buckets,
     _load_rule_buckets,
     find_substring_ranges,
     inspect_line_matches,
     parse_rule_line,
     rule_frst_entry,
 )
+from .log_types import rule_scope_log_type
 from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
 from .status_types import dominant_status
 from .rule_sets import SHARED_RULE_SET_KEY
@@ -177,6 +179,7 @@ def build_rule_test_results(
     exclude_rule_id=None,
     rule_set_key: str = SHARED_RULE_SET_KEY,
     buckets=None,
+    line_log_types=None,
 ) -> dict:
     """Build per-line rule test results for the rules test API.
 
@@ -194,6 +197,10 @@ def build_rule_test_results(
     API passes the caller's, so they agree with that caller's analyses, along
     with the cached ``buckets`` of that rule set; without them the rules are
     loaded fresh, as the browser preview has always done.
+
+    ``line_log_types`` (aligned with ``lines``) names the log type each line
+    came from, so its existing verdict uses only the rules scoped to that type,
+    as the analyzer does. Without it, or for a line of no type, every rule counts.
     """
     compiled_patterns = [
         _compile_pattern(pattern, status, match_type) for pattern in patterns
@@ -204,12 +211,25 @@ def build_rule_test_results(
     else:
         new_priority = max(PRIORITY_MIN, min(PRIORITY_MAX, int(priority)))
 
-    # Load existing rule buckets once for inspect_line_matches.
+    # Load existing rule buckets once for inspect_line_matches. The per-type
+    # ones come the same way: cached when the caller passed cached buckets,
+    # else fresh, so a rule saved a moment ago shows in the browser preview.
+    from_cache = buckets is not None
     if buckets is None:
         buckets = _load_rule_buckets(rule_set_key)
+    buckets_by_type = {}
+
+    def buckets_for(index):
+        log_type = rule_scope_log_type(line_log_types[index]) if line_log_types else None
+        if log_type is None:
+            return buckets
+        if log_type not in buckets_by_type:
+            load = _get_cached_rule_buckets if from_cache else _load_rule_buckets
+            buckets_by_type[log_type] = load(rule_set_key, log_type)
+        return buckets_by_type[log_type]
 
     results = []
-    for raw_line in lines:
+    for line_index, raw_line in enumerate(lines):
         line = (raw_line or '').strip() if match_type in ('exact', 'parsed', 'filepath') else (raw_line or '')
         result = {'line': line, 'matched': False, 'parsed': None, 'match_ranges': None}
 
@@ -229,7 +249,7 @@ def build_rule_test_results(
         stripped = line.strip()
         if stripped:
             inspection = inspect_line_matches(
-                stripped, buckets=buckets, exclude_rule_id=exclude_rule_id
+                stripped, buckets=buckets_for(line_index), exclude_rule_id=exclude_rule_id
             )
             result['existing_status'] = inspection['dominant_status']
             result['existing_status_label'] = STATUS_LABELS.get(inspection['dominant_status'], 'unknown')

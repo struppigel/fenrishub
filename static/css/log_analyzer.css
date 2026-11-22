@@ -730,6 +730,24 @@ textarea.speech-capture-field {
     gap: 4px;
 }
 
+/* The candidate's log type scope (RuleForm.createLogScopePicker), laid out
+ * like the description row above it. */
+.rule-log-scope-inline {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.rule-log-scope-inline .rule-log-scope {
+    gap: 4px;
+}
+
+.rule-log-scope-inline .log-type-choices {
+    padding: 3px 6px;
+}
+
 .rule-tags-inline .tag-picker-input {
     border: 1px solid var(--la-border);
     background: var(--la-bg-0);

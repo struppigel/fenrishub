@@ -21,6 +21,9 @@ from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
     evaluate_regex_pattern, REPARSE_FIELDS,
 )
+from ..log_types import (
+    ALL_LOG_TYPES, DEFAULT_RULE_LOG_TYPES, default_rule_scope, normalize_log_type_selection, scope_payload,
+)
 from ..models import (
     ClassificationRule,
     DEFAULT_PRIORITY_BY_MATCH_TYPE,
@@ -28,6 +31,7 @@ from ..models import (
     PRIORITY_MAX,
     PRIORITY_MIN,
     RuleTag,
+    known_log_type_names,
 )
 from ..rule_sets import invalidate_for_rule_owner
 from ..tagging import auto_tag_rules, parse_tag_ids, selected_tags_for_picker, serialize_tag
@@ -172,9 +176,40 @@ def _set_rule_tags(rules, tag_ids) -> None:
     )
 
 
+def _log_scope_from_post(request) -> tuple:
+    """The log type scope picker of a POST: `(scope, error)`.
+
+    `scope` is `(all_log_types, log_types)`, or None when the form has no
+    picker (the rule keeps its scope, a new rule gets the default).
+    """
+    mode = request.POST.get('log_scope')
+    if mode is None:
+        return None, None
+    if mode.strip() == ALL_LOG_TYPES:
+        return (True, []), None
+    scope, error = normalize_log_type_selection(request.POST.getlist('log_types'))
+    if error:
+        return None, f'Log types: {error}.'
+    return scope, None
+
+
+def _log_scope_from_query(params) -> tuple | None:
+    """A scope carried in the add page's query string, or None (default / invalid)."""
+    mode = params.get('log_scope')
+    if mode == ALL_LOG_TYPES:
+        return True, []
+    if mode == 'selected':
+        scope, error = normalize_log_type_selection(params.getlist('log_types'))
+        return None if error else scope
+    return None
+
+
 def _rule_form_from_post(request) -> dict:
     """Read the shared rule-form fields out of a POST."""
+    log_scope, log_scope_error = _log_scope_from_post(request)
     return {
+        'log_scope': log_scope,
+        'log_scope_error': log_scope_error,
         'tag_ids': _tag_ids_from_post(request),
         'status': request.POST.get('status', '').strip(),
         'match_type': request.POST.get('match_type', '').strip(),
@@ -194,6 +229,8 @@ def _rule_form_from_post(request) -> dict:
 def _rule_form_from_rule(rule) -> dict:
     """Form state for an existing rule. See _rule_form_from_post on the priority str."""
     return {
+        'log_scope': (rule.all_log_types, list(rule.log_types or [])),
+        'log_scope_error': None,
         'tag_ids': list(rule.tags.values_list('pk', flat=True)),
         'status': rule.status,
         'match_type': rule.match_type,
@@ -306,6 +343,8 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
         return whole_log_error
     if script_error:
         return script_error
+    if form.get('log_scope_error'):
+        return form['log_scope_error']
 
     duplicate = ClassificationRule.objects.filter(
         owner_id=rule.owner_id, status=form['status'], match_type=form['match_type'],
@@ -323,9 +362,13 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
     rule.whole_log = form['whole_log']
     rule.color_whole_line = _color_whole_line_for(form['color_whole_line'], form['match_type'])
     _assign_parsed_metadata(rule, form)
+    scope_fields = []
+    if form.get('log_scope') is not None:
+        rule.all_log_types, rule.log_types = form['log_scope'][0], list(form['log_scope'][1])
+        scope_fields = ['all_log_types', 'log_types']
     rule.save(update_fields=[
-        'status', 'match_type', 'source_text', 'description',
-        'is_enabled', 'priority', 'whole_log', 'color_whole_line', *REPARSE_FIELDS, 'updated_at',
+        'status', 'match_type', 'source_text', 'description', 'is_enabled', 'priority',
+        'whole_log', 'color_whole_line', *scope_fields, *REPARSE_FIELDS, 'updated_at',
     ])
     # Tags are looked up when an analysis is served, not baked into the cached
     # result, so changing them needs no invalidation of their own.
@@ -346,7 +389,25 @@ def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', r
         tag_ids = list(rule.tags.values_list('pk', flat=True)) if rule else []
     tags_by_id = {tag.pk: tag for tag in RuleTag.objects.filter(pk__in=tag_ids).select_related('category')}
 
+    log_scope = form.get('log_scope') or default_rule_scope(form['match_type'])
+    log_type_choices = known_log_type_names()
+    # A stored type no longer defined anywhere stays checked (saving keeps it), with a warning.
+    unknown_log_types = [name for name in log_scope[1] if name not in log_type_choices]
+
     return {
+        'unknown_log_types': unknown_log_types,
+        # For RuleForm.createLogScopePicker (json_script in add_rule.html).
+        'log_scope_picker': {
+            'choices': log_type_choices + unknown_log_types,
+            'value': scope_payload(*log_scope),
+            'unknown': unknown_log_types,
+            'defaults': list(DEFAULT_RULE_LOG_TYPES),
+            # The user's own pick (a re-shown POST, or a kept query) is not overridden by match type changes.
+            'chosen': form.get('log_scope') is not None,
+            # A refused scope re-renders the form; the editor opens the tab holding it.
+            'error': bool(form.get('log_scope_error')),
+        },
+        'log_preview_scope_text': _log_preview_scope_text(_log_preview_log_types(scope_payload(*log_scope))),
         'form_tags_json': [serialize_tag(tags_by_id[pk]) for pk in tag_ids if pk in tags_by_id],
         'editing': editing,
         'rule': rule,
@@ -408,6 +469,10 @@ def rules_view(request):
         action = request.POST.get('action', '')
 
         if action == 'create':
+            log_scope, log_scope_error = _log_scope_from_post(request)
+            if log_scope_error:
+                messages.error(request, log_scope_error)
+                return redirect('rules')
             created, skipped, error = create_rules(
                 request.user,
                 status=request.POST.get('status', '').strip(),
@@ -419,6 +484,7 @@ def rules_view(request):
                 color_whole_line=request.POST.get('color_whole_line') == 'on',
                 tag_ids=_tag_ids_from_post(request),
                 source_name=f'web-rules:{request.user.username}',
+                log_scope=log_scope,
             )
             if error:
                 messages.error(request, error)
@@ -568,13 +634,16 @@ def rules_view(request):
 
 
 def create_rules(user, *, status, match_type, source_text, description='', raw_priority='',
-                 whole_log=False, color_whole_line=False, tag_ids=None, source_name=''):
+                 whole_log=False, color_whole_line=False, tag_ids=None, source_name='',
+                 log_scope=None):
     """Validate and create rules for `user`, one per line of `source_text` (a script rule stays one).
 
     Returns ``(created, skipped, error)``: the new rules, the patterns skipped
     as duplicates of the user's existing rules, and an error message (nothing
     created) or None. `tag_ids` None leaves the tags to auto-apply; a list
-    becomes the new rules' tags. Shared by the add-rule page and the token API.
+    becomes the new rules' tags. `log_scope` is `(all_log_types, log_types)`;
+    None gives the match type's default (log_types.default_rule_scope).
+    Shared by the add-rule page and the token API.
     """
     color_whole_line = _color_whole_line_for(color_whole_line, match_type)
     patterns = _patterns_for(match_type, source_text)
@@ -592,6 +661,7 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
         return [], [], script_error
 
     priority = _coerce_priority(raw_priority, match_type)
+    all_log_types, log_types = log_scope or default_rule_scope(match_type)
     existing = set(
         ClassificationRule.objects.filter(
             owner=user,
@@ -620,6 +690,8 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
             'priority': priority,
             'whole_log': whole_log,
             'color_whole_line': color_whole_line,
+            'all_log_types': all_log_types,
+            'log_types': list(log_types),
         }
         if parsed:
             for field in (*REPARSE_FIELDS, 'source_name'):
@@ -667,6 +739,9 @@ def add_rule_view(request):
     form_color_whole_line = request.GET.get('color_whole_line') == '1'
     # None: the post had no tag picker, so auto-apply alone decides the tags.
     form_tag_ids = None
+    # None: the match type's default scope. Kept across "create" via the query string.
+    form_log_scope = _log_scope_from_query(request.GET)
+    log_scope_error = None
 
     if form_status not in dict(ClassificationRule.CREATABLE_STATUS_CHOICES):
         form_status = ClassificationRule.STATUS_MALWARE
@@ -691,18 +766,23 @@ def add_rule_view(request):
         form_whole_log = whole_log
         form_color_whole_line = color_whole_line
         form_tag_ids = _tag_ids_from_post(request)
-        created, skipped, error = create_rules(
-            request.user,
-            status=status,
-            match_type=match_type,
-            source_text=source_text,
-            description=description,
-            raw_priority=raw_priority,
-            whole_log=whole_log,
-            color_whole_line=color_whole_line,
-            tag_ids=form_tag_ids,
-            source_name=f'web-add-rule:{request.user.username}',
-        )
+        form_log_scope, log_scope_error = _log_scope_from_post(request)
+        if log_scope_error:
+            created, skipped, error = [], [], log_scope_error
+        else:
+            created, skipped, error = create_rules(
+                request.user,
+                status=status,
+                match_type=match_type,
+                source_text=source_text,
+                description=description,
+                raw_priority=raw_priority,
+                whole_log=whole_log,
+                color_whole_line=color_whole_line,
+                tag_ids=form_tag_ids,
+                source_name=f'web-add-rule:{request.user.username}',
+                log_scope=form_log_scope,
+            )
         if error:
             messages.error(request, error)
         elif _report_created_rules(request, created, skipped):
@@ -711,7 +791,10 @@ def add_rule_view(request):
                 keep_params['whole_log'] = '1'
             if color_whole_line:
                 keep_params['color_whole_line'] = '1'
-            return redirect(f"{reverse('add_rule')}?{urlencode(keep_params)}")
+            if form_log_scope is not None:
+                keep_params['log_scope'] = ALL_LOG_TYPES if form_log_scope[0] else 'selected'
+                keep_params['log_types'] = list(form_log_scope[1])
+            return redirect(f"{reverse('add_rule')}?{urlencode(keep_params, doseq=True)}")
 
     form = {
         'status': form_status,
@@ -724,6 +807,8 @@ def add_rule_view(request):
         # New rules are always created enabled; the add form has no such field.
         'is_enabled': True,
         'tag_ids': form_tag_ids or [],
+        'log_scope': form_log_scope,
+        'log_scope_error': log_scope_error,
     }
     return render(
         request, 'add_rule.html', _rule_form_context(request.user, form, editing=False)
@@ -744,6 +829,10 @@ def edit_rule_view(request, pk: int):
     if request.method == 'POST':
         return_q = request.POST.get('return_q', '')
         form = _rule_form_from_post(request)
+        # A POST without the picker (the quick edit's hand-off) keeps the
+        # rule's own scope, both when saving and when shown here.
+        if form['log_scope'] is None and not form['log_scope_error']:
+            form['log_scope'] = (rule.all_log_types, list(rule.log_types or []))
         # The quick-edit panel hands over by POSTing its own form here so whatever the
         # user had typed survives the jump. That hand-off only prefills this page --
         # it never saves. Its own field name, so it cannot collide with the `action`
@@ -919,23 +1008,53 @@ LOG_PREVIEW_TIME_BUDGET_S = 3.0
 LOG_PREVIEW_LOG_TYPE = 'FRST&Addition'
 
 
+def _log_preview_log_types(raw_scope):
+    """The log types whose newest uploads the stored-log preview scans: exactly
+    the rule's types, or ALL_LOG_TYPES (no type filter) for "all log types".
+    A request without a valid scope scans FRST&Addition logs, as it always has.
+    """
+    if raw_scope is None:
+        return [LOG_PREVIEW_LOG_TYPE]
+    scope, error = normalize_log_type_selection(raw_scope)
+    if error:
+        return [LOG_PREVIEW_LOG_TYPE]
+    return ALL_LOG_TYPES if scope[0] else list(scope[1])
+
+
+def _first_log_types(matches, log_type_by_upload) -> list:
+    """The log type of the first log each scanned line was found in (None if unknown)."""
+    return [
+        log_type_by_upload.get(entry['logs'][0]['upload_id']) if entry.get('logs') else None
+        for entry in matches
+    ]
+
+
+def _log_preview_scope_text(log_types) -> str:
+    """The editor's wording for what _log_preview_log_types scans."""
+    if log_types == ALL_LOG_TYPES:
+        return 'newest uploaded logs of every type'
+    return f"newest uploaded {', '.join(log_types)} logs"
+
+
 @deny_guests
 @login_required
 @require_http_methods(["POST"])
 def test_rule_logs_api(request):
     """Test a rule definition against the newest stored logs.
 
-    Scans the FRST&Addition logs the user can open in the analyzer (own and
+    Scans the logs of the rule's log types (see _log_preview_log_types) the
+    user can open in the analyzer (own and
     general channel, not trashed) and returns the distinct lines the rule matches, each with the
     same per-line verdict `test_rule_api` gives plus the logs it occurs in. A
     whole-log alert rule instead returns the logs it would fire on.
     """
-    _payload, rule, error_response = _read_rule_test_payload(request)
+    payload, rule, error_response = _read_rule_test_payload(request)
     if error_response:
         return error_response
 
     patterns = rule['patterns']
     match_type = rule['match_type']
+    log_types = _log_preview_log_types(payload.get('log_types'))
 
     if match_type == ClassificationRule.MATCH_REGEX:
         # The paste preview only warns about slow patterns; run over dozens of
@@ -948,13 +1067,24 @@ def test_rule_logs_api(request):
                              f"({evaluation['worst_ms']:.0f} ms on a {evaluation['worst_input']} input).",
                 }, status=400)
 
-    logs = (
-        get_action_scoped_uploads(request.user)
-        .live().filter(log_type=LOG_PREVIEW_LOG_TYPE)
+    logs = get_action_scoped_uploads(request.user).live()
+    if log_types != ALL_LOG_TYPES:
+        logs = logs.filter(log_type__in=log_types)
+    rows = (
+        logs
         .order_by('-created_at')
-        .values_list('upload_id', 'content')[:LOG_PREVIEW_MAX_LOGS]
+        .values_list('upload_id', 'content', 'log_type')[:LOG_PREVIEW_MAX_LOGS]
         .iterator(chunk_size=10)
     )
+    # Each matched line's existing verdict uses the rules of its log's type.
+    log_type_by_upload = {}
+
+    def corpus():
+        for upload_id, content, log_type in rows:
+            log_type_by_upload[upload_id] = log_type
+            yield upload_id, content
+
+    logs = corpus()
     deadline = time.monotonic() + LOG_PREVIEW_TIME_BUDGET_S
 
     try:
@@ -975,6 +1105,7 @@ def test_rule_logs_api(request):
                 lines=[entry['line'] for entry in matches],
                 priority=rule['priority'],
                 exclude_rule_id=rule['exclude_rule_id'],
+                line_log_types=_first_log_types(matches, log_type_by_upload),
             )
             for result, entry in zip(response_payload['results'], matches):
                 result['logs'] = entry['logs']
@@ -985,4 +1116,5 @@ def test_rule_logs_api(request):
 
     response_payload['max_logs'] = LOG_PREVIEW_MAX_LOGS
     response_payload['max_lines'] = LOG_PREVIEW_MAX_LINES
+    response_payload['log_types'] = log_types
     return JsonResponse(response_payload)

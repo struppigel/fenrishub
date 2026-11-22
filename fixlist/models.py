@@ -18,6 +18,9 @@ import mmh3
 from django.utils import timezone
 
 from .machine_signals import RAN_BY_WORDS
+from .log_types import (
+    DEFAULT_RULE_LOG_TYPES, default_rule_log_types, is_analyzed_log_type, rule_applies_to, scope_label, scope_payload,
+)
 from .status_types import STATUS_CHOICES as _STATUS_CHOICES, STATUS_CSS_CLASS
 
 logger = logging.getLogger(__name__)
@@ -555,6 +558,17 @@ class ClassificationRule(models.Model):
         help_text='Substring, file path and regex rules only: colour the whole analyzer line instead of just the matched text.',
     )
     tags = models.ManyToManyField('RuleTag', blank=True, related_name='rules')
+    # Log type scope: every log type (including ones added later), or only the
+    # types named in `log_types` (exact names; ignored when all_log_types is set).
+    all_log_types = models.BooleanField(
+        default=False,
+        help_text='Apply to every log type, including types added later.',
+    )
+    log_types = models.JSONField(
+        default=default_rule_log_types,
+        blank=True,
+        help_text='Log type names this rule applies to (when not applying to all log types).',
+    )
 
     # Optional parsed metadata, populated for parsed/filepath rules.
     entry_type = models.CharField(max_length=64, blank=True)
@@ -601,6 +615,23 @@ class ClassificationRule(models.Model):
     def shows_whole_line_badge(self) -> bool:
         """The rule opted into whole-line colour where it could colour just its match."""
         return self.color_whole_line and self.match_type in self.COLOR_WHOLE_LINE_MATCH_TYPES
+
+    def applies_to_log_type(self, log_type) -> bool:
+        return rule_applies_to(self.all_log_types, self.log_types, log_type)
+
+    @property
+    def log_scope_payload(self):
+        """`"all"` or the list of log type names (API / JS form)."""
+        return scope_payload(self.all_log_types, self.log_types)
+
+    @property
+    def log_scope_label(self) -> str:
+        return scope_label(self.all_log_types, self.log_types)
+
+    @property
+    def has_default_log_scope(self) -> bool:
+        """Applies to exactly the FRST types, as every rule did before scopes existed."""
+        return not self.all_log_types and sorted(self.log_types or []) == sorted(DEFAULT_RULE_LOG_TYPES)
 
     @classmethod
     def default_priority_for(cls, match_type: str) -> int:
@@ -780,7 +811,8 @@ class RuleTag(models.Model):
 
 
 from .log_types import (  # noqa: E402 - re-exported, many modules import these from models
-    ANALYZED_LOG_TYPES, LOG_TYPE_ADDITION, LOG_TYPE_FRST, LOG_TYPE_FRST_AND_ADDITION, LOG_TYPE_UNKNOWN,
+    ANALYZED_LOG_TYPES, DEFAULT_RULE_LOG_TYPES, LOG_TYPE_ADDITION, LOG_TYPE_FRST, LOG_TYPE_FRST_AND_ADDITION,
+    LOG_TYPE_NAME_RE, LOG_TYPE_UNKNOWN,
 )
 
 _HEADER_WINDOW_CHARS = 4096
@@ -931,7 +963,6 @@ def extract_scan_date(content: str):
     return None
 
 
-LOG_TYPE_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9 &._-]{0,31}$')
 LOG_TYPE_COLOR_RE = HEX_COLOR_RE
 DEFAULT_LOG_TYPE_COLOR = DEFAULT_COLOR
 RESERVED_LOG_TYPE_NAMES = {'unknown'}
@@ -1019,6 +1050,16 @@ class LogTypeDetectionRule(models.Model):
             re.compile(self.pattern)
         except re.error as exc:
             raise ValidationError({'pattern': f'Invalid regex: {exc}'})
+
+
+def known_log_type_names() -> list:
+    """Every log type a rule can be scoped to: the FRST types first, then the
+    badge and detection-rule names alphabetically ('Unknown' left out)."""
+    names = set(LogTypeBadge.objects.values_list('name', flat=True))
+    names.update(LogTypeDetectionRule.objects.values_list('log_type', flat=True))
+    names.difference_update(DEFAULT_RULE_LOG_TYPES)
+    names.discard(LOG_TYPE_UNKNOWN)
+    return list(DEFAULT_RULE_LOG_TYPES) + sorted(names, key=str.lower)
 
 
 @receiver(post_save, sender=LogTypeDetectionRule)
@@ -1201,7 +1242,7 @@ class UploadedLog(AnalysisCountsBase):
         effective_key = resolve_effective_rule_set_key(self)
         shared_payload = None
         effective_payload = None
-        if self.log_type in self.ANALYZED_LOG_TYPES:
+        if is_analyzed_log_type(self.log_type):
             from .analyzer import analyze_log_text, _detect_incomplete_log_warning
             content = self.content or ''
             # Analysis is linear in line count and is the single most expensive
@@ -1209,11 +1250,11 @@ class UploadedLog(AnalysisCountsBase):
             # creeping regression visible in the logs before it starts timing
             # out requests -- and identifies the log when one does.
             started = time.monotonic()
-            shared_payload = analyze_log_text(content, SHARED_RULE_SET_KEY)
+            shared_payload = analyze_log_text(content, SHARED_RULE_SET_KEY, self.log_type)
             if effective_key == SHARED_RULE_SET_KEY:
                 effective_payload = shared_payload
             else:
-                effective_payload = analyze_log_text(content, effective_key)
+                effective_payload = analyze_log_text(content, effective_key, self.log_type)
             logger.info(
                 'analysed upload_id=%s type=%s lines=%s rule_set=%s in %.1fs',
                 self.upload_id,
@@ -1223,6 +1264,7 @@ class UploadedLog(AnalysisCountsBase):
                 time.monotonic() - started,
             )
             self.apply_analysis_summary(effective_payload.get('summary', {}))
+            # FRST types only: the check returns None for every other type.
             self.is_incomplete = _detect_incomplete_log_warning(content) is not None
             for field_name in self.FIXLOG_STAT_FIELDS:
                 setattr(self, field_name, 0)

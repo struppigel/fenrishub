@@ -25,7 +25,8 @@
         min-width: 0;
     }
 
-    .rule-form-panel select {
+    .rule-form-panel select,
+    .rule-side-panel select {
         width: 100%;
         padding: 8px;
         background-color: var(--la-bg-1);
@@ -35,7 +36,8 @@
         font-size: 12px;
     }
 
-    .rule-form-panel select:focus {
+    .rule-form-panel select:focus,
+    .rule-side-panel select:focus {
         outline: none;
         border-color: var(--la-focus);
     }
@@ -60,21 +62,40 @@
         opacity: 1;
     }
 
-    .log-input-panel {
+    /* Right column: "test log lines" and "advanced options" tabs. */
+    .rule-side-panel {
         min-width: 0;
         display: flex;
         flex-direction: column;
+    }
+
+    .rule-side-body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 10px;
+        border: 1px solid var(--la-border);
+        background-color: var(--la-bg-1);
+    }
+
+    .rule-side-body[hidden] {
+        display: none;
     }
 
     .log-input-panel .form-group {
         flex: 1;
         display: flex;
         flex-direction: column;
+        margin-bottom: 0;
     }
 
     #logLinesInput {
         min-height: 160px;
         flex: 1;
+    }
+
+    .log-scope-note {
+        margin-bottom: 8px;
     }
 
     .match-count {
@@ -273,15 +294,19 @@
 {% endblock %}
 
 {% block content %}
-<div class="add-rule-top">
+{% comment %}
+The form spans both columns: priority, log types and tags sit in the right
+column's "advanced options" tab and must post with the rest. The test lines
+textarea has no name, so it is never submitted.
+{% endcomment %}
+<form method="post" id="addRuleForm" class="add-rule-top">
+    {% csrf_token %}
+    {% if editing %}<input type="hidden" name="return_q" value="{{ return_q }}">{% endif %}
     <div class="rule-form-panel">
         <h2>{% if editing %}edit{% else %}add{% endif %} rule</h2>
         {% if editing and rule.owner_id != request.user.id %}
         <div id="ruleOwnerNote" class="regex-warning">editing a rule owned by {{ rule.owner.username|default:"another user" }}; they stay the owner</div>
         {% endif %}
-        <form method="post" id="addRuleForm">
-            {% csrf_token %}
-            {% if editing %}<input type="hidden" name="return_q" value="{{ return_q }}">{% endif %}
             <div class="form-group">
                 <label for="ruleStatus">status</label>
                 <select id="ruleStatus" name="status" required>
@@ -304,25 +329,6 @@
                     run once against the whole log
                 </label>
             </div>
-            <div class="form-group" id="ruleColorWholeLineGroup" style="display: none;">
-                <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;">
-                    <input type="checkbox" id="ruleColorWholeLine" name="color_whole_line" {% if form_color_whole_line %}checked{% endif %}>
-                    color the whole line in the analyzer
-                </label>
-            </div>
-            <div class="form-group" id="rulePriorityGroup">
-                <label for="rulePriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
-                <select id="rulePriority" name="priority">
-                    {% comment %}
-                    Editing a rule always has a concrete priority; offering "auto"
-                    there would quietly discard a hand-tuned value, so it is add-only.
-                    {% endcomment %}
-                    {% if not editing %}<option value="" {% if form_priority == '' %}selected{% endif %}>auto from match type</option>{% endif %}
-                    {% for value, label in priority_choices %}
-                    <option value="{{ value }}" {% if form_priority == value %}selected{% endif %}>{{ label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
             <div class="form-group">
                 <label for="ruleSourceText" id="ruleSourceTextLabel">match line or pattern</label>
                 <textarea id="ruleSourceText" name="source_text" placeholder="{% if editing %}The line or pattern this rule matches.{% else %}One pattern per line. All lines share the status, match type, priority, and description above.{% endif %}" required>{{ form_source_text }}</textarea>
@@ -334,10 +340,6 @@
             <div class="form-group">
                 <label for="ruleDescription">description (optional)</label>
                 <textarea id="ruleDescription" name="description" rows="3" placeholder="What this rule matches...">{{ form_description }}</textarea>
-            </div>
-            <div class="form-group">
-                <label for="ruleTagPicker">tags (optional)</label>
-                <div id="ruleTagPicker"></div>
             </div>
             {% if editing %}
             {% comment %}
@@ -355,19 +357,58 @@
                 <button type="submit">{% if editing %}save{% else %}create{% endif %}</button>
                 <a href="{{ cancel_url }}"><button type="button">cancel</button></a>
             </div>
-        </form>
     </div>
 
-    <div class="log-input-panel">
-        <h2>test log lines</h2>
-        <div class="form-group">
-            <label for="logLinesInput">paste log lines to preview matches</label>
-            <textarea id="logLinesInput" placeholder="Paste log lines here to test if your rule matches them..."></textarea>
+    <div class="rule-side-panel">
+        <div class="panel-tabs" role="tablist" aria-label="rule editor panels">
+            <button type="button" class="panel-tab tab-active" id="ruleTabTest" data-rule-tab="test" role="tab" aria-selected="true" aria-controls="ruleTabTestBody">test log lines</button>
+            <button type="button" class="panel-tab" id="ruleTabAdvanced" data-rule-tab="advanced" role="tab" aria-selected="false" aria-controls="ruleTabAdvancedBody">advanced options</button>
+        </div>
+        <div class="rule-side-body log-input-panel" id="ruleTabTestBody" role="tabpanel" aria-labelledby="ruleTabTest">
+            <div class="form-group">
+                <label for="logLinesInput">paste log lines to preview matches</label>
+                <textarea id="logLinesInput" placeholder="Paste log lines here to test if your rule matches them..."></textarea>
+            </div>
+        </div>
+        <div class="rule-side-body" id="ruleTabAdvancedBody" role="tabpanel" aria-labelledby="ruleTabAdvanced" hidden>
+            <div class="form-group" id="rulePriorityGroup">
+                <label for="rulePriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
+                <select id="rulePriority" name="priority">
+                    {% comment %}
+                    Editing a rule always has a concrete priority; offering "auto"
+                    there would quietly discard a hand-tuned value, so it is add-only.
+                    {% endcomment %}
+                    {% if not editing %}<option value="" {% if form_priority == '' %}selected{% endif %}>auto from match type</option>{% endif %}
+                    {% for value, label in priority_choices %}
+                    <option value="{{ value }}" {% if form_priority == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" id="ruleColorWholeLineGroup" style="display: none;">
+                <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;">
+                    <input type="checkbox" id="ruleColorWholeLine" name="color_whole_line" {% if form_color_whole_line %}checked{% endif %}>
+                    color the whole line in the analyzer
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="ruleTagPicker">tags (optional)</label>
+                <div id="ruleTagPicker"></div>
+            </div>
+            <div class="form-group">
+                <label id="ruleLogScopeLabel">applies to</label>
+                <div id="ruleLogScope" aria-labelledby="ruleLogScopeLabel"></div>
+                {% if unknown_log_types %}
+                <div id="ruleUnknownLogTypes" class="regex-warning" style="margin-top: 6px;">
+                    not a known log type any more: {{ unknown_log_types|join:", " }}. Saving keeps the selection as it is unless you untick it.
+                </div>
+                {% endif %}
+            </div>
         </div>
     </div>
-</div>
+</form>
 
 <div class="preview-results-panel">
+    <div id="logScopeNote" class="regex-warning log-scope-note" hidden></div>
     <div id="colorLegend" class="color-legend" style="display:none;">
         <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-entry-type)"></span>entry type</div>
         <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-clsid)"></span>clsid</div>
@@ -386,19 +427,21 @@
     <h2>matches in current logs</h2>
     <label class="log-matches-toggle">
         <input type="checkbox" id="logMatchesToggle">
-        preview against the {{ log_preview_max_logs }} newest uploaded FRST&amp;Addition logs
+        preview against the {{ log_preview_max_logs }} <span id="logPreviewScopeLabel">{{ log_preview_scope_text }}</span>
     </label>
     <div class="match-count" id="logMatchCount"></div>
     <div class="preview-output" id="logMatchOutput"></div>
 </div>
 
+{{ log_scope_picker|json_script:"ruleLogScopeData" }}
 <script src="{% static 'js/rule_highlight.js' %}"></script>
 <script src="{% static 'js/rule_form.js' %}"></script>
 <script>
 (function () {
     const TEST_RULE_URL = "{% url 'test_rule_api' %}";
     const TEST_RULE_LOGS_URL = "{% url 'test_rule_logs_api' %}";
-    const ANALYZER_URL = "{% url 'log_analyzer' %}";
+    /* The log page; __UPLOAD_ID__ is swapped for the upload id. */
+    const VIEW_LOG_URL_TEMPLATE = "{% url 'view_uploaded_log' '__UPLOAD_ID__' %}";
     const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
     const EDITING = {% if editing %}true{% else %}false{% endif %};
     const PRIORITY_MAX = {{ priority_max }};
@@ -760,11 +803,14 @@
 
     /* ── stored-logs preview (opt-in) ── */
 
+    /* The log's own page, scrolled to the matched line (#L<n>). */
     function buildLogLink(uploadId, lineNumber) {
         const link = document.createElement('a');
-        link.href = ANALYZER_URL + '?upload_id=' + encodeURIComponent(uploadId);
+        link.href = VIEW_LOG_URL_TEMPLATE.replace('__UPLOAD_ID__', encodeURIComponent(uploadId))
+            + (lineNumber ? '#L' + lineNumber : '');
         link.target = '_blank';
         link.textContent = lineNumber ? uploadId + ' line ' + lineNumber : uploadId;
+        link.title = lineNumber ? 'open the log at line ' + lineNumber : 'open the log';
         return link;
     }
 
@@ -826,6 +872,7 @@
                     priority: currentPriority(),
                     whole_log: isWholeLogActive(),
                     exclude_rule_id: EXCLUDE_RULE_ID,
+                    log_types: logScopePicker.getValue(),
                 }),
                 signal: logMatchesController.signal,
             });
@@ -910,6 +957,73 @@
         colorWholeLine: document.getElementById('ruleColorWholeLine'),
         colorWholeLineGroup: document.getElementById('ruleColorWholeLineGroup'),
     };
+
+    /* ── log type scope ── */
+
+    const LOG_SCOPE = JSON.parse(document.getElementById('ruleLogScopeData').textContent);
+    const logScopePicker = RuleForm.createLogScopePicker({
+        root: document.getElementById('ruleLogScope'),
+        choices: LOG_SCOPE.choices,
+        value: LOG_SCOPE.value,
+        unknown: LOG_SCOPE.unknown,
+        formNames: true,
+        /* The picker sits in the advanced tab; show it when saving is blocked. */
+        onInvalid: function () { showRuleTab('advanced'); },
+        onChange: function () {
+            syncLogScopeNotes();
+            scheduleLogMatchesUpdate();
+        },
+    });
+    if (!LOG_SCOPE.chosen) {
+        RuleForm.bindLogScopeDefaults(logScopePicker, RULE_FORM.matchType, LOG_SCOPE.defaults);
+    }
+
+    /* The stored-log scan reads the logs of exactly the rule's log types
+     * (every type for "all"), as the server's _log_preview_log_types does. */
+    function logPreviewScopeText(value) {
+        if (value === RuleForm.ALL_LOG_TYPES) return 'newest uploaded logs of every type';
+        return 'newest uploaded ' + (value.length ? value.join(', ') : 'FRST&Addition') + ' logs';
+    }
+
+    function syncLogScopeNotes() {
+        const value = logScopePicker.getValue();
+        document.getElementById('logPreviewScopeLabel').textContent = logPreviewScopeText(value);
+        /* The pasted lines have no log type, so the preview applies the rule to
+         * them regardless; say so when the rule would skip FRST logs. */
+        const note = document.getElementById('logScopeNote');
+        const skipsFrst = value !== RuleForm.ALL_LOG_TYPES && value.length > 0
+            && !LOG_SCOPE.defaults.some(function (name) { return value.includes(name); });
+        note.hidden = !skipsFrst;
+        note.textContent = skipsFrst
+            ? 'The preview tests the pasted lines as they are. In the analyzer this rule only applies to '
+              + RuleForm.logScopeLabel(value) + ' logs.'
+            : '';
+    }
+
+    /* ── right column tabs: test log lines / advanced options ── */
+
+    const RULE_TAB_STORAGE_KEY = 'fenris.ruleEditor.tab';
+    const RULE_TABS = {
+        test: { tab: document.getElementById('ruleTabTest'), body: document.getElementById('ruleTabTestBody') },
+        advanced: { tab: document.getElementById('ruleTabAdvanced'), body: document.getElementById('ruleTabAdvancedBody') },
+    };
+
+    function showRuleTab(name) {
+        if (!RULE_TABS[name]) name = 'test';
+        Object.keys(RULE_TABS).forEach(function (key) {
+            const active = key === name;
+            RULE_TABS[key].tab.classList.toggle('tab-active', active);
+            RULE_TABS[key].tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            RULE_TABS[key].body.hidden = !active;
+        });
+    }
+
+    Object.keys(RULE_TABS).forEach(function (key) {
+        RULE_TABS[key].tab.addEventListener('click', function () {
+            showRuleTab(key);
+            Fenris.storage.set(RULE_TAB_STORAGE_KEY, key);
+        });
+    });
 
     function syncPriorityPlaceholder() {
         RuleForm.applyDefaultPriority(RULE_FORM, DEFAULT_PRIORITY_BY_MATCH_TYPE);
@@ -1032,6 +1146,8 @@
         syncWholeLogMode();
         syncColorWholeLineMode();
         syncMultilineWarning();
+        /* After bindLogScopeDefaults' own listener, which may have switched the scope. */
+        syncLogScopeNotes();
         scheduleRuleUpdate();
     });
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
@@ -1063,6 +1179,10 @@
     syncWholeLogMode();
     syncColorWholeLineMode();
     syncMultilineWarning();
+    syncLogScopeNotes();
+    /* The last tab is remembered per browser; a refused log type choice opens
+     * the tab holding it. */
+    showRuleTab(LOG_SCOPE.error ? 'advanced' : Fenris.storage.get(RULE_TAB_STORAGE_KEY, 'test'));
 
     /* Remembered per browser, so a user who wants it on does not tick it on every
      * rule. The editor opens with its rule filled in, so the scan runs at once. */

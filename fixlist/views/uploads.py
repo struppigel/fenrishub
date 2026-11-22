@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 
 from .. import trash
 from ..file_hashes import HASH_LOG_TYPES
-from ..log_types import LOG_TYPE_SPOR
+from ..log_types import LOG_TYPE_SPOR, is_analyzed_log_type
 from ..forms import UploadedLogForm
 from ..log_converters import convert_log_to_response
 from ..log_highlighting import (
@@ -401,22 +401,36 @@ _FRST_STAT_FIELDS = tuple(
 )
 
 
-def _apply_frst_rule_statuses(uploaded_log, highlight):
-    """Colour FRST lines by their rule verdicts and fill the summary box.
+def _apply_rule_statuses(uploaded_log, highlight):
+    """Colour a highlighted log's lines by their rule verdicts and fill the summary box.
 
     Only the cached analysis is read (the same rule set the uploads list
     counts use); the request never runs the analyzer. A missing or stale
     cache (e.g. written by an older analyzer) keeps the syntax colours for
     now and is refreshed in the background for the next page load.
+
+    An FRST log gets the rules' title and stat boxes as always. Any other log
+    type keeps its highlighter's own colours, title and stats: only lines it
+    left unmarked take a rule verdict, and the rules are named in the summary
+    title only when they flagged a line.
     """
     rule_set_key = resolve_effective_rule_set_key(uploaded_log)
     label = rule_set_label(rule_set_key)
     payload = get_fresh_cached_analysis(uploaded_log, rule_set_key)
+    summary_before = len(highlight.summary)
     applied = payload is not None and apply_analysis_statuses(highlight, uploaded_log.content, payload)
+    if not applied:
+        schedule_cached_analysis_refresh(uploaded_log, rule_set_key)
+    if uploaded_log.log_type not in UploadedLog.ANALYZED_LOG_TYPES:
+        if len(highlight.summary) > summary_before:
+            rules_title = f'{label} rules'
+            highlight.summary_title = (
+                f'{highlight.summary_title} and {rules_title}' if highlight.summary_title else rules_title
+            )
+        return
     if applied:
         highlight.summary_title = f'{label} rules'
     else:
-        schedule_cached_analysis_refresh(uploaded_log, rule_set_key)
         highlight.summary_title = f'{label} rules (analysis is being refreshed, reload in a moment)'
     highlight.stats = [
         Stat(code, str(getattr(uploaded_log, field_name)), severity)
@@ -487,8 +501,9 @@ def view_uploaded_log(request, upload_id):
     # None for log types without a highlighter (FRST etc.), which keep the plain view.
     highlight = highlight_log(uploaded_log.log_type, uploaded_log.content)
     correlation_context = {}
+    if highlight is not None and is_analyzed_log_type(uploaded_log.log_type):
+        _apply_rule_statuses(uploaded_log, highlight)
     if highlight is not None and uploaded_log.log_type in UploadedLog.ANALYZED_LOG_TYPES:
-        _apply_frst_rule_statuses(uploaded_log, highlight)
         # What related logs say about the files of these lines (cached).
         correlation_context = page_correlation_context(uploaded_log, request.user, highlight)
     elif highlight is not None and request.user.is_authenticated:

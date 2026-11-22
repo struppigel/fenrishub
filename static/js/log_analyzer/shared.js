@@ -204,6 +204,12 @@ let ruleDescriptionOverrides = new Map();
 // Change id -> [{id, name, description}] picked in the rule review. Not part of
 // the analyzer draft: a restored draft comes back without its review tags.
 let ruleTagOverrides = new Map();
+// Change id -> 'all' | [log type names] picked in the rule review; without one
+// the server gives the rule its default scope for currentLogType.
+let ruleLogTypeOverrides = new Map();
+// The analyzed log's type (from the analysis payload): rules are scoped by log
+// type, so line details and rule reviews are asked about this log's rules.
+let currentLogType = '';
 let removedRuleCandidateIds = new Set();
 let expandedRuleCandidateId = null;
 let ruleSubmitTarget = RULE_SUBMIT_TARGET_CREATE_FIXLIST;
@@ -968,6 +974,11 @@ function getPendingStatusChangesPayload() {
             if (ruleTagOverrides.has(changeId)) {
                 payload.tag_ids = ruleTagOverrides.get(changeId).map((tag) => tag.id);
             }
+            // An empty pick is never sent: it would make the server drop the change.
+            const logTypes = ruleLogTypeOverrides.get(changeId);
+            if (logTypes !== undefined && !(Array.isArray(logTypes) && logTypes.length === 0)) {
+                payload.log_types = logTypes;
+            }
 
             return payload;
         });
@@ -1032,6 +1043,7 @@ function analysisPayloadIsShown(payload) {
 
 function applyAnalysisPayload(payload, options = {}) {
     appliedAnalysisText = analysisPayloadText(payload) || null;
+    currentLogType = typeof payload.log_type === 'string' ? payload.log_type : '';
     const nextLines = Array.isArray(payload.lines) ? payload.lines : [];
     const shouldResetCopied = Boolean(options.resetCopied);
     const preservePendingChanges = Boolean(options.preservePendingChanges);
@@ -1045,6 +1057,7 @@ function applyAnalysisPayload(payload, options = {}) {
             pendingChangeSequence = 0;
             ruleDescriptionOverrides.clear();
             ruleTagOverrides.clear();
+            ruleLogTypeOverrides.clear();
             removedRuleCandidateIds.clear();
             expandedRuleCandidateId = null;
         }
@@ -1056,6 +1069,7 @@ function applyAnalysisPayload(payload, options = {}) {
             pendingChangeSequence = 0;
             ruleDescriptionOverrides.clear();
             ruleTagOverrides.clear();
+            ruleLogTypeOverrides.clear();
             removedRuleCandidateIds.clear();
             expandedRuleCandidateId = null;
         }

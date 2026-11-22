@@ -69,14 +69,18 @@ class PerKeyCacheTests(TestCase):
     def test_invalidate_one_key_does_not_drop_other(self):
         from ..analyzer import _get_cached_rule_buckets, _rule_buckets_cache
 
+        # Entries are keyed (rule set, log type); these tests care about the rule set.
+        def cached_sets():
+            return {key[0] for key in _rule_buckets_cache}
+
         _get_cached_rule_buckets('shared')
         _get_cached_rule_buckets(f'private:{self.bob.id}')
-        self.assertIn('shared', _rule_buckets_cache)
-        self.assertIn(f'private:{self.bob.id}', _rule_buckets_cache)
+        self.assertIn('shared', cached_sets())
+        self.assertIn(f'private:{self.bob.id}', cached_sets())
 
         invalidate_rule_buckets_cache('shared')
-        self.assertNotIn('shared', _rule_buckets_cache)
-        self.assertIn(f'private:{self.bob.id}', _rule_buckets_cache)
+        self.assertNotIn('shared', cached_sets())
+        self.assertIn(f'private:{self.bob.id}', cached_sets())
 
     def test_invalidate_all_drops_every_key(self):
         from ..analyzer import _get_cached_rule_buckets, _rule_buckets_cache

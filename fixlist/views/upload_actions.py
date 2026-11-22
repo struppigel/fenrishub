@@ -330,8 +330,9 @@ def handle_rescan_stats_selected_action(request, selected_ids: list, action_scop
     # assigned to other helpers (which fall outside the caller's action scope).
     for uploaded_log in UploadedLog.objects.live().filter(upload_id__in=selected_ids).iterator():
         try:
-            uploaded_log.recalculate_analysis_stats()
+            # The type first: the analysis uses the rules scoped to it.
             uploaded_log.recalculate_log_type()
+            uploaded_log.recalculate_analysis_stats()
             uploaded_log.recalculate_scan_date()
             rescanned_count += 1
         except Exception:

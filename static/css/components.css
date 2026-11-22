@@ -52,6 +52,54 @@ button.action-btn.delete-btn {
     cursor: pointer;
 }
 
+/* Log type scope picker of the rule forms (RuleForm.createLogScopePicker). */
+.rule-log-scope {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.rule-log-scope .log-scope-modes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+}
+
+/* A grid, so the checkboxes line up in columns whatever the name lengths. */
+.rule-log-scope .log-type-choices {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 4px 12px;
+    padding: 6px 8px;
+    border: 1px solid var(--la-border-muted);
+    background-color: var(--la-bg-0);
+}
+
+/* The base `label` margin and the browsers' input margins would offset each
+ * box differently; every label is one checkbox (or radio) and its name. */
+.rule-log-scope .checkbox-label {
+    display: flex;
+    align-items: center;
+    margin: 0;
+    min-width: 0;
+    line-height: 1.3;
+}
+
+.rule-log-scope input[type="checkbox"],
+.rule-log-scope input[type="radio"] {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.rule-log-scope .log-type-choices[hidden],
+.rule-log-scope .log-scope-error[hidden] {
+    display: none;
+}
+
+.rule-log-scope .log-type-unknown {
+    color: var(--la-warning-text);
+}
+
 /* Warnings about a regex the rule forms are about to save. */
 .regex-warning {
     font-size: 12px;

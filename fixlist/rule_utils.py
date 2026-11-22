@@ -9,7 +9,8 @@ from .analyzer import (
     EMPTY_RULE_FIELDS, VALID_STATUSES, _load_rule_buckets, inspect_line_matches, parse_rule_line, rule_defaults,
     upsert_parsed_rule,
 )
-from .models import ClassificationRule
+from .log_types import default_rule_scope, normalize_log_type_selection, rule_scope_log_type, scope_payload
+from .models import ClassificationRule, known_log_type_names
 from .tagging import parse_tag_ids
 
 
@@ -34,6 +35,24 @@ _rule_defaults_from_parsed = rule_defaults
 def _upsert_classification_rule(parsed: dict, owner: User) -> tuple[ClassificationRule, bool]:
     """Create or update a classification rule. Returns (rule, is_created)."""
     return upsert_parsed_rule(parsed, owner.pk)
+
+
+def _pending_rule_scope(change: dict, match_type: str, existing_rule, log_type) -> tuple | None:
+    """The `(all_log_types, log_types)` a pending change's rule ends up with.
+
+    The review's picker wins (`log_scope`). A new rule gets its match type's
+    default for the open log (`log_type`, see log_types.default_rule_scope). An
+    existing scoped rule gains the open log's type, since the user classified
+    the line in that log. None: an existing rule keeps its scope.
+    """
+    if change.get('log_scope') is not None:
+        return change['log_scope']
+    if existing_rule is None:
+        return default_rule_scope(match_type, log_type)
+    context = rule_scope_log_type(log_type)
+    if context and not existing_rule.all_log_types and context not in (existing_rule.log_types or []):
+        return False, [*(existing_rule.log_types or []), context]
+    return None
 
 
 def _normalize_pending_changes(raw_changes) -> tuple[list[dict], list[dict]]:
@@ -61,6 +80,13 @@ def _normalize_pending_changes(raw_changes) -> tuple[list[dict], list[dict]]:
         description = raw.get('description', None)
         # None: the review's picker never touched this change.
         tag_ids = raw.get('tag_ids')
+        # None: the rule gets the default log type scope (see _pending_rule_scope).
+        log_scope = None
+        if raw.get('log_types') is not None:
+            log_scope, scope_error = normalize_log_type_selection(raw.get('log_types'))
+            if scope_error:
+                invalid.append({'index': index, 'error': f'Field "log_types": {scope_error}.'})
+                continue
 
         if not isinstance(line, str):
             invalid.append({'index': index, 'error': 'Field "line" must be a string.'})
@@ -104,6 +130,7 @@ def _normalize_pending_changes(raw_changes) -> tuple[list[dict], list[dict]]:
                 'order': int(raw.get('order', index)) if isinstance(raw.get('order', index), int) else index,
                 'description': description,
                 'tag_ids': tag_ids,
+                'log_scope': log_scope,
             }
         )
 
@@ -240,11 +267,18 @@ def _apply_conflict_resolutions(
     return effective_selected_ids
 
 
-def _build_pending_rule_preview(pending_changes: list[dict], username: str, owner: User) -> dict:
+def _build_pending_rule_preview(
+    pending_changes: list[dict], username: str, owner: User, log_type: str | None = None,
+) -> dict:
     """
     Build preview of pending rule changes including conflict detection.
-    
-    Returns: dict with manual_changes, rule_changes, contradictions, and summary.
+
+    `log_type` is the type of the log the changes were made in: conflicts are
+    looked up among the rules that apply to it, and it decides the default log
+    type scope of each candidate.
+
+    Returns: dict with manual_changes, rule_changes, contradictions, summary,
+    and the log types a candidate's scope can be picked from.
     """
     manual_changes = []
     rule_changes = []
@@ -254,7 +288,7 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
     create_count = 0
     update_count = 0
 
-    buckets = _load_rule_buckets()
+    buckets = _load_rule_buckets(log_type=log_type)
     user_rules_index = {
         (r.status, r.match_type, r.source_text): r
         for r in ClassificationRule.objects.filter(owner=owner)
@@ -293,6 +327,9 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
             update_count += 1
 
         inspection = inspect_line_matches(line, buckets=buckets)
+        scope = _pending_rule_scope(change, parsed['match_type'], existing_rule, log_type)
+        if scope is None:
+            scope = (existing_rule.all_log_types, existing_rule.log_types)
         dominant_existing = inspection['dominant_status']
         status_codes = inspection['status_codes']
         existing_top_priority = inspection.get('effective_priority')
@@ -354,11 +391,18 @@ def _build_pending_rule_preview(pending_changes: list[dict], username: str, owne
                 'source_text': parsed['source_text'],
                 'description': parsed['description'],
                 'existing_rule_id': existing_rule.id if existing_rule else None,
+                'log_types': scope_payload(*scope),
                 **{field: parsed.get(field, empty) for field, empty in EMPTY_RULE_FIELDS.items()},
             }
         )
 
+    log_type_choices = known_log_type_names()
+    context = rule_scope_log_type(log_type)
+    if context and context not in log_type_choices:
+        log_type_choices.append(context)
     return {
+        'log_type': context,
+        'log_type_choices': log_type_choices,
         'manual_changes': manual_changes,
         'rule_changes': rule_changes,
         'contradictions': {
@@ -384,11 +428,14 @@ def _persist_selected_pending_rules(
     username: str,
     source_prefix: str,
     owner: User,
+    log_type: str | None = None,
 ) -> dict:
     """
     Persist selected pending rule changes to database.
-    
+
     Applies conflict resolutions and creates/updates classification rules.
+    `log_type` is the type of the log the changes were made in (see
+    _pending_rule_scope).
     
     Returns: dict with created/updated/skipped rule counts and change summaries.
     """
@@ -429,7 +476,15 @@ def _persist_selected_pending_rules(
             if change.get('description') is not None:
                 parsed['description'] = change['description']
 
-            rule, is_created = _upsert_classification_rule(parsed, owner=owner)
+            rule, is_created = upsert_parsed_rule(
+                parsed, owner.pk,
+                log_scope=_pending_rule_scope(change, parsed['match_type'], None, log_type),
+            )
+            if not is_created:
+                scope = _pending_rule_scope(change, parsed['match_type'], rule, log_type)
+                if scope is not None and (rule.all_log_types, rule.log_types) != (scope[0], list(scope[1])):
+                    rule.all_log_types, rule.log_types = scope[0], list(scope[1])
+                    rule.save(update_fields=['all_log_types', 'log_types', 'updated_at'])
             # The review's picker shows auto tags filled in, so a new rule gets
             # exactly its tags (a removed auto tag stays off). An existing rule
             # only gains them and keeps the tags it already had.

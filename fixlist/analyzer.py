@@ -11,7 +11,7 @@ from . import frst_extractors as ex
 from . import regex_bench, regex_engine, script_matcher
 from .regex_engine import _re2  # noqa: F401 - re-exported: tests check whether re2 is installed
 from .machine_signals import SYSTEM_PROFILE_NAMES
-from .log_types import ANALYZED_LOG_TYPES
+from .log_types import ANALYZED_LOG_TYPES, default_rule_scope, rule_scope_log_type
 from .models import ClassificationRule, ParsedFilepathExclusion, SiteConfig, get_default_rule_owner_id, detect_log_type
 from .rule_sets import SHARED_RULE_SET_KEY, parse_rule_set_key
 from .status_types import (
@@ -157,8 +157,9 @@ def _build_wholelog_alert_warnings(raw_log_text: str, buckets) -> tuple[list[dic
     return warnings, fired_rule_ids
 
 
-def _detect_incomplete_log_warning(raw_log_text: str) -> dict | None:
-    detected_type = detect_log_type(raw_log_text or "")
+def _detect_incomplete_log_warning(raw_log_text: str, detected_type: str | None = None) -> dict | None:
+    if detected_type is None:
+        detected_type = detect_log_type(raw_log_text or "")
     if detected_type not in ANALYZED_LOG_TYPES:
         return None
 
@@ -524,10 +525,10 @@ def _detect_recent_os_install_warning(raw_log_text: str) -> dict | None:
     )
 
 
-def _build_log_warnings(raw_log_text: str) -> list[dict]:
+def _build_log_warnings(raw_log_text: str, detected_type: str | None = None) -> list[dict]:
     warnings = []
     for warning in (
-        _detect_incomplete_log_warning(raw_log_text),
+        _detect_incomplete_log_warning(raw_log_text, detected_type),
         _detect_low_memory_warning(raw_log_text),
         _detect_multiple_enabled_av_warning(raw_log_text),
         _detect_recent_restore_operation_warning(raw_log_text),
@@ -579,18 +580,27 @@ def rule_defaults(parsed: dict) -> dict:
     }
 
 
-def upsert_parsed_rule(parsed: dict, owner_id) -> tuple:
+def upsert_parsed_rule(parsed: dict, owner_id, log_scope: tuple | None = None) -> tuple:
     """Create or update the rule a parse_rule_line dict describes: ``(rule, created)``.
 
-    A new rule gets its match type's default priority (ClassificationRule.save).
+    A new rule gets its match type's default priority (ClassificationRule.save)
+    and the log type scope `log_scope` (`(all_log_types, log_types)`), by
+    default its match type's (log_types.default_rule_scope). An existing rule
+    keeps its scope.
     """
-    return ClassificationRule.objects.update_or_create(
+    rule, created = ClassificationRule.objects.update_or_create(
         owner_id=owner_id,
         status=parsed["status"],
         match_type=parsed["match_type"],
         source_text=parsed["source_text"],
         defaults=rule_defaults(parsed),
     )
+    if created:
+        all_log_types, log_types = log_scope or default_rule_scope(parsed["match_type"])
+        if (rule.all_log_types, rule.log_types) != (all_log_types, list(log_types)):
+            rule.all_log_types, rule.log_types = all_log_types, list(log_types)
+            rule.save(update_fields=["all_log_types", "log_types"])
+    return rule, created
 
 
 def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict | None:
@@ -705,7 +715,8 @@ def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str 
 
 logger = logging.getLogger(__name__)
 
-# rule_set_key -> (buckets, loaded at (monotonic), rules_version when loaded).
+# (rule_set_key, scope log type) -> (buckets, loaded at (monotonic), rules_version when loaded).
+# The log type is rule_scope_log_type()'s value: None holds every rule of the set.
 _rule_buckets_cache: dict = {}
 _RULE_BUCKETS_CACHE_TTL = 60
 
@@ -734,7 +745,8 @@ def _bump_rules_version() -> None:
 
 
 def invalidate_rule_buckets_cache(rule_set_key: str | None = None) -> None:
-    """Drop one cached bucket set, or all of them when `rule_set_key` is None.
+    """Drop one rule set's cached buckets (every log type), or all of them when
+    `rule_set_key` is None.
 
     Clears the dict in place so that callers holding a reference to the module
     attribute (e.g. tests) observe the change. Also bumps
@@ -744,7 +756,9 @@ def invalidate_rule_buckets_cache(rule_set_key: str | None = None) -> None:
     if rule_set_key is None:
         _rule_buckets_cache.clear()
     else:
-        _rule_buckets_cache.pop(rule_set_key, None)
+        # list() snapshots the keys in one step: other threads insert entries.
+        for key in [key for key in list(_rule_buckets_cache) if key[0] == rule_set_key]:
+            _rule_buckets_cache.pop(key, None)
     _bump_rules_version()
 
 
@@ -918,16 +932,17 @@ def find_rule_duplicates(queryset):
     ]
 
 
-def _get_cached_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
+def _get_cached_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | None = None):
     # Read the version before loading, so a rule saved mid-load leaves this
     # entry tagged with the old version and reloaded next time.
     version = _current_rules_version()
     now = time.monotonic()
-    entry = _rule_buckets_cache.get(rule_set_key)
+    cache_key = (rule_set_key, rule_scope_log_type(log_type))
+    entry = _rule_buckets_cache.get(cache_key)
     if entry is not None and (now - entry[1]) < _RULE_BUCKETS_CACHE_TTL and entry[2] == version:
         return entry[0]
-    buckets = _load_rule_buckets(rule_set_key)
-    _rule_buckets_cache[rule_set_key] = (buckets, now, version)
+    buckets = _load_rule_buckets(rule_set_key, log_type)
+    _rule_buckets_cache[cache_key] = (buckets, now, version)
     return buckets
 
 
@@ -945,7 +960,12 @@ def rule_frst_entry(rule) -> ex.FrstEntry:
     return ex.FrstEntry(**{field: value for field, value in values.items() if value is not None})
 
 
-def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
+def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | None = None):
+    """Index the enabled rules of a rule set by matcher.
+
+    With a `log_type`, only rules whose log type scope covers it are loaded
+    (see log_types.rule_applies_to; None or 'Unknown' loads every rule).
+    """
     qs = ClassificationRule.objects.filter(is_enabled=True).select_related('owner')
     scope, scope_user_id = parse_rule_set_key(rule_set_key)
     if scope == 'private':
@@ -957,7 +977,8 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY):
             Q(owner__fenris_profile__rule_set_mode=SHARED_RULE_SET_KEY)
             | Q(owner__fenris_profile__isnull=True)
         )
-    rules = qs
+    scope_log_type = rule_scope_log_type(log_type)
+    rules = qs if scope_log_type is None else [rule for rule in qs if rule.applies_to_log_type(scope_log_type)]
     parsed_filepath_exclusions = {
         (path or "").strip().lower()
         for path in ParsedFilepathExclusion.objects.filter(is_enabled=True).values_list(
@@ -1736,6 +1757,7 @@ def inspect_line_matches(
     buckets=None,
     rule_set_key: str = SHARED_RULE_SET_KEY,
     exclude_rule_id=None,
+    log_type: str | None = None,
 ) -> dict:
     line_value = (line or "").strip()
     if not line_value:
@@ -1747,7 +1769,7 @@ def inspect_line_matches(
             "matches": [],
         }
 
-    active_buckets = buckets or _get_cached_rule_buckets(rule_set_key)
+    active_buckets = buckets or _get_cached_rule_buckets(rule_set_key, log_type)
     (
         effective_matches,
         shadowed_matches,
@@ -1783,10 +1805,20 @@ def inspect_line_matches(
 ANALYSIS_PAYLOAD_FORMAT = 4
 
 
-def analyze_log_text(raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY) -> dict:
-    buckets = _get_cached_rule_buckets(rule_set_key)
+def analyze_log_text(
+    raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | None = None,
+) -> dict:
+    """Classify every line of a log with the rules of `rule_set_key`.
+
+    Only rules scoped to the log's type take part; `log_type` is the stored
+    type of an upload, and is detected from the text when not given.
+    """
+    detected_type = detect_log_type(raw_log_text or "")
+    if not log_type:
+        log_type = detected_type
+    buckets = _get_cached_rule_buckets(rule_set_key, log_type)
     analyzed_lines = []
-    warnings = _build_log_warnings(raw_log_text or "")
+    warnings = _build_log_warnings(raw_log_text or "", detected_type)
 
     for raw_line in (raw_log_text or "").splitlines():
         line = raw_line.strip()
@@ -1818,4 +1850,5 @@ def analyze_log_text(raw_log_text: str, rule_set_key: str = SHARED_RULE_SET_KEY)
         "summary": summary,
         "warnings": warnings,
         "wholelog_rule_ids": list(dict.fromkeys(wholelog_rule_ids)),
+        "log_type": log_type,
     }

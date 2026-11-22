@@ -104,7 +104,7 @@ class RulesVersionTests(TestCase):
         self.assertEqual(analyzer._current_rules_version(), before + 1)
 
     def test_a_bump_from_another_process_reloads_the_buckets(self):
-        with mock.patch.object(analyzer, '_load_rule_buckets', side_effect=lambda key: object()) as load:
+        with mock.patch.object(analyzer, '_load_rule_buckets', side_effect=lambda key, log_type=None: object()) as load:
             first = analyzer._get_cached_rule_buckets(SHARED_RULE_SET_KEY)
             self.assertIs(analyzer._get_cached_rule_buckets(SHARED_RULE_SET_KEY), first)
             self.assertEqual(load.call_count, 1)

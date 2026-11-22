@@ -10,13 +10,13 @@ async function requestLogAnalysis(logText, uploadId = '') {
 const _lineDetailsCache = new Map();
 
 async function requestLineDetails(line, status) {
-    const cacheKey = line + '\0' + status;
+    const cacheKey = line + '\0' + status + '\0' + currentLogType;
     const cached = _lineDetailsCache.get(cacheKey);
     if (cached) {
         return cached;
     }
 
-    const result = await Fenris.postJson(LINE_DETAILS_URL, { line, status }, { errorMessage: 'Failed to inspect line details.' });
+    const result = await Fenris.postJson(LINE_DETAILS_URL, { line, status, log_type: currentLogType }, { errorMessage: 'Failed to inspect line details.' });
     _lineDetailsCache.set(cacheKey, result);
     return result;
 }

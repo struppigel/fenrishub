@@ -54,6 +54,7 @@ from django.db.models import Case, Count, F, IntegerField, JSONField, Max, Q, Va
 from django.db.models.fields.json import KT
 from django.db.models.functions import Cast, Lower
 
+from .log_types import NOT_ANALYZED_LOG_TYPES
 from .models import (
     TAG_CATEGORY_COLOR_RE, ClassificationRule, FixlistSnippet, RuleTag, Speech, TagCategory, UploadedLog,
     UploadedLogAnalysis, sync_stat_line_tag_ids,
@@ -1435,7 +1436,7 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
 
     # Logs of a type the analyzer skips never have an analysis and hold no
     # tags; only analyzable ones are worth reporting as missed.
-    analyzable = candidates.filter(log_type__in=UploadedLog.ANALYZED_LOG_TYPES).values_list('pk', flat=True)
+    analyzable = candidates.exclude(log_type__in=('', *NOT_ANALYZED_LOG_TYPES)).values_list('pk', flat=True)
     unanalyzed_count = sum(1 for pk in analyzable if pk not in analyzed)
     return [pk for pk in candidate_pks if pk in matched], unanalyzed_count
 

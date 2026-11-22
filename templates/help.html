@@ -426,11 +426,17 @@
 
     <p><strong>match type</strong> tells how to interpret the pattern, more on that later.</p>
 
-    <p><strong>priority</strong> is the priority level. I suggest using the one that fits the match type unless there are issues you cannot solve otherwise. More about priorities later.</p>
-
     <p><strong>match line / pattern</strong> - the pattern that needs to match, e.g., this might be a regex, substring or a full log line.</p>
 
     <p>The <strong>description</strong> shows up as explanation if you hover over a matched line. The description is very important for Alert rules because it contains the Alert text. It is recommended to add a description for PUP too because these require a case-by-case decision.</p>
+
+    <p>The <strong>advanced options</strong> tab next to <strong>test log lines</strong> holds the rest:</p>
+
+    <p><strong>priority</strong> is the priority level. I suggest using the one that fits the match type unless there are issues you cannot solve otherwise. More about priorities later.</p>
+
+    <p><strong>tags</strong> - see <a href="#rule-tags">rule tags</a>.</p>
+
+    <p><strong>applies to</strong> - the log types the rule classifies lines of: <strong>all log types</strong> (including log types added later) or the <strong>selected log types</strong>. Log types match by name, so a rule for FRST only does not apply to an FRST&amp;Addition log. New rules apply to FRST&amp;Addition, FRST and Addition; file path rules apply to all log types. A rule saved in the log analyzer while a log of another type is open (e.g. a Spor log) applies to that log type. Every uploaded log of a known type is analyzed with the rules for its type; logs of unknown type and Fixlogs are not.</p>
 
     <h3 id="rule-priorities">Rule priorities</h3>
 
@@ -454,7 +460,7 @@
 
     <h3 id="testing-rules">Testing rules</h3>
 
-    <p>In the <strong>add rule</strong> page, there is a big box named <strong>test log lines</strong>; that is where you put lines from logs inside to test if they are detected by your rule.</p>
+    <p>In the <strong>add rule</strong> page, there is a big box named <strong>test log lines</strong>; that is where you put lines from logs inside to test if they are detected by your rule. The pasted lines are tested whatever log types the rule applies to. <strong>Matches in current logs</strong> scans the newest uploaded logs of exactly the rule's log types.</p>
 
     <img src="{% static 'images/help/11-rules-test-input.png' %}" alt="Test log lines input box" loading="lazy">
 
