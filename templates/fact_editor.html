@@ -123,8 +123,8 @@
             <textarea id="factDescription" name="description" placeholder="notes for analysts">{{ form_description }}</textarea>
         </div>
 
-        {# Hidden for now, until it is decided how tag sources should work. It stays in
-           the page so saving the fact posts its existing tag sources back unchanged. #}
+        {% comment %}Hidden for now, until it is decided how tag sources should work. It stays in
+           the page so saving the fact posts its existing tag sources back unchanged.{% endcomment %}
         <fieldset class="tag-conditions" hidden>
             <legend>found by rules with a tag</legend>
             <div class="fact-editor-note">Wherever a rule with the tag matched. Rules with conditions don't count.</div>
