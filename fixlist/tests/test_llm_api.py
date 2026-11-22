@@ -342,7 +342,8 @@ class ApiAnalysisEndpointTests(ApiTestBase):
         payload = fake_analysis([('first', 'B'), ('second', 'C'), ('third', '?')])
         with mock.patch('fixlist.upload_utils.analyze_log_text', return_value=payload) as analyze:
             body = self.api_get('api_v1_upload_analysis', 'amber-falcon').json()
-        analyze.assert_called_once_with(self.log.content, f'private:{self.user.id}')
+        # The upload's own log type scopes the rules.
+        analyze.assert_called_once_with(self.log.content, f'private:{self.user.id}', self.log.log_type)
         self.assertEqual(body['rule_set'], 'private')
         self.assertEqual(body['untrusted_lines'][0]['status'], 'B')
 

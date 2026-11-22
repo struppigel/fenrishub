@@ -242,7 +242,8 @@ class EndpointTests(LinkedApiBase):
     def test_counts_as_an_upload_read_and_names_version_4(self):
         self.assertIn('api_v1_upload_correlations', UPLOAD_READ_ENDPOINTS)
         response = self.call('api_v1_upload_correlations', 'frst-log')
-        self.assertEqual(response[API_VERSION_HEADER], '4')
+        # At least 4: the MCP's get_correlations needs version 4 (later versions only add).
+        self.assertGreaterEqual(int(response[API_VERSION_HEADER]), 4)
         self.assertTrue(ApiRequestLog.objects.filter(endpoint='api_v1_upload_correlations', target='frst-log').exists())
 
 

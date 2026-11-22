@@ -307,6 +307,7 @@
 {% block content %}
 <div id="analyzerDraftPrompt" class="analysis-warnings" aria-live="polite" hidden></div>
 <div id="analysisWarnings" class="analysis-warnings" aria-live="polite" hidden></div>
+<div id="analysisFacts" class="analysis-facts" hidden></div>
 
 <div class="analyzer-toolbar-grid">
     <div class="analyzer-toolbar analyzer-toolbar-left">
@@ -598,6 +599,7 @@ window.logAnalyzerConfig = {
 <script defer src="{% static 'js/log_analyzer/case_correlations.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/conflict_wizard.js' %}"></script>
 <script defer src="{% static 'js/rule_highlight.js' %}"></script>
+<script defer src="{% static 'js/rule_form.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/rule_preview.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/draft_autosave.js' %}"></script>
 <script defer src="{% static 'js/log_analyzer/speech_capture.js' %}"></script>

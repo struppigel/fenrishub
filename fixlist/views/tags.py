@@ -22,6 +22,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from ..analyzer import parse_rule_line
+from ..fact_service import facts_blocking_tag_delete
 from ..models import DEFAULT_TAG_CATEGORY_COLOR, ClassificationRule, HashVerdict, RuleTag, TagCategory
 from ..tagging import (
     CONDITION_STATUSES,
@@ -82,8 +83,15 @@ def rule_tags_view(request):
         action = request.POST.get('action')
         if action == 'delete':
             tag = get_object_or_404(RuleTag, pk=request.POST.get('pk', '').strip() or 0)
+            blocking_facts = facts_blocking_tag_delete(tag)
             if tag.builtin_code is not None:
                 messages.error(request, f'"{tag.name}" is a built-in tag and cannot be deleted.')
+            elif blocking_facts:
+                names = ', '.join(f'"{fact.name}"' for fact in blocking_facts)
+                messages.error(
+                    request,
+                    f'Tag "{tag.name}" is a source of the facts {names}; remove it from them first.',
+                )
             else:
                 name = tag.name
                 delete_tag(tag)

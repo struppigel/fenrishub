@@ -235,6 +235,14 @@
         {% if highlight.summary_title %}<span class="hl-summary-title">{{ highlight.summary_title }}</span>{% endif %}
         {% for stat in highlight.stats %}<span class="hl-stat"><span class="hl-stat-label">{{ stat.label }}:</span> <span class="hl-sev-{{ stat.severity }}">{{ stat.value }}</span></span>{% endfor %}
     </div>
+    {% if facts_found %}
+    <div class="hl-summary-facts">
+        <span class="hl-stat-label">facts found:</span>
+        {% for fact in facts_found %}
+        <span class="hl-summary-fact" title="{{ fact.description }}">{{ fact.name }}{% for no in fact.line_nos|slice:":5" %} <a href="#L{{ no }}" class="hl-jump" data-line="{{ no }}">L{{ no }}</a>{% endfor %}{% if fact.line_nos|length > 5 %} &hellip;{% endif %}{% if fact.wholelog and not fact.line_nos %} (whole log){% endif %}</span>{% if not forloop.last %},{% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
     {% if highlight.summary %}
     <ul class="hl-summary-list" style="--hl-summary-line: {{ highlight.summary_line_ch }}ch">
         {% for item in highlight.summary_shown %}

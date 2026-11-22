@@ -19,14 +19,17 @@ Version 2 of the API (see api_auth.API_VERSION) only added parameters, fields
 and endpoints: a request without the new parameters gets the same response as
 before. Search, the rule dry run and rule matching also take a POST with a JSON
 body, for input that does not fit a URL. Versions 3 (correlations in the
-analysis and get_case) and 4 (the correlations endpoint for every log type,
-get_case linked_findings) are additive the same way.
+analysis and get_case), 4 (the correlations endpoint for every log type,
+get_case linked_findings) and 5 (rule log types, tag categories) are additive
+the same way.
 """
 
 import re
 import time
 
-from django.db.models import Q
+from django.db import connection
+from django.db.models import Count, Q, TextField
+from django.db.models.functions import Cast
 from django.http import JsonResponse
 from django.urls import reverse
 
@@ -57,8 +60,12 @@ from ..api_params import (
     scope_cache_part,
     text_param,
 )
-from ..log_types import ANALYZED_LOG_TYPES, LOG_TYPE_SPOR
-from ..models import ClassificationRule, FixlistSnippet, InfectionCase, InfectionCaseLog, RuleTag, Speech, UploadedLog
+from ..log_types import (
+    ANALYZED_LOG_TYPES, LOG_TYPE_NAME_RE, LOG_TYPE_SPOR, normalize_log_type_selection, rule_scope_log_type,
+)
+from ..models import (
+    ClassificationRule, FixlistSnippet, InfectionCase, InfectionCaseLog, RuleTag, Speech, TagCategory, UploadedLog,
+)
 from ..rule_sets import resolve_user_rule_set_key, rule_set_label
 from ..status_types import STATUS_LABELS, VALID_STATUSES
 from ..rule_test_service import (
@@ -94,6 +101,7 @@ from .infection_cases import _build_case_timeline
 from .log_search import _build_matcher, _logs_in_id_order
 from .rules import (
     _apply_rule_edit,
+    _first_log_types,
     _patterns_for,
     _read_rule_test_payload,
     _rule_form_from_rule,
@@ -1496,6 +1504,8 @@ def _rule_list_row(rule):
         'priority': rule.priority,
         'is_enabled': rule.is_enabled,
         'whole_log': rule.whole_log,
+        # "all" (every log type, including ones added later) or the log type names.
+        'log_types': rule.log_scope_payload,
         'updated_at': _iso(rule.updated_at),
         'tags': [{'tag_id': tag.pk, 'name': tag.name} for tag in rule.tags.all()],
     }
@@ -1504,6 +1514,21 @@ def _rule_list_row(rule):
 def _visible_rules():
     """Every rule: the rules page shows every helper's rules to anyone logged in."""
     return ClassificationRule.objects.select_related('owner').prefetch_related('tags')
+
+
+def _rules_for_log_type(rules, log_type):
+    """The rules of `rules` that apply to a `log_type` log: every-type rules
+    and those whose log_types list holds exactly that name.
+
+    JSON containment on Postgres. SQLite has none, so there the stored JSON
+    text is searched for the quoted name, which only hits a whole entry since
+    log type names hold no quote (SQLite's LIKE ignores ASCII case).
+    """
+    if connection.vendor == 'postgresql':
+        return rules.filter(Q(all_log_types=True) | Q(log_types__contains=[log_type]))
+    return rules.annotate(log_types_text=Cast('log_types', TextField())).filter(
+        Q(all_log_types=True) | Q(log_types_text__contains=f'"{log_type}"')
+    )
 
 
 @api_token_required('api_v1_rules')
@@ -1539,6 +1564,14 @@ def api_rules(request):
     owner = (request.GET.get('owner') or '').strip()
     if owner:
         rules = rules.filter(owner__username__iexact=owner)
+    log_type = (request.GET.get('log_type') or '').strip()
+    if log_type:
+        if not LOG_TYPE_NAME_RE.match(log_type):
+            return _error('log_type must be a log type name, e.g. FRST&Addition or Spor.')
+        # The rules the analyzer applies to a log of that type (see
+        # log_types.rule_applies_to): 'Unknown' logs use every rule.
+        if rule_scope_log_type(log_type) is not None:
+            rules = _rules_for_log_type(rules, log_type)
     enabled = (request.GET.get('enabled') or '').strip()
     if enabled:
         if enabled not in ('0', '1'):
@@ -1587,12 +1620,60 @@ def _rule_detail(rule):
     }
 
 
+def _tag_category_summary(category, tag_count=None):
+    return {
+        'category_id': category.pk,
+        'name': category.name,
+        'color': category.color,
+        'priority': category.priority,
+        'is_default': category.is_default,
+        **({} if tag_count is None else {'tag_count': tag_count}),
+    }
+
+
+@api_token_required('api_v1_tag_categories')
+def api_tag_categories(request):
+    """Every tag category (the default one marked) with how many tags it holds."""
+    categories = TagCategory.objects.annotate(tag_count=Count('tags')).order_by('name')
+    return JsonResponse({
+        'categories': [_tag_category_summary(category, category.tag_count) for category in categories],
+    })
+
+
+def _resolve_tag_category(payload):
+    """(payload, error): a `category` given by name (case-insensitive) becomes
+    the `category_id` save_tag reads. Without `category` (or with null) the
+    payload keeps its meaning, so category_id alone works as before (null
+    there means the default category). Both given must agree; a malformed
+    category_id is left to save_tag's own check."""
+    if payload.get('category') is None:
+        return {key: value for key, value in payload.items() if key != 'category'}, None
+    name = payload['category']
+    if not isinstance(name, str) or not name.strip():
+        return None, 'Field "category" must be a tag category name.'
+    category = TagCategory.objects.filter(name__iexact=name.strip()).first()
+    if category is None:
+        return None, f'Unknown tag category: {name.strip()[:64]}. list_tag_categories shows the categories.'
+    category_id = payload.get('category_id')
+    if category_id is not None and (isinstance(category_id, bool) or not isinstance(category_id, int)):
+        return payload, None
+    if category_id is not None and category_id != category.pk:
+        return None, 'Fields "category" and "category_id" name different tag categories.'
+    resolved = {key: value for key, value in payload.items() if key != 'category'}
+    resolved['category_id'] = category.pk
+    return resolved, None
+
+
 @api_token_required('api_v1_tag_create', write=True)
 def api_tag_create(request):
-    """Create a rule tag. Same fields and checks as the tag editor."""
+    """Create a rule tag. Same fields and checks as the tag editor; the
+    category comes as category_id or by name (category), else the default."""
     payload, error = PayloadValidator.json_object(request)
     if error:
         return error
+    payload, message = _resolve_tag_category(payload)
+    if message:
+        return _error(message)
     tag, message = save_tag(request.user, None, payload)
     if message:
         return _error(message)
@@ -1601,13 +1682,17 @@ def api_tag_create(request):
 
 @api_token_required('api_v1_tag_update', write=True)
 def api_tag_update(request, tag_id):
-    """Change a rule tag; fields left out keep their values. Tags are never deleted here."""
+    """Change a rule tag; fields left out keep their values. Tags are never deleted here.
+    category_id or category (a name) moves the tag to another category."""
     tag = RuleTag.objects.filter(pk=tag_id).first()
     if tag is None:
         return _not_found()
     payload, error = PayloadValidator.json_object(request)
     if error:
         return error
+    payload, message = _resolve_tag_category(payload)
+    if message:
+        return _error(message)
     tag, message = save_tag(request.user, tag, payload)
     if message:
         return _error(message)
@@ -1800,6 +1885,11 @@ def _rule_write_fields(payload):
         if not isinstance(tag_ids, list) or any(isinstance(item, bool) or not isinstance(item, int) for item in tag_ids):
             return None, 'Field "tag_ids" must be a list of integers.'
         fields['tag_ids'] = parse_tag_ids(tag_ids)
+    if 'log_types' in payload:
+        scope, message = normalize_log_type_selection(payload['log_types'])
+        if message:
+            return None, f'Field "log_types": {message}.'
+        fields['log_scope'] = scope
     return fields, None
 
 
@@ -1830,7 +1920,9 @@ def api_rule_create(request):
     """Create rules owned by the caller, as the add-rule page does: one per line of source_text.
 
     Body: {status, match_type, source_text, description?, priority?, whole_log?,
-    color_whole_line?, tag_ids?}. Without tag_ids the auto-apply tags decide.
+    color_whole_line?, tag_ids?, log_types?}. Without tag_ids the auto-apply tags decide.
+    log_types is "all" or a list of log type names; without it file path rules
+    apply to every log type and other rules to FRST&Addition, FRST and Addition.
     Patterns duplicating one of the caller's rules are skipped; 409 when all are.
     """
     payload, error = PayloadValidator.json_object(request)
@@ -1857,6 +1949,7 @@ def api_rule_create(request):
         color_whole_line=fields.get('color_whole_line', False),
         tag_ids=fields.get('tag_ids'),
         source_name=f'api:{request.user.username}',
+        log_scope=fields.get('log_scope'),
     )
     if message:
         return _error(message)
@@ -1878,8 +1971,8 @@ def api_rule_update(request, rule_id):
     """Change a rule, as the rule editor does; fields left out keep their values.
 
     Body: any of {status, match_type, source_text, description, is_enabled,
-    whole_log, color_whole_line, priority, tag_ids}. tag_ids replaces the
-    rule's tags. A superuser may change any helper's rule; it keeps its owner,
+    whole_log, color_whole_line, priority, tag_ids, log_types}. tag_ids replaces the
+    rule's tags; log_types is "all" or a list of log type names. A superuser may change any helper's rule; it keeps its owner,
     and duplicates are checked within that owner's rules.
     """
     rules = ClassificationRule.objects.filter(pk=rule_id)
@@ -1922,8 +2015,10 @@ RULE_COMPARE_TIME_BUDGET_S = 10.0
 RULE_COMPARE_EXTRA_UNITS = 10
 
 
-def _rule_test_corpus(scope_pks, hidden, literals):
+def _rule_test_corpus(scope_pks, hidden, literals, log_type_by_upload=None):
     """``(upload_id, content)`` of the logs in `scope_pks`, newest first, minus `hidden`.
+
+    `log_type_by_upload` (a dict, optional) is filled with each yielded log's type.
 
     `literals` (or None) prefilter in the database: a log must contain one of
     them, case-insensitively - a superset of what a substring or exact rule
@@ -1935,9 +2030,13 @@ def _rule_test_corpus(scope_pks, hidden, literals):
         for literal in literals:
             contains_one |= Q(content__icontains=literal)
         logs = logs.filter(contains_one)
-    rows = logs.order_by('-created_at', '-pk').values_list('pk', 'upload_id', 'content').iterator(chunk_size=10)
-    for pk, upload_id, content in rows:
+    rows = logs.order_by('-created_at', '-pk').values_list(
+        'pk', 'upload_id', 'content', 'log_type',
+    ).iterator(chunk_size=10)
+    for pk, upload_id, content, log_type in rows:
         if pk not in hidden:
+            if log_type_by_upload is not None:
+                log_type_by_upload[upload_id] = log_type
             yield upload_id, content
 
 
@@ -2059,8 +2158,9 @@ def api_rule_test(request):
             return JsonResponse(response)
 
         literals = literal_prefilter(patterns, match_type)
+        log_type_by_upload = {}
         scan = scan_logs_for_rule_matches(
-            patterns, status, match_type, _rule_test_corpus(scope_pks, hidden, literals),
+            patterns, status, match_type, _rule_test_corpus(scope_pks, hidden, literals, log_type_by_upload),
             max_lines=sample_lines, deadline=deadline, count_all=True,
         )
         matches = scan.pop('matches')
@@ -2073,6 +2173,7 @@ def api_rule_test(request):
             exclude_rule_id=compare_rule_id,
             rule_set_key=rule_set_key,
             buckets=_get_cached_rule_buckets(rule_set_key),
+            line_log_types=_first_log_types(matches, log_type_by_upload),
         )
         results = built['results']
         response.update({

@@ -1,0 +1,261 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}{% if fact %}Edit{% else %}New{% endif %} Fact - Fenris{% endblock %}
+
+{% block page_context_label %}facts / {% if fact %}edit{% else %}new{% endif %}{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
+<style>
+    .fact-editor {
+        max-width: 1100px;
+    }
+
+    .fact-editor textarea {
+        min-height: 70px;
+        font-family: inherit;
+        font-size: 13px;
+    }
+
+    .fact-editor-error {
+        color: var(--la-error-text);
+        font-size: 12px;
+        margin-bottom: 8px;
+    }
+
+    .fact-editor-note {
+        font-size: 12px;
+        color: var(--la-text-neutral);
+        margin-bottom: 8px;
+    }
+
+    /* Small type throughout, like the other editors: no browser-default sizes. */
+    .fact-editor-back {
+        display: inline-block;
+        margin-bottom: 6px;
+        font-size: 12px;
+    }
+
+    .fact-editor h2 {
+        font-size: 14px;
+    }
+
+    /* As in the tag editor (its fieldset styles are page-local there too). */
+    .fact-editor .tag-conditions {
+        border: 1px solid var(--la-border);
+        padding: 8px 10px;
+        margin: 0 0 12px;
+    }
+
+    .fact-editor .tag-conditions legend {
+        font-size: 12px;
+        color: var(--la-text-primary);
+        padding: 0 4px;
+    }
+
+    .fact-source {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 14px;
+        align-items: center;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--la-border);
+    }
+
+    .fact-source select {
+        width: auto;
+    }
+
+    .fact-source-statuses {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 8px;
+        font-size: 12px;
+    }
+
+    .fact-source-statuses label,
+    .fact-source label.checkbox-label {
+        font-weight: normal;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+    }
+
+    .fact-rules-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+    }
+
+    .fact-rules-table td {
+        padding: 4px 6px;
+        border-bottom: 1px solid var(--la-border);
+        vertical-align: top;
+    }
+
+    .fact-rules-table .fact-rule-source {
+        font-family: monospace;
+        word-break: break-all;
+    }
+
+    .fact-rule-disabled {
+        opacity: 0.55;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="fact-editor">
+    <a href="{% url 'facts' %}{% if return_q %}?{{ return_q }}{% endif %}" class="fact-editor-back">&larr; back to facts</a>
+    <h2>{% if fact %}edit fact "{{ fact.name }}"{% else %}new fact{% endif %}</h2>
+    {% if error %}<div class="fact-editor-error" role="alert">{{ error }}</div>{% endif %}
+
+    <form method="post" id="factForm">
+        {% csrf_token %}
+        <input type="hidden" name="tag_sources" id="factTagSources">
+        <div class="form-group">
+            <label for="factName">name</label>
+            <input type="text" id="factName" name="name" maxlength="{{ name_max_length }}" value="{{ form_name }}" placeholder="e.g. Kaspersky installed" autocomplete="off" required>
+        </div>
+        <div class="form-group">
+            <label for="factDescription">description</label>
+            <textarea id="factDescription" name="description" placeholder="notes for analysts">{{ form_description }}</textarea>
+        </div>
+
+        <fieldset class="tag-conditions">
+            <legend>found by rules with a tag</legend>
+            <div class="fact-editor-note">Wherever a rule with the tag matched. Rules with conditions don't count.</div>
+            <div id="factSourceRows"></div>
+            <button type="button" id="factAddSource">add tag source</button>
+        </fieldset>
+    </form>
+
+    {% if fact %}
+    <fieldset class="tag-conditions">
+        <legend>found by fact rules</legend>
+        <div class="fact-editor-note">Own patterns; they never set a status.</div>
+        {% if fact_rules %}
+        <table class="fact-rules-table">
+            {% for rule in fact_rules %}
+            <tr class="{% if not rule.is_enabled %}fact-rule-disabled{% endif %}">
+                <td>{{ rule.get_match_type_display }}{% if rule.whole_log %} &middot; whole log{% endif %}{% if rule.only_entry_types %} &middot; only: {{ rule.only_entry_types|join:", " }}{% endif %}</td>
+                <td class="fact-rule-source">{{ rule.source_text }}</td>
+                <td>{{ rule.owner.username }}</td>
+                <td>{{ rule.log_scope_label }}</td>
+                <td style="white-space: nowrap;">
+                    {% if rule.owner_id == request.user.id or request.user.is_superuser %}
+                    <a href="{% url 'edit_fact_rule' rule.pk %}"><button type="button">edit</button></a>
+                    <form method="post" action="{% url 'facts' %}" style="display: inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="pk" value="{{ rule.pk }}">
+                        <input type="hidden" name="return_to" value="fact">
+                        <button type="submit" name="action" value="fact_rule_toggle">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button>
+                        <button type="submit" name="action" value="fact_rule_delete" class="delete-btn" onclick="return confirm('Delete this fact rule?');">delete</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <div class="fact-editor-note">none yet</div>
+        {% endif %}
+        <a href="{% url 'add_rule' %}?record_fact=1&amp;fact={{ fact.pk }}"><button type="button">add fact rule</button></a>
+    </fieldset>
+    {% endif %}
+
+    {# At the end of the page; form= ties them to the fact form above. #}
+    <div class="button-group">
+        <button type="submit" form="factForm">save fact</button>
+        <a href="{% url 'facts' %}"><button type="button">back to facts</button></a>
+    </div>
+</div>
+
+{{ editor_data|json_script:"factEditorData" }}
+<script>
+(function () {
+    const DATA = JSON.parse(document.getElementById('factEditorData').textContent);
+    const rows = document.getElementById('factSourceRows');
+
+    function option(value, label, selected) {
+        const el = document.createElement('option');
+        el.value = String(value);
+        el.textContent = label;
+        el.selected = selected;
+        return el;
+    }
+
+    function addRow(source) {
+        source = source || { tag_id: null, statuses: [], mode: 'matched', include_filepath_fallback: false };
+        const row = document.createElement('div');
+        row.className = 'fact-source';
+
+        const tag = document.createElement('select');
+        tag.className = 'fact-source-tag';
+        tag.setAttribute('aria-label', 'tag');
+        tag.appendChild(option('', 'choose a tag…', source.tag_id === null));
+        DATA.tags.forEach(function (item) { tag.appendChild(option(item.id, item.name, item.id === source.tag_id)); });
+        row.appendChild(tag);
+
+        const statuses = document.createElement('span');
+        statuses.className = 'fact-source-statuses';
+        statuses.title = 'only rules with these statuses count (none ticked: any)';
+        DATA.statuses.forEach(function (item) {
+            const label = document.createElement('label');
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.value = item.code;
+            box.checked = source.statuses.includes(item.code);
+            label.appendChild(box);
+            label.appendChild(document.createTextNode(item.code));
+            label.title = item.label;
+            statuses.appendChild(label);
+        });
+        row.appendChild(statuses);
+
+        const mode = document.createElement('select');
+        mode.className = 'fact-source-mode';
+        mode.setAttribute('aria-label', 'counts when the rule');
+        mode.title = 'matched: also when a stronger rule shadowed it; decided: only when it set the line\'s status';
+        DATA.modes.forEach(function (item) { mode.appendChild(option(item.value, item.label, item.value === source.mode)); });
+        row.appendChild(mode);
+
+        const fallbackLabel = document.createElement('label');
+        fallbackLabel.className = 'checkbox-label';
+        const fallback = document.createElement('input');
+        fallback.type = 'checkbox';
+        fallback.className = 'fact-source-fallback';
+        fallback.checked = Boolean(source.include_filepath_fallback);
+        fallbackLabel.appendChild(fallback);
+        fallbackLabel.appendChild(document.createTextNode(' file path fallback'));
+        fallbackLabel.title = 'also count a parsed rule that matched through its file path alone';
+        row.appendChild(fallbackLabel);
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = 'remove';
+        remove.addEventListener('click', function () { row.remove(); });
+        row.appendChild(remove);
+
+        rows.appendChild(row);
+    }
+
+    DATA.sources.forEach(addRow);
+    document.getElementById('factAddSource').addEventListener('click', function () { addRow(); });
+
+    document.getElementById('factForm').addEventListener('submit', function () {
+        const sources = Array.from(rows.querySelectorAll('.fact-source')).map(function (row) {
+            const tagValue = row.querySelector('.fact-source-tag').value;
+            return {
+                tag_id: tagValue === '' ? null : parseInt(tagValue, 10),
+                statuses: Array.from(row.querySelectorAll('.fact-source-statuses input:checked')).map(function (box) { return box.value; }),
+                mode: row.querySelector('.fact-source-mode').value,
+                include_filepath_fallback: row.querySelector('.fact-source-fallback').checked,
+            };
+        }).filter(function (source) { return source.tag_id !== null; });
+        document.getElementById('factTagSources').value = JSON.stringify(sources);
+    });
+})();
+</script>
+{% endblock %}

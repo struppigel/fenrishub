@@ -15,6 +15,7 @@ from django.urls import path, reverse
 from .analyzer import (
     find_rule_duplicates,
     import_rules_from_lines,
+    invalidate_rule_buckets_cache,
     reparse_rules,
 )
 from .rule_sets import invalidate_for_rule_owner
@@ -30,6 +31,10 @@ def _invalidate_for_owner_ids(owner_ids):
     for owner in User.objects.filter(pk__in=owner_ids).select_related('fenris_profile'):
         invalidate_for_rule_owner(owner)
 from .models import (
+    Fact,
+    FactRule,
+    FactTagSource,
+    RuleCondition,
     AccessLog,
     ApiRequestLog,
     ApiToken,
@@ -237,9 +242,74 @@ class CentralboxAutoQueueAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     readonly_fields = ('hash', 'priority', 'reason', 'enqueued_at')
 
 
+class RuleConditionInline(admin.TabularInline):
+    """A rule's conditions on facts, read-only: they are edited in the rule
+    editor, which keeps ClassificationRule.condition_key in step with them."""
+    model = RuleCondition
+    extra = 0
+    can_delete = False
+    fields = ('fact', 'polarity', 'scope')
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class FactTagSourceInline(admin.TabularInline):
+    model = FactTagSource
+    extra = 0
+    fields = ('tag', 'statuses', 'mode', 'include_filepath_fallback')
+
+
+@admin.register(Fact)
+class FactAdmin(admin.ModelAdmin):
+    list_display = ('name', 'updated_by', 'updated_at')
+    search_fields = ('name', 'description')
+    readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
+    inlines = [FactTagSourceInline]
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        invalidate_rule_buckets_cache(None)
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        invalidate_rule_buckets_cache(None)
+
+    def delete_model(self, request, obj):
+        super().delete_model(request, obj)
+        invalidate_rule_buckets_cache(None)
+
+    def delete_queryset(self, request, queryset):
+        super().delete_queryset(request, queryset)
+        invalidate_rule_buckets_cache(None)
+
+
+@admin.register(FactRule)
+class FactRuleAdmin(admin.ModelAdmin):
+    list_display = ('fact', 'owner', 'match_type', 'source_text', 'whole_log', 'is_enabled', 'updated_at')
+    list_filter = ('match_type', 'whole_log', 'is_enabled', 'owner')
+    search_fields = ('source_text', 'description', 'fact__name', 'owner__username')
+    readonly_fields = ('created_at', 'updated_at')
+
+    # Fact rules feed the analyzer's rule buckets: drop them on every change.
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        invalidate_rule_buckets_cache(None)
+
+    def delete_model(self, request, obj):
+        super().delete_model(request, obj)
+        invalidate_rule_buckets_cache(None)
+
+    def delete_queryset(self, request, queryset):
+        super().delete_queryset(request, queryset)
+        invalidate_rule_buckets_cache(None)
+
+
 @admin.register(ClassificationRule)
 class ClassificationRuleAdmin(admin.ModelAdmin):
     change_list_template = 'admin/fixlist/classificationrule/change_list.html'
+    inlines = [RuleConditionInline]
     list_display = ('status', 'owner', 'match_type', 'entry_type', 'short_source', 'company', 'source_name', 'is_enabled', 'updated_at')
     list_filter = ('status', 'owner', 'match_type', 'entry_type', 'is_enabled', 'source_name')
     search_fields = ('source_text', 'description', 'name', 'filepath', 'clsid', 'company', 'owner__username')
@@ -260,7 +330,16 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                     'source_name',
                     'is_enabled',
                     'color_whole_line',
+                    'apply_to_block',
+                    'only_entry_types',
                 )
+            },
+        ),
+        (
+            'Log types',
+            {
+                'description': 'Leave "all log types" off to apply the rule only to the listed log type names.',
+                'fields': ('all_log_types', 'log_types'),
             },
         ),
         (
@@ -603,8 +682,13 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         threshold_s = threshold_ms / 1000.0
 
         buckets = _analyzer._get_cached_rule_buckets(SHARED_RULE_SET_KEY)
-        fallback = buckets[ClassificationRule.MATCH_REGEX]
-        re2_rules = buckets.get('__regex_set_rules') or []
+        # Rules with conditions sit in a matcher set of their own but run on
+        # every line just the same, so they are probed too.
+        conditional = buckets.get('__conditional') or {}
+        fallback = list(buckets[ClassificationRule.MATCH_REGEX]) + list(
+            conditional.get(ClassificationRule.MATCH_REGEX) or []
+        )
+        re2_rules = list(buckets.get('__regex_set_rules') or []) + list(conditional.get('__regex_set_rules') or [])
         total_regex_rules = ClassificationRule.objects.filter(
             match_type=ClassificationRule.MATCH_REGEX,
             is_enabled=True,

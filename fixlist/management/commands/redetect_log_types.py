@@ -2,11 +2,7 @@ from collections import Counter
 
 from django.core.management.base import BaseCommand
 
-from fixlist.log_types import ANALYZED_LOG_TYPES
 from fixlist.models import UploadedLog, detect_log_type, _bump_logtype_rules_version
-
-
-ANALYZED = set(ANALYZED_LOG_TYPES)
 
 
 class Command(BaseCommand):
@@ -21,8 +17,8 @@ class Command(BaseCommand):
         parser.add_argument('--dry-run', action='store_true',
                             help='Report what would change without saving.')
         parser.add_argument('--rebuild-stats', action='store_true',
-                            help='Also recompute analyzer stats for any log that transitions '
-                                 'into an analyzer-eligible type. Slow.')
+                            help='Also recompute analyzer stats for every log whose type changed '
+                                 '(rules are scoped by log type). Slow.')
         parser.add_argument('--chunk-size', type=int, default=200)
 
     def handle(self, *args, **opts):
@@ -41,10 +37,9 @@ class Command(BaseCommand):
                 continue
             transitions[(log.log_type, new_type)] += 1
             if not opts['dry_run']:
-                old_type = log.log_type
                 log.log_type = new_type
                 log.save(update_fields=['log_type', 'updated_at'])
-                if opts['rebuild_stats'] and new_type in ANALYZED and old_type not in ANALYZED:
+                if opts['rebuild_stats']:
                     recalc_ids.append(log.id)
 
         self.stdout.write(f'Scanned {scanned} log(s).')

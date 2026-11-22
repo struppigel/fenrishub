@@ -206,6 +206,11 @@ function renderRuleCandidates(ruleChanges) {
             ruleTagOverrides.delete(changeId);
         }
     });
+    [...ruleLogTypeOverrides.keys()].forEach((changeId) => {
+        if (!validChangeIds.has(changeId)) {
+            ruleLogTypeOverrides.delete(changeId);
+        }
+    });
     [...removedRuleCandidateIds].forEach((changeId) => {
         if (!validChangeIds.has(changeId)) {
             removedRuleCandidateIds.delete(changeId);
@@ -337,6 +342,10 @@ function renderRuleCandidates(ruleChanges) {
             body.appendChild(tagEditor);
         }
 
+        if (window.RuleForm) {
+            body.appendChild(buildRuleLogScopeEditor(change, changeId));
+        }
+
         const controls = document.createElement('div');
         controls.className = 'rule-candidate-controls';
 
@@ -373,6 +382,49 @@ function renderRuleCandidates(ruleChanges) {
     renderPlannedExistingRuleChanges(ruleChanges);
 }
 
+// "applies to": the candidate's log type scope. The server sends the scope the
+// rule gets (the default for this log, or an existing rule's own); a pick here
+// is sent back as the change's log_types.
+function buildRuleLogScopeEditor(change, changeId) {
+    const editor = document.createElement('div');
+    editor.className = 'rule-log-scope-inline';
+    // Same reason as the description: clicks must not reach the row's toggle.
+    editor.addEventListener('click', (event) => event.stopPropagation());
+    editor.addEventListener('keydown', (event) => event.stopPropagation());
+
+    const label = document.createElement('span');
+    label.className = 'rule-description-inline-label';
+    label.textContent = 'applies to:';
+    editor.appendChild(label);
+
+    const root = document.createElement('div');
+    editor.appendChild(root);
+    const value = ruleLogTypeOverrides.has(changeId)
+        ? ruleLogTypeOverrides.get(changeId)
+        : (change.log_types === undefined ? RuleForm.ALL_LOG_TYPES : change.log_types);
+    const picked = RuleForm.logScopeChoices((currentRulePreview || {}).log_type_choices || [], value);
+    RuleForm.createLogScopePicker({
+        root,
+        choices: picked.choices,
+        unknown: picked.unknown,
+        value,
+        onChange: (next) => {
+            ruleLogTypeOverrides.set(changeId, next);
+        },
+    });
+    return editor;
+}
+
+// A rule being saved whose review pick is "selected log types" with none
+// ticked; the server would refuse it, so saving stops and says so. Candidates
+// left unselected do not block (their empty pick is not sent).
+function emptyLogScopeOverride() {
+    const selected = new Set(selectedRuleIdsFromModal().map(String));
+    return [...ruleLogTypeOverrides.entries()].some(
+        ([changeId, value]) => selected.has(String(changeId)) && Array.isArray(value) && value.length === 0
+    );
+}
+
 function selectedRuleIdsFromModal() {
     return [...selectedRuleCandidateIds];
 }
@@ -382,6 +434,7 @@ function resetRuleReviewDraftState() {
     selectedRuleCandidateIds = [];
     ruleDescriptionOverrides.clear();
     ruleTagOverrides.clear();
+    ruleLogTypeOverrides.clear();
     removedRuleCandidateIds.clear();
     expandedRuleCandidateId = null;
 
@@ -438,7 +491,10 @@ async function fetchRulePreview(pendingChanges) {
 
     rulePreviewInFlight = true;
     try {
-        const preview = await Fenris.postJson(PREVIEW_RULE_CHANGES_URL, { pending_changes: pendingChanges }, { errorMessage: 'Failed to preview pending rule changes.' });
+        const preview = await Fenris.postJson(PREVIEW_RULE_CHANGES_URL, {
+            pending_changes: pendingChanges,
+            log_type: currentLogType,
+        }, { errorMessage: 'Failed to preview pending rule changes.' });
         renderRulePreview(preview);
         initializeConflictWizard(preview);
         const firstUnresolvedIndex = findNextWizardIndex(0);
@@ -461,6 +517,7 @@ async function persistPendingRuleChanges(pendingChanges, selectedRuleIds, confli
         pending_changes: pendingChanges,
         selected_rule_change_ids: selectedRuleIds,
         conflict_resolutions: conflictResolutions,
+        log_type: currentLogType,
     }, { errorMessage: 'Failed to persist selected rules.' });
 }
 
@@ -469,6 +526,10 @@ async function submitWithRulePersist(persistSelectedRules) {
     const submitTarget = ruleSubmitTarget;
 
     if (persistSelectedRules && pendingPayload.length > 0) {
+        if (emptyLogScopeOverride()) {
+            alert('A rule has "selected log types" with none ticked. Tick at least one log type, or pick "all log types".');
+            return;
+        }
         const selectedRuleIds = selectedRuleIdsFromModal();
         const conflictResolutions = serializeConflictResolutions();
 

@@ -64,10 +64,19 @@ python manage.py purge_old_trash       # cleanup soft-deleted records
 - `static/js/common.js` (`Fenris.*`: CSRF, JSON requests, clipboard, storage, status maps) is loaded on every page;
   also `popup_menu.js`, `correlation_format.js`, `rule_form.js`, `rule_highlight.js`, `library_page.js`
 - `static/css/components.css` — shared buttons, tabs, modal backdrop, tables
+- `fixlist/log_layout.py` — `analyzed_lines` (the analyzer's line walk with log page line numbers; pair
+  payload entries with log lines through it), `layout` (block and section of each line)
+- `fixlist/fact_service.py` — facts outside the analyzer: names at serve time, condition keys, invalidation
 
 ## Rule matching
 
-Matcher tiers (first match wins, lower tiers are shadowed):
-exact > parsed_entry > filepath > substring > regex
+Every rule has a numeric priority (0-20, default by match type: exact 19, parsed 15, filepath 11,
+substring 7, regex/script 3). The highest priority on a line decides; lower ones are shadowed.
+Within it, status precedence: B > P > C > ! > G > S > I > J > ?
 
-Within a tier, status precedence: B > P > C > ! > G > S > I > J > ?
+Facts (advanced): a `Fact` is found by `FactRule`s (own pattern, never a status) and `FactTagSource`s
+(classification rules with a tag that matched). A classification rule with `RuleCondition`s
+(require/forbid a fact in its block, section or the log) applies only where all hold. Analysis runs in
+two passes: rules without conditions and facts first, then conditional rules on the lines they matched;
+conditional rules never feed facts, so there are no cycles. `ClassificationRule.condition_key` is part of
+a rule's identity: lookups of "the same rule" must include it (plain rules have '').

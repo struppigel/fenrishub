@@ -299,6 +299,12 @@
     margin-bottom: 6px;
 }
 
+/* The facts the rules found in the log, each with links to its first lines. */
+.hl-summary-facts {
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+
 .hl-summary-title {
     color: var(--la-text-primary);
     font-weight: 600;

@@ -204,6 +204,12 @@ let ruleDescriptionOverrides = new Map();
 // Change id -> [{id, name, description}] picked in the rule review. Not part of
 // the analyzer draft: a restored draft comes back without its review tags.
 let ruleTagOverrides = new Map();
+// Change id -> 'all' | [log type names] picked in the rule review; without one
+// the server gives the rule its default scope for currentLogType.
+let ruleLogTypeOverrides = new Map();
+// The analyzed log's type (from the analysis payload): rules are scoped by log
+// type, so line details and rule reviews are asked about this log's rules.
+let currentLogType = '';
 let removedRuleCandidateIds = new Set();
 let expandedRuleCandidateId = null;
 let ruleSubmitTarget = RULE_SUBMIT_TARGET_CREATE_FIXLIST;
@@ -968,6 +974,11 @@ function getPendingStatusChangesPayload() {
             if (ruleTagOverrides.has(changeId)) {
                 payload.tag_ids = ruleTagOverrides.get(changeId).map((tag) => tag.id);
             }
+            // An empty pick is never sent: it would make the server drop the change.
+            const logTypes = ruleLogTypeOverrides.get(changeId);
+            if (logTypes !== undefined && !(Array.isArray(logTypes) && logTypes.length === 0)) {
+                payload.log_types = logTypes;
+            }
 
             return payload;
         });
@@ -977,22 +988,26 @@ function getPendingStatusChangesPayload() {
 const SPLITLINES_BOUNDARY = new RegExp(
     '\\r\\n|[\\n\\r\\x0b\\x0c\\x1c\\x1d\\x1e\\x85' + String.fromCharCode(0x2028, 0x2029) + ']'
 );
-let blankLineGapMemo = null;
+let rawLineLayoutMemo = null;
+const INDENT_TAB_WIDTH = 4;
 
-// The analyzer drops blank lines, so its entries carry no line positions.
-// Rebuild them from the raw log: gaps[k] is the number of blank lines just
-// before entry k (none before the first entry, trailing ones are dropped).
-// Each non-blank raw line must match its entry's text; on any mismatch
-// (e.g. the textarea no longer holds the analysed text) this returns null
-// and the view shows no blank lines, exactly as before.
-function computeBlankLineGaps(rawText, entries) {
+// The analyzer drops blank lines and strips every line, so its entries carry
+// neither line positions nor indentation. Rebuild both from the raw log:
+// gaps[k] is the number of blank lines just before entry k (none before the
+// first entry, trailing ones are dropped), indents[k] the width of entry k's
+// leading whitespace (a tab counts as INDENT_TAB_WIDTH). Display only: rules
+// keep matching the stripped line. Each non-blank raw line must match its
+// entry's text; on any mismatch (e.g. the textarea no longer holds the
+// analysed text) this returns null and the view shows the lines as before.
+function computeRawLineLayout(rawText, entries) {
     if (!rawText || !Array.isArray(entries) || !entries.length) {
         return null;
     }
-    if (blankLineGapMemo && blankLineGapMemo.text === rawText && blankLineGapMemo.entries === entries) {
-        return blankLineGapMemo.gaps;
+    if (rawLineLayoutMemo && rawLineLayoutMemo.text === rawText && rawLineLayoutMemo.entries === entries) {
+        return rawLineLayoutMemo.layout;
     }
     const gaps = new Array(entries.length).fill(0);
+    const indents = new Array(entries.length).fill(0);
     let index = 0;
     let gap = 0;
     let ok = true;
@@ -1008,11 +1023,25 @@ function computeBlankLineGaps(rawText, entries) {
         }
         gaps[index] = index === 0 ? 0 : gap;
         gap = 0;
+        const leading = piece.slice(0, piece.length - piece.trimStart().length);
+        let width = 0;
+        for (const char of leading) width += char === '\t' ? INDENT_TAB_WIDTH : 1;
+        indents[index] = width;
         index += 1;
     }
-    const result = ok && index === entries.length ? gaps : null;
-    blankLineGapMemo = { text: rawText, entries, gaps: result };
-    return result;
+    const layout = ok && index === entries.length ? { gaps, indents } : null;
+    rawLineLayoutMemo = { text: rawText, entries, layout };
+    return layout;
+}
+
+function computeBlankLineGaps(rawText, entries) {
+    const layout = computeRawLineLayout(rawText, entries);
+    return layout ? layout.gaps : null;
+}
+
+function computeLineIndents(rawText, entries) {
+    const layout = computeRawLineLayout(rawText, entries);
+    return layout ? layout.indents : null;
 }
 
 // The analysis payload as JSON, '' when it cannot be serialized.
@@ -1032,6 +1061,7 @@ function analysisPayloadIsShown(payload) {
 
 function applyAnalysisPayload(payload, options = {}) {
     appliedAnalysisText = analysisPayloadText(payload) || null;
+    currentLogType = typeof payload.log_type === 'string' ? payload.log_type : '';
     const nextLines = Array.isArray(payload.lines) ? payload.lines : [];
     const shouldResetCopied = Boolean(options.resetCopied);
     const preservePendingChanges = Boolean(options.preservePendingChanges);
@@ -1045,6 +1075,7 @@ function applyAnalysisPayload(payload, options = {}) {
             pendingChangeSequence = 0;
             ruleDescriptionOverrides.clear();
             ruleTagOverrides.clear();
+            ruleLogTypeOverrides.clear();
             removedRuleCandidateIds.clear();
             expandedRuleCandidateId = null;
         }
@@ -1056,6 +1087,7 @@ function applyAnalysisPayload(payload, options = {}) {
             pendingChangeSequence = 0;
             ruleDescriptionOverrides.clear();
             ruleTagOverrides.clear();
+            ruleLogTypeOverrides.clear();
             removedRuleCandidateIds.clear();
             expandedRuleCandidateId = null;
         }
@@ -1071,6 +1103,8 @@ function applyAnalysisPayload(payload, options = {}) {
     }
     applyPendingOverrides();
     renderWarnings(payload.warnings || []);
+    // Payloads cached before facts existed have no `facts`: none found.
+    renderFactsFound(payload.facts || []);
     if (typeof updateSpeechSuggestionsFromAnalysis === 'function') {
         updateSpeechSuggestionsFromAnalysis(payload);
     }

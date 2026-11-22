@@ -10,12 +10,15 @@ from .analyzer import (
     STATUS_LABELS,
     STATUS_PRECEDENCE,
     _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY,
+    _get_cached_rule_buckets,
     _load_rule_buckets,
+    entry_types_allow,
     find_substring_ranges,
     inspect_line_matches,
     parse_rule_line,
     rule_frst_entry,
 )
+from .log_types import rule_scope_log_type
 from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
 from .status_types import dominant_status
 from .rule_sets import SHARED_RULE_SET_KEY
@@ -168,6 +171,13 @@ def _match_line(pattern: dict, match_type: str, line: str) -> dict:
     return outcome
 
 
+def _line_types_allow(only_entry_types, line: str) -> bool:
+    """Whether a rule restricted to `only_entry_types` may match `line`."""
+    if not only_entry_types:
+        return True
+    return entry_types_allow(only_entry_types, {entry.entry_type for entry in ex.iter_frst_entries(line.strip())})
+
+
 def build_rule_test_results(
     patterns: list,
     status: str,
@@ -177,6 +187,8 @@ def build_rule_test_results(
     exclude_rule_id=None,
     rule_set_key: str = SHARED_RULE_SET_KEY,
     buckets=None,
+    line_log_types=None,
+    only_entry_types=None,
 ) -> dict:
     """Build per-line rule test results for the rules test API.
 
@@ -194,6 +206,13 @@ def build_rule_test_results(
     API passes the caller's, so they agree with that caller's analyses, along
     with the cached ``buckets`` of that rule set; without them the rules are
     loaded fresh, as the browser preview has always done.
+
+    ``line_log_types`` (aligned with ``lines``) names the log type each line
+    came from, so its existing verdict uses only the rules scoped to that type,
+    as the analyzer does. Without it, or for a line of no type, every rule counts.
+
+    ``only_entry_types`` restricts the candidate rule to lines parsed as one of
+    those entry types, as the analyzer does (analyzer.entry_types_allow).
     """
     compiled_patterns = [
         _compile_pattern(pattern, status, match_type) for pattern in patterns
@@ -204,12 +223,25 @@ def build_rule_test_results(
     else:
         new_priority = max(PRIORITY_MIN, min(PRIORITY_MAX, int(priority)))
 
-    # Load existing rule buckets once for inspect_line_matches.
+    # Load existing rule buckets once for inspect_line_matches. The per-type
+    # ones come the same way: cached when the caller passed cached buckets,
+    # else fresh, so a rule saved a moment ago shows in the browser preview.
+    from_cache = buckets is not None
     if buckets is None:
         buckets = _load_rule_buckets(rule_set_key)
+    buckets_by_type = {}
+
+    def buckets_for(index):
+        log_type = rule_scope_log_type(line_log_types[index]) if line_log_types else None
+        if log_type is None:
+            return buckets
+        if log_type not in buckets_by_type:
+            load = _get_cached_rule_buckets if from_cache else _load_rule_buckets
+            buckets_by_type[log_type] = load(rule_set_key, log_type)
+        return buckets_by_type[log_type]
 
     results = []
-    for raw_line in lines:
+    for line_index, raw_line in enumerate(lines):
         line = (raw_line or '').strip() if match_type in ('exact', 'parsed', 'filepath') else (raw_line or '')
         result = {'line': line, 'matched': False, 'parsed': None, 'match_ranges': None}
 
@@ -223,13 +255,16 @@ def build_rule_test_results(
                 result['parsed'] = outcome['parsed']
             if outcome['script_error'] and 'script_error' not in result:
                 result['script_error'] = outcome['script_error']
+        if result['matched'] and not _line_types_allow(only_entry_types, line):
+            result['matched'] = False
+            ranges = []
         result['match_ranges'] = _merge_ranges(ranges) or None
 
         # Inspect existing rule matches for this line.
         stripped = line.strip()
         if stripped:
             inspection = inspect_line_matches(
-                stripped, buckets=buckets, exclude_rule_id=exclude_rule_id
+                stripped, buckets=buckets_for(line_index), exclude_rule_id=exclude_rule_id
             )
             result['existing_status'] = inspection['dominant_status']
             result['existing_status_label'] = STATUS_LABELS.get(inspection['dominant_status'], 'unknown')
@@ -332,6 +367,7 @@ def scan_logs_for_rule_matches(
     max_lines: int,
     deadline: float,
     count_all: bool = False,
+    only_entry_types=None,
 ) -> dict:
     """Find the distinct lines a rule matches across stored logs.
 
@@ -382,6 +418,8 @@ def scan_logs_for_rule_matches(
                 line_hits += 1
                 continue
             if not any(_match_line(p, match_type, line)['matched'] for p in compiled_patterns):
+                continue
+            if not _line_types_allow(only_entry_types, line):
                 continue
 
             entry = found.get(line)

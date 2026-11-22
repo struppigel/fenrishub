@@ -131,7 +131,8 @@ class RuleLogsPreviewApiTests(TestCase):
 
     def test_page_names_the_log_type(self):
         response = self.client.get(reverse("add_rule"))
-        self.assertContains(response, "newest uploaded FRST&amp;Addition logs")
+        # The preview scans the rule's log types; a new rule's are the FRST types.
+        self.assertContains(response, "newest uploaded FRST&amp;Addition, FRST, Addition logs")
 
     def test_skips_logs_sent_to_another_helper(self):
         other = make_user("bob")

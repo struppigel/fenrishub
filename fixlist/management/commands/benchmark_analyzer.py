@@ -130,7 +130,7 @@ class Command(BaseCommand):
         per_line = []
         original_collect = analyzer._collect_effective_and_shadowed_matches_for_line
         analyzer._collect_effective_and_shadowed_matches_for_line = (
-            lambda line, _buckets, exclude_rule_id=None: matches[line]
+            lambda line, _buckets, exclude_rule_id=None, **_kwargs: matches[line]
         )
         try:
             for run in range(runs + 1):

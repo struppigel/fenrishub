@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from .analyzer import ANALYSIS_PAYLOAD_FORMAT, analyze_log_text
 from . import background, trash
+from .log_types import ANALYZED_LOG_TYPES, rule_scope_log_type
 from .models import UploadedLog, UploadedLogAnalysis
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,11 @@ def get_fresh_cached_analysis(uploaded_log: UploadedLog, rule_set_key: str):
     """Return the cached analyzer payload for (upload, rule set), or None if unusable.
 
     A cache row is unusable when the upload's content changed since it was
-    written, or when an older analyzer wrote it in a shape no longer produced.
+    written, when an older analyzer wrote it in a shape no longer produced, or
+    when it was analyzed as another log type (rules are scoped by log type).
+    A payload from before log type scopes (no `log_type`) used every rule; for
+    the FRST types that is what their scoped rules give, and an 'Unknown' log
+    still uses every rule; for other types it is not.
     """
     cached = UploadedLogAnalysis.objects.filter(
         upload=uploaded_log, rule_set_key=rule_set_key,
@@ -27,6 +32,12 @@ def get_fresh_cached_analysis(uploaded_log: UploadedLog, rule_set_key: str):
         or not isinstance(cached.payload, dict)
         or cached.payload.get('format') != ANALYSIS_PAYLOAD_FORMAT
     ):
+        return None
+    payload_type = cached.payload.get('log_type')
+    if payload_type is None:
+        if uploaded_log.log_type not in ANALYZED_LOG_TYPES and rule_scope_log_type(uploaded_log.log_type):
+            return None
+    elif payload_type != uploaded_log.log_type:
         return None
     return cached.payload
 
@@ -68,7 +79,7 @@ def get_or_compute_upload_analysis(uploaded_log: UploadedLog, rule_set_key: str)
     payload = get_fresh_cached_analysis(uploaded_log, rule_set_key)
     if payload is not None:
         return payload, False
-    payload = analyze_log_text(uploaded_log.content, rule_set_key)
+    payload = analyze_log_text(uploaded_log.content, rule_set_key, uploaded_log.log_type)
     try:
         store_cached_analysis(uploaded_log, rule_set_key, payload)
     except Exception:

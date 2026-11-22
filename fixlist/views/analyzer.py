@@ -25,12 +25,14 @@ from ..analyzer import (
     VALID_STATUSES,
 )
 from ..centralbox import is_available as centralbox_is_available
-from ..models import ClassificationRule, Fixlist, UploadedLog
+from ..log_types import LOG_TYPE_NAME_RE
+from ..models import ClassificationRule, Fixlist, UploadedLog, known_log_type_names
 from ..rule_sets import (
     SHARED_RULE_SET_KEY,
     resolve_effective_rule_set_key,
     resolve_user_rule_set_key,
 )
+from ..fact_service import attach_fact_info
 from ..tagging import attach_rule_tags, attach_tags_to_matches
 from ..upload_utils import get_fresh_cached_analysis, store_cached_analysis
 from ..validators import PayloadValidator
@@ -143,6 +145,15 @@ def log_analyzer_view(request):
     )
 
 
+def _same_text(text: str, content: str) -> bool:
+    """Whether analyzer text is an upload's content. A textarea turns CRLF and
+    a lone CR into LF, so line endings are compared normalized; the analysis
+    splits lines the same way either way."""
+    def normalized(value):
+        return (value or '').replace('\r\n', '\n').replace('\r', '\n')
+    return normalized(text) == normalized(content)
+
+
 @guest_or_login_required
 @require_http_methods(["POST"])
 def analyze_log_api(request):
@@ -166,7 +177,7 @@ def analyze_log_api(request):
     else:
         viewer_key = resolve_user_rule_set_key(request.user)
 
-    analysis = analyze_log_text(log_text, viewer_key)
+    uploaded_log = None
     if upload_id and not is_guest_request(request):
         # Cache row is per-(upload, rule_set_key), so populating it for an
         # arbitrary viewer's key can't step on the recipient's row. Look the
@@ -178,24 +189,29 @@ def analyze_log_api(request):
         uploaded_log = UploadedLog.objects.filter(
             upload_id=upload_id, deleted_at__isnull=True,
         ).first()
-        if uploaded_log:
-            try:
-                store_cached_analysis(uploaded_log, viewer_key, analysis)
-                # count_* on the upload reflects the assigned recipient's view.
-                # Only update it when this viewer's ruleset matches the
-                # upload's effective ruleset AND the viewer is the recipient
-                # (or the upload is unassigned). Otherwise an uninvolved
-                # viewer would overwrite the recipient's listing stats.
-                if (
-                    viewer_key == resolve_effective_rule_set_key(uploaded_log)
-                    and get_action_scoped_uploads(request.user).filter(pk=uploaded_log.pk).exists()
-                ):
-                    uploaded_log.apply_analysis_summary(analysis.get('summary', {}))
-                    uploaded_log.save(update_fields=UploadedLog.analysis_stat_update_fields())
-            except Exception:
-                logger.exception('Failed to refresh cached analysis for upload_id=%s', upload_id)
+    # The text may have been edited in the analyzer. Only the upload's own text
+    # uses its stored log type (rules are scoped by it; edited text gets the
+    # detected type) and is cached as the upload's analysis.
+    is_upload_text = uploaded_log is not None and _same_text(log_text, uploaded_log.content)
+    analysis = analyze_log_text(log_text, viewer_key, uploaded_log.log_type if is_upload_text else None)
+    if is_upload_text:
+        try:
+            store_cached_analysis(uploaded_log, viewer_key, analysis)
+            # count_* on the upload reflects the assigned recipient's view.
+            # Only update it when this viewer's ruleset matches the
+            # upload's effective ruleset AND the viewer is the recipient
+            # (or the upload is unassigned). Otherwise an uninvolved
+            # viewer would overwrite the recipient's listing stats.
+            if (
+                viewer_key == resolve_effective_rule_set_key(uploaded_log)
+                and get_action_scoped_uploads(request.user).filter(pk=uploaded_log.pk).exists()
+            ):
+                uploaded_log.apply_analysis_summary(analysis.get('summary', {}))
+                uploaded_log.save(update_fields=UploadedLog.analysis_stat_update_fields())
+        except Exception:
+            logger.exception('Failed to refresh cached analysis for upload_id=%s', upload_id)
     # After the cache write: tags are looked up per request, never cached.
-    return JsonResponse(attach_rule_tags(analysis), json_dumps_params=ANALYSIS_JSON_PARAMS)
+    return JsonResponse(attach_fact_info(attach_rule_tags(analysis)), json_dumps_params=ANALYSIS_JSON_PARAMS)
 
 
 @deny_guests
@@ -221,9 +237,26 @@ def uploaded_log_cached_analysis_api(request, upload_id):
         return JsonResponse({'has_cache': False, 'payload': None, 'source_content_hash': None})
     return JsonResponse({
         'has_cache': True,
-        'payload': attach_rule_tags(payload),
+        'payload': attach_fact_info(attach_rule_tags(payload)),
         'source_content_hash': uploaded_log.content_hash,
     }, json_dumps_params=ANALYSIS_JSON_PARAMS)
+
+
+def _optional_log_type(payload: dict) -> str | None:
+    """The open log's type from an analyzer payload (`log_type`), or None.
+
+    Rules are scoped by log type; an absent or malformed value means no log
+    context, where every rule applies.
+    """
+    value = payload.get('log_type')
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or not LOG_TYPE_NAME_RE.match(value):
+        return None
+    # Only defined types: each type gets its own cached rule buckets, so a
+    # client-chosen name must not add entries. An undefined name is no context.
+    return value if value in known_log_type_names() else None
 
 
 @guest_or_login_required
@@ -236,6 +269,7 @@ def analyze_line_details_api(request):
 
     line = payload.get('line', '')
     requested_status = payload.get('status', ClassificationRule.STATUS_UNKNOWN)
+    log_type = _optional_log_type(payload)
 
     if not isinstance(line, str):
         return PayloadValidator.error_response('Field "line" must be a string.')
@@ -256,7 +290,7 @@ def analyze_line_details_api(request):
         status=requested_status,
         source_name=f'analyzer-inspect:{actor_label}',
     )
-    inspection = inspect_line_matches(line)
+    inspection = inspect_line_matches(line, log_type=log_type)
     attach_tags_to_matches(inspection.get('matches'), inspection.get('shadowed_matches'))
 
     return JsonResponse(
@@ -282,7 +316,9 @@ def preview_pending_rule_changes_api(request):
     if pending_changes is not None and not isinstance(pending_changes, list):
         return PayloadValidator.error_response('Field "pending_changes" must be a list.')
 
-    preview = _build_pending_rule_preview(normalized_changes, request.user.username, request.user)
+    preview = _build_pending_rule_preview(
+        normalized_changes, request.user.username, request.user, log_type=_optional_log_type(payload),
+    )
     preview['invalid_changes'] = invalid_changes
     return JsonResponse(preview)
 
@@ -314,6 +350,7 @@ def persist_pending_rule_changes_api(request):
         username=request.user.username,
         source_prefix='analyzer-persist',
         owner=request.user,
+        log_type=_optional_log_type(payload),
     )
 
     from ..rule_sets import invalidate_for_rule_owner

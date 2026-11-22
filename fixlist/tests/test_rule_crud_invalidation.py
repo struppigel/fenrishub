@@ -15,6 +15,11 @@ from ..models import (
 )
 
 
+
+def _cached_rule_sets():
+    """The rule sets with cached buckets (entries are keyed (rule set, log type))."""
+    return {key[0] for key in _rule_buckets_cache}
+
 def _seed_cache_rows(user):
     """Create two UploadedLogAnalysis rows (shared + private:user.id) for a log."""
     log = UploadedLog.objects.create(
@@ -61,8 +66,8 @@ class SharedOwnerInvalidatesBothBucketsTests(TestCase):
 
         # In-memory bucket caches for the affected keys are flushed so the
         # next analysis runs with the new rule.
-        self.assertNotIn('shared', _rule_buckets_cache)
-        self.assertNotIn(f'private:{self.user.id}', _rule_buckets_cache)
+        self.assertNotIn('shared', _cached_rule_sets())
+        self.assertNotIn(f'private:{self.user.id}', _cached_rule_sets())
 
         # Persistent analysis payloads survive — the analyzer page serves
         # them instantly while the fresh analysis runs in the background.
@@ -94,8 +99,8 @@ class PrivateOwnerInvalidatesOnlyPrivateBucketTests(TestCase):
 
         # 'shared' bucket cache is preserved (private user's rules don't
         # contribute to shared); 'private:bob' bucket cache is flushed.
-        self.assertIn('shared', _rule_buckets_cache)
-        self.assertNotIn(f'private:{self.user.id}', _rule_buckets_cache)
+        self.assertIn('shared', _cached_rule_sets())
+        self.assertNotIn(f'private:{self.user.id}', _cached_rule_sets())
 
         # Both persistent payloads survive — neither gets deleted on rule edit.
         remaining = set(

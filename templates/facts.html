@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Facts - Fenris{% endblock %}
+
+{% block page_context_label %}facts{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
+<style>
+    .facts-toolbar {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .facts-toolbar input[type="text"] {
+        flex: 0 1 240px;
+        min-width: 120px;
+        width: auto;
+        padding: 4px 8px;
+    }
+
+    .facts-toolbar button {
+        white-space: nowrap;
+    }
+
+    .facts-count {
+        font-size: 12px;
+        color: var(--la-text-muted);
+        margin-bottom: 8px;
+    }
+
+    /* Like a tag's name in the tag list. */
+    .fact-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--la-info);
+    }
+
+    @media (max-width: 640px) {
+        .facts-toolbar input[type="text"] {
+            width: 100%;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div>
+    <form method="get" action="{% url 'facts' %}" class="facts-toolbar">
+        <input type="text" name="q" value="{{ search_query }}" placeholder="search name, notes" aria-label="search facts" class="search-filter-input">
+        <button type="submit">search</button>
+        {% if search_query %}<a href="{% url 'facts' %}" class="search-filter-clear">clear</a>{% endif %}
+        <span style="flex: 1;"></span>
+        <a href="{% url 'add_rule' %}?record_fact=1"><button type="button" title="a rule that records a fact wherever it matches">new fact rule</button></a>
+        <a href="{% url 'fact_add' %}"><button type="button" title="a named fact; fact rules and rules with a tag find it">new fact</button></a>
+    </form>
+
+    {% if facts %}
+        <div class="facts-count">{{ page_obj.paginator.count }} fact{{ page_obj.paginator.count|pluralize }}{% if page_obj.paginator.num_pages > 1 %} &middot; page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}{% endif %}</div>
+        {% for fact in facts %}
+        <div class="tag-row">
+            <div class="tag-row-header">
+                <span>
+                    <span class="fact-name">{{ fact.name }}</span>
+                    <span class="tag-row-meta">
+                        - {{ fact.fact_rule_count }} fact rule{{ fact.fact_rule_count|pluralize }},
+                        {{ fact.tag_source_count }} tag source{{ fact.tag_source_count|pluralize }}
+                        {% if fact.updated_by %}, edited by {{ fact.updated_by.username }}{% endif %}
+                    </span>
+                </span>
+                <div class="tag-row-actions">
+                    <a href="{% url 'fact_edit' fact.pk %}"><button type="button">edit</button></a>
+                    <form method="post" style="display: inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="pk" value="{{ fact.pk }}">
+                        <input type="hidden" name="return_q" value="{{ current_query_string }}">
+                        <button type="submit" class="delete-btn" onclick="return confirm('Delete fact &quot;{{ fact.name|escapejs }}&quot; with its {{ fact.fact_rule_count }} fact rule(s) and {{ fact.tag_source_count }} tag source(s)?');">delete</button>
+                    </form>
+                </div>
+            </div>
+            {% if fact.description %}<div class="tag-row-description">{{ fact.description }}</div>{% endif %}
+        </div>
+        {% endfor %}
+        {% include "partials/pagination.html" %}
+    {% elif has_any_facts %}
+        <div class="info-box">
+            no facts match. <a href="{% url 'facts' %}">show all facts</a>
+        </div>
+    {% else %}
+        <div class="info-box">
+            no facts yet. A fact is something a log shows, e.g. "Kaspersky installed". Fact rules (and rules with a tag) find it; rules with conditions use it.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

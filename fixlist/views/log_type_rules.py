@@ -18,6 +18,7 @@ from ..models import (
     RESERVED_LOG_TYPE_NAMES,
     LogTypeBadge,
     LogTypeDetectionRule,
+    known_log_type_names,
     detect_log_type,
 )
 from ..validators import PayloadValidator
@@ -26,10 +27,7 @@ from .utils import flash_validation_errors
 
 
 def _existing_log_type_names() -> list:
-    names = set(LogTypeBadge.objects.values_list('name', flat=True))
-    names.update(LogTypeDetectionRule.objects.values_list('log_type', flat=True))
-    names.discard('Unknown')
-    return sorted(names)
+    return known_log_type_names()
 
 
 def _badge_color_for(log_type: str) -> str:

@@ -136,6 +136,28 @@ function shape() {
     container.classList.remove('tag-filter-active');
 })();
 
+// ---------------------------------------------------------------------------
+// indentation (display only; entries stay stripped)
+// ---------------------------------------------------------------------------
+(function testIndents() {
+    const e = entries('item => x', 'path: C:\\a.exe', 'loaded: y', 'plain');
+    const indents = computeLineIndents('item => x\n    path: C:\\a.exe\r\n\n\tloaded: y\nplain\n', e);
+    assert('indents count leading spaces, a tab as 4',
+        JSON.stringify(indents) === JSON.stringify([0, 4, 4, 0]), JSON.stringify(indents));
+    assert('a text mismatch gives no indents', computeLineIndents('other', e) === null);
+})();
+
+(function testRenderIndents() {
+    logInput.value = '2026-11-20 08:14:02 [task] X\n    program: C:\\run.exe\nnext item\n' + ' '.repeat(40) + 'deep';
+    analyzedLines = entries('2026-11-20 08:14:02 [task] X', 'program: C:\\run.exe', 'next item', 'deep');
+    renderLogLines();
+    const texts = [...container.querySelectorAll('.log-line .line-text')];
+    assert('an indented line is shown indented', texts[1].style.paddingLeft === '4ch', texts[1].style.paddingLeft);
+    assert('unindented lines get no padding', texts[0].style.paddingLeft === '' && texts[2].style.paddingLeft === '');
+    assert('deep indentation is capped', texts[3].style.paddingLeft === MAX_LINE_INDENT_CH + 'ch', texts[3].style.paddingLeft);
+    assert('the line text itself stays stripped', texts[1].textContent === 'program: C:\\run.exe', texts[1].textContent);
+})();
+
 const summary = document.getElementById('summary');
 summary.textContent = passed + ' passed, ' + failed + ' failed';
 summary.style.color = failed === 0 ? '#6f9' : '#f66';
