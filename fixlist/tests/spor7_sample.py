@@ -69,6 +69,15 @@ SPOR7 = '\n'.join([
     '',
     f'2026-10-27 14:37:02 [1033] installed: Some App 2.0 (Some Inc) => SYSTEM; name Some App; product code {{{PRODUCT_CODE}}}',
     '',
+    # Spor 0.8.0 (the one block of a newer version: every parsed type in one sample)
+    '--- Cached Windows Installer packages (C:\\Windows\\Installer) ---',
+    '(line: cached [kind] package [status] => name; version; publisher; product code <==== flags)',
+    '',
+    f'2026-10-27 14:37:00 [cached msi] C:\\Windows\\Installer\\4f1a2b.msi [unsigned] => name Some App; version 2.0;'
+    f' publisher Some Inc; product code {{{PRODUCT_CODE}}} <==== !msi-script-action',
+    '    custom action: Launch: INSTALLFOLDER wscript.exe //B "[run.wsf]"',
+    '    folder: C:\\Users\\Bob\\AppData\\Local\\Some Inc\\Some App\\',
+    '',
     '--- Store and MSIX apps: added, registered, removed or failed in the last 30 days (AppXDeploymentServer log) ---',
     '(line: last [operation] package [status] => display name; first; times; from; source; full trust <==== flags)',
     '',

@@ -461,6 +461,20 @@ body:not(.no-word-wrap) #logLines > .log-blank-line {
     contain-intrinsic-size: auto 21px;
 }
 
+/* Every part of a row in whole pixels, so the row is too (21px): the badge and
+   the copy / search / info buttons were 12px x 1.2 = 14.4px plus their 1px
+   borders, 16.4px, and rows 21.4px high now and then lost their bottom border
+   (two lines with no line between them, e.g. under a legend filter). */
+#logLines .log-line .status-badge,
+#logLines .log-line .line-copy-trigger,
+#logLines .log-line .line-search-trigger {
+    line-height: 14px;
+}
+
+#logLines .log-line .line-correlation-trigger {
+    height: 16px;
+}
+
 /* While a filter narrows the view, spacers would only pile up. */
 .log-lines-container[class*="hide-status-"] > .log-blank-line,
 .tag-filter-active .log-blank-line {

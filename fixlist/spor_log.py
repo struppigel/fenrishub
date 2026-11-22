@@ -37,6 +37,10 @@ SECTION_AMCACHE_FILES = 'AMCACHE FILES'
 SECTION_LEGEND = 'LEGEND'
 # Spor 0.6.0+ (USB worm profile): drive contents, autorun.inf, shortcuts.
 SECTION_USB = 'USB DRIVES'
+# Spor 0.8.0: loader project folders found by a sweep of Windows cache folders
+# (PavinLoader), each folder a line ending in "\" with "entry:" (its programs,
+# scripts, .resx), "others:" (other names) and "group:" sub-lines.
+SECTION_DROPS = 'DROP FOLDERS'
 SECTION_REMOTE = 'REMOTE ACCESS'
 # Sections read by their own functions, not as mentions (iter_mentions).
 _NOT_MENTION_SECTIONS = frozenset({
@@ -139,10 +143,11 @@ _SOFTWARE_FOLDER_RE = re.compile(r'(?:^|; )folder ([^;]{1,400})')
 # launcher: Spor 0.3.0; USB DRIVES, Spor 0.6.0: "target:" a file autorun.inf
 # starts, "icon file:" its icon, "argument file:" a file a shortcut's
 # arguments name (a worm's hidden copy), "item list target:" a shortcut's
-# target from its shell items when it differs).
+# target from its shell items when it differs; Spor 0.8.0: "group:" the first
+# folder of a drop folder's group, so the members link to it).
 _PATH_SUB_KEYS = frozenset({
     'loaded', 'path', 'target', 'entry', 'files', 'dll', 'module', 'script',
-    'argument file', 'icon file', 'item list target',
+    'argument file', 'icon file', 'item list target', 'group',
 })
 # REMOTE ACCESS "[RMM folder]" lines (Spor 0.6.0): "exe: <path>", "file: <time> <path>".
 _REMOTE_PATH_SUB_KEYS = frozenset({'exe', 'file'})
@@ -265,7 +270,7 @@ _HIDDEN_ATTRIBUTES_RE = re.compile(r'(?:^|; )attributes [^;]*\b(?:hidden|system)
 
 
 def is_hidden_folder(item):
-    r"""A USB DRIVES folder line (path ending in "\") that is hidden, system or
+    r"""A USB DRIVES or DROP FOLDERS folder line (path ending in "\") that is hidden, system or
     flagged: it speaks for the files inside it (a worm's hidden folder)."""
     return (item.item.endswith('\\') and len(item.item.rstrip('\\')) > 2
             and (bool(_HIDDEN_ATTRIBUTES_RE.search(item.rest)) or bool(item.loud_flags)))
@@ -1017,8 +1022,10 @@ def iter_mentions(lines, known=None):
                     if key == 'module':
                         # loaded by the program of the line (a Run value's or task's target), not the registry entry
                         owner = next((mention.path for mention in current if mention.role == 'target'), owner)
+                    # a group's first folder keys like that folder's own line (without the "\")
+                    path = folder_path(item.item) if key == 'group' else item.item
                     out.append(Mention(
-                        index + 1, item.item, title, subsection, item.time or (parent.time if parent else ''),
+                        index + 1, path, title, subsection, item.time or (parent.time if parent else ''),
                         parent.tags if parent else '', stripped[:300], key,
                         owner[:200], item.status, item.flags, parent_line=parent_no if parent else 0,
                     ))
@@ -1039,7 +1046,7 @@ def iter_mentions(lines, known=None):
             if is_path(item.item):
                 folder = title == SECTION_DEFENDER and item.tags == 'Paths' and 'exclusion' in subsection.lower()
                 path = item.item
-                if title == SECTION_USB:
+                if title in (SECTION_USB, SECTION_DROPS):
                     # Folders end in "\"; a hidden or flagged one speaks for its files.
                     folder = is_hidden_folder(item)
                     path = folder_path(path)
@@ -1077,7 +1084,7 @@ SOFTWARE_EVENTS = {'1033': 'installed', '1034': 'removed', '11708': 'install fai
 @dataclass
 class SoftwareFact:
     line_no: int
-    kind: str               # uninstall / installer / package
+    kind: str               # uninstall / installer / cached / package
     name: str               # display name (or the package full name)
     subsection: str = ''
     time: str = ''
@@ -1097,6 +1104,8 @@ def _software_kind(subsection):
         return 'uninstall'
     if lower.startswith('windows installer'):
         return 'installer'
+    if lower.startswith('cached windows installer'):
+        return 'cached'
     if lower.startswith('store and msix'):
         return 'package'
     return ''
@@ -1126,7 +1135,9 @@ def iter_software(lines):
     """A SoftwareFact per line of the SOFTWARE section's sub-sections:
     installed programs (Uninstall keys, with "key HKLM\\...\\X" in FRST's
     form), Windows Installer events (1033 / 1034 / 11708, with "product
-    code {GUID}") and Store / MSIX operations (with the package "folder").
+    code {GUID}"), cached Windows Installer packages (Spor 0.8.0: "name N;
+    version V; publisher P; product code {GUID}", the packages Spor flags)
+    and Store / MSIX operations (with the package "folder").
     The "key:" sub-lines of a collapsed group ("27 entries from ...") are
     facts too. TIMELINE's [INS] lines repeat these and are not read."""
     written = lines
@@ -1182,6 +1193,8 @@ def iter_software(lines):
                 details['program'] = program[:300]
             # The item's own status is the program's ("=> program [unsigned]").
             item.status = status
+        elif kind == 'cached':
+            details, unlabelled = parse_labelled(item.rest, SOFTWARE_LABELS)
         elif kind == 'installer':
             details, unlabelled = parse_labelled(item.rest, SOFTWARE_LABELS)
             details['event'] = SOFTWARE_EVENTS.get(item.tags, item.tags)
@@ -1192,7 +1205,9 @@ def iter_software(lines):
                 details['display name'] = unlabelled[0]
         if kind == 'installer' and unlabelled:
             details['user'] = unlabelled[0]
-        name = details.get('display name') or details.get('name') or item.item
+        # a cached package's file name is random: its product code, not the file, when it has no name
+        fallback = details.get('product code', '') if kind == 'cached' else item.item
+        name = details.get('display name') or details.get('name') or fallback
         if not item.rest and kind == 'uninstall':
             continue   # a collapsed group's own line: its "key:" sub-lines are the facts
         text, extra = as_written(written, index + 1)

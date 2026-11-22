@@ -27,7 +27,7 @@ from . import spor_log as sl
 # Every entry_type parse_block produces (a test checks the module's literals).
 SPOR_ENTRY_TYPES = (
     "spor_run", "spor_service", "spor_task", "spor_startup", "spor_defender", "spor_defender_exclusion",
-    "spor_software", "spor_installer", "spor_package", "spor_process", "spor_file",
+    "spor_software", "spor_installer", "spor_cached_msi", "spor_package", "spor_process", "spor_file",
 )
 # The parsed types a rule can be restricted to: FRST's, then Spor's.
 ALL_ENTRY_TYPES = ex.ENTRY_TYPES + SPOR_ENTRY_TYPES
@@ -194,6 +194,19 @@ def _installer(item, _subs_found):
     return _entry('spor_installer', name=name, clsid=product_code, attributes=event)
 
 
+def _cached_msi(item, _subs_found):
+    """A cached Windows Installer package Spor flags (Spor 0.8.0, SOFTWARE):
+    "C:\\Windows\\Installer\\x.msi [status] => name N; version V; publisher P;
+    product code {GUID}". The cached file's name is random, and so may be its
+    signature state (Windows caches a changed copy): neither is part of it."""
+    details, _unlabelled = sl.parse_labelled(item.rest, sl.SOFTWARE_LABELS)
+    name = details.get('name', '')
+    product_code = details.get('product code', '').strip().strip('{}')
+    if not name and not product_code:
+        return None
+    return _entry('spor_cached_msi', name=name, company=details.get('publisher', ''), clsid=product_code)
+
+
 def _software(item, _subs_found):
     program, status, rest = sl._split_program(item.rest)
     details, _unlabelled = sl.parse_labelled(rest, sl.SOFTWARE_LABELS)
@@ -253,6 +266,8 @@ def _parse_item(item, texts):
     if len(tags) != 1:
         return None
     tag = tags[0]
+    if tag == 'cached msi':
+        return _cached_msi(item, subs)
     if tag in _EXCLUSION_KINDS:
         value = item.item.strip()
         if not value:
@@ -317,7 +332,7 @@ def line_path(text, *, sub_line=None):
 # (A FILES line's "file: md5 ...; size ..." names no path, and is a detail.)
 _OTHER_FILE_KEYS = frozenset({
     'file', 'process', 'resource', 'dll', 'module', 'loaded', 'path', 'script', 'files', 'folder',
-    'action', 'exe', 'icon file', 'argument file', 'item list target',
+    'action', 'exe', 'icon file', 'argument file', 'item list target', 'group',
 })
 
 

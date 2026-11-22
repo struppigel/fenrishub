@@ -53,13 +53,15 @@ def _spor_file_infos(upload_id, lines):
         yield path, _file_info_entry(upload_id, LOG_TYPE_SPOR, line_no, path, 'spor_amcache', {}, {'sha1': sha1})
 
 
-SOFTWARE_ROLES = {'uninstall': 'uninstall entry', 'installer': 'installer event', 'package': 'package'}
+SOFTWARE_ROLES = {'uninstall': 'uninstall entry', 'installer': 'installer event', 'cached': 'cached package',
+                  'package': 'package'}
 
 
 def _software_entries(upload_id, lines, index):
     """Spor's SOFTWARE facts: an Uninstall entry under its key (Addition's
     Installed Programs line) and its install folder; a Windows Installer
-    event under its MSI product code; a Store / MSIX package under its folder
+    event under its MSI product code; a cached Windows Installer package
+    under its product code and install folder; a Store / MSIX package under its folder
     (Addition's Packages line, and the files inside)."""
     for fact in spor_log.iter_software(lines):
         details = fact.details
@@ -80,10 +82,15 @@ def _software_entries(upload_id, lines, index):
                     index.setdefault(key, []).append(entry)
             if details.get('folder'):
                 _add_folder_entry(index, details['folder'], entry)
-        elif fact.kind == 'installer':
+        elif fact.kind in ('installer', 'cached'):
             key = msi_key(details.get('product code', ''))
             if key:
                 index.setdefault(key, []).append(entry)
+            if fact.kind == 'cached':
+                # one "folder:" line per install folder and profile (unfold joins them, the details keep the first)
+                folders = [value for key, value in fact.extra if key == 'folder'] or [details.get('folder', '')]
+                for folder in dict.fromkeys(f.strip() for f in folders if f and f.strip()):
+                    _add_folder_entry(index, folder, entry)
         elif details.get('folder'):
             _add_folder_entry(index, details['folder'], entry)
 
@@ -132,9 +139,10 @@ def spor_log_entries(upload_id, lines, index, known=None, usb_files=None):
         _add_path_entry(index, path, entry)
     for mention in spor_log.iter_mentions(lines, known):
         entry = _mention_entry(upload_id, LOG_TYPE_SPOR, mention)
-        if mention.folder and mention.section == spor_log.SECTION_USB:
-            # A worm's hidden folder on a drive: speaks for the files inside
-            # (not a broad one, e.g. a hidden C:\ProgramData in the root listing).
+        if mention.folder and mention.section in (spor_log.SECTION_USB, spor_log.SECTION_DROPS):
+            # A worm's hidden folder on a drive, a flagged loader project
+            # folder: speaks for the files inside (not a broad one, e.g. a
+            # hidden C:\ProgramData in the root listing).
             _add_folder_entry(index, mention.path, entry)
         else:
             _add_path_entry(index, mention.path, entry)
@@ -220,6 +228,39 @@ def _file_of(index, key):
         if entry.get('file'):
             return entry['file']
     return ntpath.basename(key.rstrip('\\'))[:120]
+
+
+def _group_entries(upload_id, lines, known, index):
+    """The "group:" sub-lines of SUMMARY and TIMELINE (Spor 0.8.0: the first
+    folder of a drop folder's group) under that folder, so the members' lines
+    and the first folder's link up. DROP FOLDERS' own group: lines are
+    mentions (iter_mentions)."""
+    profile = spor_log.user_profile(lines, known)
+    for title, start, end in spor_log.iter_sections(lines):
+        if title not in (spor_log.SECTION_SUMMARY, spor_log.SECTION_TIMELINE):
+            continue
+        parent = ''   # the item line above, split only when it has a group: line
+        for at in range(start + 1, end):
+            body = lines[at].rstrip('\r')
+            sub = spor_log._sub_line(body)
+            if sub is None:
+                if body.strip() and not body[:1].isspace():
+                    parent = body.strip()
+                continue
+            key, value = sub
+            if key != 'group' or not value:
+                continue
+            item = spor_log.split_item(value, known, profile)
+            folder = spor_log.folder_path(item.item)
+            if not item.trusted or not spor_log.is_path(folder):
+                continue
+            owner = spor_log.split_item(parent, known, profile) if parent else None
+            entry = _plain_mention(
+                upload_id, LOG_TYPE_SPOR, at + 1, body.strip(), 'group', ntpath.basename(folder),
+                section=title, time=owner.time if owner else '', tags=owner.tags if owner else '',
+            )
+            entry['parent'] = owner.item[:200] if owner else ''
+            _add_path_entry(index, folder, entry)
 
 
 def _summary_pairs(upload_id, lines, known, index):
@@ -460,6 +501,7 @@ def build(upload_id, lines, known=None):
     spor_log_entries(upload_id, lines, index, known, usb_files)
     _defender_event_entries(upload_id, lines, known, index)
     _timeline_entries(upload_id, lines, known, index)
+    _group_entries(upload_id, lines, known, index)
     pairs = _summary_pairs(upload_id, lines, known, index)
     _install_entries(upload_id, lines, known, index)
     by_line = _line_keys(index)

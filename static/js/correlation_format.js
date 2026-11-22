@@ -115,6 +115,10 @@ window.CorrelationFormat = (function () {
         if (entry.role === 'shortcut') return 'the shortcut itself';
         if (entry.role === 'uninstall entry') return 'installed program';
         if (entry.role === 'installer event') return 'Windows Installer';
+        // Spor 0.8.0: a cached Windows Installer package Spor flagged (!msi-script-action)
+        if (entry.role === 'cached package') return 'cached Windows Installer package';
+        // Spor 0.8.0: a drop folder of the group this folder starts (its group: line; parent = that folder)
+        if (entry.role === 'group') return parent ? 'group member ' + parent : 'group member';
         if (entry.role === 'package') return 'Store / MSIX package';
         if (entry.role === 'removed by MAU') return 'removed by MAU';
         if (entry.role === 'deleted by MAU') return 'deleted by MAU';
