@@ -28,6 +28,7 @@ from django.utils.safestring import mark_safe
 
 from . import spor_log
 from .frst_extractors import SPOR_CHAR_RE
+from .log_layout import analyzed_lines
 from .log_types import ANALYZED_LOG_TYPES, DETECTION_LOG_TYPES, LOG_TYPE_SPOR
 from .status_types import STATUS_PAINT
 
@@ -1738,28 +1739,23 @@ def apply_analysis_statuses(result, content, payload):
     """Mark each line of a FRST-type result with its cached analyzer verdict.
 
     The analyzer stores one entry per non-blank line, in order, without line
-    numbers (it walks `splitlines()` and strips). Walk the content the same way
-    and check every entry's text, so a stale or mismatched cache is never
-    painted onto the wrong lines. Adds B / P / ! lines to the summary.
+    numbers. Walk the content the same way (log_layout.analyzed_lines) and
+    check every entry's text, so a stale or mismatched cache is never painted
+    onto the wrong lines. Adds B / P / ! lines to the summary.
     Returns False (and changes nothing) when the payload doesn't line up.
     """
     entries = payload.get('lines') if isinstance(payload, dict) else None
     if not isinstance(entries, list):
         return False
-    matched = []
-    index = 0
-    for no, raw in enumerate(content.split('\n'), start=1):
-        for piece in raw.splitlines():
-            stripped = piece.strip()
-            if not stripped:
-                continue
-            if index >= len(entries) or not isinstance(entries[index], dict) \
-                    or entries[index].get('line') != stripped:
-                return False
-            matched.append((no, stripped, entries[index]))
-            index += 1
-    if index != len(entries):
+    walked = analyzed_lines(content)
+    if len(walked) != len(entries):
         return False
+    matched = []
+    for item in walked:
+        entry = entries[item.index]
+        if not isinstance(entry, dict) or entry.get('line') != item.text:
+            return False
+        matched.append((item.line_no, item.text, entry))
     by_no = {line.no: line for line in iter_lines(result)}
     items = []
     for no, text, entry in matched:

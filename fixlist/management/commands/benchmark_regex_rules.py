@@ -37,8 +37,12 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         buckets = analyzer._get_cached_rule_buckets(SHARED_RULE_SET_KEY)
 
-        fallback = buckets[ClassificationRule.MATCH_REGEX]
-        re2_rules = buckets.get('__regex_set_rules') or []
+        # Rules with conditions have a matcher set of their own; they run on every line too.
+        conditional = buckets.get('__conditional') or {}
+        fallback = list(buckets[ClassificationRule.MATCH_REGEX]) + list(
+            conditional.get(ClassificationRule.MATCH_REGEX) or []
+        )
+        re2_rules = list(buckets.get('__regex_set_rules') or []) + list(conditional.get('__regex_set_rules') or [])
 
         total_regex_rules = ClassificationRule.objects.filter(
             match_type=ClassificationRule.MATCH_REGEX,

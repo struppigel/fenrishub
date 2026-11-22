@@ -100,6 +100,7 @@ from .views.log_type_rules import (
     test_log_type_api,
     toggle_log_type_rule_view,
 )
+from .views.facts import edit_fact_rule_view, fact_add_view, fact_edit_view, facts_view
 from .views.rules import add_rule_view, edit_rule_view, rules_view, test_rule_api, test_rule_logs_api
 from .views.snippets import (
     add_snippet_view, edit_snippet_view, snippets_api, snippets_toggle_analyzer_api, snippets_view,
@@ -181,6 +182,10 @@ urlpatterns = [
     path('rules/', rules_view, name='rules'),
     path('rules/add/', add_rule_view, name='add_rule'),
     path('rules/<int:pk>/edit/', edit_rule_view, name='edit_rule'),
+    path('rules/facts/<int:pk>/edit/', edit_fact_rule_view, name='edit_fact_rule'),
+    path('facts/', facts_view, name='facts'),
+    path('facts/add/', fact_add_view, name='fact_add'),
+    path('facts/<int:pk>/edit/', fact_edit_view, name='fact_edit'),
     path('tags/', rule_tags_view, name='rule_tags'),
     path('tags/add/', rule_tag_add_view, name='rule_tag_add'),
     path('tags/categories/', tag_categories_view, name='tag_categories'),

@@ -18,6 +18,7 @@ from django.db.models.functions import Substr
 from urllib.parse import urlencode
 
 from .. import trash
+from ..fact_service import attach_fact_info
 from ..file_hashes import HASH_LOG_TYPES
 from ..log_types import LOG_TYPE_SPOR, is_analyzed_log_type
 from ..forms import UploadedLogForm
@@ -421,13 +422,15 @@ def _apply_rule_statuses(uploaded_log, highlight):
     applied = payload is not None and apply_analysis_statuses(highlight, uploaded_log.content, payload)
     if not applied:
         schedule_cached_analysis_refresh(uploaded_log, rule_set_key)
+    # The facts the analysis found, named (fact_service.attach_fact_info).
+    facts_found = attach_fact_info(payload).get('facts', []) if applied else []
     if uploaded_log.log_type not in UploadedLog.ANALYZED_LOG_TYPES:
         if len(highlight.summary) > summary_before:
             rules_title = f'{label} rules'
             highlight.summary_title = (
                 f'{highlight.summary_title} and {rules_title}' if highlight.summary_title else rules_title
             )
-        return
+        return facts_found
     if applied:
         highlight.summary_title = f'{label} rules'
     else:
@@ -436,6 +439,7 @@ def _apply_rule_statuses(uploaded_log, highlight):
         Stat(code, str(getattr(uploaded_log, field_name)), severity)
         for code, field_name, severity in _FRST_STAT_FIELDS
     ] + highlight.stats
+    return facts_found
 
 
 @login_required
@@ -501,8 +505,9 @@ def view_uploaded_log(request, upload_id):
     # None for log types without a highlighter (FRST etc.), which keep the plain view.
     highlight = highlight_log(uploaded_log.log_type, uploaded_log.content)
     correlation_context = {}
+    facts_found = []
     if highlight is not None and is_analyzed_log_type(uploaded_log.log_type):
-        _apply_rule_statuses(uploaded_log, highlight)
+        facts_found = _apply_rule_statuses(uploaded_log, highlight)
     if highlight is not None and uploaded_log.log_type in UploadedLog.ANALYZED_LOG_TYPES:
         # What related logs say about the files of these lines (cached).
         correlation_context = page_correlation_context(uploaded_log, request.user, highlight)
@@ -555,6 +560,7 @@ def view_uploaded_log(request, upload_id):
         'correlations': correlation_context,
         'related_count': related_count,
         'has_info_tabs': True,
+        'facts_found': facts_found,
     })
 
 

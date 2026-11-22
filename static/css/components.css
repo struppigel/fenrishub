@@ -65,6 +65,11 @@ button.action-btn.delete-btn {
     gap: 4px 16px;
 }
 
+.rule-log-scope .log-scope-mode {
+    width: auto;
+    max-width: 100%;
+}
+
 /* A grid, so the checkboxes line up in columns whatever the name lengths. */
 .rule-log-scope .log-type-choices {
     display: grid;

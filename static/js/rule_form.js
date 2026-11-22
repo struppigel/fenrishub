@@ -4,24 +4,43 @@
  * rule review also uses. Each page passes its elements in `els`:
  *   {status, matchType, wholeLog, wholeLogGroup, priority, priorityGroup,
  *    colorWholeLine, colorWholeLineGroup}
- * and keeps its own wording (labels, help text, placeholders). */
+ * and keeps its own wording (labels, help text, placeholders). The editor page
+ * also passes {factStatusValue, factGroup, verdictGroups} for recording a
+ * fact: a choice in the status dropdown, though a fact is not a status. */
 window.RuleForm = (function () {
     /* Only substring, file path and regex rules colour just their match; every
      * other type already colours the whole line, so the choice is offered for
      * those. Whole-log rules colour no lines at all, so not for them either. */
     const COLOR_WHOLE_LINE_MATCH_TYPES = ['substring', 'filepath', 'regex'];
 
-    /* Whole-log only makes sense as an alert on regex / script rules. Hides the
-     * checkbox (and unticks it) otherwise, and hides the priority, which has no
-     * effect on whole-log alerts. Returns whether whole-log is on. */
+    /* Whole-log only makes sense as an alert on regex / script rules, or as a
+     * fact rule (the status dropdown's `els.factStatusValue` choice, on the
+     * editor page only), which records a fact about the log. Hides the checkbox (and unticks it)
+     * otherwise, and hides the priority, which has no effect on whole-log
+     * alerts (fact rules have none at all). Returns whether whole-log is on. */
     function syncWholeLog(els) {
-        const eligible = els.status.value === 'A'
+        const factMode = isFactMode(els);
+        const eligible = (factMode || els.status.value === 'A')
             && (els.matchType.value === 'regex' || els.matchType.value === 'script');
         els.wholeLogGroup.style.display = eligible ? '' : 'none';
         if (!eligible) els.wholeLog.checked = false;
         const wholeLog = els.wholeLog.checked;
-        els.priorityGroup.style.display = wholeLog ? 'none' : '';
+        els.priorityGroup.style.display = wholeLog || factMode ? 'none' : '';
         return wholeLog;
+    }
+
+    function isFactMode(els) {
+        return Boolean(els.factStatusValue) && els.status.value === els.factStatusValue;
+    }
+
+    /* Fact mode: the rule records a fact instead of setting a status, so the
+     * fields that only shape a verdict are hidden (`els.verdictGroups`) and
+     * the fact picker is shown (`els.factGroup`). Returns whether it is on. */
+    function syncFactMode(els) {
+        const factMode = isFactMode(els);
+        (els.verdictGroups || []).forEach(function (group) { group.hidden = factMode; });
+        if (els.factGroup) els.factGroup.hidden = !factMode;
+        return factMode;
     }
 
     function wholeLogActive(els) {
@@ -29,7 +48,8 @@ window.RuleForm = (function () {
     }
 
     function syncColorWholeLine(els) {
-        const offered = COLOR_WHOLE_LINE_MATCH_TYPES.includes(els.matchType.value) && !wholeLogActive(els);
+        const offered = COLOR_WHOLE_LINE_MATCH_TYPES.includes(els.matchType.value) && !wholeLogActive(els)
+            && !isFactMode(els);
         els.colorWholeLineGroup.style.display = offered ? '' : 'none';
         if (!offered) els.colorWholeLine.checked = false;
     }
@@ -64,22 +84,32 @@ window.RuleForm = (function () {
     }
 
     /* ── log type scope picker ──
-     * Which log types a rule classifies: "all log types" (including ones added
-     * later) or a selection of exact names. Shared by the rule editor, the rules
-     * list's quick edit and the analyzer's rule review.
+     * Which log types a rule classifies, as a dropdown: the default types
+     * (FRST and Addition), custom types (a selection of exact names, shown
+     * only then) or all log types (including ones added later). Shared by the
+     * rule editor, the rules list's quick edit and the analyzer's rule review.
      *
      * opts: {root, choices: [names], value: 'all' | [names], formNames: bool
-     *        (inputs named log_scope / log_types for a form POST), unknown:
-     *        [names no longer defined anywhere], onChange(value), onInvalid()
+     *        (fields named log_scope / log_types for a form POST), unknown:
+     *        [names no longer defined anywhere], defaults: [names] (the default
+     *        types; DEFAULT_LOG_TYPES without), onChange(value), onInvalid()
      *        (a form submit stopped because nothing is selected)}
      * Returns {getValue, setValue, isTouched, validate, element}. */
     const ALL_LOG_TYPES = 'all';
+    /* log_types.DEFAULT_RULE_LOG_TYPES. */
+    const DEFAULT_LOG_TYPES = ['FRST&Addition', 'FRST', 'Addition'];
+    const SCOPE_DEFAULT = 'default';
+    const SCOPE_CUSTOM = 'selected';
     let pickerCount = 0;
+
+    function sameNames(a, b) {
+        return a.length === b.length && a.every(function (name) { return b.includes(name); });
+    }
 
     function createLogScopePicker(opts) {
         pickerCount += 1;
-        const radioName = opts.formNames ? 'log_scope' : 'log-scope-' + pickerCount;
         const unknown = new Set(opts.unknown || []);
+        const defaults = (opts.defaults || DEFAULT_LOG_TYPES).slice();
         let touched = false;
 
         const root = opts.root;
@@ -88,19 +118,25 @@ window.RuleForm = (function () {
 
         const modes = document.createElement('div');
         modes.className = 'log-scope-modes';
-        function radio(value, text) {
-            const label = document.createElement('label');
-            label.className = 'checkbox-label';
-            const input = document.createElement('input');
-            input.type = 'radio';
-            input.name = radioName;
-            input.value = value;
-            label.append(input, text);
-            modes.appendChild(label);
-            return input;
-        }
-        const allRadio = radio(ALL_LOG_TYPES, 'all log types');
-        const selectedRadio = radio('selected', 'selected log types');
+        /* The server reads log_scope "all" as every type and anything else as
+         * the posted log_types, so "default" posts the default types. */
+        const mode = document.createElement('select');
+        mode.className = 'log-scope-mode';
+        mode.setAttribute('aria-label', 'log types');
+        if (opts.formNames) mode.name = 'log_scope';
+        else mode.name = 'log-scope-' + pickerCount;
+        const defaultsText = defaults.filter(function (name) { return !name.includes('&'); }).join(', ');
+        [
+            [SCOPE_DEFAULT, 'default log types (' + defaultsText + ')'],
+            [SCOPE_CUSTOM, 'custom log types'],
+            [ALL_LOG_TYPES, 'all log types'],
+        ].forEach(function (pair) {
+            const option = document.createElement('option');
+            option.value = pair[0];
+            option.textContent = pair[1];
+            mode.appendChild(option);
+        });
+        modes.appendChild(mode);
         root.appendChild(modes);
 
         const list = document.createElement('div');
@@ -125,29 +161,44 @@ window.RuleForm = (function () {
         const error = document.createElement('div');
         error.className = 'regex-warning log-scope-error';
         error.hidden = true;
-        error.textContent = 'select at least one log type, or "all log types"';
+        error.textContent = 'select at least one log type, or choose default or all log types';
         root.appendChild(error);
 
-        function getValue() {
-            if (allRadio.checked) return ALL_LOG_TYPES;
+        function checkedNames() {
             return boxes.filter(function (box) { return box.checked; }).map(function (box) { return box.value; });
         }
 
+        function setChecked(names) {
+            const wanted = new Set(names);
+            boxes.forEach(function (box) { box.checked = wanted.has(box.value); });
+        }
+
+        function getValue() {
+            if (mode.value === ALL_LOG_TYPES) return ALL_LOG_TYPES;
+            if (mode.value === SCOPE_DEFAULT) return defaults.slice();
+            return checkedNames();
+        }
+
         function sync() {
-            const all = allRadio.checked;
-            list.hidden = all;
-            /* Unchecked or hidden boxes are left out of a POST either way; disabling
-             * them keeps "all" from sending a stale selection. */
-            boxes.forEach(function (box) { box.disabled = all; });
-            if (all || boxes.some(function (box) { return box.checked; })) error.hidden = true;
+            const custom = mode.value === SCOPE_CUSTOM;
+            list.hidden = !custom;
+            /* "default" posts the default types through the (hidden) boxes;
+             * "all" disables them so no stale selection is sent. */
+            if (mode.value === SCOPE_DEFAULT) setChecked(defaults);
+            boxes.forEach(function (box) { box.disabled = mode.value === ALL_LOG_TYPES; });
+            if (!custom || checkedNames().length) error.hidden = true;
         }
 
         function setValue(value) {
-            const all = value === ALL_LOG_TYPES;
-            allRadio.checked = all;
-            selectedRadio.checked = !all;
-            const names = new Set(all ? [] : (value || []));
-            boxes.forEach(function (box) { box.checked = names.has(box.value); });
+            if (value === ALL_LOG_TYPES) {
+                mode.value = ALL_LOG_TYPES;
+                setChecked([]);
+            } else if (sameNames(value || [], defaults)) {
+                mode.value = SCOPE_DEFAULT;
+            } else {
+                mode.value = SCOPE_CUSTOM;
+                setChecked(value || []);
+            }
             sync();
         }
 
@@ -163,8 +214,7 @@ window.RuleForm = (function () {
             sync();
             if (opts.onChange) opts.onChange(getValue());
         }
-        allRadio.addEventListener('change', changed);
-        selectedRadio.addEventListener('change', changed);
+        mode.addEventListener('change', changed);
         boxes.forEach(function (box) { box.addEventListener('change', changed); });
 
         if (opts.formNames) {
@@ -223,7 +273,8 @@ window.RuleForm = (function () {
 
     return {
         COLOR_WHOLE_LINE_MATCH_TYPES, ALL_LOG_TYPES,
-        syncWholeLog, wholeLogActive, syncColorWholeLine, applyDefaultPriority, bindPriorityConfirm,
+        syncWholeLog, wholeLogActive, syncColorWholeLine, syncFactMode, isFactMode, applyDefaultPriority,
+        bindPriorityConfirm,
         styleScriptTextarea, createLogScopePicker, bindLogScopeDefaults, logScopeLabel, logScopeChoices,
     };
 })();

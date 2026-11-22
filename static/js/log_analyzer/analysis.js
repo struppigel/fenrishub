@@ -422,7 +422,9 @@ function renderLineInspector(detailsPayload, entry) {
         summaryEl.appendChild(document.createTextNode(
             ` (${STATUS_LABEL_MAP[dominantStatus] || 'unknown'}), ` +
             `matcher: ${effectiveMatcher}, ` +
-            `matches: ${effectiveMatches.length + shadowedMatches.length}`,
+            `matches: ${effectiveMatches.length + shadowedMatches.length}`
+            + (Array.isArray(inspection.conditional_matches) && inspection.conditional_matches.length
+                ? `, conditional: ${inspection.conditional_matches.length}` : ''),
         ));
     }
 
@@ -487,9 +489,14 @@ function renderLineInspector(detailsPayload, entry) {
 
     if (matchesListEl) {
         matchesListEl.innerHTML = '';
+        // Rules with conditions on facts: whether those hold depends on the
+        // whole log, so the inspection (one line) lists them unchecked; the
+        // line's reasons say whether they applied.
+        const conditionalMatches = Array.isArray(inspection.conditional_matches) ? inspection.conditional_matches : [];
         const allMatches = [
             ...effectiveMatches.map((match) => ({ ...match, _scope: 'effective' })),
             ...shadowedMatches.map((match) => ({ ...match, _scope: 'shadowed' })),
+            ...conditionalMatches.map((match) => ({ ...match, _scope: 'conditional' })),
         ];
 
         if (!allMatches.length) {
@@ -499,8 +506,13 @@ function renderLineInspector(detailsPayload, entry) {
         } else {
             allMatches.forEach((match) => {
                 const item = document.createElement('li');
-                const scopeLabel = match._scope === 'shadowed' ? 'shadowed' : 'effective';
+                const scopeLabel = match._scope === 'effective' ? 'effective' : match._scope;
                 const matcherText = match.matcher ? ` | matcher: ${match.matcher}` : '';
+                const conditionsText = match._scope === 'conditional'
+                    ? ' | if ' + (Array.isArray(match.conditions) ? match.conditions : []).map((condition) =>
+                        `${condition.require ? 'requires' : 'forbids'} "${condition.fact}" (${condition.scope})`
+                    ).join(' and ') + ' (see the line\'s reasons)'
+                    : '';
                 const priorityText = (match.priority !== undefined && match.priority !== null)
                     ? ` | priority: ${match.priority}`
                     : '';
@@ -510,7 +522,7 @@ function renderLineInspector(detailsPayload, entry) {
                 item.appendChild(buildStatusSymbolNode(match.status));
                 item.appendChild(document.createTextNode(
                     ` (${STATUS_LABEL_MAP[match.status] || 'unknown'}) | ` +
-                    `${match.match_type}${priorityText}${matcherText} | ${match.source_text}${reasonText}${ownerText}`,
+                    `${match.match_type}${priorityText}${matcherText} | ${match.source_text}${reasonText}${ownerText}${conditionsText}`,
                 ));
                 // The rule's tags. A shadowed rule's tags do not reach the line.
                 (Array.isArray(match.tags) ? match.tags : []).forEach((tag) => {
@@ -594,6 +606,63 @@ function initAnalysisWarningsRestore() {
         restore.addEventListener('click', () => setAllAnalysisWarningsHidden(false));
     }
     applyAnalysisWarningsVisibility();
+}
+
+/* The facts found in the log (payload.facts, names added when served): one
+ * chip per fact; a click scrolls to the next line it was found on. Facts
+ * about the whole log have no line. */
+function renderFactsFound(facts) {
+    const container = document.getElementById('analysisFacts');
+    if (!container) return;
+    const list = (Array.isArray(facts) ? facts : []).filter((fact) => fact && fact.name);
+    container.innerHTML = '';
+    container.hidden = list.length === 0;
+    if (!list.length) return;
+
+    const label = document.createElement('span');
+    label.className = 'analysis-facts-label';
+    label.textContent = 'facts found:';
+    container.appendChild(label);
+
+    list.forEach((fact) => {
+        const indexes = Array.isArray(fact.line_indexes) ? fact.line_indexes : [];
+        const lineNos = Array.isArray(fact.line_nos) ? fact.line_nos : [];
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'analysis-fact';
+        const count = indexes.length ? ` (${indexes.length})` : '';
+        chip.textContent = fact.name + count;
+        const where = indexes.length
+            ? `on line${lineNos.length === 1 ? '' : 's'} ${lineNos.slice(0, 10).join(', ')}${lineNos.length > 10 ? ', …' : ''}`
+            : 'in the whole log';
+        chip.title = (fact.description ? fact.description + '\n' : '') + 'found ' + where
+            + (fact.wholelog && indexes.length ? ' and in the whole log' : '');
+        if (!indexes.length) {
+            chip.disabled = true;
+        } else {
+            let next = 0;
+            chip.addEventListener('click', () => {
+                scrollToAnalyzedLine(indexes[next % indexes.length]);
+                next += 1;
+            });
+        }
+        container.appendChild(chip);
+    });
+}
+
+function scrollToAnalyzedLine(index) {
+    const badge = document.querySelector(`#logLines .status-badge[data-line-index="${index}"]`);
+    const row = badge ? badge.closest('.log-line') : null;
+    if (!row || row.offsetParent === null) return;
+    row.scrollIntoView({ block: 'center' });
+    row.classList.remove('correlation-flash', 'correlation-flash-fade');
+    void row.offsetWidth;
+    row.classList.add('correlation-flash');
+    setTimeout(() => {
+        row.classList.add('correlation-flash-fade');
+        row.classList.remove('correlation-flash');
+        setTimeout(() => row.classList.remove('correlation-flash-fade'), 900);
+    }, 2500);
 }
 
 function renderWarnings(warnings) {
@@ -1746,6 +1815,9 @@ function buildLineTooltip(line, reasons, tags = []) {
     return `${tagRows.join('\n')}\n\n${body}`;
 }
 
+// Deeper indentation is shown at this width, so the text stays readable.
+const MAX_LINE_INDENT_CH = 16;
+
 function renderLogLines() {
     const container = document.getElementById('logLines');
     const savedScrollTop = container.scrollTop;
@@ -1758,6 +1830,11 @@ function renderLogLines() {
     const logInputElement = document.getElementById('logInput');
     const blankGaps = typeof computeBlankLineGaps === 'function'
         ? computeBlankLineGaps(logInputElement ? logInputElement.value : '', analyzedLines)
+        : null;
+    // The log's own indentation (e.g. Spor sub-lines under their item), for
+    // display only: entries are stripped, and rules match the stripped line.
+    const lineIndents = typeof computeLineIndents === 'function'
+        ? computeLineIndents(logInputElement ? logInputElement.value : '', analyzedLines)
         : null;
 
     analyzedLines.forEach((entry, index) => {
@@ -1814,6 +1891,10 @@ function renderLogLines() {
         const text = document.createElement('span');
         text.className = 'line-text';
         appendLineTextWithDateHighlight(text, line, collectPartialHighlights(entry));
+        const indent = lineIndents ? lineIndents[index] : 0;
+        if (indent > 0) {
+            text.style.paddingLeft = `${Math.min(indent, MAX_LINE_INDENT_CH)}ch`;
+        }
 
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';

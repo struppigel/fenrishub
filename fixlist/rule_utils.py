@@ -229,6 +229,8 @@ def _apply_conflict_resolutions(
                     status=target_status,
                     match_type=existing_rule.match_type,
                     source_text=existing_rule.source_text,
+                    # Its twin: a rule with other conditions is another rule.
+                    condition_key=existing_rule.condition_key,
                 )
                 .exclude(pk=existing_rule.pk)
                 .first()
@@ -289,9 +291,11 @@ def _build_pending_rule_preview(
     update_count = 0
 
     buckets = _load_rule_buckets(log_type=log_type)
+    # The review saves rules without conditions (upsert_parsed_rule), so only
+    # those can be the rule a change updates.
     user_rules_index = {
         (r.status, r.match_type, r.source_text): r
-        for r in ClassificationRule.objects.filter(owner=owner)
+        for r in ClassificationRule.objects.filter(owner=owner, condition_key='', whole_log=False)
     }
 
     for change in sorted(pending_changes, key=lambda item: item['order']):

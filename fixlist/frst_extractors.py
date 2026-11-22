@@ -726,6 +726,16 @@ _ALL_EXTRACTORS = (
 
 _PATH_EXTRACTORS = tuple(fn for fn in _ALL_EXTRACTORS if fn not in _NON_PATH_EXTRACTORS)
 
+# Every entry_type the extractors above produce, in _ALL_EXTRACTORS order: the
+# parsed types a rule can be restricted to (RuleMatcherBase.only_entry_types).
+# A test checks that each extractor's type is listed here.
+ENTRY_TYPES = (
+    "service", "runkey", "activesetup", "shortcut", "scheduled_task_command", "scheduled_task",
+    "startup", "startup_dir", "firewall", "onemonth", "process", "installed_software",
+    "browser_extension", "custom_clsid", "context_menu_handler", "bho", "shell_icon_overlay_id",
+    "printmonitor", "appcompatflags", "appcompatsdb", "package",
+)
+
 
 def iter_frst_entries(line):
     """Every FrstEntry an extractor reads from `line`, in _ALL_EXTRACTORS order."""

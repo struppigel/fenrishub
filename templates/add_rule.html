@@ -98,6 +98,51 @@
         margin-bottom: 8px;
     }
 
+    /* Fact mode hides the fields that only shape a verdict. */
+    .add-rule-top .form-group[hidden],
+    .add-rule-top input[hidden] {
+        display: none;
+    }
+
+    .rule-option-note {
+        font-size: 11px;
+        color: var(--la-text-neutral);
+        margin-top: 4px;
+    }
+
+    .rule-entry-types {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 2px 8px;
+        font-size: 11px;
+    }
+
+    .rule-entry-types[hidden] {
+        display: none;
+    }
+
+    .rule-entry-types label {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-weight: normal;
+        font-size: 11px;
+        margin: 0;
+    }
+
+    .rule-condition-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        align-items: center;
+        margin-bottom: 4px;
+    }
+
+    .rule-condition-row select {
+        width: auto;
+        max-width: 100%;
+    }
+
     .match-count {
         font-size: 11px;
         color: var(--la-text-muted);
@@ -303,18 +348,37 @@ textarea has no name, so it is never submitted.
     {% csrf_token %}
     {% if editing %}<input type="hidden" name="return_q" value="{{ return_q }}">{% endif %}
     <div class="rule-form-panel">
-        <h2>{% if editing %}edit{% else %}add{% endif %} rule</h2>
+        <h2 id="ruleHeading">{% if editing %}edit{% else %}add{% endif %} {% if form_record_fact %}fact {% endif %}rule</h2>
         {% if editing and rule.owner_id != request.user.id %}
         <div id="ruleOwnerNote" class="regex-warning">editing a rule owned by {{ rule.owner.username|default:"another user" }}; they stay the owner</div>
         {% endif %}
-            <div class="form-group">
-                <label for="ruleStatus">status</label>
+            <div class="form-group" id="ruleStatusGroup">
+                <label for="ruleStatus">{% if fact_mode_offered %}status / rule type{% else %}status{% endif %}</label>
                 <select id="ruleStatus" name="status" required>
+                    {% if not fact_mode_locked %}
                     {% for code, label in creatable_status_choices %}
-                    <option value="{{ code }}" {% if form_status == code %}selected{% endif %}>{{ code }} - {{ label }}</option>
+                    <option value="{{ code }}" {% if form_status == code and not form_record_fact %}selected{% endif %}>{{ code }} - {{ label }}</option>
                     {% endfor %}
+                    {% endif %}
+                    {# Not a status: the rule then records a fact (a FactRule). #}
+                    {% if fact_mode_offered %}<option value="{{ fact_status_value }}" {% if form_record_fact %}selected{% endif %} title="a fact rule sets no status: it records a fact where it matches">fact rule - records a fact</option>{% endif %}
                 </select>
+                {% if fact_mode_offered %}<input type="hidden" name="record_fact" id="ruleRecordFact" value="{% if form_record_fact %}on{% endif %}">{% endif %}
             </div>
+            {% if fact_mode_offered %}
+            <div class="form-group" id="ruleFactGroup" hidden>
+                <label for="ruleFact">fact it records</label>
+                <select id="ruleFact" name="fact_id">
+                    <option value="">choose a fact&hellip;</option>
+                    {% for fact in fact_choices %}
+                    <option value="{{ fact.pk }}" {% if form_fact_id == fact.pk|stringformat:"d" %}selected{% endif %}>{{ fact.name }}</option>
+                    {% endfor %}
+                    <option value="new" {% if form_fact_id == 'new' %}selected{% endif %}>new fact&hellip;</option>
+                </select>
+                <input type="text" id="ruleNewFactName" name="new_fact_name" maxlength="{{ fact_name_max_length }}" placeholder="name of the new fact" value="{{ form_new_fact_name }}" autocomplete="off" style="margin-top: 6px;" hidden>
+                <div class="rule-option-note">A fact rule never sets a status. <a href="{% url 'facts' %}">manage facts</a></div>
+            </div>
+            {% endif %}
             <div class="form-group">
                 <label for="ruleMatchType">match type</label>
                 <select id="ruleMatchType" name="match_type" required>
@@ -390,7 +454,14 @@ textarea has no name, so it is never submitted.
                     color the whole line in the analyzer
                 </label>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="ruleApplyToBlockGroup">
+                <input type="hidden" name="apply_to_block_present" value="1">
+                <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;" title="block: a Spor item with its indented lines, an FRST Search file entry, an Addition event">
+                    <input type="checkbox" id="ruleApplyToBlock" name="apply_to_block" {% if form_apply_to_block %}checked{% endif %}>
+                    apply the verdict to the whole block
+                </label>
+            </div>
+            <div class="form-group" id="ruleTagsGroup">
                 <label for="ruleTagPicker">tags (optional)</label>
                 <div id="ruleTagPicker"></div>
             </div>
@@ -403,12 +474,36 @@ textarea has no name, so it is never submitted.
                 </div>
                 {% endif %}
             </div>
+            <div class="form-group" id="ruleEntryTypesGroup">
+                <input type="hidden" name="only_entry_types_present" value="1">
+                <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;" title="untick to match only lines FRST parses as the types you choose">
+                    <input type="checkbox" id="ruleAllEntryTypes" {% if not form_only_entry_types %}checked{% endif %}>
+                    all log lines
+                </label>
+                <div class="rule-entry-types" id="ruleEntryTypeChoices" aria-label="only on lines parsed as" {% if not form_only_entry_types %}hidden{% endif %}>
+                    {% for value, label in entry_type_choices %}
+                    <label><input type="checkbox" name="only_entry_types" value="{{ value }}" {% if value in form_only_entry_types %}checked{% endif %}> {{ label }}</label>
+                    {% endfor %}
+                </div>
+            </div>
+            {% if conditions_offered %}
+            <div class="form-group" id="ruleConditionsGroup">
+                <label id="ruleConditionsLabel">conditions (optional)</label>
+                <input type="hidden" name="conditions_present" value="1">
+                <input type="hidden" name="conditions" id="ruleConditionsInput">
+                <div id="ruleConditionRows" class="rule-condition-rows" aria-labelledby="ruleConditionsLabel"></div>
+                <button type="button" id="ruleAddCondition">add condition</button>
+                <div class="rule-option-note" title="block: one entry, e.g. a Spor item with its indented lines or an Addition event; section: the part under a ===== banner">Applies only where all hold. <a href="{% url 'facts' %}">manage facts</a></div>
+                <div id="ruleConditionsNoFacts" class="rule-option-note" hidden>No facts yet: <a href="{% url 'fact_add' %}">create one</a> first.</div>
+            </div>
+            {% endif %}
         </div>
     </div>
 </form>
 
 <div class="preview-results-panel">
     <div id="logScopeNote" class="regex-warning log-scope-note" hidden></div>
+    <div id="ruleAdvancedPreviewNote" class="regex-warning log-scope-note" hidden></div>
     <div id="colorLegend" class="color-legend" style="display:none;">
         <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-entry-type)"></span>entry type</div>
         <div class="color-legend-item"><span class="color-swatch" style="background:var(--la-parsed-clsid)"></span>clsid</div>
@@ -434,6 +529,7 @@ textarea has no name, so it is never submitted.
 </div>
 
 {{ log_scope_picker|json_script:"ruleLogScopeData" }}
+{{ conditions_data|json_script:"ruleConditionsData" }}
 <script src="{% static 'js/rule_highlight.js' %}"></script>
 <script src="{% static 'js/rule_form.js' %}"></script>
 <script>
@@ -444,12 +540,15 @@ textarea has no name, so it is never submitted.
     const VIEW_LOG_URL_TEMPLATE = "{% url 'view_uploaded_log' '__UPLOAD_ID__' %}";
     const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
     const EDITING = {% if editing %}true{% else %}false{% endif %};
+    /* The status dropdown's "fact" choice (views.rules.FACT_STATUS_VALUE). */
+    const FACT_STATUS_VALUE = '{{ fact_status_value|escapejs }}';
     const PRIORITY_MAX = {{ priority_max }};
     const HIGHEST_PRIORITY_WARNING = 'highest priority should only be used in exceptional cases, are you sure?';
     /* Editing: hide the saved copy of this rule from the preview's existing-match
      * report, so it is not listed as already matching and cannot appear to shadow
      * the user's own pending edit. */
-    const EXCLUDE_RULE_ID = {% if editing %}{{ rule.pk }}{% else %}null{% endif %};
+    {# A fact rule is no classification rule: its pk must not exclude one from the preview. #}
+    const EXCLUDE_RULE_ID = {% if editing and not fact_mode_locked %}{{ rule.pk }}{% else %}null{% endif %};
     const RULE_NOUN = EDITING ? 'this rule' : 'new rule';
     let debounceTimer = null;
     let fetchController = null;
@@ -532,6 +631,37 @@ textarea has no name, so it is never submitted.
             row.appendChild(existLabel);
         }
 
+        return row;
+    }
+
+    /* The name of the fact the fact rule records, for the preview. */
+    function chosenFactName() {
+        const select = document.getElementById('ruleFact');
+        if (!select || !select.value) return 'its fact';
+        if (select.value === 'new') {
+            const name = document.getElementById('ruleNewFactName').value.trim();
+            return name ? '"' + name + '"' : 'the new fact';
+        }
+        return '"' + select.options[select.selectedIndex].textContent + '"';
+    }
+
+    /* Fact rule preview of a line: whether it records the fact there, and the
+     * status the line keeps (from the other rules). */
+    function buildFactRow(result) {
+        const row = document.createElement('div');
+        row.className = 'line-status-row';
+        if (result.matched) {
+            const recorded = document.createElement('span');
+            recorded.textContent = 'records ' + chosenFactName() + '; ';
+            row.appendChild(recorded);
+        }
+        const stays = document.createElement('span');
+        stays.textContent = 'status stays ';
+        row.appendChild(stays);
+        row.appendChild(makeStatusBadge(result.existing_status));
+        const label = document.createElement('span');
+        label.textContent = ' ' + result.existing_status_label;
+        row.appendChild(label);
         return row;
     }
 
@@ -646,12 +776,19 @@ textarea has no name, so it is never submitted.
         /* ── status row (show when line has any matches) ── */
         const hasExisting = (result.existing_matches && result.existing_matches.length) ||
                             (result.existing_shadowed && result.existing_shadowed.length);
-        if (result.matched || hasExisting) {
+        /* A fact rule sets no status: it records its fact where it matches and
+         * the line keeps the status the other rules give it. */
+        const factMode = RuleForm.isFactMode(RULE_FORM);
+        if (factMode) {
+            if (result.matched || hasExisting) wrapper.appendChild(buildFactRow(result));
+        } else if (result.matched || hasExisting) {
             wrapper.appendChild(buildStatusRow(result, statusLabels));
         }
 
         /* ── new rule shadowed / outranked notices ── */
-        if (result.new_rule_shadowed) {
+        if (factMode) {
+            /* Nothing to shadow or outrank: no status. */
+        } else if (result.new_rule_shadowed) {
             const notice = document.createElement('div');
             notice.className = 'new-rule-notice';
             notice.textContent = RULE_NOUN + ' (priority ' + result.new_rule_priority +
@@ -687,7 +824,7 @@ textarea has no name, so it is never submitted.
             const resp = await fetch(TEST_RULE_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': Fenris.csrfToken() },
-                body: JSON.stringify({ source_text: sourceText, status: status, match_type: matchType, priority: priority, lines: lines, exclude_rule_id: EXCLUDE_RULE_ID }),
+                body: JSON.stringify({ source_text: sourceText, status: status, match_type: matchType, priority: priority, lines: lines, exclude_rule_id: EXCLUDE_RULE_ID, only_entry_types: selectedEntryTypes() }),
                 signal: fetchController.signal,
             });
 
@@ -873,6 +1010,7 @@ textarea has no name, so it is never submitted.
                     whole_log: isWholeLogActive(),
                     exclude_rule_id: EXCLUDE_RULE_ID,
                     log_types: logScopePicker.getValue(),
+                    only_entry_types: selectedEntryTypes(),
                 }),
                 signal: logMatchesController.signal,
             });
@@ -956,7 +1094,133 @@ textarea has no name, so it is never submitted.
         priorityGroup: document.getElementById('rulePriorityGroup'),
         colorWholeLine: document.getElementById('ruleColorWholeLine'),
         colorWholeLineGroup: document.getElementById('ruleColorWholeLineGroup'),
+        /* The status option that records a fact; absent unless the page offers
+         * it (add page, fact rule editor). */
+        factStatusValue: document.getElementById('ruleFactGroup') ? FACT_STATUS_VALUE : null,
+        factGroup: document.getElementById('ruleFactGroup'),
+        verdictGroups: [
+            document.getElementById('ruleTagsGroup'),
+            document.getElementById('ruleConditionsGroup'), document.getElementById('ruleApplyToBlockGroup'),
+        ].filter(Boolean),
     };
+
+    /* The ticked "only on lines parsed as" types, for the previews. */
+    function selectedEntryTypes() {
+        return Array.from(document.querySelectorAll('#ruleEntryTypesGroup input[name="only_entry_types"]:checked'))
+            .map(function (box) { return box.value; });
+    }
+
+    /* ── conditions on facts (advanced) ── */
+
+    const CONDITIONS = JSON.parse(document.getElementById('ruleConditionsData').textContent);
+    const conditionRows = document.getElementById('ruleConditionRows');
+
+    function conditionOption(value, label, selected) {
+        const el = document.createElement('option');
+        el.value = String(value);
+        el.textContent = label;
+        el.selected = selected;
+        return el;
+    }
+
+    function addConditionRow(condition) {
+        if (!conditionRows) return;
+        condition = condition || { fact_id: null, polarity: 'require', scope: 'log' };
+        const row = document.createElement('div');
+        row.className = 'rule-condition-row';
+        const polarity = document.createElement('select');
+        polarity.className = 'rule-condition-polarity';
+        polarity.setAttribute('aria-label', 'require or forbid');
+        CONDITIONS.polarities.forEach(function (item) {
+            polarity.appendChild(conditionOption(item.value, item.label, item.value === condition.polarity));
+        });
+        const fact = document.createElement('select');
+        fact.className = 'rule-condition-fact';
+        fact.setAttribute('aria-label', 'fact');
+        fact.appendChild(conditionOption('', 'choose a fact…', condition.fact_id === null));
+        CONDITIONS.facts.forEach(function (item) {
+            fact.appendChild(conditionOption(item.id, item.name, item.id === condition.fact_id));
+        });
+        const scope = document.createElement('select');
+        scope.className = 'rule-condition-scope';
+        scope.setAttribute('aria-label', 'where');
+        CONDITIONS.scopes.forEach(function (item) {
+            scope.appendChild(conditionOption(item.value, item.label, item.value === condition.scope));
+        });
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = 'remove';
+        remove.addEventListener('click', function () { row.remove(); syncConditionControls(); });
+        row.append(polarity, fact, scope, remove);
+        conditionRows.appendChild(row);
+        syncConditionControls();
+    }
+
+    /* A whole-log rule has no line, so its conditions can only look at the whole log. */
+    function syncConditionControls() {
+        if (!conditionRows) return;
+        const wholeLog = RuleForm.wholeLogActive(RULE_FORM);
+        conditionRows.querySelectorAll('.rule-condition-scope').forEach(function (select) {
+            if (wholeLog) select.value = 'log';
+            Array.from(select.options).forEach(function (option) {
+                option.disabled = wholeLog && option.value !== 'log';
+            });
+        });
+        const rows = conditionRows.querySelectorAll('.rule-condition-row').length;
+        document.getElementById('ruleAddCondition').disabled = !CONDITIONS.facts.length || rows >= CONDITIONS.max;
+        document.getElementById('ruleConditionsNoFacts').hidden = CONDITIONS.facts.length > 0;
+        syncAdvancedPreviewNote();
+    }
+
+    /* The previews test lines one by one, so they cannot see the facts of the
+     * rest of a log. (A fact rule's preview shows what it records instead of a
+     * status: buildFactRow.) */
+    function syncAdvancedPreviewNote() {
+        const note = document.getElementById('ruleAdvancedPreviewNote');
+        if (!note) return;
+        const text = !RuleForm.isFactMode(RULE_FORM) && conditionRows && conditionRows.querySelector('.rule-condition-row')
+            ? 'The previews do not check conditions.'
+            : '';
+        note.textContent = text;
+        note.hidden = !text;
+    }
+
+    if (conditionRows) {
+        CONDITIONS.conditions.forEach(addConditionRow);
+        document.getElementById('ruleAddCondition').addEventListener('click', function () { addConditionRow(); });
+        document.getElementById('addRuleForm').addEventListener('submit', function () {
+            const conditions = Array.from(conditionRows.querySelectorAll('.rule-condition-row')).map(function (row) {
+                const factValue = row.querySelector('.rule-condition-fact').value;
+                return {
+                    fact_id: factValue === '' ? null : parseInt(factValue, 10),
+                    polarity: row.querySelector('.rule-condition-polarity').value,
+                    scope: row.querySelector('.rule-condition-scope').value,
+                };
+            }).filter(function (condition) { return condition.fact_id !== null; });
+            document.getElementById('ruleConditionsInput').value = JSON.stringify(conditions);
+        });
+        syncConditionControls();
+    }
+
+    /* Fact mode: the fact picker replaces status, tags, priority and colour;
+     * "new fact..." asks for the new fact's name. */
+    function syncFactMode() {
+        const factMode = RuleForm.syncFactMode(RULE_FORM);
+        const recordFact = document.getElementById('ruleRecordFact');
+        if (recordFact) recordFact.value = factMode ? 'on' : '';
+        document.getElementById('ruleHeading').textContent =
+            (EDITING ? 'edit ' : 'add ') + (factMode ? 'fact rule' : 'rule');
+        syncAdvancedPreviewNote();
+        const factSelect = document.getElementById('ruleFact');
+        const newName = document.getElementById('ruleNewFactName');
+        if (factSelect && newName) {
+            const wantsNew = factMode && factSelect.value === 'new';
+            newName.hidden = !wantsNew;
+            newName.required = wantsNew;
+            factSelect.required = factMode;
+        }
+        return factMode;
+    }
 
     /* ── log type scope ── */
 
@@ -966,6 +1230,7 @@ textarea has no name, so it is never submitted.
         choices: LOG_SCOPE.choices,
         value: LOG_SCOPE.value,
         unknown: LOG_SCOPE.unknown,
+        defaults: LOG_SCOPE.defaults,
         formNames: true,
         /* The picker sits in the advanced tab; show it when saving is blocked. */
         onInvalid: function () { showRuleTab('advanced'); },
@@ -1051,6 +1316,21 @@ textarea has no name, so it is never submitted.
     function syncWholeLogMode() {
         const matchType = RULE_FORM.matchType.value;
         const wholeLog = RuleForm.syncWholeLog(RULE_FORM);
+        syncConditionControls();
+        /* A whole-log rule has no line, so no block to apply its verdict to,
+         * and no parsed type to be restricted to. */
+        const blockGroup = document.getElementById('ruleApplyToBlockGroup');
+        if (blockGroup) {
+            blockGroup.style.display = wholeLog ? 'none' : '';
+            if (wholeLog) document.getElementById('ruleApplyToBlock').checked = false;
+        }
+        const entryTypesGroup = document.getElementById('ruleEntryTypesGroup');
+        entryTypesGroup.style.display = wholeLog ? 'none' : '';
+        if (wholeLog) {
+            entryTypesGroup.querySelectorAll('input[name="only_entry_types"]').forEach(function (box) { box.checked = false; });
+            document.getElementById('ruleAllEntryTypes').checked = true;
+            document.getElementById('ruleEntryTypeChoices').hidden = true;
+        }
         /* Script help depends on scope: whole-log scripts read the full log from
          * `log`, per-line scripts read one line from `line`. Set both branches so
          * the text is correct regardless of how we got here (e.g. status change). */
@@ -1152,6 +1432,7 @@ textarea has no name, so it is never submitted.
     });
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
     document.getElementById('ruleStatus').addEventListener('change', function () {
+        syncFactMode();
         syncWholeLogMode();
         syncColorWholeLineMode();
         scheduleRuleUpdate();
@@ -1162,6 +1443,24 @@ textarea has no name, so it is never submitted.
         syncColorWholeLineMode();
         scheduleRuleUpdate();
     });
+    if (RULE_FORM.factGroup) {
+        /* The preview names the fact, so it follows the choice. */
+        document.getElementById('ruleFact').addEventListener('change', function () {
+            syncFactMode();
+            schedulePreviewUpdate();
+        });
+        document.getElementById('ruleNewFactName').addEventListener('input', schedulePreviewUpdate);
+    }
+    /* "all log lines" (the default) hides the parsed types and clears them;
+     * unticked, the types to restrict the rule to appear. */
+    document.getElementById('ruleAllEntryTypes').addEventListener('change', function () {
+        const choices = document.getElementById('ruleEntryTypeChoices');
+        choices.hidden = this.checked;
+        if (this.checked) {
+            choices.querySelectorAll('input[name="only_entry_types"]').forEach(function (box) { box.checked = false; });
+        }
+    });
+    document.getElementById('ruleEntryTypesGroup').addEventListener('change', scheduleRuleUpdate);
     RuleForm.bindPriorityConfirm(RULE_FORM.priority, {
         max: PRIORITY_MAX, warning: HIGHEST_PRIORITY_WARNING, onChange: scheduleRuleUpdate,
     });
@@ -1175,14 +1474,17 @@ textarea has no name, so it is never submitted.
         document.getElementById('rulePriority').dataset.userTouched = 'true';
     }
     syncPriorityPlaceholder();
+    const factModeOn = syncFactMode();
     syncSourceTextMode();
     syncWholeLogMode();
     syncColorWholeLineMode();
     syncMultilineWarning();
     syncLogScopeNotes();
     /* The last tab is remembered per browser; a refused log type choice opens
-     * the tab holding it. */
-    showRuleTab(LOG_SCOPE.error ? 'advanced' : Fenris.storage.get(RULE_TAB_STORAGE_KEY, 'test'));
+     * the tab holding it, and so do conditions and parsed types already set. */
+    const hasConditions = CONDITIONS.conditions.length > 0;
+    showRuleTab(LOG_SCOPE.error || hasConditions || selectedEntryTypes().length
+        ? 'advanced' : Fenris.storage.get(RULE_TAB_STORAGE_KEY, 'test'));
 
     /* Remembered per browser, so a user who wants it on does not tick it on every
      * rule. The editor opens with its rule filled in, so the scan runs at once. */

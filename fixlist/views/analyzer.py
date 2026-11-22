@@ -32,6 +32,7 @@ from ..rule_sets import (
     resolve_effective_rule_set_key,
     resolve_user_rule_set_key,
 )
+from ..fact_service import attach_fact_info
 from ..tagging import attach_rule_tags, attach_tags_to_matches
 from ..upload_utils import get_fresh_cached_analysis, store_cached_analysis
 from ..validators import PayloadValidator
@@ -210,7 +211,7 @@ def analyze_log_api(request):
         except Exception:
             logger.exception('Failed to refresh cached analysis for upload_id=%s', upload_id)
     # After the cache write: tags are looked up per request, never cached.
-    return JsonResponse(attach_rule_tags(analysis), json_dumps_params=ANALYSIS_JSON_PARAMS)
+    return JsonResponse(attach_fact_info(attach_rule_tags(analysis)), json_dumps_params=ANALYSIS_JSON_PARAMS)
 
 
 @deny_guests
@@ -236,7 +237,7 @@ def uploaded_log_cached_analysis_api(request, upload_id):
         return JsonResponse({'has_cache': False, 'payload': None, 'source_content_hash': None})
     return JsonResponse({
         'has_cache': True,
-        'payload': attach_rule_tags(payload),
+        'payload': attach_fact_info(attach_rule_tags(payload)),
         'source_content_hash': uploaded_log.content_hash,
     }, json_dumps_params=ANALYSIS_JSON_PARAMS)
 

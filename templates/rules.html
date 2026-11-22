@@ -448,6 +448,9 @@
                 <span class="rule-match-type">{{ rule.get_match_type_display }}</span>
                 {% if rule.whole_log %}<span class="rule-match-type" title="evaluated once against the whole log">whole log</span>{% endif %}
                 {% if rule.shows_whole_line_badge %}<span class="rule-match-type" title="colors the whole analyzer line">whole line</span>{% endif %}
+                {% if rule.condition_key %}<span class="rule-match-type" title="applies only where its conditions on facts hold (see the full editor)">conditional</span>{% endif %}
+                {% if rule.apply_to_block %}<span class="rule-match-type" title="its verdict also applies to the rest of the block">block</span>{% endif %}
+                {% if rule.only_entry_types %}<span class="rule-match-type" title="matches only lines parsed as these types">only: {{ rule.only_entry_types|join:", " }}</span>{% endif %}
                 {% if not rule.has_default_log_scope %}<span class="rule-match-type" title="applies to these log types">{{ rule.log_scope_label }}</span>{% endif %}
                 <span class="rule-priority" title="priority">p{{ rule.priority }}</span>
                 <span class="rule-priority" title="rule id">#{{ rule.pk }}</span>

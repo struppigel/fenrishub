@@ -470,6 +470,11 @@ def apply_tag(tag, add_ids, remove_ids):
     unwanted = current & set(remove_ids)
     if unwanted:
         through.objects.filter(ruletag_id=tag.pk, classificationrule_id__in=unwanted).delete()
+    if wanted or unwanted:
+        # Rules of any owner changed membership; facts counting this tag changed.
+        from .fact_service import invalidate_if_tags_referenced
+
+        invalidate_if_tags_referenced([tag.pk])
     return len(wanted), len(unwanted)
 
 

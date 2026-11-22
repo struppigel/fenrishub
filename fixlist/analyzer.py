@@ -2,17 +2,21 @@ import logging
 import re
 import time
 from datetime import datetime
-from typing import Iterable
+from typing import Iterable, NamedTuple
 
 from django.db import transaction
 from django.db.models import F, Q
 
 from . import frst_extractors as ex
-from . import regex_bench, regex_engine, script_matcher
+from . import log_layout, regex_bench, regex_engine, script_matcher
 from .regex_engine import _re2  # noqa: F401 - re-exported: tests check whether re2 is installed
 from .machine_signals import SYSTEM_PROFILE_NAMES
 from .log_types import ANALYZED_LOG_TYPES, default_rule_scope, rule_scope_log_type
-from .models import ClassificationRule, ParsedFilepathExclusion, SiteConfig, get_default_rule_owner_id, detect_log_type
+from .fact_index import FactIndex
+from .models import (
+    ClassificationRule, FactRule, FactTagSource, ParsedFilepathExclusion, RuleCondition, SiteConfig,
+    get_default_rule_owner_id, detect_log_type,
+)
 from .rule_sets import SHARED_RULE_SET_KEY, parse_rule_set_key
 from .status_types import (
     STATUS_PRECEDENCE,
@@ -113,7 +117,21 @@ def _build_alert_rule_warnings(analyzed_lines: list[dict]) -> list[dict]:
     return warnings
 
 
-def _build_wholelog_alert_warnings(raw_log_text: str, buckets) -> tuple[list[dict], list[int]]:
+def _fired_wholelog_rules(raw_log_text: str, buckets) -> list:
+    """The whole-log rules of a matcher set that match the whole log, regex
+    rules first."""
+    fired = []
+    for rule, compiled in buckets.get("__wholelog_regex", []):
+        if compiled.search(raw_log_text):
+            fired.append(rule)
+    for rule, code in buckets.get("__wholelog_script", []):
+        matched, _error = script_matcher.run_script(code, raw_log_text, var_name="log")
+        if matched:
+            fired.append(rule)
+    return fired
+
+
+def _build_wholelog_alert_warnings(raw_log_text: str, buckets, fired=None) -> tuple[list[dict], list[int]]:
     """Evaluate whole-log alert rules once against the entire log.
 
     Returns the warnings and the ids of the rules that fired, so their rule
@@ -122,28 +140,20 @@ def _build_wholelog_alert_warnings(raw_log_text: str, buckets) -> tuple[list[dic
     Whole-log rules (regex or script, alert status) bypass the per-line tier/
     shadowing logic entirely: each is tested once against ``raw_log_text`` and, on
     a match, surfaces its description as a log-level alert warning. Priority plays
-    no part -- a matching rule always fires.
+    no part -- a matching rule always fires. `fired`, when given, are the rules
+    that fired (already tested, conditional ones included).
     """
     rule_ids_by_description = {}
     fired_rule_ids = []
 
-    def _record(rule):
+    for rule in _fired_wholelog_rules(raw_log_text, buckets) if fired is None else fired:
         fired_rule_ids.append(rule.pk)
         value = (rule.description or "").strip() or (rule.source_text or "").strip()
         if not value:
-            return
+            continue
         ids = rule_ids_by_description.setdefault(value, [])
         if rule.pk not in ids:
             ids.append(rule.pk)
-
-    for rule, compiled in buckets.get("__wholelog_regex", []):
-        if compiled.search(raw_log_text):
-            _record(rule)
-
-    for rule, code in buckets.get("__wholelog_script", []):
-        matched, _error = script_matcher.run_script(code, raw_log_text, var_name="log")
-        if matched:
-            _record(rule)
 
     warnings = []
     for index, (description, rule_ids) in enumerate(rule_ids_by_description.items(), start=1):
@@ -588,11 +598,15 @@ def upsert_parsed_rule(parsed: dict, owner_id, log_scope: tuple | None = None) -
     default its match type's (log_types.default_rule_scope). An existing rule
     keeps its scope.
     """
+    # Always the plain rule: a rule with the same text but conditions is
+    # another rule (condition_key), and so is a whole-log one.
     rule, created = ClassificationRule.objects.update_or_create(
         owner_id=owner_id,
         status=parsed["status"],
         match_type=parsed["match_type"],
         source_text=parsed["source_text"],
+        whole_log=False,
+        condition_key="",
         defaults=rule_defaults(parsed),
     )
     if created:
@@ -855,6 +869,7 @@ def convert_exact_rules_to_parsed(queryset, entry_types):
                 match_type=ClassificationRule.MATCH_PARSED_ENTRY,
                 source_text=rule.source_text,
                 whole_log=rule.whole_log,
+                condition_key=rule.condition_key,
             )
             .exclude(pk=rule.pk)
             .exists()
@@ -905,6 +920,8 @@ def find_rule_duplicates(queryset):
             key = (
                 rule.match_type,
                 rule.status,
+                # Rules that differ in their conditions are no duplicates.
+                rule.condition_key,
                 rule.entry_type or "",
                 clsid,
                 rule.name or "",
@@ -920,7 +937,7 @@ def find_rule_duplicates(queryset):
             normalized = (rule.normalized_filepath or "").strip().lower()
             if not normalized:
                 continue
-            key = (rule.match_type, rule.status, normalized)
+            key = (rule.match_type, rule.status, rule.condition_key, normalized)
         else:
             continue
         groups[key].append(rule)
@@ -960,34 +977,32 @@ def rule_frst_entry(rule) -> ex.FrstEntry:
     return ex.FrstEntry(**{field: value for field, value in values.items() if value is not None})
 
 
-def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | None = None):
-    """Index the enabled rules of a rule set by matcher.
+def _rule_set_queryset(model, rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | None = None):
+    """The enabled rules of `model` in a rule set, scoped to `log_type`.
 
-    With a `log_type`, only rules whose log type scope covers it are loaded
-    (see log_types.rule_applies_to; None or 'Unknown' loads every rule).
+    A private set is one owner's rules; the shared set is the rules of owners
+    in shared mode and of owners with no profile row (covers the
+    rule_owner_fallback system user and any historical accounts). With a
+    `log_type`, only rules whose log type scope covers it are returned (see
+    log_types.rule_applies_to; None or 'Unknown' returns every rule).
     """
-    qs = ClassificationRule.objects.filter(is_enabled=True).select_related('owner')
+    qs = model.objects.filter(is_enabled=True).select_related('owner')
     scope, scope_user_id = parse_rule_set_key(rule_set_key)
     if scope == 'private':
         qs = qs.filter(owner_id=scope_user_id)
     else:
-        # Include rules from users in shared mode and users with no profile row
-        # (covers the rule_owner_fallback system user and any historical accounts).
         qs = qs.filter(
             Q(owner__fenris_profile__rule_set_mode=SHARED_RULE_SET_KEY)
             | Q(owner__fenris_profile__isnull=True)
         )
     scope_log_type = rule_scope_log_type(log_type)
-    rules = qs if scope_log_type is None else [rule for rule in qs if rule.applies_to_log_type(scope_log_type)]
-    parsed_filepath_exclusions = {
-        (path or "").strip().lower()
-        for path in ParsedFilepathExclusion.objects.filter(is_enabled=True).values_list(
-            "normalized_filepath",
-            flat=True,
-        )
-        if path
-    }
-    buckets = {
+    return qs if scope_log_type is None else [rule for rule in qs if rule.applies_to_log_type(scope_log_type)]
+
+
+def _new_buckets(parsed_filepath_exclusions, regex_by_rule_id=None) -> dict:
+    """An empty matcher set. `regex_by_rule_id` is shared between sets whose
+    rules come from the same table (the paint cache is keyed by pk)."""
+    return {
         ClassificationRule.MATCH_EXACT: [],
         ClassificationRule.MATCH_SUBSTRING: [],
         ClassificationRule.MATCH_REGEX: [],
@@ -1001,15 +1016,140 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | 
         "__regex_set_rules": [],
         # rule pk -> compiled pattern (or None), for locating a regex rule's match
         # when painting. Filled lazily by _regex_match_ranges, see there.
-        "__regex_by_rule_id": {},
+        "__regex_by_rule_id": {} if regex_by_rule_id is None else regex_by_rule_id,
         "__wholelog_regex": [],
         "__wholelog_script": [],
     }
 
+
+def _load_parsed_filepath_exclusions() -> set:
+    return {
+        (path or "").strip().lower()
+        for path in ParsedFilepathExclusion.objects.filter(is_enabled=True).values_list(
+            "normalized_filepath",
+            flat=True,
+        )
+        if path
+    }
+
+
+def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | None = None):
+    """Index the enabled rules of a rule set by matcher.
+
+    With a `log_type`, only rules whose log type scope covers it are loaded
+    (see log_types.rule_applies_to; None or 'Unknown' loads every rule).
+    """
+    rules = _rule_set_queryset(ClassificationRule, rule_set_key, log_type)
+    exclusions = _load_parsed_filepath_exclusions()
+    buckets = _new_buckets(exclusions)
+    plain, conditional = [], []
+    for rule in rules:
+        (conditional if rule.condition_key else plain).append(rule)
+    # Only rules without conditions are in the main set, so everything that
+    # reads it (rule previews, the analyzer review, line search) sees exactly
+    # the rules it always saw.
+    _index_rules(buckets, plain)
+    _load_conditional_rules(buckets, conditional, exclusions)
+    _load_fact_sources(buckets, rule_set_key, log_type, exclusions)
+    # Some rule's verdict applies to its whole block (analyze_log_text, step 3).
+    buckets["__block_rules"] = any(rule.apply_to_block and not rule.whole_log for rule in plain + conditional)
+    return buckets
+
+
+class _Condition(NamedTuple):
+    fact_id: int
+    fact_name: str
+    require: bool
+    scope: str
+
+
+def _load_conditional_rules(buckets, rules, exclusions):
+    """Add the rules with conditions as a matcher set of their own:
+
+    - `__conditional`: None without such rules. Classification rules like the
+      main set, so they share its paint cache.
+    - `__rule_conditions`: rule pk -> [_Condition].
+    - `__conditions_need_layout`: some condition looks at a block or section.
+    """
+    buckets["__conditional"] = None
+    buckets["__rule_conditions"] = {}
+    buckets["__conditions_need_layout"] = False
+    if not rules:
+        return
+    by_rule = {}
+    for condition in RuleCondition.objects.filter(rule__in=[rule.pk for rule in rules]).select_related('fact'):
+        by_rule.setdefault(condition.rule_id, []).append(_Condition(
+            condition.fact_id, condition.fact.name, condition.polarity == RuleCondition.POLARITY_REQUIRE,
+            condition.scope,
+        ))
+        if condition.scope != RuleCondition.SCOPE_LOG:
+            buckets["__conditions_need_layout"] = True
+    # A rule with a condition_key but no condition rows is inconsistent; it
+    # must not apply unconditionally, so it is left out.
+    rules = [rule for rule in rules if rule.pk in by_rule]
+    if not rules:
+        return
+    conditional = _new_buckets(exclusions, regex_by_rule_id=buckets["__regex_by_rule_id"])
+    _index_rules(conditional, rules)
+    buckets["__conditional"] = conditional
+    buckets["__rule_conditions"] = by_rule
+
+
+class _TagSource(NamedTuple):
+    fact_id: int
+    statuses: frozenset   # empty: any status
+    decided_only: bool
+    include_fallback: bool
+
+
+def _load_fact_sources(buckets, rule_set_key, log_type, exclusions):
+    """Add what finds facts to a rule set's buckets:
+
+    - `__facts`: the fact rules of the rule set, as a matcher set of their own
+      (None without fact rules). Their pks share nothing with classification
+      rules, so they get their own paint cache, and only file path fact rules
+      match through a path: a fact must not come from a weak path fallback.
+    - `__fact_tag_sources`: classification rule pk -> [_TagSource], for the
+      rules that carry a tag some fact counts.
+    """
+    fact_rules = list(_rule_set_queryset(FactRule, rule_set_key, log_type))
+    fact_buckets = None
+    if fact_rules:
+        fact_buckets = _new_buckets(exclusions)
+        _index_rules(fact_buckets, fact_rules, require_status=False, filepath_fallback=False)
+    buckets["__facts"] = fact_buckets
+
+    by_rule = {}
+    sources = list(FactTagSource.objects.values_list(
+        'fact_id', 'tag_id', 'statuses', 'mode', 'include_filepath_fallback',
+    ))
+    if sources:
+        rules_by_tag = {}
+        for rule_id, tag_id in ClassificationRule.tags.through.objects.filter(
+            ruletag_id__in={source[1] for source in sources},
+        ).values_list('classificationrule_id', 'ruletag_id'):
+            rules_by_tag.setdefault(tag_id, []).append(rule_id)
+        for fact_id, tag_id, statuses, mode, include_fallback in sources:
+            source = _TagSource(
+                fact_id, frozenset(statuses or ()), mode == FactTagSource.MODE_DECIDED, include_fallback,
+            )
+            for rule_id in rules_by_tag.get(tag_id, ()):
+                by_rule.setdefault(rule_id, []).append(source)
+    buckets["__fact_tag_sources"] = by_rule
+
+
+def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True):
+    """Put `rules` into the matcher set `buckets`.
+
+    `require_status` skips rules without a valid status (classification
+    rules). Every rule with a file path also matches through it as a weak
+    fallback (`__filepath_any`); without `filepath_fallback` only file path
+    rules go there.
+    """
     pending_regex_rules = []
 
     for rule in rules:
-        if rule.status not in VALID_STATUSES:
+        if require_status and rule.status not in VALID_STATUSES:
             continue
 
         # Whole-log rules run once against the entire log (see analyze_log_text),
@@ -1037,7 +1177,7 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | 
             source_path = ex.extract_any_frst_path(rule.source_text)
             if source_path:
                 rule_path = ex.path_key(source_path)
-        if rule_path:
+        if rule_path and (filepath_fallback or rule.match_type == ClassificationRule.MATCH_FILEPATH):
             buckets["__filepath_any"].append(
                 (rule, rule_path, rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY)
             )
@@ -1063,7 +1203,6 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | 
 
     _build_parsed_entry_index(buckets)
     _build_regex_matchers(buckets, pending_regex_rules)
-    return buckets
 
 
 def _build_parsed_entry_index(buckets):
@@ -1522,13 +1661,37 @@ def _entry_type_for_winning_group(top_matches, parsed_entry):
     return parsed_entry.entry_type if parsed_entry else ""
 
 
-def _analyze_single_line(line: str, buckets):
-    parsed_entry = ex.get_frst_entry(line)
-    dates = _extract_dates(line, parsed_entry)
+class LineFeatures(NamedTuple):
+    """What the matchers read from a line besides its text, parsed once so
+    several matcher sets can share it."""
+    parsed_entries: tuple  # every FrstEntry an extractor reads, in extractor order
+    filepath: str | None   # extract_any_frst_path
 
+    @property
+    def parsed_entry(self):
+        """The first entry (ex.get_frst_entry)."""
+        return self.parsed_entries[0] if self.parsed_entries else None
+
+
+def line_features(line: str) -> LineFeatures:
+    return LineFeatures(tuple(ex.iter_frst_entries(line)), ex.extract_any_frst_path(line))
+
+
+def _analyze_single_line(line: str, buckets, features: LineFeatures | None = None):
+    if features is None:
+        features = line_features(line)
     effective_matches, shadowed_matches, matcher_label, top_priority = (
-        _collect_effective_and_shadowed_matches_for_line(line, buckets)
+        _collect_effective_and_shadowed_matches_for_line(line, buckets, features=features)
     )
+    return _line_result(
+        line, features, buckets, effective_matches, shadowed_matches, matcher_label, top_priority,
+    )
+
+
+def _line_result(line, features, buckets, effective_matches, shadowed_matches, matcher_label, top_priority):
+    """The analysis entry of a line from its matches, already split by priority."""
+    parsed_entry = features.parsed_entry
+    dates = _extract_dates(line, parsed_entry)
 
     if not effective_matches:
         unknown_entry_type = parsed_entry.entry_type if parsed_entry else ""
@@ -1579,7 +1742,9 @@ def _analyze_single_line(line: str, buckets):
     )
 
 
-def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]:
+def _collect_match_groups_for_line(line: str, buckets, features: LineFeatures | None = None) -> dict[str, list[tuple]]:
+    if features is None:
+        features = line_features(line)
     groups = {
         "exact": [],
         "parsed_entry": [],
@@ -1593,7 +1758,7 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
         if rule.source_text.strip() == line.strip():
             groups["exact"].append((rule, "found exact match", "exact"))
 
-    parsed_entries = list(ex.iter_frst_entries(line))
+    parsed_entries = features.parsed_entries
 
     if parsed_entries:
         parsed_entry_index = buckets["__parsed_entry_index"]
@@ -1606,7 +1771,7 @@ def _collect_match_groups_for_line(line: str, buckets) -> dict[str, list[tuple]]
                         (rule, f"matched {entry.entry_type or 'parsed'} entry", "parsed_entry")
                     )
 
-    filepath = ex.extract_any_frst_path(line)
+    filepath = features.filepath
     if filepath:
         normalized = ex.path_key(filepath)
         for rule, rule_path, parsed_fallback in buckets["__filepath_any"]:
@@ -1691,16 +1856,42 @@ def _match_precedence_sort_key(entry):
     return (-_effective_match_priority(rule, matcher), status_rank, rule.id)
 
 
-def _collect_effective_and_shadowed_matches_for_line(line: str, buckets, exclude_rule_id=None):
-    groups = _collect_match_groups_for_line(line, buckets)
+def _flat_matches(line: str, buckets, features: LineFeatures | None = None, exclude_rule_id=None) -> list[tuple]:
+    """Every (rule, reason, matcher) of the matcher set `buckets` on `line`,
+    one per rule. A rule restricted to parsed entry types (only_entry_types)
+    counts only where one of the line's parsed entries has such a type."""
+    if features is None:
+        features = line_features(line)
+    groups = _collect_match_groups_for_line(line, buckets, features)
     flat = _dedupe_matches_by_rule(m for matches in groups.values() for m in matches)
+
+    if any(getattr(match[0], "only_entry_types", None) for match in flat):
+        line_types = {entry.entry_type for entry in features.parsed_entries}
+        flat = [m for m in flat if entry_types_allow(getattr(m[0], "only_entry_types", None), line_types)]
 
     # Dropped before the priority split rather than filtered out of the result, so
     # the effective/shadowed groups are what they would be without this rule at all.
     # Used by the rule editor's preview: a rule must not shadow its own edit.
     if exclude_rule_id is not None:
         flat = [m for m in flat if m[0].id != exclude_rule_id]
+    return flat
 
+
+def entry_types_allow(only_entry_types, line_types) -> bool:
+    """Whether a rule restricted to `only_entry_types` (empty: none) may match
+    a line whose parsed entries have the types `line_types`."""
+    return not only_entry_types or not line_types.isdisjoint(only_entry_types)
+
+
+def _collect_effective_and_shadowed_matches_for_line(
+    line: str, buckets, exclude_rule_id=None, features: LineFeatures | None = None,
+):
+    return _split_by_priority(_flat_matches(line, buckets, features, exclude_rule_id))
+
+
+def _split_by_priority(flat: list[tuple]):
+    """(effective, shadowed, matcher label, top priority) of a line's matches:
+    the highest priority decides, everything below it is shadowed."""
     if not flat:
         return [], [], "unknown", None
 
@@ -1785,7 +1976,7 @@ def inspect_line_matches(
     serialized_matches, reasons = _serialize_rule_matches(effective_matches)
     serialized_shadowed_matches, _ = _serialize_rule_matches(shadowed_matches)
 
-    return {
+    result = {
         "line": line_value,
         "status_codes": status_codes,
         "dominant_status": dominant_status,
@@ -1795,6 +1986,23 @@ def inspect_line_matches(
         "matches": serialized_matches,
         "shadowed_matches": serialized_shadowed_matches,
     }
+    # Rules with conditions that match the line too. Whether their conditions
+    # hold depends on the rest of the log, which a single line does not have,
+    # so they are listed apart, unchecked, and never change the verdict above.
+    conditional = active_buckets.get("__conditional") if isinstance(active_buckets, dict) else None
+    if conditional is not None:
+        conditional_matches = _flat_matches(line_value, conditional, exclude_rule_id=exclude_rule_id)
+        if conditional_matches:
+            serialized, _ = _serialize_rule_matches(sorted(conditional_matches, key=_match_precedence_sort_key))
+            conditions = active_buckets.get("__rule_conditions") or {}
+            for item in serialized:
+                item["conditions"] = [
+                    {"fact": condition.fact_name, "require": condition.require, "scope": condition.scope}
+                    for condition in conditions.get(item["id"], ())
+                ]
+                item["conditions_checked"] = False
+            result["conditional_matches"] = serialized
+    return result
 
 
 # Bumped whenever the per-line payload changes shape, so payloads cached by an
@@ -1820,14 +2028,85 @@ def analyze_log_text(
     analyzed_lines = []
     warnings = _build_log_warnings(raw_log_text or "", detected_type)
 
-    for raw_line in (raw_log_text or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        analyzed_lines.append(_analyze_single_line(line, buckets))
+    raw_text = raw_log_text or ""
+    fact_buckets = buckets.get("__facts")
+    tag_sources = buckets.get("__fact_tag_sources") or {}
+    conditional_buckets = buckets.get("__conditional")
+    facts = FactIndex()
+    walked = log_layout.analyzed_lines(raw_log_text)
+    line_nos = [item.line_no for item in walked]
+    # Lines a conditional rule matched: (index, features, main matches, conditional matches).
+    pending = []
+    # With rules whose verdict applies to their block, every line's matches
+    # are kept (index -> (features, matches)) to re-resolve it in step 3.
+    block_rules = buckets.get("__block_rules", False)
+    line_matches = {}
+    structure = None
+
+    def _structure():
+        nonlocal structure
+        if structure is None:
+            structure = log_layout.layout(raw_log_text, log_type)
+        return structure
+
+    # Pass 1: every line with the rules without conditions; facts are found here.
+    for item in walked:
+        line = item.text
+        features = line_features(line)
+        flat = _flat_matches(line, buckets, features)
+        effective, shadowed, matcher_label, top_priority = _split_by_priority(flat)
+        entry = _line_result(line, features, buckets, effective, shadowed, matcher_label, top_priority)
+        analyzed_lines.append(entry)
+        if block_rules:
+            line_matches[item.index] = (features, flat)
+        if tag_sources and flat:
+            _record_tag_source_facts(facts, item.index, entry["rule_ids"], effective + shadowed, tag_sources)
+        if fact_buckets is not None:
+            for rule, _reason, _matcher in _flat_matches(line, fact_buckets, features):
+                facts.add(rule.fact_id, item.index)
+        if conditional_buckets is not None:
+            conditional_matches = _flat_matches(line, conditional_buckets, features)
+            if conditional_matches:
+                pending.append((item.index, features, flat, conditional_matches))
+
+    fired_wholelog = _fired_wholelog_rules(raw_text, buckets)
+    if tag_sources and fired_wholelog:
+        _record_wholelog_tag_source_facts(facts, fired_wholelog, tag_sources)
+    if fact_buckets is not None:
+        for rule in _fired_wholelog_rules(raw_text, fact_buckets):
+            facts.add(rule.fact_id)
+
+    # The facts are complete now. Pass 2: the rules with conditions, only on
+    # the lines they matched; they never add facts, so no condition can
+    # depend on another conditional rule.
+    if conditional_buckets is not None:
+        conditions = buckets["__rule_conditions"]
+        condition_structure = _structure() if buckets["__conditions_need_layout"] else None
+        for index, features, flat, conditional_matches in pending:
+            accepted = []
+            for rule, reason, matcher in conditional_matches:
+                explanation = _conditions_hold(conditions.get(rule.pk, ()), facts, index, condition_structure, line_nos)
+                if explanation is not None:
+                    accepted.append((rule, f"{reason}; {explanation}" if explanation else reason, matcher))
+            if accepted:
+                line = walked[index].text
+                effective, shadowed, matcher_label, top_priority = _split_by_priority(flat + accepted)
+                analyzed_lines[index] = _line_result(
+                    line, features, buckets, effective, shadowed, matcher_label, top_priority,
+                )
+                if block_rules:
+                    line_matches[index] = (features, flat + accepted)
+        for rule in _fired_wholelog_rules(raw_text, conditional_buckets):
+            if _conditions_hold(conditions.get(rule.pk, ()), facts, None, None, line_nos) is not None:
+                fired_wholelog.append(rule)
+
+    # Step 3: a rule whose verdict applies to its block, and that decided a
+    # line, also matches the other lines of that line's block.
+    if block_rules:
+        _apply_block_verdicts(analyzed_lines, walked, buckets, line_matches, _structure(), line_nos)
 
     warnings.extend(_build_alert_rule_warnings(analyzed_lines))
-    wholelog_warnings, wholelog_rule_ids = _build_wholelog_alert_warnings(raw_log_text or "", buckets)
+    wholelog_warnings, wholelog_rule_ids = _build_wholelog_alert_warnings(raw_text, buckets, fired_wholelog)
     warnings.extend(wholelog_warnings)
     for entry in analyzed_lines:
         entry.pop("_alert_descriptions", None)
@@ -1844,7 +2123,7 @@ def analyze_log_text(
         "warning_count": len(warnings),
     }
 
-    return {
+    payload = {
         "format": ANALYSIS_PAYLOAD_FORMAT,
         "lines": analyzed_lines,
         "summary": summary,
@@ -1852,3 +2131,123 @@ def analyze_log_text(
         "wholelog_rule_ids": list(dict.fromkeys(wholelog_rule_ids)),
         "log_type": log_type,
     }
+    # Optional, so payloads cached before facts existed stay valid: readers
+    # take a missing key as no facts. Names are added when served
+    # (fact_service.attach_fact_info), so renaming a fact needs no re-analysis.
+    if facts:
+        payload["facts"] = facts.payload([item.line_no for item in walked])
+    return payload
+
+
+def _apply_block_verdicts(analyzed_lines, walked, buckets, line_matches, structure, line_nos):
+    """Give the other lines of a block the match of a rule that applies to its
+    block (ClassificationRule.apply_to_block) and decided one of its lines.
+
+    The added match ("block" matcher, the rule's own priority) competes with
+    each line's own matches like any other, so a stronger rule on a sub-line
+    still wins. Runs after the facts are complete and feeds none.
+    """
+    members = {}
+    for index, block in enumerate(structure.block_of):
+        members.setdefault(block, []).append(index)
+
+    added = {}
+    for index, (_features, flat) in line_matches.items():
+        deciding = None
+        for rule, reason, _matcher in flat:
+            if not rule.apply_to_block:
+                continue
+            if deciding is None:
+                deciding = set(analyzed_lines[index]["rule_ids"])
+            if rule.pk not in deciding:
+                continue
+            block_reason = f"{reason}; applies to its block (L{line_nos[index]})"
+            for other in members.get(structure.block_of[index], ()):
+                if other != index:
+                    added.setdefault(other, []).append((rule, block_reason, "block"))
+
+    for index, extra in added.items():
+        features, flat = line_matches[index]
+        effective, shadowed, matcher_label, top_priority = _split_by_priority(
+            _dedupe_matches_by_rule(flat + extra),
+        )
+        analyzed_lines[index] = _line_result(
+            walked[index].text, features, buckets, effective, shadowed, matcher_label, top_priority,
+        )
+
+
+def _record_tag_source_facts(facts, index, deciding_rule_ids, matches, tag_sources):
+    """Record the facts the tag sources find on a line from its matches
+    (effective and shadowed)."""
+    for rule, _reason, matcher in matches:
+        sources = tag_sources.get(rule.pk)
+        if not sources:
+            continue
+        fallback = _is_filepath_fallback(rule, matcher)
+        for source in sources:
+            if source.statuses and rule.status not in source.statuses:
+                continue
+            if fallback and not source.include_fallback:
+                continue
+            if source.decided_only and rule.pk not in deciding_rule_ids:
+                continue
+            facts.add(source.fact_id, index)
+
+
+def _record_wholelog_tag_source_facts(facts, fired_rules, tag_sources):
+    """Whole-log alert rules that fired count as a fact about the whole log
+    for the tag sources of their tags."""
+    for rule in fired_rules:
+        for source in tag_sources.get(rule.pk, ()):
+            if not source.statuses or rule.status in source.statuses:
+                facts.add(source.fact_id)
+
+
+_SCOPE_WORDS = {
+    RuleCondition.SCOPE_BLOCK: "in its block",
+    RuleCondition.SCOPE_SECTION: "in its section",
+    RuleCondition.SCOPE_LOG: "in the log",
+}
+
+
+def _fact_evidence(facts, fact_id, scope, index, structure):
+    """Where `fact_id` was found within `scope` of analyzed line `index`: the
+    first such line's index, "log" for a fact about the whole log (log scope
+    only), or None. `index` None stands for the whole log (whole-log rules)."""
+    lines = facts.lines_of(fact_id)
+    if scope == RuleCondition.SCOPE_LOG or index is None:
+        if scope != RuleCondition.SCOPE_LOG:
+            return None
+        if lines:
+            return lines[0]
+        return "log" if fact_id in facts else None
+    if structure is None:
+        return None
+    if scope == RuleCondition.SCOPE_BLOCK:
+        wanted, of = structure.block_of[index], structure.block_of
+    else:
+        wanted, of = structure.section_of[index], structure.section_of
+    for line in lines:
+        if of[line] == wanted:
+            return line
+    return None
+
+
+def _conditions_hold(conditions, facts, index, structure, line_nos):
+    """The explanation of why every condition holds for analyzed line `index`
+    (None: the whole log), e.g. 'requires "Kaspersky installed" in the log
+    (L312)', or None when one does not hold."""
+    parts = []
+    for condition in conditions:
+        evidence = _fact_evidence(facts, condition.fact_id, condition.scope, index, structure)
+        where = _SCOPE_WORDS.get(condition.scope, condition.scope)
+        if condition.require:
+            if evidence is None:
+                return None
+            found = "the whole log" if evidence == "log" else f"L{line_nos[evidence]}"
+            parts.append(f'requires "{condition.fact_name}" {where} ({found})')
+        else:
+            if evidence is not None:
+                return None
+            parts.append(f'forbids "{condition.fact_name}" {where} (not found)')
+    return "; ".join(parts)

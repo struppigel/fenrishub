@@ -211,6 +211,35 @@ body.clean-cursor-mode .line-text {
     margin-bottom: 10px;
 }
 
+/* Facts found in the log: one chip per fact, a click scrolls to its next line. */
+.analysis-facts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
+    margin-bottom: 10px;
+    font-size: 12px;
+}
+
+.analysis-facts[hidden] {
+    display: none;
+}
+
+.analysis-facts-label {
+    color: var(--la-text-muted);
+}
+
+.analysis-fact {
+    font-size: 12px;
+    padding: 1px 8px;
+    border-radius: 10px;
+}
+
+.analysis-fact:disabled {
+    cursor: default;
+    opacity: 1;
+}
+
 .analysis-warning {
     border: 1px solid var(--la-warning-border);
     background-color: var(--la-warning-bg);
@@ -368,7 +397,10 @@ body.panel-resizing * {
     cursor: pointer;
     font-family: monospace;
     font-size: 12px;
-    line-height: 1.35;
+    /* Whole pixels, not 1.35 (16.2px): with content-visibility (below) a row
+       of fractional height loses its bottom border now and then, so wrapped
+       lines seemed to run into the next one. */
+    line-height: 16px;
     color: var(--la-text-neutral);
     white-space: normal;
     word-break: break-word;
@@ -402,8 +434,8 @@ body.panel-resizing * {
 .log-blank-line {
     padding: 2px 8px;
     font-size: 12px;
-    line-height: 1.35;
-    min-height: 1.35em;
+    line-height: 16px;
+    min-height: 16px;
     border-bottom: 1px solid var(--la-border-muted);
     cursor: default;
     user-select: none;
@@ -411,7 +443,7 @@ body.panel-resizing * {
 
 /* A big log has thousands of rows: the browser skips the layout and paint of
    those out of view, so showing a legend status again or re-rendering costs
-   about a tenth. 21px is one unwrapped row (12px * 1.35 + padding + border);
+   about a tenth. 21px is one unwrapped row (16px line + padding + border);
    "auto" remembers a row's real height once it was laid out. Keep the rows
    free of :has() rules: with them this makes rendering slower, not faster.
    Word wrap on only: with it off, rows are as wide as their text

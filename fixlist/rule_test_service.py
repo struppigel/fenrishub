@@ -12,6 +12,7 @@ from .analyzer import (
     _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY,
     _get_cached_rule_buckets,
     _load_rule_buckets,
+    entry_types_allow,
     find_substring_ranges,
     inspect_line_matches,
     parse_rule_line,
@@ -170,6 +171,13 @@ def _match_line(pattern: dict, match_type: str, line: str) -> dict:
     return outcome
 
 
+def _line_types_allow(only_entry_types, line: str) -> bool:
+    """Whether a rule restricted to `only_entry_types` may match `line`."""
+    if not only_entry_types:
+        return True
+    return entry_types_allow(only_entry_types, {entry.entry_type for entry in ex.iter_frst_entries(line.strip())})
+
+
 def build_rule_test_results(
     patterns: list,
     status: str,
@@ -180,6 +188,7 @@ def build_rule_test_results(
     rule_set_key: str = SHARED_RULE_SET_KEY,
     buckets=None,
     line_log_types=None,
+    only_entry_types=None,
 ) -> dict:
     """Build per-line rule test results for the rules test API.
 
@@ -201,6 +210,9 @@ def build_rule_test_results(
     ``line_log_types`` (aligned with ``lines``) names the log type each line
     came from, so its existing verdict uses only the rules scoped to that type,
     as the analyzer does. Without it, or for a line of no type, every rule counts.
+
+    ``only_entry_types`` restricts the candidate rule to lines parsed as one of
+    those entry types, as the analyzer does (analyzer.entry_types_allow).
     """
     compiled_patterns = [
         _compile_pattern(pattern, status, match_type) for pattern in patterns
@@ -243,6 +255,9 @@ def build_rule_test_results(
                 result['parsed'] = outcome['parsed']
             if outcome['script_error'] and 'script_error' not in result:
                 result['script_error'] = outcome['script_error']
+        if result['matched'] and not _line_types_allow(only_entry_types, line):
+            result['matched'] = False
+            ranges = []
         result['match_ranges'] = _merge_ranges(ranges) or None
 
         # Inspect existing rule matches for this line.
@@ -352,6 +367,7 @@ def scan_logs_for_rule_matches(
     max_lines: int,
     deadline: float,
     count_all: bool = False,
+    only_entry_types=None,
 ) -> dict:
     """Find the distinct lines a rule matches across stored logs.
 
@@ -402,6 +418,8 @@ def scan_logs_for_rule_matches(
                 line_hits += 1
                 continue
             if not any(_match_line(p, match_type, line)['matched'] for p in compiled_patterns):
+                continue
+            if not _line_types_allow(only_entry_types, line):
                 continue
 
             entry = found.get(line)

@@ -14,9 +14,10 @@ from django.views.decorators.http import require_http_methods
 from django.http import JsonResponse
 from django.urls import reverse
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Q, Case, When
 
-from .. import script_matcher
+from .. import frst_extractors, script_matcher
 from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
     evaluate_regex_pattern, REPARSE_FIELDS,
@@ -26,12 +27,19 @@ from ..log_types import (
 )
 from ..models import (
     ClassificationRule,
+    Fact,
+    FactRule,
+    RuleCondition,
     DEFAULT_PRIORITY_BY_MATCH_TYPE,
     PRIORITY_DEFAULT_LABELS,
     PRIORITY_MAX,
     PRIORITY_MIN,
     RuleTag,
     known_log_type_names,
+)
+from ..fact_service import (
+    DUPLICATE_CONDITIONS_ERROR, condition_key_for, conditions_error, conditions_from_payload,
+    rule_condition_specs, set_rule_conditions,
 )
 from ..rule_sets import invalidate_for_rule_owner
 from ..tagging import auto_tag_rules, parse_tag_ids, selected_tags_for_picker, serialize_tag
@@ -204,12 +212,65 @@ def _log_scope_from_query(params) -> tuple | None:
     return None
 
 
+def _conditions_from_post(request) -> tuple:
+    """The conditions block of a POST: `(specs, error)`; specs None when the
+    form had no conditions block (the rule keeps its conditions). The editor
+    always posts `conditions_present`, like the tag picker's `tags_present`."""
+    if not request.POST.get('conditions_present'):
+        return None, None
+    return conditions_from_payload(request.POST.get('conditions', ''))
+
+
+def clean_entry_types(raw) -> tuple:
+    """`(types, error)` for a parsed-type restriction (only_entry_types): the
+    names in frst_extractors.ENTRY_TYPES order, [] for none."""
+    if raw in (None, '', []):
+        return [], None
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not all(isinstance(value, str) for value in raw):
+        return [], 'Parsed types must be a list of names.'
+    wanted = set(raw)
+    unknown = sorted(wanted - set(frst_extractors.ENTRY_TYPES))
+    if unknown:
+        return [], f'Unknown parsed type: {", ".join(unknown)}.'
+    return [name for name in frst_extractors.ENTRY_TYPES if name in wanted], None
+
+
+def entry_types_from_post(request) -> tuple:
+    """The advanced "only on lines parsed as" checkboxes: `(types, error)`;
+    types None when the form has none (the quick-edit panel, the token API:
+    keep the rule's own)."""
+    if not request.POST.get('only_entry_types_present'):
+        return None, None
+    return clean_entry_types(request.POST.getlist('only_entry_types'))
+
+
+def entry_type_choices():
+    """(value, label) of every parsed type a rule can be restricted to."""
+    return [(name, name.replace('_', ' ')) for name in frst_extractors.ENTRY_TYPES]
+
+
+def _apply_to_block_from_post(request):
+    """The advanced "apply the verdict to its block" checkbox, or None when
+    the form has none (the quick-edit panel, the token API: keep the rule's)."""
+    if not request.POST.get('apply_to_block_present'):
+        return None
+    return request.POST.get('apply_to_block') == 'on'
+
+
 def _rule_form_from_post(request) -> dict:
     """Read the shared rule-form fields out of a POST."""
     log_scope, log_scope_error = _log_scope_from_post(request)
+    conditions, conditions_problem = _conditions_from_post(request)
+    only_entry_types, entry_types_problem = entry_types_from_post(request)
     return {
         'log_scope': log_scope,
         'log_scope_error': log_scope_error,
+        'conditions': conditions,
+        'conditions_error': conditions_problem,
+        'only_entry_types': only_entry_types,
+        'only_entry_types_error': entry_types_problem,
         'tag_ids': _tag_ids_from_post(request),
         'status': request.POST.get('status', '').strip(),
         'match_type': request.POST.get('match_type', '').strip(),
@@ -218,6 +279,7 @@ def _rule_form_from_post(request) -> dict:
         'is_enabled': request.POST.get('is_enabled') == 'on',
         'whole_log': request.POST.get('whole_log') == 'on',
         'color_whole_line': request.POST.get('color_whole_line') == 'on',
+        'apply_to_block': _apply_to_block_from_post(request),
         # Kept as a string: the template selects an option with `form_priority == value`
         # against the str-keyed `_priority_choices()`, and an int would never compare
         # equal -- leaving the select unselected and letting the page's JS overwrite
@@ -231,6 +293,11 @@ def _rule_form_from_rule(rule) -> dict:
     return {
         'log_scope': (rule.all_log_types, list(rule.log_types or [])),
         'log_scope_error': None,
+        # None: keep the rule's conditions (the form shows them, see _rule_form_context).
+        'conditions': None,
+        'conditions_error': None,
+        'only_entry_types': list(rule.only_entry_types or []),
+        'only_entry_types_error': None,
         'tag_ids': list(rule.tags.values_list('pk', flat=True)),
         'status': rule.status,
         'match_type': rule.match_type,
@@ -239,6 +306,7 @@ def _rule_form_from_rule(rule) -> dict:
         'is_enabled': rule.is_enabled,
         'whole_log': rule.whole_log,
         'color_whole_line': rule.color_whole_line,
+        'apply_to_block': rule.apply_to_block,
         'priority': '' if rule.priority is None else str(rule.priority),
     }
 
@@ -345,12 +413,28 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
         return script_error
     if form.get('log_scope_error'):
         return form['log_scope_error']
+    if form.get('conditions_error'):
+        return form['conditions_error']
+    if form.get('only_entry_types_error'):
+        return form['only_entry_types_error']
+
+    # Conditions are an advanced option: a form without them (the quick-edit
+    # panel, the token API) keeps the rule's own, which must still suit it.
+    new_conditions = form.get('conditions')
+    conditions = new_conditions if new_conditions is not None else rule_condition_specs(rule)
+    if conditions:
+        problem = conditions_error(conditions, whole_log=form['whole_log'])
+        if problem:
+            return problem
+    condition_key = condition_key_for(conditions)
 
     duplicate = ClassificationRule.objects.filter(
         owner_id=rule.owner_id, status=form['status'], match_type=form['match_type'],
-        source_text=form['source_text'], whole_log=form['whole_log'],
+        source_text=form['source_text'], whole_log=form['whole_log'], condition_key=condition_key,
     ).exclude(pk=rule.pk).exists()
     if duplicate:
+        if condition_key:
+            return DUPLICATE_CONDITIONS_ERROR
         return 'A rule with this status, match type, and source text already exists.'
 
     rule.status = form['status']
@@ -361,15 +445,38 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
     rule.priority = priority
     rule.whole_log = form['whole_log']
     rule.color_whole_line = _color_whole_line_for(form['color_whole_line'], form['match_type'])
+    if form.get('apply_to_block') is not None:
+        rule.apply_to_block = form['apply_to_block']
+    # A whole-log rule has no line, so no block either.
+    rule.apply_to_block = rule.apply_to_block and not form['whole_log']
+    if form.get('only_entry_types') is not None:
+        rule.only_entry_types = list(form['only_entry_types'])
+    # Nor a parsed type.
+    if form['whole_log']:
+        rule.only_entry_types = []
     _assign_parsed_metadata(rule, form)
     scope_fields = []
     if form.get('log_scope') is not None:
         rule.all_log_types, rule.log_types = form['log_scope'][0], list(form['log_scope'][1])
         scope_fields = ['all_log_types', 'log_types']
-    rule.save(update_fields=[
-        'status', 'match_type', 'source_text', 'description', 'is_enabled', 'priority',
-        'whole_log', 'color_whole_line', *scope_fields, *REPARSE_FIELDS, 'updated_at',
-    ])
+    # Saved with the rest, so the rule never passes through an identity
+    # (new text, old conditions) that another rule may have. The key encodes
+    # the conditions exactly, so an unchanged key means unchanged conditions.
+    conditions_changed = new_conditions is not None and rule.condition_key != condition_key
+    rule.condition_key = condition_key
+    try:
+        # One transaction: a failed condition write must not leave the rule
+        # with a condition_key its RuleCondition rows do not match.
+        with transaction.atomic():
+            rule.save(update_fields=[
+                'status', 'match_type', 'source_text', 'description', 'is_enabled', 'priority',
+                'whole_log', 'color_whole_line', 'apply_to_block', 'only_entry_types', *scope_fields, *REPARSE_FIELDS,
+                'condition_key', 'updated_at',
+            ])
+            if conditions_changed:
+                set_rule_conditions(rule, new_conditions)
+    except ValueError as error:
+        return str(error)
     # Tags are looked up when an analysis is served, not baked into the cached
     # result, so changing them needs no invalidation of their own.
     if form.get('tag_ids') is not None:
@@ -424,6 +531,17 @@ def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', r
         'form_priority': form['priority'],
         'form_whole_log': form['whole_log'],
         'form_color_whole_line': form['color_whole_line'],
+        # None (a POST without the box, e.g. the quick edit's hand-off): the rule's own.
+        'form_apply_to_block': bool(
+            form.get('apply_to_block') if form.get('apply_to_block') is not None
+            else isinstance(rule, ClassificationRule) and rule.apply_to_block
+        ),
+        # Same for the parsed types; a fact rule has them too.
+        'form_only_entry_types': (
+            form.get('only_entry_types') if form.get('only_entry_types') is not None
+            else list(getattr(rule, 'only_entry_types', None) or [])
+        ),
+        'entry_type_choices': entry_type_choices(),
         'form_is_enabled': form['is_enabled'],
         'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
         'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
@@ -431,6 +549,49 @@ def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', r
         'priority_max': PRIORITY_MAX,
         'priority_choices': _priority_choices(),
         'log_preview_max_logs': LOG_PREVIEW_MAX_LOGS,
+        **_fact_mode_context(form, editing=editing, rule=rule),
+        **_conditions_context(form, rule=rule),
+    }
+
+
+def _conditions_context(form: dict, *, rule=None) -> dict:
+    """The conditions block of add_rule.html (advanced options): the
+    conditions to show and the facts to pick from. Fact rules have none."""
+    conditions = form.get('conditions')
+    if conditions is None:
+        conditions = rule_condition_specs(rule) if isinstance(rule, ClassificationRule) else []
+    return {
+        'conditions_offered': not isinstance(rule, FactRule),
+        'conditions_data': {
+            'conditions': [
+                {'fact_id': spec.fact_id, 'polarity': spec.polarity, 'scope': spec.scope} for spec in conditions
+            ],
+            'facts': [{'id': pk, 'name': name} for pk, name in Fact.objects.order_by('name').values_list('pk', 'name')],
+            'polarities': [{'value': v, 'label': label} for v, label in RuleCondition.POLARITY_CHOICES],
+            'scopes': [{'value': v, 'label': label} for v, label in RuleCondition.SCOPE_CHOICES],
+            'max': RuleCondition.MAX_PER_RULE,
+        },
+        'has_conditions': bool(conditions),
+    }
+
+
+def _fact_mode_context(form: dict, *, editing: bool, rule=None) -> dict:
+    """The "fact" choice in add_rule.html's status dropdown (records a fact
+    instead of setting a status): offered when adding, the only choice when
+    editing a fact rule. Editing a classification rule never shows it."""
+    from .facts import FACT_STATUS_VALUE
+
+    is_fact_rule = isinstance(rule, FactRule)
+    offered = is_fact_rule or not editing
+    return {
+        'fact_status_value': FACT_STATUS_VALUE,
+        'fact_mode_offered': offered,
+        'fact_mode_locked': is_fact_rule,
+        'fact_choices': list(Fact.objects.order_by('name').only('pk', 'name')) if offered else [],
+        'form_record_fact': is_fact_rule or bool(form.get('record_fact')),
+        'form_fact_id': form.get('fact_id') or '',
+        'form_new_fact_name': form.get('new_fact_name') or '',
+        'fact_name_max_length': Fact.NAME_MAX_LENGTH,
     }
 
 
@@ -635,7 +796,7 @@ def rules_view(request):
 
 def create_rules(user, *, status, match_type, source_text, description='', raw_priority='',
                  whole_log=False, color_whole_line=False, tag_ids=None, source_name='',
-                 log_scope=None):
+                 log_scope=None, conditions=None, apply_to_block=False, only_entry_types=None):
     """Validate and create rules for `user`, one per line of `source_text` (a script rule stays one).
 
     Returns ``(created, skipped, error)``: the new rules, the patterns skipped
@@ -643,8 +804,16 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
     created) or None. `tag_ids` None leaves the tags to auto-apply; a list
     becomes the new rules' tags. `log_scope` is `(all_log_types, log_types)`;
     None gives the match type's default (log_types.default_rule_scope).
-    Shared by the add-rule page and the token API.
+    `conditions` (fact_service.ConditionSpec list, advanced) makes them
+    conditional rules; `apply_to_block` (advanced) gives their verdict to the
+    whole block of a line they decide; `only_entry_types` (advanced) limits
+    them to lines parsed as those types. Shared by the add-rule page and the
+    token API.
     """
+    conditions = list(conditions or [])
+    only_entry_types, entry_types_problem = clean_entry_types(only_entry_types)
+    if entry_types_problem:
+        return [], [], entry_types_problem
     color_whole_line = _color_whole_line_for(color_whole_line, match_type)
     patterns = _patterns_for(match_type, source_text)
     script_error = _script_rule_error(match_type, source_text, user, whole_log)
@@ -659,15 +828,20 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
         return [], [], whole_log_error
     if script_error:
         return [], [], script_error
+    conditions_problem = conditions_error(conditions, whole_log=whole_log) if conditions else None
+    if conditions_problem:
+        return [], [], conditions_problem
 
     priority = _coerce_priority(raw_priority, match_type)
     all_log_types, log_types = log_scope or default_rule_scope(match_type)
+    condition_key = condition_key_for(conditions)
     existing = set(
         ClassificationRule.objects.filter(
             owner=user,
             status=status,
             match_type=match_type,
             whole_log=whole_log,
+            condition_key=condition_key,
             source_text__in=patterns,
         ).values_list('source_text', flat=True)
     )
@@ -690,8 +864,11 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
             'priority': priority,
             'whole_log': whole_log,
             'color_whole_line': color_whole_line,
+            'apply_to_block': bool(apply_to_block) and not whole_log,
+            'only_entry_types': [] if whole_log else list(only_entry_types),
             'all_log_types': all_log_types,
             'log_types': list(log_types),
+            'condition_key': condition_key,
         }
         if parsed:
             for field in (*REPARSE_FIELDS, 'source_name'):
@@ -701,7 +878,15 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
 
     if not to_create:
         return [], skipped, None
-    created = ClassificationRule.objects.bulk_create(to_create)
+    # One transaction: a rule with a condition_key must never be left without
+    # its RuleCondition rows (e.g. a fact deleted meanwhile).
+    with transaction.atomic():
+        created = ClassificationRule.objects.bulk_create(to_create)
+        if conditions:
+            RuleCondition.objects.bulk_create([
+                RuleCondition(rule=rule, fact_id=spec.fact_id, polarity=spec.polarity, scope=spec.scope)
+                for rule in created for spec in conditions
+            ])
     # bulk_create sends no signals, so auto tags are added here.
     auto_tag_rules(created)
     # The picker already shows the auto tags filled in, so with a
@@ -712,15 +897,33 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
     return created, skipped, None
 
 
-def _report_created_rules(request, created, skipped) -> bool:
-    """Flash the outcome of `create_rules`; return True when any rule was created."""
+def _kept_log_scope_params(log_scope, match_type) -> dict:
+    """Query params that carry a log type scope over to the next add page, or
+    {} when it is just the match type's default. The picker always posts its
+    value; carried over, the next page would take it as the user's own choice
+    and stop following the match type (file path rules: all log types)."""
+    if log_scope is None:
+        return {}
+    all_log_types, log_types = log_scope
+    default_all, default_types = default_rule_scope(match_type)
+    if all_log_types == default_all and (all_log_types or sorted(log_types) == sorted(default_types)):
+        return {}
+    return {
+        'log_scope': ALL_LOG_TYPES if all_log_types else 'selected',
+        'log_types': list(log_types),
+    }
+
+
+def _report_created_rules(request, created, skipped, noun='rule') -> bool:
+    """Flash the outcome of `create_rules` (or create_fact_rules, `noun` "fact
+    rule"); return True when any rule was created."""
     m = len(skipped)
     skipped_text = f'{m} duplicate{"" if m == 1 else "s"} skipped: {_format_skipped(skipped)}' if m else ''
     if not created:
-        messages.error(request, f'No rules created. {skipped_text}')
+        messages.error(request, f'No {noun}s created. {skipped_text}')
         return False
     n = len(created)
-    messages.success(request, f'{n} rule{"" if n == 1 else "s"} created.')
+    messages.success(request, f'{n} {noun}{"" if n == 1 else "s"} created.')
     if skipped_text:
         messages.warning(request, skipped_text)
     return True
@@ -737,8 +940,13 @@ def add_rule_view(request):
     form_priority = ''
     form_whole_log = request.GET.get('whole_log') == '1'
     form_color_whole_line = request.GET.get('color_whole_line') == '1'
+    form_apply_to_block = False
+    # Advanced: only lines parsed as these types (frst_extractors.ENTRY_TYPES).
+    form_only_entry_types = []
     # None: the post had no tag picker, so auto-apply alone decides the tags.
     form_tag_ids = None
+    # Advanced: the conditions of the new rules (fact_service.ConditionSpec list).
+    form_conditions = None
     # None: the match type's default scope. Kept across "create" via the query string.
     form_log_scope = _log_scope_from_query(request.GET)
     log_scope_error = None
@@ -748,7 +956,54 @@ def add_rule_view(request):
     if form_match_type not in dict(ClassificationRule.MATCH_TYPE_CHOICES):
         form_match_type = ClassificationRule.MATCH_EXACT
 
+    # Advanced option: record a fact instead of setting a status (views.facts).
+    fact_fields = {
+        'record_fact': request.GET.get('record_fact') == '1',
+        'fact_id': request.GET.get('fact', '').strip(),
+        'new_fact_name': '',
+    }
     if request.method == 'POST':
+        from .facts import create_fact_rules, fact_form_fields, fact_rule_add_redirect
+
+        fact_fields = fact_form_fields(request)
+
+    if request.method == 'POST' and fact_fields['record_fact']:
+        match_type = request.POST.get('match_type', '').strip()
+        source_text = request.POST.get('source_text', '').strip()
+        description = request.POST.get('description', '').strip()
+        whole_log = request.POST.get('whole_log') == 'on'
+        form_status = request.POST.get('status', '').strip() or form_status
+        form_match_type = match_type
+        form_source_text = source_text
+        form_description = description
+        form_priority = request.POST.get('priority', '').strip()
+        form_whole_log = whole_log
+        form_log_scope, log_scope_error = _log_scope_from_post(request)
+        posted_types, entry_types_problem = entry_types_from_post(request)
+        form_only_entry_types = posted_types or []
+        if log_scope_error or entry_types_problem:
+            messages.error(request, log_scope_error or entry_types_problem)
+        else:
+            fact, created, skipped, error = create_fact_rules(
+                request.user,
+                fact_id=fact_fields['fact_id'],
+                new_fact_name=fact_fields['new_fact_name'],
+                match_type=match_type,
+                source_text=source_text,
+                description=description,
+                whole_log=whole_log,
+                source_name=f'web-add-rule:{request.user.username}',
+                log_scope=form_log_scope,
+                only_entry_types=form_only_entry_types,
+            )
+            if error:
+                messages.error(request, error)
+            elif _report_created_rules(request, created, skipped, noun='fact rule'):
+                return fact_rule_add_redirect(fact, match_type, whole_log, form_log_scope)
+            if fact is not None:
+                # A new fact was created or reused: offer it as the selection.
+                fact_fields = {**fact_fields, 'fact_id': str(fact.pk), 'new_fact_name': ''}
+    elif request.method == 'POST':
         status = request.POST.get('status', '').strip()
         match_type = request.POST.get('match_type', '').strip()
         source_text = request.POST.get('source_text', '').strip()
@@ -767,8 +1022,12 @@ def add_rule_view(request):
         form_color_whole_line = color_whole_line
         form_tag_ids = _tag_ids_from_post(request)
         form_log_scope, log_scope_error = _log_scope_from_post(request)
-        if log_scope_error:
-            created, skipped, error = [], [], log_scope_error
+        form_conditions, conditions_problem = _conditions_from_post(request)
+        form_apply_to_block = bool(_apply_to_block_from_post(request))
+        posted_types, entry_types_problem = entry_types_from_post(request)
+        form_only_entry_types = posted_types or []
+        if log_scope_error or conditions_problem or entry_types_problem:
+            created, skipped, error = [], [], log_scope_error or conditions_problem or entry_types_problem
         else:
             created, skipped, error = create_rules(
                 request.user,
@@ -782,6 +1041,9 @@ def add_rule_view(request):
                 tag_ids=form_tag_ids,
                 source_name=f'web-add-rule:{request.user.username}',
                 log_scope=form_log_scope,
+                conditions=form_conditions,
+                apply_to_block=form_apply_to_block,
+                only_entry_types=form_only_entry_types,
             )
         if error:
             messages.error(request, error)
@@ -791,9 +1053,7 @@ def add_rule_view(request):
                 keep_params['whole_log'] = '1'
             if color_whole_line:
                 keep_params['color_whole_line'] = '1'
-            if form_log_scope is not None:
-                keep_params['log_scope'] = ALL_LOG_TYPES if form_log_scope[0] else 'selected'
-                keep_params['log_types'] = list(form_log_scope[1])
+            keep_params.update(_kept_log_scope_params(form_log_scope, match_type))
             return redirect(f"{reverse('add_rule')}?{urlencode(keep_params, doseq=True)}")
 
     form = {
@@ -804,11 +1064,15 @@ def add_rule_view(request):
         'priority': form_priority,
         'whole_log': form_whole_log,
         'color_whole_line': form_color_whole_line,
+        'apply_to_block': form_apply_to_block,
+        'only_entry_types': form_only_entry_types,
         # New rules are always created enabled; the add form has no such field.
         'is_enabled': True,
         'tag_ids': form_tag_ids or [],
         'log_scope': form_log_scope,
         'log_scope_error': log_scope_error,
+        'conditions': form_conditions,
+        **fact_fields,
     }
     return render(
         request, 'add_rule.html', _rule_form_context(request.user, form, editing=False)
@@ -930,6 +1194,9 @@ def _read_rule_test_payload(request):
         return refuse('At most 100 patterns are allowed.')
     if whole_log and match_type not in (ClassificationRule.MATCH_REGEX, ClassificationRule.MATCH_SCRIPT):
         return refuse('Whole-log rules support only regex and script match types.')
+    only_entry_types, entry_types_problem = clean_entry_types(payload.get('only_entry_types'))
+    if entry_types_problem:
+        return refuse(entry_types_problem)
 
     return payload, {
         'patterns': patterns,
@@ -937,6 +1204,7 @@ def _read_rule_test_payload(request):
         'match_type': match_type,
         'priority': priority,
         'whole_log': whole_log,
+        'only_entry_types': [] if whole_log else only_entry_types,
         # The rule editor passes the rule it is editing so the preview reports the
         # lines as they would look without it -- otherwise the saved copy shows up
         # as an existing match and can appear to shadow the user's own pending
@@ -983,6 +1251,7 @@ def test_rule_api(request):
             lines=lines,
             priority=rule['priority'],
             exclude_rule_id=rule['exclude_rule_id'],
+            only_entry_types=rule['only_entry_types'],
         )
     except ValueError as exc:
         return JsonResponse({'error': str(exc)}, status=400)
@@ -1096,6 +1365,7 @@ def test_rule_logs_api(request):
             scan = scan_logs_for_rule_matches(
                 patterns, rule['status'], match_type, logs,
                 max_lines=LOG_PREVIEW_MAX_LINES, deadline=deadline,
+                only_entry_types=rule['only_entry_types'],
             )
             matches = scan.pop('matches')
             response_payload = build_rule_test_results(
@@ -1106,6 +1376,7 @@ def test_rule_logs_api(request):
                 priority=rule['priority'],
                 exclude_rule_id=rule['exclude_rule_id'],
                 line_log_types=_first_log_types(matches, log_type_by_upload),
+                only_entry_types=rule['only_entry_types'],
             )
             for result, entry in zip(response_payload['results'], matches):
                 result['logs'] = entry['logs']

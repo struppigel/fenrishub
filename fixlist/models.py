@@ -493,7 +493,91 @@ class ClassificationRuleQuerySet(models.QuerySet):
         ))
 
 
-class ClassificationRule(models.Model):
+class RuleMatcherBase(models.Model):
+    """What a rule matches log lines with: the match type and pattern, the log
+    type scope and the fields parsed from the pattern. Classification rules
+    (which set a line's status) and fact rules (which record a fact) both
+    match this way, through the same analyzer matchers."""
+
+    MATCH_EXACT = 'exact'
+    MATCH_SUBSTRING = 'substring'
+    MATCH_REGEX = 'regex'
+    MATCH_FILEPATH = 'filepath'
+    MATCH_PARSED_ENTRY = 'parsed'
+    MATCH_SCRIPT = 'script'
+
+    MATCH_TYPE_CHOICES = [
+        (MATCH_EXACT, 'Exact line'),
+        (MATCH_SUBSTRING, 'Substring'),
+        (MATCH_REGEX, 'Regex'),
+        (MATCH_FILEPATH, 'File path'),
+        (MATCH_PARSED_ENTRY, 'Parsed'),
+        (MATCH_SCRIPT, 'Python script'),
+    ]
+
+    match_type = models.CharField(max_length=16, choices=MATCH_TYPE_CHOICES)
+    source_text = models.TextField(help_text='Rule input without description metadata.')
+    description = models.TextField(blank=True)
+    source_name = models.CharField(max_length=128, blank=True)
+    is_enabled = models.BooleanField(default=True)
+    # Log type scope: every log type (including ones added later), or only the
+    # types named in `log_types` (exact names; ignored when all_log_types is set).
+    all_log_types = models.BooleanField(
+        default=False,
+        help_text='Apply to every log type, including types added later.',
+    )
+    log_types = models.JSONField(
+        default=default_rule_log_types,
+        blank=True,
+        help_text='Log type names this rule applies to (when not applying to all log types).',
+    )
+    # Advanced: the rule matches only lines FRST parses as one of these entry
+    # types (frst_extractors.ENTRY_TYPES; any of a line's parsed entries
+    # counts). Empty: any line. Ignored by whole-log rules.
+    only_entry_types = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Per-line rules only: match only lines parsed as one of these entry types (empty: any line).',
+    )
+
+    # Optional parsed metadata, populated for parsed/filepath rules.
+    entry_type = models.CharField(max_length=64, blank=True)
+    clsid = models.CharField(max_length=128, blank=True)
+    name = models.CharField(max_length=512, blank=True)
+    filepath = models.TextField(blank=True)
+    normalized_filepath = models.TextField(blank=True)
+    filename = models.CharField(max_length=260, blank=True)
+    company = models.CharField(max_length=512, blank=True)
+    arguments = models.TextField(blank=True)
+    file_not_signed = models.BooleanField(default=False)
+    attributes = models.CharField(max_length=16, blank=True)
+    is_hidden = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+    def applies_to_log_type(self, log_type) -> bool:
+        return rule_applies_to(self.all_log_types, self.log_types, log_type)
+
+    @property
+    def log_scope_payload(self):
+        """`"all"` or the list of log type names (API / JS form)."""
+        return scope_payload(self.all_log_types, self.log_types)
+
+    @property
+    def log_scope_label(self) -> str:
+        return scope_label(self.all_log_types, self.log_types)
+
+    @property
+    def has_default_log_scope(self) -> bool:
+        """Applies to exactly the FRST types, as every rule did before scopes existed."""
+        return not self.all_log_types and sorted(self.log_types or []) == sorted(DEFAULT_RULE_LOG_TYPES)
+
+
+class ClassificationRule(RuleMatcherBase):
     objects = ClassificationRuleQuerySet.as_manager()
 
     STATUS_MALWARE = 'B'
@@ -517,25 +601,11 @@ class ClassificationRule(models.Model):
 
     STATUS_CSS_CLASS_MAP = STATUS_CSS_CLASS
 
-    MATCH_EXACT = 'exact'
-    MATCH_SUBSTRING = 'substring'
-    MATCH_REGEX = 'regex'
-    MATCH_FILEPATH = 'filepath'
-    MATCH_PARSED_ENTRY = 'parsed'
-    MATCH_SCRIPT = 'script'
-
     # Match types that colour only the text they matched unless `color_whole_line`
     # is set; every other match type always colours the whole analyzer line.
-    COLOR_WHOLE_LINE_MATCH_TYPES = frozenset({MATCH_SUBSTRING, MATCH_FILEPATH, MATCH_REGEX})
-
-    MATCH_TYPE_CHOICES = [
-        (MATCH_EXACT, 'Exact line'),
-        (MATCH_SUBSTRING, 'Substring'),
-        (MATCH_REGEX, 'Regex'),
-        (MATCH_FILEPATH, 'File path'),
-        (MATCH_PARSED_ENTRY, 'Parsed'),
-        (MATCH_SCRIPT, 'Python script'),
-    ]
+    COLOR_WHOLE_LINE_MATCH_TYPES = frozenset({
+        RuleMatcherBase.MATCH_SUBSTRING, RuleMatcherBase.MATCH_FILEPATH, RuleMatcherBase.MATCH_REGEX,
+    })
 
     status = models.CharField(max_length=1, choices=STATUS_CHOICES)
     owner = models.ForeignKey(
@@ -544,11 +614,6 @@ class ClassificationRule(models.Model):
         related_name='classification_rules',
         default=get_default_rule_owner_id,
     )
-    match_type = models.CharField(max_length=16, choices=MATCH_TYPE_CHOICES)
-    source_text = models.TextField(help_text='Rule input without description metadata.')
-    description = models.TextField(blank=True)
-    source_name = models.CharField(max_length=128, blank=True)
-    is_enabled = models.BooleanField(default=True)
     whole_log = models.BooleanField(
         default=False,
         help_text='Alert rules only: evaluate once against the whole log instead of per line.',
@@ -558,30 +623,13 @@ class ClassificationRule(models.Model):
         help_text='Substring, file path and regex rules only: colour the whole analyzer line instead of just the matched text.',
     )
     tags = models.ManyToManyField('RuleTag', blank=True, related_name='rules')
-    # Log type scope: every log type (including ones added later), or only the
-    # types named in `log_types` (exact names; ignored when all_log_types is set).
-    all_log_types = models.BooleanField(
+    # Advanced: where the rule decides a line, every other line of that line's
+    # block (log_layout: a Spor item and its indented lines, an Addition event)
+    # gets the rule's verdict too, at the rule's priority.
+    apply_to_block = models.BooleanField(
         default=False,
-        help_text='Apply to every log type, including types added later.',
+        help_text='Per-line rules only: the verdict also applies to the rest of the block of a line the rule decides.',
     )
-    log_types = models.JSONField(
-        default=default_rule_log_types,
-        blank=True,
-        help_text='Log type names this rule applies to (when not applying to all log types).',
-    )
-
-    # Optional parsed metadata, populated for parsed/filepath rules.
-    entry_type = models.CharField(max_length=64, blank=True)
-    clsid = models.CharField(max_length=128, blank=True)
-    name = models.CharField(max_length=512, blank=True)
-    filepath = models.TextField(blank=True)
-    normalized_filepath = models.TextField(blank=True)
-    filename = models.CharField(max_length=260, blank=True)
-    company = models.CharField(max_length=512, blank=True)
-    arguments = models.TextField(blank=True)
-    file_not_signed = models.BooleanField(default=False)
-    attributes = models.CharField(max_length=16, blank=True)
-    is_hidden = models.BooleanField(default=False)
 
     priority = models.PositiveSmallIntegerField(
         null=True,
@@ -593,13 +641,15 @@ class ClassificationRule(models.Model):
             'Auto-set from match_type when blank.'
         ),
     )
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    # The rule's conditions on facts (RuleCondition) in a fixed text form, ''
+    # for a rule without any. Part of the rule's identity, so two rules may
+    # differ in their conditions alone (OR: one rule per alternative). Written
+    # only by fact_service.set_rule_conditions.
+    condition_key = models.CharField(max_length=200, blank=True, default='', editable=False)
 
     class Meta:
         ordering = ['-priority', 'status', 'match_type', 'source_text']
-        unique_together = ('owner', 'status', 'match_type', 'source_text', 'whole_log')
+        unique_together = ('owner', 'status', 'match_type', 'source_text', 'whole_log', 'condition_key')
         constraints = [
             models.CheckConstraint(
                 check=Q(priority__gte=PRIORITY_MIN) & Q(priority__lte=PRIORITY_MAX),
@@ -615,23 +665,6 @@ class ClassificationRule(models.Model):
     def shows_whole_line_badge(self) -> bool:
         """The rule opted into whole-line colour where it could colour just its match."""
         return self.color_whole_line and self.match_type in self.COLOR_WHOLE_LINE_MATCH_TYPES
-
-    def applies_to_log_type(self, log_type) -> bool:
-        return rule_applies_to(self.all_log_types, self.log_types, log_type)
-
-    @property
-    def log_scope_payload(self):
-        """`"all"` or the list of log type names (API / JS form)."""
-        return scope_payload(self.all_log_types, self.log_types)
-
-    @property
-    def log_scope_label(self) -> str:
-        return scope_label(self.all_log_types, self.log_types)
-
-    @property
-    def has_default_log_scope(self) -> bool:
-        """Applies to exactly the FRST types, as every rule did before scopes existed."""
-        return not self.all_log_types and sorted(self.log_types or []) == sorted(DEFAULT_RULE_LOG_TYPES)
 
     @classmethod
     def default_priority_for(cls, match_type: str) -> int:
@@ -808,6 +841,143 @@ class RuleTag(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class Fact(models.Model):
+    """A named observation about a log, e.g. "Kaspersky installed".
+
+    A fact is found in a log by its fact rules (FactRule: their own patterns)
+    or its tag sources (FactTagSource: classification rules with a tag that
+    matched). Conditional rules require or forbid facts. Facts are not tags:
+    tags group rules, facts describe logs. Shared, and anyone can edit them,
+    like tags; fact rules are owned like classification rules.
+    """
+
+    NAME_MAX_LENGTH = 64
+
+    name = models.CharField(max_length=NAME_MAX_LENGTH)
+    description = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_facts',
+    )
+    updated_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name='updated_facts',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(Lower('name'), name='unique_fact_name_ci'),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class FactRule(RuleMatcherBase):
+    """A pattern that records its fact wherever it matches, instead of setting
+    a status. Never takes part in a line's verdict, shadowing or colouring,
+    and has no conditions of its own (so facts cannot depend on facts).
+
+    A whole-log fact rule (regex or script) is tested once against the whole
+    log: its fact is about the log and has no line.
+    """
+
+    objects = ClassificationRuleQuerySet.as_manager()
+
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='fact_rules',
+        default=get_default_rule_owner_id,
+    )
+    fact = models.ForeignKey(Fact, on_delete=models.CASCADE, related_name='fact_rules')
+    whole_log = models.BooleanField(
+        default=False,
+        help_text='Regex and script only: evaluate once against the whole log; the fact has no line.',
+    )
+
+    class Meta:
+        ordering = ['match_type', 'source_text']
+        unique_together = ('owner', 'fact', 'match_type', 'source_text', 'whole_log')
+
+    def __str__(self):
+        owner_name = self.owner.username if self.owner_id else 'unknown'
+        return f"fact {self.fact_id} [{self.match_type}] {self.source_text[:80]} ({owner_name})"
+
+
+class FactTagSource(models.Model):
+    """A fact found wherever a classification rule carrying `tag` matched.
+
+    `statuses` limits it to rules with these statuses (empty: any), so a tag
+    that also holds rules for fakes (B) can feed "installed" only through its
+    S/C rules. In `decided` mode the rule must have decided the line; in
+    `matched` mode a match shadowed by a stronger rule counts too. Matches
+    through a parsed rule's file path alone count only with
+    `include_filepath_fallback`. Whole-log alert rules with the tag that fired
+    count as a fact about the log. Conditional rules never count.
+    """
+
+    MODE_DECIDED = 'decided'
+    MODE_MATCHED = 'matched'
+    MODE_CHOICES = [
+        (MODE_MATCHED, 'matched (shadowed matches count too)'),
+        (MODE_DECIDED, 'decided the line'),
+    ]
+
+    fact = models.ForeignKey(Fact, on_delete=models.CASCADE, related_name='tag_sources')
+    tag = models.ForeignKey('RuleTag', on_delete=models.PROTECT, related_name='fact_sources')
+    statuses = models.JSONField(default=list, blank=True)
+    mode = models.CharField(max_length=16, choices=MODE_CHOICES, default=MODE_MATCHED)
+    include_filepath_fallback = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['fact', 'tag']
+        unique_together = ('fact', 'tag')
+
+    def __str__(self):
+        return f"{self.fact_id} <- tag {self.tag_id}"
+
+
+class RuleCondition(models.Model):
+    """A classification rule applies only where its conditions hold: each
+    requires or forbids a fact in the line's block, section or anywhere in
+    the log. All of a rule's conditions must hold.
+
+    Facts are found before any conditional rule is evaluated, and conditional
+    rules never find facts, so conditions cannot depend on each other.
+    """
+
+    POLARITY_REQUIRE = 'require'
+    POLARITY_FORBID = 'forbid'
+    POLARITY_CHOICES = [(POLARITY_REQUIRE, 'require'), (POLARITY_FORBID, 'forbid')]
+
+    SCOPE_BLOCK = 'block'
+    SCOPE_SECTION = 'section'
+    SCOPE_LOG = 'log'
+    SCOPE_CHOICES = [
+        (SCOPE_BLOCK, 'in the same block'),
+        (SCOPE_SECTION, 'in the same section'),
+        (SCOPE_LOG, 'anywhere in the log'),
+    ]
+
+    MAX_PER_RULE = 8
+
+    rule = models.ForeignKey(ClassificationRule, on_delete=models.CASCADE, related_name='conditions')
+    fact = models.ForeignKey(Fact, on_delete=models.PROTECT, related_name='conditions')
+    polarity = models.CharField(max_length=8, choices=POLARITY_CHOICES, default=POLARITY_REQUIRE)
+    scope = models.CharField(max_length=8, choices=SCOPE_CHOICES, default=SCOPE_LOG)
+
+    class Meta:
+        ordering = ['rule', 'fact']
+        unique_together = ('rule', 'fact')
+
+    def __str__(self):
+        return f"rule {self.rule_id}: {self.polarity} fact {self.fact_id} in {self.scope}"
 
 
 from .log_types import (  # noqa: E402 - re-exported, many modules import these from models
