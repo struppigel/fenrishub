@@ -21,9 +21,10 @@ from django.urls import reverse
 from django.utils.safestring import mark_safe
 
 from ..analyzer import (
-    analyze_log_text, parse_rule_line, inspect_line_matches,
+    analyze_log_text, parse_rule_for_line, parse_rule_line, inspect_line_matches,
     VALID_STATUSES,
 )
+from ..rule_utils import MAX_BLOCK_CHARS, MAX_BLOCK_LINES
 from ..centralbox import is_available as centralbox_is_available
 from ..log_types import LOG_TYPE_NAME_RE
 from ..models import ClassificationRule, Fixlist, UploadedLog, known_log_type_names
@@ -283,14 +284,31 @@ def analyze_line_details_api(request):
         return JsonResponse({'error': 'Field "line" cannot be empty.'}, status=400)
     if requested_status not in VALID_STATUSES:
         requested_status = ClassificationRule.STATUS_UNKNOWN
+    # The block the line is in (Spor: its item line and indented lines), as
+    # the analyzer laid it out.
+    block_lines = payload.get('block_lines')
+    if not (
+        isinstance(block_lines, list) and 0 < len(block_lines) <= MAX_BLOCK_LINES
+        and all(isinstance(value, str) for value in block_lines)
+        and sum(len(value) for value in block_lines) <= MAX_BLOCK_CHARS
+        and line in [value.strip() for value in block_lines]
+    ):
+        block_lines = None
+    else:
+        block_lines = [value.strip() for value in block_lines if value.strip()]
+    # Whether the analysis read a Spor entry from the block (payload
+    # block_entry_type): only then is the line's rule the block's parsed rule.
+    block_entry = payload.get('block_entry', True) is not False
 
     actor_label = 'guest' if is_guest_request(request) else request.user.username
-    parsed_rule = parse_rule_line(
+    parsed_rule = parse_rule_for_line(
         line,
-        status=requested_status,
-        source_name=f'analyzer-inspect:{actor_label}',
+        requested_status,
+        f'analyzer-inspect:{actor_label}',
+        log_type=log_type,
+        block_text='\n'.join(block_lines) if block_lines and block_entry else None,
     )
-    inspection = inspect_line_matches(line, log_type=log_type)
+    inspection = inspect_line_matches(line, log_type=log_type, block_lines=block_lines, block_entry=block_entry)
     attach_tags_to_matches(inspection.get('matches'), inspection.get('shadowed_matches'))
 
     return JsonResponse(

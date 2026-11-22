@@ -330,7 +330,7 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
                     'source_name',
                     'is_enabled',
                     'color_whole_line',
-                    'apply_to_block',
+                    'match_unit',
                     'only_entry_types',
                 )
             },

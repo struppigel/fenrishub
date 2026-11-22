@@ -520,16 +520,29 @@ function normalizePendingChangesForCurrentLines() {
     }
 
     const availableLineKeys = new Set(analyzedLines.map((entry) => pendingOverrideKeyForEntry(entry)));
+    // A Spor block's first line -> its index, to read its block again.
+    const blockHeads = new Map();
+    analyzedLines.forEach((entry, index) => {
+        if (entry._blockEntryType && (entry._blockStart === index || entry._blockStart === null)) {
+            const key = pendingOverrideKeyForEntry(entry);
+            if (!blockHeads.has(key)) blockHeads.set(key, index);
+        }
+    });
     const normalizedPending = new Map();
     pendingStatusChanges.forEach((change, key) => {
         const changeLine = change && typeof change.line === 'string' ? change.line : key;
         if (!availableLineKeys.has(changeLine)) {
             return;
         }
-        normalizedPending.set(changeLine, {
-            ...change,
-            line: changeLine,
-        });
+        const normalized = { ...change, line: changeLine };
+        if (normalized.block_text) {
+            if (blockHeads.has(changeLine)) {
+                normalized.block_text = blockTextFor(blockHeads.get(changeLine));
+            } else {
+                delete normalized.block_text;
+            }
+        }
+        normalizedPending.set(changeLine, normalized);
     });
 
     pendingStatusChanges = normalizedPending;
@@ -844,7 +857,7 @@ function summarizeEffectiveStatuses(lines) {
 
 function attachLineKeys(lines) {
     const seenByLine = new Map();
-    return lines.map((entry) => {
+    return lines.map((entry, index) => {
         const lineText = entry.line || '';
         const nextCount = (seenByLine.get(lineText) || 0) + 1;
         seenByLine.set(lineText, nextCount);
@@ -856,6 +869,12 @@ function attachLineKeys(lines) {
             ...entry,
             _lineKey: `${lineText}::${nextCount}`,
             _lineTextKey: lineText,
+            // The block the line is in (payload format 5): the index of its
+            // first line for lines of blocks of several lines, else null; and
+            // a Spor block's parsed type.
+            _index: index,
+            _blockStart: Number.isInteger(entry.block_start) ? entry.block_start : null,
+            _blockEntryType: entry.block_entry_type || '',
             _baseDominantStatus: baseStatus,
             _baseStatusCodes: entry.status_codes || baseStatus,
             _baseCssClass: entry.css_class || STATUS_CLASS_MAP[baseStatus] || 'status-unknown',
@@ -895,11 +914,79 @@ function pendingOverrideKeyForEntry(entry, fallbackIndex = 0) {
     return entry && entry._lineKey ? entry._lineKey : `line::${fallbackIndex}`;
 }
 
+// The analyzed-line indexes of the block line `index` is in (itself alone
+// when it is a block of one line).
+function blockIndexesFor(index) {
+    const entry = analyzedLines[index];
+    if (!entry || !Number.isInteger(entry._blockStart)) {
+        return [index];
+    }
+    const start = entry._blockStart;
+    const indexes = [];
+    for (let i = start; i < analyzedLines.length && analyzedLines[i]._blockStart === start; i++) {
+        indexes.push(i);
+    }
+    return indexes.length ? indexes : [index];
+}
+
+// The lines of the block line `index` is in, as the server's block rules see
+// them (stripped, joined by "\n").
+function blockTextFor(index) {
+    return blockIndexesFor(index).map((i) => analyzedLines[i].line || '').join('\n');
+}
+
+// In a Spor log, a line of a block's parsed entry (the payload's
+// block_entry_type: the item line and its detail lines, not a sub-line
+// naming another file) is classified as its block: a status set on it
+// becomes one rule for the block (a parsed block rule). The index of the
+// block's first line, or null.
+function sporBlockHead(index) {
+    const entry = analyzedLines[index];
+    if (!entry || currentLogType !== 'Spor' || !entry._blockEntryType) {
+        return null;
+    }
+    return Number.isInteger(entry._blockStart) ? entry._blockStart : index;
+}
+
+// Where a status set on line `index` is kept: {key, entry, blockText}. A
+// Spor block's lines share the change of its first line, with the block's
+// text; any other line has its own (keyed by its text).
+function pendingTargetForIndex(index) {
+    const head = sporBlockHead(index);
+    if (head === null) {
+        const entry = analyzedLines[index];
+        return { key: pendingOverrideKeyForEntry(entry, index), entry, blockText: null };
+    }
+    const entry = analyzedLines[head];
+    return { key: pendingOverrideKeyForEntry(entry, head), entry, blockText: blockTextFor(head) };
+}
+
+// The pending change that sets `entry`'s status: its own, else (a line of a
+// Spor block) the one of its block's first line, whose block rule will reach
+// every line of the block.
+function pendingChangeForEntry(entry) {
+    const own = pendingStatusChanges.get(pendingOverrideKeyForEntry(entry));
+    if (own) {
+        return own;
+    }
+    if (entry && Number.isInteger(entry._blockStart) && entry._index !== entry._blockStart) {
+        const head = analyzedLines[entry._blockStart];
+        if (!head || !head._blockEntryType) {
+            return null;
+        }
+        const change = pendingStatusChanges.get(pendingOverrideKeyForEntry(head));
+        if (change && change.block_text) {
+            return change;
+        }
+    }
+    return null;
+}
+
 function applyPendingOverrides() {
     analyzedLines = analyzedLines.map((entry) => {
         const baseStatus = entry._baseDominantStatus || entry.dominant_status || '?';
         const baseReasons = Array.isArray(entry._baseReasons) ? [...entry._baseReasons] : [];
-        const pending = pendingStatusChanges.get(pendingOverrideKeyForEntry(entry));
+        const pending = pendingChangeForEntry(entry);
 
         if (!pending) {
             // An explicit per-line override wins over a queued token rule, so
@@ -966,6 +1053,10 @@ function getPendingStatusChangesPayload() {
                 new_status: change.new_status,
                 order: change.order,
             };
+            // A Spor block's change: the block it was set on (a parsed block rule).
+            if (change.block_text) {
+                payload.block_text = change.block_text;
+            }
 
             const changeId = String(change.id);
             if (ruleDescriptionOverrides.has(changeId)) {

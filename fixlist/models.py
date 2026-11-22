@@ -625,12 +625,19 @@ class ClassificationRule(RuleMatcherBase):
         help_text='Substring, file path and regex rules only: colour the whole analyzer line instead of just the matched text.',
     )
     tags = models.ManyToManyField('RuleTag', blank=True, related_name='rules')
-    # Advanced: where the rule decides a line, every other line of that line's
-    # block (log_layout: a Spor item and its indented lines, an Addition event)
-    # gets the rule's verdict too, at the rule's priority.
-    apply_to_block = models.BooleanField(
-        default=False,
-        help_text='Per-line rules only: the verdict also applies to the rest of the block of a line the rule decides.',
+    # What the rule tests: one line, or a whole block (log_layout: a Spor item
+    # and its indented lines, an FRST Search file entry, an Addition event;
+    # any other line is a block of its own). A block rule tests the block's
+    # lines joined by line breaks and its verdict goes to every line of the
+    # block, at the rule's priority. Spor parsed rules are always block rules.
+    MATCH_UNIT_LINE = 'line'
+    MATCH_UNIT_BLOCK = 'block'
+    MATCH_UNIT_CHOICES = [(MATCH_UNIT_LINE, 'line'), (MATCH_UNIT_BLOCK, 'block')]
+    match_unit = models.CharField(
+        max_length=8,
+        choices=MATCH_UNIT_CHOICES,
+        default=MATCH_UNIT_LINE,
+        help_text='Per-line rules only: test one line, or the whole block (its verdict goes to every line of the block).',
     )
 
     priority = models.PositiveSmallIntegerField(
@@ -651,7 +658,7 @@ class ClassificationRule(RuleMatcherBase):
 
     class Meta:
         ordering = ['-priority', 'status', 'match_type', 'source_text']
-        unique_together = ('owner', 'status', 'match_type', 'source_text', 'whole_log', 'condition_key')
+        unique_together = ('owner', 'status', 'match_type', 'source_text', 'whole_log', 'condition_key', 'match_unit')
         constraints = [
             models.CheckConstraint(
                 check=Q(priority__gte=PRIORITY_MIN) & Q(priority__lte=PRIORITY_MAX),
@@ -666,7 +673,15 @@ class ClassificationRule(RuleMatcherBase):
     @property
     def shows_whole_line_badge(self) -> bool:
         """The rule opted into whole-line colour where it could colour just its match."""
-        return self.color_whole_line and self.match_type in self.COLOR_WHOLE_LINE_MATCH_TYPES
+        return (
+            self.color_whole_line
+            and self.match_type in self.COLOR_WHOLE_LINE_MATCH_TYPES
+            and self.match_unit == self.MATCH_UNIT_LINE
+        )
+
+    @property
+    def is_block_rule(self) -> bool:
+        return self.match_unit == self.MATCH_UNIT_BLOCK
 
     @classmethod
     def default_priority_for(cls, match_type: str) -> int:

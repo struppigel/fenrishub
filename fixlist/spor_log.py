@@ -156,6 +156,8 @@ MAX_EXTRA = 6
 class SporItem:
     time: str = ''
     tags: str = ''
+    # The tag groups one by one ("[machine 32-bit]" stays one tag; `tags` joins them with blanks).
+    tag_list: list = field(default_factory=list)
     item: str = ''      # before the first " => ", without its status
     status: str = ''    # the status word of the item (or, without one, of the target)
     rest: str = ''      # after the first " => " (target and / or details)
@@ -349,7 +351,8 @@ def _split_item(body, known):
         text = ''
     m = _TAGS_RE.match(text)
     if m:
-        item.tags = ' '.join(group[1:-1] for group in _TAG_GROUP_RE.findall(m.group(1)))
+        item.tag_list = [group[1:-1] for group in _TAG_GROUP_RE.findall(m.group(1))]
+        item.tags = ' '.join(item.tag_list)
         text = text[m.end():]
     item.text = text
     if SYNTAX_FLAG in item.flags:
@@ -912,6 +915,12 @@ def _status_after(text, path):
             position = end + 1
     m = STATUS_RE.match(text, position)
     return m.group(1) if m else ''
+
+
+# For the parsers of Spor blocks (spor_extractors): the path a text starts
+# with, and the status written right after it.
+path_at = _path_at
+status_after = _status_after
 
 
 # PERSISTENCE: the entry's kind is its first tag ("[run]", "[service]", ...),

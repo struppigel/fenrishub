@@ -12,6 +12,7 @@ from .analyzer import (
     RULE_ENTRY_FIELDS,
     STATUS_LABELS,
     STATUS_PRECEDENCE,
+    _BLOCK_REGEX_FLAGS,
     _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY,
     _get_cached_rule_buckets,
     _load_rule_buckets,
@@ -21,11 +22,14 @@ from .analyzer import (
     find_facts,
     find_substring_ranges,
     inspect_line_matches,
+    line_features,
+    log_inputs,
     parse_rule_line,
     rule_frst_entry,
+    single_block_inputs,
 )
 from .fact_index import FactIndex
-from .log_types import ANALYZED_LOG_TYPES, rule_scope_log_type
+from .log_types import ANALYZED_LOG_TYPES, LOG_TYPE_SPOR, rule_scope_log_type
 from .models import (
     ClassificationRule, Fact, FactRule, FactTagSource, PRIORITY_MAX, PRIORITY_MIN, RuleCondition,
     UploadedLogAnalysis,
@@ -47,7 +51,7 @@ def pasted_condition_check(log_text, line_count, specs, buckets, log_type):
     text is one small log, its facts found as the analyzer would find them.
     Lines are checked by their position among the non-blank lines; when that
     count differs from the preview's `line_count`, nothing is checked."""
-    facts, walked = find_facts(log_text, buckets)
+    facts, walked = find_facts(log_text, buckets, log_type)
     if len(walked) != line_count:
         return lambda _index: None
     conditions = conditions_for_specs(specs)
@@ -56,9 +60,9 @@ def pasted_condition_check(log_text, line_count, specs, buckets, log_type):
     return lambda index: condition_report(conditions, facts, index, structure, line_nos)
 
 
-def wholelog_condition_report(log_text, specs, buckets):
+def wholelog_condition_report(log_text, specs, buckets, log_type=None):
     """`(holds, explanation)` of a whole-log rule's conditions on a text."""
-    facts, walked = find_facts(log_text, buckets)
+    facts, walked = find_facts(log_text, buckets, log_type)
     return condition_report(conditions_for_specs(specs), facts, None, None, [item.line_no for item in walked])
 
 
@@ -187,11 +191,19 @@ def build_wholelog_rule_test_result(
     raise ValueError('Whole-log preview supports only regex and script match types.')
 
 
-def _compile_pattern(source_text: str, status: str, match_type: str) -> dict:
-    """Pre-compute the per-pattern state needed to test lines against it."""
-    parsed_rule = parse_rule_line(source_text, status=status)
+_LINE = ClassificationRule.MATCH_UNIT_LINE
+_BLOCK = ClassificationRule.MATCH_UNIT_BLOCK
 
-    compiled = _compile_regex(source_text) if match_type == 'regex' else None
+
+def _compile_pattern(source_text: str, status: str, match_type: str, match_unit: str = _LINE) -> dict:
+    """Pre-compute the per-pattern state needed to test lines (or, for a block
+    rule, blocks) against it."""
+    block = match_unit == _BLOCK
+    parsed_rule = parse_rule_line(source_text, status=status, match_unit=match_unit)
+
+    compiled = None
+    if match_type == 'regex':
+        compiled = _compile_regex(_BLOCK_REGEX_FLAGS + source_text if block else source_text)
 
     script_code = None
     if match_type == 'script':
@@ -215,6 +227,7 @@ def _compile_pattern(source_text: str, status: str, match_type: str) -> dict:
 
     return {
         'source_text': source_text,
+        'block_text': log_layout.normalize_block_text(source_text) if block else '',
         'parsed_rule': parsed_rule,
         'compiled': compiled,
         'script_code': script_code,
@@ -223,8 +236,25 @@ def _compile_pattern(source_text: str, status: str, match_type: str) -> dict:
     }
 
 
-def _match_line(pattern: dict, match_type: str, line: str) -> dict:
-    """Test one line against one pattern.
+def _match_block(pattern: dict, match_type: str, block) -> bool:
+    """Whether one block (analyzer.BlockFeatures) matches one block-rule pattern,
+    as analyzer._flat_block_matches tests it."""
+    if match_type == 'exact':
+        return bool(pattern['block_text']) and block.text == pattern['block_text']
+    if match_type == 'substring':
+        return bool(pattern['source_text']) and pattern['source_text'] in block.text
+    if match_type == 'regex':
+        return bool(regex_engine.match_ranges(pattern['compiled'], block.text))
+    if match_type == 'parsed':
+        return pattern['rule_entry'] is not None and pattern['rule_entry'] in block.entries
+    if match_type == 'filepath':
+        return bool(pattern['rule_norm_path']) and pattern['rule_norm_path'] in block.paths
+    return False
+
+
+def _match_line(pattern: dict, match_type: str, line: str, features=None) -> dict:
+    """Test one line against one pattern. `features` (analyzer.LineFeatures,
+    e.g. a Spor line's path) default to the line read on its own.
 
     Returns ``matched`` plus, where the match type provides them, the highlight
     ``ranges``, the line's ``parsed`` breakdown, and any ``script_error``.
@@ -245,14 +275,15 @@ def _match_line(pattern: dict, match_type: str, line: str) -> dict:
 
     elif match_type == 'parsed':
         if line:
-            line_entry = ex.get_frst_entry(line)
+            entries = features.parsed_entries if features is not None else tuple(ex.iter_frst_entries(line))
+            line_entry = entries[0] if entries else None
             if line_entry:
                 outcome['parsed'] = {field: getattr(line_entry, field) for field in RULE_ENTRY_FIELDS}
             rule_entry = pattern['rule_entry']
-            outcome['matched'] = bool(rule_entry and line_entry and line_entry == rule_entry)
+            outcome['matched'] = bool(rule_entry and rule_entry in entries)
 
     elif match_type == 'filepath':
-        line_path = ex.extract_any_frst_path(line)
+        line_path = features.filepath if features is not None else ex.extract_any_frst_path(line)
         if line_path:
             line_norm = ex.path_key(line_path)
             rule_norm_path = pattern['rule_norm_path']
@@ -267,11 +298,79 @@ def _match_line(pattern: dict, match_type: str, line: str) -> dict:
     return outcome
 
 
-def _line_types_allow(only_entry_types, line: str) -> bool:
-    """Whether a rule restricted to `only_entry_types` may match `line`."""
+def _line_types_allow(only_entry_types, line: str, features=None) -> bool:
+    """Whether a rule restricted to `only_entry_types` may match `line` (its
+    parsed types: of `features` when given, e.g. a Spor block's)."""
     if not only_entry_types:
         return True
-    return entry_types_allow(only_entry_types, {entry.entry_type for entry in ex.iter_frst_entries(line.strip())})
+    if features is None:
+        features = line_features(line.strip())
+    return entry_types_allow(only_entry_types, features.entry_types)
+
+
+class _LogView:
+    """A log's lines as the analyzer reads them (analyzer.LogInputs): every
+    analyzed line with its features, and, when `blocks`, their blocks."""
+
+    def __init__(self, content, log_type, blocks):
+        self.inputs = log_inputs(content, log_type, {"__block": {} if blocks else None})
+
+    def lines(self):
+        """(index, line number, raw piece, stripped text, the line's features)
+        per analyzed line; the features are read only when used (a lazy
+        lookup: `self.inputs.features[index]`)."""
+        for item in self.inputs.walked:
+            yield item.index, item.line_no, item.raw, item.text, None
+
+    def block_at(self, index, reads='all'):
+        """(BlockFeatures, analyzed-line indexes) of the block line `index` is
+        in, with what a block rule reads: 'text' just its text, 'spor' its
+        text and Spor entry (LogInputs.block_text_at / block_entry_at)."""
+        if reads == 'text':
+            return self.inputs.block_text_at(index)
+        if reads == 'spor':
+            return self.inputs.block_entry_at(index)
+        return self.inputs.block_at(index)
+
+
+def _block_reads(compiled_patterns, match_type, only_entry_types):
+    """What of a block the block-rule patterns need (see _LogView.block_at)."""
+    if match_type in _TEXT_MATCH_TYPES and not only_entry_types:
+        return 'text'
+    if match_type == 'parsed' and _spor_only(compiled_patterns) and all(
+        name.startswith('spor_') for name in only_entry_types or ()
+    ):
+        return 'spor'
+    return 'all'
+
+
+def _spor_only(compiled_patterns) -> bool:
+    """Every pattern is a Spor parsed entry: they can only match Spor blocks."""
+    return all(
+        pattern['rule_entry'] is not None and pattern['rule_entry'].entry_type.startswith('spor_')
+        for pattern in compiled_patterns
+    )
+
+
+# Block rules of these match types read only the block's text.
+_TEXT_MATCH_TYPES = frozenset({'exact', 'substring', 'regex'})
+
+
+def _is_spor(log_type) -> bool:
+    return rule_scope_log_type(log_type) == LOG_TYPE_SPOR
+
+
+def _pasted_view(lines, log_type, blocks):
+    """`(view, index of each line)` for pasted `lines` read as one log, or
+    (None, None) when they need no more than reading each line on its own
+    (no Spor log, no block rule)."""
+    if not blocks and not _is_spor(log_type):
+        return None, None
+    view = _LogView('\n'.join(str(line or '') for line in lines), log_type, blocks)
+    index_of = {}
+    for index, line_no, _raw, _text, _features in view.lines():
+        index_of.setdefault(line_no - 1, index)
+    return view, index_of
 
 
 def build_rule_test_results(
@@ -286,6 +385,9 @@ def build_rule_test_results(
     line_log_types=None,
     only_entry_types=None,
     condition_check=None,
+    match_unit: str = _LINE,
+    log_type=None,
+    blocks: bool = False,
 ) -> dict:
     """Build per-line rule test results for the rules test API.
 
@@ -315,10 +417,19 @@ def build_rule_test_results(
     ``(holds, explanation)`` for a line, or None when they cannot be checked.
     A matched line whose conditions fail is treated as not matched; each
     matched line says why in ``condition_note``.
+
+    ``match_unit`` "block" tests the candidate on blocks: the pasted ``lines``
+    are laid out as one log (``log_type``, e.g. Spor) and every line of a
+    matching block is matched. With ``blocks`` each entry of ``lines`` is a
+    block's text already (the stored-log scan), one result per block.
+    ``log_type`` also reads Spor lines as the analyzer does (their paths,
+    their block's parsed type).
     """
+    block_rule = match_unit == _BLOCK
     compiled_patterns = [
-        _compile_pattern(pattern, status, match_type) for pattern in patterns
+        _compile_pattern(pattern, status, match_type, match_unit) for pattern in patterns
     ]
+    view, index_of = (None, None) if blocks else _pasted_view(lines, log_type, block_rule)
 
     if priority is None:
         new_priority = ClassificationRule.default_priority_for(match_type)
@@ -342,24 +453,63 @@ def build_rule_test_results(
             buckets_by_type[log_type] = load(rule_set_key, log_type)
         return buckets_by_type[log_type]
 
+    block_hits = {}
+
+    def block_matched(block):
+        # By content: blocks read for one line at a time are not kept alive,
+        # so their ids can repeat.
+        key = (block.text, block.entries, block.paths)
+        if key not in block_hits:
+            block_hits[key] = (
+                any(_match_block(pattern, match_type, block) for pattern in compiled_patterns)
+                and entry_types_allow(only_entry_types, block.entry_types)
+            )
+        return block_hits[key]
+
     results = []
     for line_index, raw_line in enumerate(lines):
-        line = (raw_line or '').strip() if match_type in ('exact', 'parsed', 'filepath') else (raw_line or '')
+        line_log_type = (line_log_types[line_index] if line_log_types else None) or log_type
+        block_lines = None
+        features = None
+        block = None
+        if blocks:
+            line = log_layout.normalize_block_text(raw_line or '')
+            block_lines = line.split('\n') if line else []
+            if block_lines:
+                features, block = single_block_inputs(block_lines[0], line_log_type, block_lines)
+        else:
+            line = (raw_line or '').strip() if match_type in ('exact', 'parsed', 'filepath') or block_rule else (raw_line or '')
+            index = index_of.get(line_index) if index_of is not None else None
+            if index is not None:
+                features = view.inputs.features[index]
+                if block_rule:
+                    block, members = view.block_at(index)
+                    block_lines = [view.inputs.walked[member].text for member in members]
+                elif _is_spor(log_type):
+                    _block, members = view.block_at(index)
+                    block_lines = [view.inputs.walked[member].text for member in members]
         result = {'line': line, 'matched': False, 'parsed': None, 'match_ranges': None}
 
         ranges = []
-        for pattern in compiled_patterns:
-            outcome = _match_line(pattern, match_type, line)
-            if outcome['matched']:
+        if block_rule:
+            if block is None and line.strip():
+                features, block = single_block_inputs(line.strip(), line_log_type)
+            if block is not None and block_matched(block):
                 result['matched'] = True
-            ranges.extend(outcome['ranges'])
-            if result['parsed'] is None and outcome['parsed'] is not None:
-                result['parsed'] = outcome['parsed']
-            if outcome['script_error'] and 'script_error' not in result:
-                result['script_error'] = outcome['script_error']
-        if result['matched'] and not _line_types_allow(only_entry_types, line):
-            result['matched'] = False
-            ranges = []
+                ranges = [[0, len(line)]]
+        else:
+            for pattern in compiled_patterns:
+                outcome = _match_line(pattern, match_type, line, features)
+                if outcome['matched']:
+                    result['matched'] = True
+                ranges.extend(outcome['ranges'])
+                if result['parsed'] is None and outcome['parsed'] is not None:
+                    result['parsed'] = outcome['parsed']
+                if outcome['script_error'] and 'script_error' not in result:
+                    result['script_error'] = outcome['script_error']
+            if result['matched'] and not _line_types_allow(only_entry_types, line, features):
+                result['matched'] = False
+                ranges = []
         if result['matched'] and condition_check is not None:
             report = condition_check(line_index)
             if report is None:
@@ -373,10 +523,11 @@ def build_rule_test_results(
         result['match_ranges'] = _merge_ranges(ranges) or None
 
         # Inspect existing rule matches for this line.
-        stripped = line.strip()
+        stripped = (block_lines[0] if blocks and block_lines else line).strip()
         if stripped:
             inspection = inspect_line_matches(
-                stripped, buckets=buckets_for(line_index), exclude_rule_id=exclude_rule_id
+                stripped, buckets=buckets_for(line_index), exclude_rule_id=exclude_rule_id,
+                log_type=line_log_type, block_lines=block_lines,
             )
             result['existing_status'] = inspection['dominant_status']
             result['existing_status_label'] = STATUS_LABELS.get(inspection['dominant_status'], 'unknown')
@@ -462,11 +613,13 @@ def _may_contain_match(compiled_patterns: list, match_type: str, content: str) -
 
     Only exact and substring rules have a literal that must appear verbatim in
     any matching line; every other type has to look at the lines themselves.
+    A block rule's text spans lines (indented in the log): only its first
+    line is looked for.
     """
     if match_type == 'substring':
-        return any(p['source_text'] in content for p in compiled_patterns)
+        return any(p['source_text'].split('\n', 1)[0].strip() in content for p in compiled_patterns)
     if match_type == 'exact':
-        return any(p['source_text'].strip() in content for p in compiled_patterns)
+        return any(p['source_text'].split('\n', 1)[0].strip() in content for p in compiled_patterns)
     return True
 
 
@@ -481,8 +634,14 @@ def scan_logs_for_rule_matches(
     count_all: bool = False,
     only_entry_types=None,
     line_check=None,
+    match_unit: str = _LINE,
+    log_type_for=None,
 ) -> dict:
     """Find the distinct lines a rule matches across stored logs.
+
+    ``match_unit`` "block": the distinct blocks instead, each entry's ``line``
+    being the block's text (its lines joined by "\n"). ``log_type_for(upload_id)``
+    names each log's type, so Spor logs are read as the analyzer reads them.
 
     ``line_check(upload_id, index)`` (a rule with conditions) answers 'hold',
     'fail' or 'unchecked' for the analyzed line ``index`` of a log: failing
@@ -502,10 +661,11 @@ def scan_logs_for_rule_matches(
     within a log included) and ``distinct_lines`` cover every log scanned, while
     ``matches`` keeps only the first ``max_lines`` distinct lines.
     """
+    block_rule = match_unit == _BLOCK
     compiled_patterns = [
-        _compile_pattern(pattern, status, match_type) for pattern in patterns
+        _compile_pattern(pattern, status, match_type, match_unit) for pattern in patterns
     ]
-    strip = match_type in ('exact', 'parsed', 'filepath')
+    strip = match_type in ('exact', 'parsed', 'filepath') or block_rule
 
     found = {}
     # Distinct lines past the sample, kept only to count them (count_all).
@@ -525,27 +685,51 @@ def scan_logs_for_rule_matches(
         if not _may_contain_match(compiled_patterns, match_type, content):
             continue
 
-        if line_check is None:
+        log_type = log_type_for(upload_id) if log_type_for is not None else None
+        if block_rule and match_type == 'parsed' and _spor_only(compiled_patterns) and not _is_spor(log_type):
+            continue   # Spor entries are only read in Spor logs
+        view = None
+        if block_rule or _is_spor(log_type):
+            view = _LogView(content, log_type, block_rule)
+            walk = ((line_no, raw, index) for index, line_no, raw, _text, _features in view.lines())
+        elif line_check is None:
             walk = ((number, raw, None) for number, raw in enumerate(content.splitlines(), start=1))
         else:
             walk = ((item.line_no, item.raw, item.index) for item in log_layout.analyzed_lines(content))
         matched_here = set()
+        blocks_seen = set()
+        reads = _block_reads(compiled_patterns, match_type, only_entry_types)
         for line_number, raw_line, index in walk:
             if time.monotonic() > deadline:
                 timed_out = True
                 break
-            # Normalised exactly as build_rule_test_results does, so the lines
-            # handed back to it produce the same verdicts the scan found.
-            line = raw_line.strip() if strip else raw_line
-            if not line.strip():
-                continue
-            if line in matched_here:
-                line_hits += 1
-                continue
-            if not any(_match_line(p, match_type, line)['matched'] for p in compiled_patterns):
-                continue
-            if not _line_types_allow(only_entry_types, line):
-                continue
+            if block_rule:
+                block, members = view.block_at(index, reads)
+                if members[0] in blocks_seen:
+                    continue
+                blocks_seen.add(members[0])
+                line = block.text
+                if line in matched_here:
+                    line_hits += 1
+                    continue
+                if not any(_match_block(p, match_type, block) for p in compiled_patterns):
+                    continue
+                if not entry_types_allow(only_entry_types, block.entry_types):
+                    continue
+            else:
+                # Normalised exactly as build_rule_test_results does, so the lines
+                # handed back to it produce the same verdicts the scan found.
+                line = raw_line.strip() if strip else raw_line
+                if not line.strip():
+                    continue
+                if line in matched_here:
+                    line_hits += 1
+                    continue
+                features = view.inputs.features[index] if view is not None else None
+                if not any(_match_line(p, match_type, line, features)['matched'] for p in compiled_patterns):
+                    continue
+                if not _line_types_allow(only_entry_types, line, features):
+                    continue
             check = line_check(upload_id, index) if line_check is not None else 'hold'
             if check == 'fail':
                 continue
@@ -735,32 +919,48 @@ def literal_prefilter(patterns: list, match_type: str):
 
     Only exact and substring rules have such a literal (see _may_contain_match).
     """
+    # A block rule's text spans lines: its first line stands for it.
     if match_type == 'substring':
-        literals = [pattern for pattern in patterns if pattern]
+        literals = [pattern.split('\n', 1)[0] for pattern in patterns if pattern]
     elif match_type == 'exact':
-        literals = [pattern.strip() for pattern in patterns if pattern.strip()]
+        literals = [pattern.split('\n', 1)[0].strip() for pattern in patterns if pattern.strip()]
     else:
         return None
+    literals = [literal for literal in literals if literal.strip()]
     return literals or None
 
 
-def compare_rule_scans(new_rule: dict, old_rule: dict, logs, *, deadline: float, sample_lines: int) -> dict:
+def compare_rule_scans(new_rule: dict, old_rule: dict, logs, *, deadline: float, sample_lines: int,
+                       log_type_for=None) -> dict:
     """Which distinct lines a candidate rule and an existing rule match, in one pass over `logs`.
 
     Each rule is ``{'patterns', 'status', 'match_type'}`` and optionally
-    ``only_entry_types`` (see build_rule_test_results). Returns the counts of
+    ``only_entry_types`` and ``match_unit`` (see build_rule_test_results); a
+    block rule matches every line of a block it matches. Returns the counts of
     distinct lines only the new rule matches, only the old one, or both, with a
     sample of each one-sided kind (most widespread first): whether a new rule
     covers everything an old per-case rule caught, and what else it catches.
     """
     sides = []
     for rule in (new_rule, old_rule):
+        unit = rule.get('match_unit') or _LINE
         sides.append({
-            'compiled': [_compile_pattern(p, rule['status'], rule['match_type']) for p in rule['patterns']],
+            'compiled': [_compile_pattern(p, rule['status'], rule['match_type'], unit) for p in rule['patterns']],
             'match_type': rule['match_type'],
             'strip': rule['match_type'] in ('exact', 'parsed', 'filepath'),
             'only_entry_types': rule.get('only_entry_types') or [],
+            'block': unit == _BLOCK,
         })
+    any_block = any(side['block'] for side in sides)
+
+    def side_hits(side, line, features, block):
+        if side['block']:
+            return block is not None and any(
+                _match_block(p, side['match_type'], block) for p in side['compiled']
+            ) and entry_types_allow(side['only_entry_types'], block.entry_types)
+        return any(
+            _match_line(p, side['match_type'], line, features)['matched'] for p in side['compiled']
+        ) and _line_types_allow(side['only_entry_types'], line, features)
 
     seen = {'both': set(), 'only_new': set(), 'only_old': set()}
     samples = {'only_new': {}, 'only_old': {}}
@@ -776,24 +976,34 @@ def compare_rule_scans(new_rule: dict, old_rule: dict, logs, *, deadline: float,
         if not any(may_match):
             continue
         tested_here = set()
-        for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        counted_here = set()   # (kind, key): a line counts once per log
+        log_type = log_type_for(upload_id) if log_type_for is not None else None
+        view = _LogView(content, log_type, any_block) if any_block or _is_spor(log_type) else None
+        if view is not None:
+            walk = ((line_no, raw, index) for index, line_no, raw, _text, _features in view.lines())
+        else:
+            walk = ((number, raw, None) for number, raw in enumerate(content.splitlines(), start=1))
+        for line_number, raw_line, index in walk:
             if time.monotonic() > deadline:
                 timed_out = True
                 break
-            if not raw_line.strip() or raw_line in tested_here:
+            if not raw_line.strip() or (raw_line in tested_here and not any_block):
                 continue
             tested_here.add(raw_line)
+            features = view.inputs.features[index] if view is not None else None
+            block = view.block_at(index)[0] if any_block else None
             hits = []
             for side, may in zip(sides, may_match):
                 line = raw_line.strip() if side['strip'] else raw_line
-                hits.append(may and any(
-                    _match_line(p, side['match_type'], line)['matched'] for p in side['compiled']
-                ) and _line_types_allow(side['only_entry_types'], line))
+                hits.append(may and side_hits(side, line, features, block))
             if not any(hits):
                 continue
             kind = 'both' if all(hits) else ('only_new' if hits[0] else 'only_old')
             key = raw_line.strip()
             seen[kind].add(key)
+            if (kind, key) in counted_here:
+                continue
+            counted_here.add((kind, key))
             if kind in samples:
                 entry = samples[kind].get(key)
                 if entry is None and len(samples[kind]) < sample_lines:

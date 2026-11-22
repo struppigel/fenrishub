@@ -45,7 +45,7 @@ class FactReadTests(FactApiBase):
         self.conditional_rule('upd.exe')
         response = self.get('api_v1_facts')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(int(response[API_VERSION_HEADER]), 6)
+        self.assertGreaterEqual(int(response[API_VERSION_HEADER]), 6)  # facts came with version 6
         [row] = response.json()['facts']
         self.assertEqual(
             {key: row[key] for key in ('fact_id', 'name', 'fact_rule_count', 'tag_source_count', 'conditional_rule_count')},
@@ -92,13 +92,13 @@ class FactReadTests(FactApiBase):
 class RuleOptionReadTests(FactApiBase):
     def test_rule_detail_and_list_show_the_new_options(self):
         rule = self.conditional_rule('upd.exe')
-        ClassificationRule.objects.filter(pk=rule.pk).update(apply_to_block=True, only_entry_types=['runkey'])
+        ClassificationRule.objects.filter(pk=rule.pk).update(match_unit='block', only_entry_types=['runkey'])
         detail = self.get('api_v1_rule', rule.pk).json()
         self.assertEqual(detail['conditions'], [
             {'fact_id': self.fact.pk, 'fact': 'nvidia installed', 'polarity': 'forbid', 'scope': 'log'},
         ])
         self.assertTrue(detail['conditional'])
-        self.assertTrue(detail['apply_to_block'])
+        self.assertEqual(detail['match_unit'], 'block')
         self.assertEqual(detail['only_entry_types'], ['runkey'])
         [row] = self.get('api_v1_rules').json()['rules']
         self.assertTrue(row['conditional'])
@@ -163,10 +163,23 @@ class RuleConditionWriteTests(FactApiBase):
         self.assertEqual(ClassificationRule.objects.count(), 2)
 
     def test_create_with_entry_types_and_block_verdict(self):
-        response = self.create(only_entry_types=['runkey'], apply_to_block=True)
+        response = self.create(only_entry_types=['runkey'], match_unit='block')
         self.assertEqual(response.status_code, 201, response.content)
         [created] = response.json()['created']
-        self.assertEqual((created['only_entry_types'], created['apply_to_block']), (['runkey'], True))
+        self.assertEqual((created['only_entry_types'], created['match_unit']), (['runkey'], 'block'))
+
+    def test_apply_to_block_is_still_read_as_a_block_rule(self):
+        # API version 6 clients wrote block verdicts as apply_to_block.
+        response = self.create(apply_to_block=True)
+        self.assertEqual(response.status_code, 201, response.content)
+        [created] = response.json()['created']
+        self.assertEqual(created['match_unit'], 'block')
+        self.assertNotIn('apply_to_block', created)
+
+    def test_unknown_match_unit_is_refused(self):
+        response = self.create(match_unit='word')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('match_unit', response.json()['error'])
 
     def test_unknown_entry_type_is_refused(self):
         response = self.create(only_entry_types=['nonsense'])
@@ -188,13 +201,13 @@ class RuleConditionWriteTests(FactApiBase):
         rule = ClassificationRule.objects.create(owner=self.helper, status=B, match_type='substring', source_text='upd.exe')
         response = self.post('api_v1_rule_update', rule.pk, body={
             'conditions': [{'fact': 'nvidia installed', 'polarity': 'require'}], 'only_entry_types': ['runkey'],
-            'apply_to_block': True,
+            'match_unit': 'block',
         })
         self.assertEqual(response.status_code, 200, response.content)
         body = response.json()
         self.assertEqual(body['owner'], 'alice')
         self.assertEqual(body['conditions'][0]['polarity'], 'require')
-        self.assertEqual((body['only_entry_types'], body['apply_to_block']), (['runkey'], True))
+        self.assertEqual((body['only_entry_types'], body['match_unit']), (['runkey'], 'block'))
 
     def test_whole_log_rule_conditions_must_look_at_the_log(self):
         response = self.post('api_v1_rule_create', body={

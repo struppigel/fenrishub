@@ -118,7 +118,8 @@ class EntryTypeRestrictionTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(rule.only_entry_types, ["service", "runkey"])
         page = self.client.get(reverse("edit_rule", args=[rule.pk]))
         self.assertContains(page, 'name="only_entry_types" value="service" checked')
-        self.assertContains(self.client.get(reverse("rules")), "only: service, runkey")
+        # The rules overview leaves parsed types out (the editor shows them).
+        self.assertNotContains(self.client.get(reverse("rules")), "only: service, runkey")
         # The full editor posts them: none ticked clears them.
         self.client.post(reverse("edit_rule", args=[rule.pk]), {
             "status": B, "match_type": "substring", "source_text": "evil2", "is_enabled": "on",
@@ -205,3 +206,35 @@ class KeptLogScopeTests(LogAnalyzerApiBaseTestCase):
         )
         self.assertIn("record_fact=1", response["Location"])
         self.assertNotIn("log_scope", response["Location"])
+
+
+class SporEntryTypeRestrictionTests(LogAnalyzerApiBaseTestCase):
+    """Spor parsed types: accepted, offered in their own group, and a line
+    rule restricted to one matches every line of such a block."""
+
+    def test_spor_names_are_accepted_after_frsts(self):
+        from ..views.rules import clean_entry_types
+        self.assertEqual(clean_entry_types(["spor_task", "service"]), (["service", "spor_task"], None))
+
+    def test_grouped_choices(self):
+        from ..views.rules import entry_type_groups
+        groups = dict(entry_type_groups())
+        self.assertEqual(list(groups), ["FRST", "Spor"])
+        self.assertIn(("spor_task", "task"), groups["Spor"])
+
+    def test_a_line_rule_restricted_to_a_spor_type_matches_its_sub_lines(self):
+        ClassificationRule.objects.create(
+            owner=self.user, status=B, match_type=ClassificationRule.MATCH_SUBSTRING, source_text="/run",
+            only_entry_types=["spor_task"], all_log_types=True,
+        )
+        log = "\n".join([
+            "==================== Spor 0.7.1 - forensic triage log ====================",
+            r"2026-11-20 08:14:02 [task] \Evil\UpdateCheck",
+            r"    program: C:\Users\Bob\AppData\Roaming\svc\run.exe",
+            "    arguments: /run",
+            r"2026-11-20 08:15:02 [run] HKU\Bob\Software\Microsoft\Windows\CurrentVersion\Run\X",
+            r"    program: C:\x.exe",
+            "    arguments: /run",
+        ])
+        statuses = [line["dominant_status"] for line in analyze_log_text(log, log_type="Spor")["lines"]]
+        self.assertEqual(statuses, ["?", "?", "?", B, "?", "?", "?"])

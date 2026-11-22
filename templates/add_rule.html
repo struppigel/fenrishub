@@ -123,8 +123,31 @@
         padding: 0 6px 3px;
     }
 
-    .rule-entry-types[hidden] {
+    .rule-entry-types[hidden],
+    #ruleEntryTypeChoices[hidden] {
         display: none;
+    }
+
+    /* Priority and "matches" side by side; one under the other when narrow. */
+    .rule-field-pair {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0 12px;
+    }
+
+    .rule-field-pair > .form-group {
+        flex: 1 1 140px;
+        min-width: 0;
+    }
+
+    .rule-field-pair > .form-group select {
+        width: 100%;
+    }
+
+    .rule-entry-type-group-label {
+        font-size: 11px;
+        color: var(--la-text-neutral);
+        margin: 4px 0 2px;
     }
 
     .rule-entry-types label {
@@ -441,6 +464,7 @@ textarea has no name, so it is never submitted.
             </div>
         </div>
         <div class="rule-side-body" id="ruleTabAdvancedBody" role="tabpanel" aria-labelledby="ruleTabAdvanced" hidden>
+            <div class="rule-field-pair">
             <div class="form-group" id="rulePriorityGroup">
                 <label for="rulePriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
                 <select id="rulePriority" name="priority">
@@ -454,17 +478,18 @@ textarea has no name, so it is never submitted.
                     {% endfor %}
                 </select>
             </div>
+            <div class="form-group" id="ruleMatchUnitGroup">
+                <label for="ruleMatchUnit" title="line: the rule tests one line and its verdict goes to that line. block: it tests a block's lines (a Spor item with its indented lines, an FRST Search file entry, an Addition event; any other line is a block of its own) and its verdict goes to all of them">matches</label>
+                <select id="ruleMatchUnit" name="match_unit">
+                    <option value="line" {% if form_match_unit != 'block' %}selected{% endif %}>line</option>
+                    <option value="block" {% if form_match_unit == 'block' %}selected{% endif %}>block</option>
+                </select>
+            </div>
+            </div>
             <div class="form-group" id="ruleColorWholeLineGroup" style="display: none;">
                 <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;">
                     <input type="checkbox" id="ruleColorWholeLine" name="color_whole_line" {% if form_color_whole_line %}checked{% endif %}>
                     color the whole line in the analyzer
-                </label>
-            </div>
-            <div class="form-group" id="ruleApplyToBlockGroup">
-                <input type="hidden" name="apply_to_block_present" value="1">
-                <label style="display: flex; align-items: center; gap: 6px; font-weight: normal;" title="block: a Spor item with its indented lines, an FRST Search file entry, an Addition event">
-                    <input type="checkbox" id="ruleApplyToBlock" name="apply_to_block" {% if form_apply_to_block %}checked{% endif %}>
-                    apply the verdict to the whole block
                 </label>
             </div>
             <div class="form-group" id="ruleTagsGroup">
@@ -486,9 +511,16 @@ textarea has no name, so it is never submitted.
                     <input type="checkbox" id="ruleAllEntryTypes" {% if not form_only_entry_types %}checked{% endif %}>
                     all log lines
                 </label>
-                <div class="rule-entry-types" id="ruleEntryTypeChoices" aria-label="only on lines parsed as" {% if not form_only_entry_types %}hidden{% endif %}>
-                    {% for value, label in entry_type_choices %}
-                    <label><input type="checkbox" name="only_entry_types" value="{{ value }}" {% if value in form_only_entry_types %}checked{% endif %}> {{ label }}</label>
+                <div id="ruleEntryTypeChoices" aria-label="only on lines parsed as" {% if not form_only_entry_types %}hidden{% endif %}>
+                    {% for group_label, choices in entry_type_groups %}
+                    <div class="rule-entry-type-group" data-entry-group="{{ group_label }}">
+                    <div class="rule-entry-type-group-label">{{ group_label }}</div>
+                    <div class="rule-entry-types">
+                        {% for value, label in choices %}
+                        <label><input type="checkbox" name="only_entry_types" value="{{ value }}" {% if value in form_only_entry_types %}checked{% endif %}> {{ label }}</label>
+                        {% endfor %}
+                    </div>
+                    </div>
                     {% endfor %}
                 </div>
             </div>
@@ -844,6 +876,7 @@ textarea has no name, so it is never submitted.
                 body: JSON.stringify({
                     source_text: sourceText, status: status, match_type: matchType, priority: priority,
                     lines: lines, exclude_rule_id: EXCLUDE_RULE_ID, only_entry_types: selectedEntryTypes(),
+                    match_unit: currentMatchUnit(),
                     /* The pasted text as one small log: its facts decide the conditions. */
                     log_text: document.getElementById('logLinesInput').value,
                     conditions: currentConditions(), log_types: logScopePicker.getValue(),
@@ -863,6 +896,7 @@ textarea has no name, so it is never submitted.
             }
 
             container.innerHTML = '';
+            followSporScope(data.rule);
             renderRegexWarnings(data.regex_warnings);
             let matchCount = 0;
             const statusLabels = data.status_labels || {};
@@ -1042,12 +1076,17 @@ textarea has no name, so it is never submitted.
                     exclude_rule_id: EXCLUDE_RULE_ID,
                     log_types: logScopePicker.getValue(),
                     only_entry_types: selectedEntryTypes(),
+                    match_unit: currentMatchUnit(),
                     conditions: currentConditions(),
                 }),
                 signal: logMatchesController.signal,
             });
             const data = await resp.json();
             if (data.error) { showLogMatchesError(data.error); return; }
+            /* The logs actually scanned: a Spor parsed rule scans Spor logs only. */
+            if (data.log_types) {
+                document.getElementById('logPreviewScopeLabel').textContent = logPreviewScopeText(data.log_types);
+            }
 
             output.innerHTML = '';
             const scanned = data.logs_scanned + ' log' + (data.logs_scanned === 1 ? '' : 's');
@@ -1130,13 +1169,14 @@ textarea has no name, so it is never submitted.
         priorityGroup: document.getElementById('rulePriorityGroup'),
         colorWholeLine: document.getElementById('ruleColorWholeLine'),
         colorWholeLineGroup: document.getElementById('ruleColorWholeLineGroup'),
+        matchUnit: document.getElementById('ruleMatchUnit'),
         /* The status option that records a fact; absent unless the page offers
          * it (add page, fact rule editor). */
         factStatusValue: document.getElementById('ruleFactGroup') ? FACT_STATUS_VALUE : null,
         factGroup: document.getElementById('ruleFactGroup'),
         verdictGroups: [
             document.getElementById('ruleTagsGroup'),
-            document.getElementById('ruleConditionsGroup'), document.getElementById('ruleApplyToBlockGroup'),
+            document.getElementById('ruleConditionsGroup'), document.getElementById('ruleMatchUnitGroup'),
         ].filter(Boolean),
     };
 
@@ -1162,6 +1202,69 @@ textarea has no name, so it is never submitted.
     }
 
     /* The ticked "only on lines parsed as" types, for the previews. */
+    /* "line" or "block": what the rule tests (whole-log and script rules always lines). */
+    function currentMatchUnit() {
+        const select = document.getElementById('ruleMatchUnit');
+        const group = document.getElementById('ruleMatchUnitGroup');
+        if (!select || group.style.display === 'none' || group.hidden) return 'line';
+        return select.value;
+    }
+
+    /* A rule of a Spor parsed type applies to Spor logs, until the user picks
+     * a scope (as the server's default_rule_scope does); once it is no such
+     * rule any more, the match type's default comes back. */
+    let scopeFollowsSpor = false;
+    function followSporScope(rule) {
+        if (LOG_SCOPE.chosen || logScopePicker.isTouched() || EDITING) return;
+        const spor = Boolean(rule) && (rule.entry_type || '').indexOf('spor_') === 0;
+        if (spor && !scopeFollowsSpor) {
+            logScopePicker.setValue(['Spor']);
+            scopeFollowsSpor = true;
+            onLogScopeChanged();
+        } else if (!spor && scopeFollowsSpor) {
+            logScopePicker.setValue(
+                RULE_FORM.matchType.value === 'filepath' ? RuleForm.ALL_LOG_TYPES : LOG_SCOPE.defaults.slice()
+            );
+            scopeFollowsSpor = false;
+            onLogScopeChanged();
+        }
+    }
+
+    /* The parsed types offered follow the rule's log types: Spor's types are
+     * only read in Spor logs, FRST's in every other log (analyzer.LogInputs).
+     * A group the scope rules out is hidden; `clear` (a scope change) unticks
+     * its boxes too. Without it (page load) a group with a stored tick stays
+     * visible, so opening a rule never drops part of it unseen.
+     * Returns whether any box was unticked. */
+    function entryGroupApplies(group, scope) {
+        if (scope === RuleForm.ALL_LOG_TYPES) return true;
+        if (group === 'Spor') return scope.includes('Spor');
+        return scope.some(function (name) { return name !== 'Spor'; });
+    }
+
+    function syncEntryTypeGroups(clear) {
+        const scope = logScopePicker.getValue();
+        let cleared = false;
+        document.querySelectorAll('#ruleEntryTypeChoices .rule-entry-type-group').forEach(function (group) {
+            const applies = entryGroupApplies(group.dataset.entryGroup, scope);
+            const boxes = group.querySelectorAll('input[name="only_entry_types"]');
+            if (!applies && clear) {
+                boxes.forEach(function (box) {
+                    if (box.checked) { box.checked = false; cleared = true; }
+                });
+            }
+            const ticked = Array.prototype.some.call(boxes, function (box) { return box.checked; });
+            group.hidden = !applies && !ticked;
+        });
+        return cleared;
+    }
+
+    /* After the picker's value changed (by the user or a default following
+     * the match type / parsed type). */
+    function onLogScopeChanged() {
+        if (syncEntryTypeGroups(true)) schedulePreviewUpdate();
+    }
+
     function selectedEntryTypes() {
         return Array.from(document.querySelectorAll('#ruleEntryTypesGroup input[name="only_entry_types"]:checked'))
             .map(function (box) { return box.value; });
@@ -1292,6 +1395,7 @@ textarea has no name, so it is never submitted.
         onInvalid: function () { showRuleTab('advanced'); },
         onChange: function () {
             syncLogScopeNotes();
+            onLogScopeChanged();
             scheduleLogMatchesUpdate();
         },
     });
@@ -1360,6 +1464,11 @@ textarea has no name, so it is never submitted.
         if (isScript) {
             label.textContent = 'python script (one rule)';
             textarea.placeholder = 'result = "evil" in line.lower()';
+        } else if (currentMatchUnit() === 'block') {
+            label.innerHTML = 'match block or pattern';
+            textarea.placeholder = EDITING
+                ? 'The block (its lines) or pattern this rule matches.'
+                : 'One block per pattern: its lines, as in the log. Separate blocks with a blank line.';
         } else {
             label.innerHTML = 'match line or pattern';
             /* One rule in, one rule out -- the editor never splits per line. */
@@ -1373,12 +1482,13 @@ textarea has no name, so it is never submitted.
         const matchType = RULE_FORM.matchType.value;
         const wholeLog = RuleForm.syncWholeLog(RULE_FORM);
         syncConditionControls();
-        /* A whole-log rule has no line, so no block to apply its verdict to,
-         * and no parsed type to be restricted to. */
-        const blockGroup = document.getElementById('ruleApplyToBlockGroup');
-        if (blockGroup) {
-            blockGroup.style.display = wholeLog ? 'none' : '';
-            if (wholeLog) document.getElementById('ruleApplyToBlock').checked = false;
+        /* A whole-log rule has no line, so no block either, and no parsed
+         * type to be restricted to; a script rule always tests lines. */
+        const unitGroup = document.getElementById('ruleMatchUnitGroup');
+        if (unitGroup) {
+            const lineOnly = wholeLog || matchType === 'script';
+            unitGroup.style.display = lineOnly ? 'none' : '';
+            if (lineOnly) document.getElementById('ruleMatchUnit').value = 'line';
         }
         const entryTypesGroup = document.getElementById('ruleEntryTypesGroup');
         entryTypesGroup.style.display = wholeLog ? 'none' : '';
@@ -1418,9 +1528,9 @@ textarea has no name, so it is never submitted.
         if (!box) return false;
         const isScript = document.getElementById('ruleMatchType').value === 'script';
         const multiline = /[\r\n]/.test(document.getElementById('ruleSourceText').value.trim());
-        const show = multiline && !isScript;
+        const show = multiline && !isScript && currentMatchUnit() !== 'block';
         box.textContent = show
-            ? 'This rule matches a single line — remove the line breaks, or use "add rule" to create one rule per line. Saving is blocked until then.'
+            ? 'This rule matches a single line — remove the line breaks, match a block instead, or use "add rule" to create one rule per line. Saving is blocked until then.'
             : '';
         box.style.display = show ? '' : 'none';
         return show;
@@ -1484,6 +1594,9 @@ textarea has no name, so it is never submitted.
         syncMultilineWarning();
         /* After bindLogScopeDefaults' own listener, which may have switched the scope. */
         syncLogScopeNotes();
+        /* Only when that listener can have moved the scope: a match type
+         * change alone never unticks parsed types. */
+        if (!LOG_SCOPE.chosen && !logScopePicker.isTouched()) onLogScopeChanged();
         scheduleRuleUpdate();
     });
     document.getElementById('logLinesInput').addEventListener('input', schedulePreviewUpdate);
@@ -1497,6 +1610,12 @@ textarea has no name, so it is never submitted.
         syncSourceTextMode();
         syncWholeLogMode();
         syncColorWholeLineMode();
+        scheduleRuleUpdate();
+    });
+    document.getElementById('ruleMatchUnit').addEventListener('change', function () {
+        syncSourceTextMode();
+        syncColorWholeLineMode();
+        syncMultilineWarning();
         scheduleRuleUpdate();
     });
     if (RULE_FORM.factGroup) {
@@ -1536,6 +1655,7 @@ textarea has no name, so it is never submitted.
     syncColorWholeLineMode();
     syncMultilineWarning();
     syncLogScopeNotes();
+    syncEntryTypeGroups(false);
     /* The last tab is remembered per browser; a refused log type choice opens
      * the tab holding it, and so do conditions and parsed types already set. */
     const hasConditions = CONDITIONS.conditions.length > 0;

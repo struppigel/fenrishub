@@ -6,9 +6,10 @@ from django.contrib.auth.models import User
 from django.db import transaction
 
 from .analyzer import (
-    EMPTY_RULE_FIELDS, VALID_STATUSES, _load_rule_buckets, inspect_line_matches, parse_rule_line, rule_defaults,
-    upsert_parsed_rule,
+    EMPTY_RULE_FIELDS, VALID_STATUSES, _load_rule_buckets, inspect_line_matches, parse_rule_for_line,
+    parse_rule_line, rule_defaults, upsert_parsed_rule,
 )
+from .log_layout import normalize_block_text
 from .log_types import default_rule_scope, normalize_log_type_selection, rule_scope_log_type, scope_payload
 from .models import ClassificationRule, known_log_type_names
 from .tagging import parse_tag_ids
@@ -48,11 +49,29 @@ def _pending_rule_scope(change: dict, match_type: str, existing_rule, log_type) 
     if change.get('log_scope') is not None:
         return change['log_scope']
     if existing_rule is None:
-        return default_rule_scope(match_type, log_type)
+        return default_rule_scope(match_type, log_type, entry_type=change.get('entry_type', ''))
     context = rule_scope_log_type(log_type)
     if context and not existing_rule.all_log_types and context not in (existing_rule.log_types or []):
         return False, [*(existing_rule.log_types or []), context]
     return None
+
+
+# The block a pending change's line is in (the analyzer sends it for Spor
+# blocks): at most this many lines and characters.
+MAX_BLOCK_LINES = 200
+MAX_BLOCK_CHARS = 20000
+
+
+def _clean_block_text(raw, line):
+    """The block text of a pending change, normalized, or None when it is
+    missing, too long, or does not hold the change's line."""
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > MAX_BLOCK_CHARS:
+        return None
+    text = normalize_block_text(raw)
+    lines = text.split('\n')
+    if len(lines) > MAX_BLOCK_LINES or line not in lines:
+        return None
+    return text
 
 
 def _normalize_pending_changes(raw_changes) -> tuple[list[dict], list[dict]]:
@@ -131,10 +150,22 @@ def _normalize_pending_changes(raw_changes) -> tuple[list[dict], list[dict]]:
                 'description': description,
                 'tag_ids': tag_ids,
                 'log_scope': log_scope,
+                'block_text': _clean_block_text(raw.get('block_text'), line),
             }
         )
 
     return normalized, invalid
+
+
+def _parse_pending_change(change, source_name, log_type):
+    """The rule a pending change becomes (analyzer.parse_rule_for_line): a
+    Spor block's parsed block rule, or the line's rule."""
+    parsed = parse_rule_for_line(
+        change['line'], change['new_status'], source_name, log_type=log_type, block_text=change.get('block_text'),
+    )
+    if parsed:
+        change['entry_type'] = parsed.get('entry_type', '')
+    return parsed
 
 
 def _normalize_conflict_resolutions(raw_resolutions) -> list[dict]:
@@ -229,8 +260,10 @@ def _apply_conflict_resolutions(
                     status=target_status,
                     match_type=existing_rule.match_type,
                     source_text=existing_rule.source_text,
-                    # Its twin: a rule with other conditions is another rule.
+                    # Its twin: a rule with other conditions (or of the other
+                    # match unit) is another rule.
                     condition_key=existing_rule.condition_key,
+                    match_unit=existing_rule.match_unit,
                 )
                 .exclude(pk=existing_rule.pk)
                 .first()
@@ -294,7 +327,7 @@ def _build_pending_rule_preview(
     # The review saves rules without conditions (upsert_parsed_rule), so only
     # those can be the rule a change updates.
     user_rules_index = {
-        (r.status, r.match_type, r.source_text): r
+        (r.status, r.match_type, r.source_text, r.match_unit): r
         for r in ClassificationRule.objects.filter(owner=owner, condition_key='', whole_log=False)
     }
 
@@ -318,11 +351,11 @@ def _build_pending_rule_preview(
             continue
 
         source_name = f'analyzer-review:{username}'
-        parsed = parse_rule_line(line, status=new_status, source_name=source_name)
+        parsed = _parse_pending_change(change, source_name, log_type)
         if not parsed:
             continue
 
-        key = (parsed['status'], parsed['match_type'], parsed['source_text'])
+        key = (parsed['status'], parsed['match_type'], parsed['source_text'], parsed['match_unit'])
         existing_rule = user_rules_index.get(key)
         action = 'update' if existing_rule else 'create'
         if action == 'create':
@@ -330,7 +363,10 @@ def _build_pending_rule_preview(
         else:
             update_count += 1
 
-        inspection = inspect_line_matches(line, buckets=buckets)
+        block_text = change.get('block_text')
+        inspection = inspect_line_matches(
+            line, buckets=buckets, log_type=log_type, block_lines=block_text.split('\n') if block_text else None,
+        )
         scope = _pending_rule_scope(change, parsed['match_type'], existing_rule, log_type)
         if scope is None:
             scope = (existing_rule.all_log_types, existing_rule.log_types)
@@ -396,6 +432,8 @@ def _build_pending_rule_preview(
                 'description': parsed['description'],
                 'existing_rule_id': existing_rule.id if existing_rule else None,
                 'log_types': scope_payload(*scope),
+                'match_unit': parsed['match_unit'],
+                'block_text': block_text,
                 **{field: parsed.get(field, empty) for field, empty in EMPTY_RULE_FIELDS.items()},
             }
         )
@@ -472,7 +510,7 @@ def _persist_selected_pending_rules(
                 skipped_changes += 1
                 continue
 
-            parsed = parse_rule_line(change['line'], status=change['new_status'], source_name=source_name)
+            parsed = _parse_pending_change(change, source_name, log_type)
             if not parsed:
                 skipped_changes += 1
                 continue

@@ -12,7 +12,7 @@ function bindAnalyzerButton(elementId, handler) {
 
 const _uploadContentCache = new Map();
 
-// Console-style loading indicator, defined in js/status_spinner.js (loaded from
+// Loading indicator (text + spinning ring), defined in js/status_spinner.js (loaded from
 // base.html) so the log search page can use the same one.
 const startStatusSpinner = window.startStatusSpinner;
 

@@ -90,6 +90,8 @@ class ComponentFilter:
         lowered = line.lower()
         if any(literal not in lowered for literal in self.literals):
             return False
+        # FRST entries of the line alone: Spor's parsed types are read from a
+        # whole block (spor_extractors), which a line search does not see.
         entry = ex.get_frst_entry(line.strip())
         if entry is None:
             return False

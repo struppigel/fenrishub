@@ -9,14 +9,23 @@ async function requestLogAnalysis(logText, uploadId = '') {
 
 const _lineDetailsCache = new Map();
 
-async function requestLineDetails(line, status) {
-    const cacheKey = line + '\0' + status + '\0' + currentLogType;
+async function requestLineDetails(line, status, blockLines = null, blockEntry = false) {
+    const blockKey = blockLines ? blockLines.join('\n') : '';
+    const cacheKey = line + '\0' + status + '\0' + currentLogType + '\0' + blockKey + '\0' + (blockEntry ? '1' : '0');
     const cached = _lineDetailsCache.get(cacheKey);
     if (cached) {
         return cached;
     }
 
-    const result = await Fenris.postJson(LINE_DETAILS_URL, { line, status, log_type: currentLogType }, { errorMessage: 'Failed to inspect line details.' });
+    const payload = { line, status, log_type: currentLogType };
+    // The block the line is in: block rules, and a Spor block's parsed rule.
+    if (blockLines) {
+        payload.block_lines = blockLines;
+        // Whether the analysis read a Spor entry from the block (not, e.g.,
+        // in a Spor log before 0.7.0): only then is its parsed type read.
+        payload.block_entry = Boolean(blockEntry);
+    }
+    const result = await Fenris.postJson(LINE_DETAILS_URL, payload, { errorMessage: 'Failed to inspect line details.' });
     _lineDetailsCache.set(cacheKey, result);
     return result;
 }
@@ -559,7 +568,17 @@ async function openLineInspectorForIndex(index, options = {}) {
 
     lineInspectorInFlight = true;
     try {
-        const detailsPayload = await requestLineDetails(entry.line || '', entry.dominant_status || '?');
+        // Its block: for block rules, and (a Spor entry, also of one line) the
+        // block the analysis read the entry from.
+        const blockIndexes = blockIndexesFor(index);
+        const blockLines = Number.isInteger(entry._blockStart) || entry._blockEntryType
+            ? blockIndexes.map((i) => analyzedLines[i].line || '')
+            : null;
+        // The analysis read an entry from the block: its first line carries it.
+        const blockHead = analyzedLines[blockIndexes[0]];
+        const detailsPayload = await requestLineDetails(
+            entry.line || '', entry.dominant_status || '?', blockLines, Boolean(blockHead && blockHead._blockEntryType),
+        );
         renderLineInspector(detailsPayload, entry);
         openLineInspectorModal(options);
     } catch (error) {
@@ -1037,12 +1056,23 @@ async function saveStatusSelection(index, newStatus) {
     setStatusPickerDisabled(true);
 
     try {
-        const lineKey = pendingOverrideKeyForEntry(entry, index);
+        // A Spor block's lines share one change, kept on its first line.
+        const target = pendingTargetForIndex(index);
+        const lineKey = target.key;
         const existing = pendingStatusChanges.get(lineKey);
+        // A Spor block's change is its first line's: it is taken back when
+        // that line would be back at its own status, not when the clicked
+        // sub-line would be (that status becomes the block's rule).
+        const targetBase = target.entry._baseDominantStatus || baseStatus;
 
-        const removeOverride = partiallyColored
-            ? Boolean(existing) && existing.new_status === newStatus
-            : newStatus === baseStatus;
+        let removeOverride;
+        if (partiallyColored) {
+            removeOverride = Boolean(existing) && existing.new_status === newStatus;
+        } else if (target.blockText) {
+            removeOverride = Boolean(existing) && newStatus === targetBase;
+        } else {
+            removeOverride = newStatus === baseStatus;
+        }
 
         if (removeOverride) {
             pendingStatusChanges.delete(lineKey);
@@ -1056,13 +1086,17 @@ async function saveStatusSelection(index, newStatus) {
                 order = pendingChangeSequence;
             }
 
-            pendingStatusChanges.set(lineKey, {
+            const change = {
                 id,
                 order,
-                line: entry.line,
-                original_status: baseStatus,
+                line: target.entry.line,
+                original_status: targetBase,
                 new_status: newStatus,
-            });
+            };
+            if (target.blockText) {
+                change.block_text = target.blockText;
+            }
+            pendingStatusChanges.set(lineKey, change);
         }
 
         applyPendingOverrides();
@@ -2255,19 +2289,30 @@ function addRemainingAsClean() {
         const effectiveStatus = entry.dominant_status || '?';
         if (effectiveStatus !== '?') continue;
         if (!entry.entry_type) continue;
-        if (exclusions.some((ex) => entry.line.includes(ex))) continue;
+        // A Spor block is one change, on its first line: only for a block that
+        // is unknown on every line, with none of them excluded.
+        const target = pendingTargetForIndex(index);
+        const lines = target.blockText !== null
+            ? blockIndexesFor(target.entry._index).map((i) => analyzedLines[i])
+            : [entry];
+        if (lines.some((line) => (line.dominant_status || '?') !== '?')) continue;
+        if (lines.some((line) => exclusions.some((ex) => (line.line || '').includes(ex)))) continue;
 
-        const lineKey = pendingOverrideKeyForEntry(entry, index);
+        const lineKey = target.key;
         if (pendingStatusChanges.has(lineKey)) continue;
 
         pendingChangeSequence += 1;
-        pendingStatusChanges.set(lineKey, {
+        const change = {
             id: String(pendingChangeSequence),
             order: pendingChangeSequence,
-            line: entry.line,
+            line: target.entry.line,
             original_status: '?',
             new_status: 'C',
-        });
+        };
+        if (target.blockText) {
+            change.block_text = target.blockText;
+        }
+        pendingStatusChanges.set(lineKey, change);
         count++;
     }
 

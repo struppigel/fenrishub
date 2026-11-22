@@ -9,9 +9,10 @@ from django.db.models import F, Q
 
 from . import frst_extractors as ex
 from . import log_layout, regex_bench, regex_engine, script_matcher
+from . import spor_extractors
 from .regex_engine import _re2  # noqa: F401 - re-exported: tests check whether re2 is installed
 from .machine_signals import SYSTEM_PROFILE_NAMES
-from .log_types import ANALYZED_LOG_TYPES, default_rule_scope, rule_scope_log_type
+from .log_types import ANALYZED_LOG_TYPES, LOG_TYPE_SPOR, default_rule_scope, rule_scope_log_type
 from .fact_index import FactIndex
 from .models import (
     ClassificationRule, FactRule, FactTagSource, ParsedFilepathExclusion, RuleCondition, SiteConfig,
@@ -599,7 +600,8 @@ def upsert_parsed_rule(parsed: dict, owner_id, log_scope: tuple | None = None) -
     keeps its scope.
     """
     # Always the plain rule: a rule with the same text but conditions is
-    # another rule (condition_key), and so is a whole-log one.
+    # another rule (condition_key), and so is a whole-log one, or one of the
+    # other match unit.
     rule, created = ClassificationRule.objects.update_or_create(
         owner_id=owner_id,
         status=parsed["status"],
@@ -607,17 +609,36 @@ def upsert_parsed_rule(parsed: dict, owner_id, log_scope: tuple | None = None) -
         source_text=parsed["source_text"],
         whole_log=False,
         condition_key="",
+        match_unit=parsed.get("match_unit", ClassificationRule.MATCH_UNIT_LINE),
         defaults=rule_defaults(parsed),
     )
     if created:
-        all_log_types, log_types = log_scope or default_rule_scope(parsed["match_type"])
+        all_log_types, log_types = log_scope or default_rule_scope(
+            parsed["match_type"], entry_type=parsed.get("entry_type", ""),
+        )
         if (rule.all_log_types, rule.log_types) != (all_log_types, list(log_types)):
             rule.all_log_types, rule.log_types = all_log_types, list(log_types)
             rule.save(update_fields=["all_log_types", "log_types"])
     return rule, created
 
 
-def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict | None:
+_RULE_PREFIXES = ("EXACT:", "SUBSTRING:", "REGEX:", "FILEPATH:")
+
+
+def parse_rule_line(raw_line: str, status: str, source_name: str = "", *, match_unit: str = "line") -> dict | None:
+    """The rule a line (or with `match_unit` "block", a block) of a log becomes.
+
+    A line: a parsed rule when an FRST extractor reads it, a file path rule
+    for a bare path, else an exact rule (or the match type its EXACT: /
+    SUBSTRING: / REGEX: / FILEPATH: prefix names).
+
+    A block (its lines, log_layout.normalize_block_text): a parsed rule of a
+    Spor type when spor_extractors reads it, else a block of one line is
+    read like a line, and any other block becomes an exact rule.
+    """
+    if match_unit == ClassificationRule.MATCH_UNIT_BLOCK:
+        return _parse_rule_block(raw_line, status, source_name)
+
     line = (raw_line or "").strip()
     if not line:
         return None
@@ -638,6 +659,7 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
         "source_text": source_text,
         "description": description,
         "source_name": source_name,
+        "match_unit": ClassificationRule.MATCH_UNIT_LINE,
         **EMPTY_RULE_FIELDS,
     }
 
@@ -683,8 +705,9 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
 
     # Bare path (no FRST line shape): `C:\foo\bar` or `\\server\share\foo` — treat
     # as a filepath rule so the import flow and the re-parse don't silently
-    # downgrade these to exact.
-    if _BARE_PATH_RE.match(core):
+    # downgrade these to exact. A path with details after " => " (a Spor
+    # file line) is no bare path: the whole line would be stored as the path.
+    if _BARE_PATH_RE.match(core) and " => " not in core:
         rule_data["match_type"] = ClassificationRule.MATCH_FILEPATH
         rule_data["source_text"] = core
         rule_data["filepath"] = core
@@ -693,7 +716,78 @@ def parse_rule_line(raw_line: str, status: str, source_name: str = "") -> dict |
     return rule_data
 
 
+def _parse_rule_block(raw_text: str, status: str, source_name: str) -> dict | None:
+    text = log_layout.normalize_block_text(raw_text)
+    if not text:
+        return None
+    if status not in VALID_STATUSES:
+        raise ValueError(f"Invalid status: {status}")
+    lines = text.split("\n")
+    entry = spor_extractors.parse_block(lines)
+    if entry is not None:
+        return {
+            "status": status,
+            "match_type": ClassificationRule.MATCH_PARSED_ENTRY,
+            "source_text": text,
+            "description": "",
+            "source_name": source_name,
+            "match_unit": ClassificationRule.MATCH_UNIT_BLOCK,
+            **rule_fields_from_entry(entry),
+        }
+    if len(lines) == 1 or text.startswith(_RULE_PREFIXES):
+        parsed = parse_rule_line(text, status, source_name)
+        if parsed is not None:
+            parsed["match_unit"] = ClassificationRule.MATCH_UNIT_BLOCK
+        return parsed
+    return {
+        "status": status,
+        "match_type": ClassificationRule.MATCH_EXACT,
+        "source_text": text,
+        "description": "",
+        "source_name": source_name,
+        "match_unit": ClassificationRule.MATCH_UNIT_BLOCK,
+        **EMPTY_RULE_FIELDS,
+    }
+
+
+def parse_rule_for_line(line: str, status: str, source_name: str = "", *, log_type=None,
+                        block_text: str | None = None) -> dict | None:
+    """The rule an analyzer line becomes when its status is set: in a Spor log
+    a block that spor_extractors reads (`block_text`: the block the line is
+    in, its stripped lines, which the analyzer sends for the lines of a
+    block it read an entry from) becomes a parsed block rule of its Spor
+    type. Any other Spor line that names a path (a TIMELINE file, a
+    "loaded:" or "file:" line) becomes a file path rule for it, where
+    parse_rule_line would make an exact rule of the line, time and user name
+    included; every other line parse_rule_line's rule for it."""
+    if rule_scope_log_type(log_type) != LOG_TYPE_SPOR:
+        return parse_rule_line(line, status, source_name)
+    line_value = (line or "").strip()
+    lines = []
+    if block_text:
+        text = log_layout.normalize_block_text(block_text)
+        lines = text.split("\n") if text else []
+        # A sub-line naming another file ("file:", "module:") is no part of
+        # the entry: it keeps its own line rule.
+        own_line = line_value in lines and not spor_extractors.is_entry_line(
+            line_value, sub_line=lines.index(line_value) > 0,
+        )
+        if lines and not own_line and spor_extractors.parse_block(lines) is not None:
+            return parse_rule_line(text, status, source_name, match_unit=ClassificationRule.MATCH_UNIT_BLOCK)
+    parsed = parse_rule_line(line, status, source_name)
+    # A Spor line's path is the one the analyzer matches file path rules on
+    # (spor_path): FRST's path guesses would read "C:\x.sys => sha256, ..."
+    # as a path, details and all.
+    if parsed and parsed["match_type"] in (ClassificationRule.MATCH_EXACT, ClassificationRule.MATCH_FILEPATH):
+        sub_line = lines.index(line_value) > 0 if line_value in lines else None
+        path = spor_extractors.line_path(line_value, sub_line=sub_line)
+        if path and path != parsed.get("filepath"):
+            return parse_rule_line(f"FILEPATH:{path}", status, source_name)
+    return parsed
+
+
 def import_rules_from_lines(lines: Iterable[str], status: str, source_name: str = "", owner=None) -> dict:
+    """Rules from lines of text, one rule per line (line rules only)."""
     created = 0
     updated = 0
     skipped = 0
@@ -793,7 +887,7 @@ def reparse_rules(queryset, *, apply: bool = False):
     match_type_skip = 0
 
     for rule in queryset.iterator():
-        parsed = parse_rule_line(rule.source_text, rule.status, rule.source_name)
+        parsed = parse_rule_line(rule.source_text, rule.status, rule.source_name, match_unit=rule.match_unit)
         if parsed is None:
             unparseable += 1
             continue
@@ -853,7 +947,8 @@ def convert_exact_rules_to_parsed(queryset, entry_types):
     model = queryset.model
 
     for rule in queryset.filter(match_type=ClassificationRule.MATCH_EXACT).iterator():
-        parsed = parse_rule_line(rule.source_text, rule.status, rule.source_name)
+        # A line rule never becomes a Spor rule: those read a whole block.
+        parsed = parse_rule_line(rule.source_text, rule.status, rule.source_name, match_unit=rule.match_unit)
         if (
             parsed is None
             or parsed["match_type"] != ClassificationRule.MATCH_PARSED_ENTRY
@@ -870,6 +965,7 @@ def convert_exact_rules_to_parsed(queryset, entry_types):
                 source_text=rule.source_text,
                 whole_log=rule.whole_log,
                 condition_key=rule.condition_key,
+                match_unit=rule.match_unit,
             )
             .exclude(pk=rule.pk)
             .exists()
@@ -914,7 +1010,7 @@ def find_rule_duplicates(queryset):
     for rule in queryset.iterator():
         # Rules that differ in their conditions, parsed-type restriction or
         # block verdict behave differently: no duplicates.
-        behaviour = (rule.condition_key, tuple(rule.only_entry_types or ()), bool(rule.apply_to_block))
+        behaviour = (rule.condition_key, tuple(rule.only_entry_types or ()), rule.match_unit)
         if rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
             clsid = (
                 "" if rule.entry_type in ex.SYSTEM_SPECIFIC_CLSID_TYPES
@@ -1021,6 +1117,9 @@ def _new_buckets(parsed_filepath_exclusions, regex_by_rule_id=None) -> dict:
         "__regex_by_rule_id": {} if regex_by_rule_id is None else regex_by_rule_id,
         "__wholelog_regex": [],
         "__wholelog_script": [],
+        # The rules that test whole blocks (match_unit "block"), None without any:
+        # see _index_block_rules.
+        "__block": None,
     }
 
 
@@ -1053,8 +1152,6 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | 
     _index_rules(buckets, plain)
     _load_conditional_rules(buckets, conditional, exclusions)
     _load_fact_sources(buckets, rule_set_key, log_type, exclusions)
-    # Some rule's verdict applies to its whole block (analyze_log_text, step 3).
-    buckets["__block_rules"] = any(rule.apply_to_block and not rule.whole_log for rule in plain + conditional)
     return buckets
 
 
@@ -1149,6 +1246,7 @@ def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True)
     rules go there.
     """
     pending_regex_rules = []
+    block_rules = []
 
     for rule in rules:
         if require_status and rule.status not in VALID_STATUSES:
@@ -1175,10 +1273,19 @@ def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True)
         rule_path = (rule.normalized_filepath or "").strip().lower()
         if not rule_path and rule.filepath:
             rule_path = ex.path_key(rule.filepath)
-        if not rule_path and rule.source_text:
+        if not rule_path and rule.source_text and "\n" not in rule.source_text:
             source_path = ex.extract_any_frst_path(rule.source_text)
             if source_path:
                 rule_path = ex.path_key(source_path)
+
+        if _is_block_rule(rule):
+            # A parsed block rule still matches single lines through its stored
+            # path, as the weak fallback every parsed rule has.
+            if rule_path and filepath_fallback and rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
+                buckets["__filepath_any"].append((rule, rule_path, True))
+            block_rules.append((rule, rule_path))
+            continue
+
         if rule_path and (filepath_fallback or rule.match_type == ClassificationRule.MATCH_FILEPATH):
             buckets["__filepath_any"].append(
                 (rule, rule_path, rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY)
@@ -1205,6 +1312,71 @@ def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True)
 
     _build_parsed_entry_index(buckets)
     _build_regex_matchers(buckets, pending_regex_rules)
+    buckets["__block"] = _index_block_rules(block_rules) if block_rules else None
+
+
+def _is_block_rule(rule) -> bool:
+    """A rule that tests whole blocks: match_unit "block", per-line matcher
+    types only (whole-log and script rules always test lines)."""
+    return (
+        getattr(rule, "match_unit", ClassificationRule.MATCH_UNIT_LINE) == ClassificationRule.MATCH_UNIT_BLOCK
+        and not rule.whole_log
+        and rule.match_type != ClassificationRule.MATCH_SCRIPT
+    )
+
+
+def _index_block_rules(rules_with_paths) -> dict:
+    """The matcher set of the block rules: (rule, its normalized path) pairs.
+
+    A block rule tests a block's text (log_layout.normalize_block_text: its
+    lines stripped, joined by line breaks): exact rules the whole text, substring
+    rules anywhere in it, regex rules with `^`/`$` per line (MULTILINE).
+    Parsed rules match any entry of the block (a Spor block's own entry, or a
+    line's FRST entry) and file path rules any path of its lines.
+    """
+    block = {
+        "exact": {},
+        "substring": [],
+        "regex": [],
+        "regex_set": None,
+        "regex_set_rules": [],
+        "parsed": {},
+        "filepath": {},
+    }
+    regex_rules = []
+    for rule, rule_path in rules_with_paths:
+        if rule.match_type == ClassificationRule.MATCH_EXACT:
+            key = log_layout.normalize_block_text(rule.source_text)
+            if key:
+                block["exact"].setdefault(key, []).append(rule)
+        elif rule.match_type == ClassificationRule.MATCH_SUBSTRING:
+            if rule.source_text:
+                block["substring"].append(rule)
+        elif rule.match_type == ClassificationRule.MATCH_REGEX:
+            regex_rules.append(rule)
+        elif rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
+            block["parsed"].setdefault(rule_frst_entry(rule), []).append(rule)
+        elif rule.match_type == ClassificationRule.MATCH_FILEPATH:
+            if rule_path:
+                block["filepath"].setdefault(rule_path, []).append(rule)
+    if regex_rules:
+        patterns = [_BLOCK_REGEX_FLAGS + rule.source_text for rule in regex_rules]
+        regex_set, positions = regex_engine.build_set(patterns)
+        in_set = set(positions)
+        for index, rule in enumerate(regex_rules):
+            if index not in in_set:
+                try:
+                    block["regex"].append((rule, re.compile(patterns[index])))
+                except re.error:
+                    pass
+        if regex_set is not None:
+            block["regex_set"] = regex_set
+            block["regex_set_rules"] = [regex_rules[index] for index in positions]
+    return block
+
+
+# Block regexes see several lines: `^` and `$` stand for each line's start and end.
+_BLOCK_REGEX_FLAGS = "(?m)"
 
 
 def _build_parsed_entry_index(buckets):
@@ -1378,6 +1550,7 @@ def _build_line_result(
     verdict_priority: int | None = None,
     fallback_only: bool = False,
     rule_ids: list[int] | None = None,
+    line_path: str | None = None,
 ):
     dominant_status = _dominant_status(status_codes)
     components = {}
@@ -1412,6 +1585,11 @@ def _build_line_result(
         exclusion_path = ex.defender_exclusion_path(line)
         if exclusion_path:
             components["filepath"] = exclusion_path
+    # The line's own path (Spor lines: also their sub-lines'), as written.
+    if "filepath" not in components and line_path:
+        pos = ex.find_value_position(line_path, line, "filepath", start=ex.path_search_start(line))
+        if pos:
+            components["filepath"] = line[pos[0]:pos[1]]
     return {
         "line": line,
         "status_codes": status_codes,
@@ -1526,10 +1704,11 @@ def _paint_kind(rule, matcher: str) -> str:
     return _PAINT_LINE
 
 
-def _locate_line_path(line: str):
-    """[start, end) of the line's file path, or None when there is none or it
-    cannot be found in the line's own spelling."""
-    path = ex.extract_any_frst_path(line)
+def _locate_line_path(line: str, path=None):
+    """[start, end) of the line's file path (`path`, by default FRST's reading
+    of the line), or None when there is none or it cannot be found in the
+    line's own spelling."""
+    path = path or ex.extract_any_frst_path(line)
     if not path:
         return None
     return ex.find_value_position(path, line, "filepath", start=ex.path_search_start(line))
@@ -1570,7 +1749,8 @@ def _add_covered(covered: list, start: int, end: int) -> list:
     return merged
 
 
-def _resolve_line_paint(line: str, matches_top_down, regex_patterns=None) -> tuple[dict | None, list[dict]]:
+def _resolve_line_paint(line: str, matches_top_down, regex_patterns=None,
+                        line_path=None) -> tuple[dict | None, list[dict]]:
     """How the analyzer colours a line: every matching rule paints it, lowest
     priority first, so the highest priority ends up on top.
 
@@ -1610,7 +1790,7 @@ def _resolve_line_paint(line: str, matches_top_down, regex_patterns=None) -> tup
                 kind = _PAINT_LINE
         elif kind == _PAINT_PATH:
             if path_range is _PATH_NOT_LOCATED:
-                path_range = _locate_line_path(line)
+                path_range = _locate_line_path(line, line_path)
             if path_range is not None:
                 ranges = [path_range]
             elif _is_filepath_fallback(rule, matcher):
@@ -1646,15 +1826,23 @@ _MATCHER_ENTRY_TYPE_LABELS = {
     "filepath": "filepath",
     "substring": "substrings",
     "regex": "regex",
+    "block": "block",
 }
-_MATCHER_PREFERENCE = ("parsed_entry", "exact", "filepath", "substring", "regex")
+_MATCHER_PREFERENCE = ("parsed_entry", "block", "exact", "filepath", "substring", "regex")
+
+
+def _is_parsed_match(rule, matcher) -> bool:
+    """A match of a parsed rule through its entry: on a line, or on its block."""
+    return matcher == "parsed_entry" or (
+        matcher == "block" and rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY
+    )
 
 
 def _entry_type_for_winning_group(top_matches, parsed_entry):
     matchers = {m[2] for m in top_matches}
-    if "parsed_entry" in matchers:
+    if any(_is_parsed_match(rule, matcher) for rule, _reason, matcher in top_matches):
         for rule, _reason, matcher in top_matches:
-            if matcher == "parsed_entry" and rule.entry_type:
+            if _is_parsed_match(rule, matcher) and rule.entry_type:
                 return rule.entry_type
         return "parsed"
     for matcher in _MATCHER_PREFERENCE:
@@ -1667,16 +1855,105 @@ class LineFeatures(NamedTuple):
     """What the matchers read from a line besides its text, parsed once so
     several matcher sets can share it."""
     parsed_entries: tuple  # every FrstEntry an extractor reads, in extractor order
-    filepath: str | None   # extract_any_frst_path
+    filepath: str | None   # extract_any_frst_path; in Spor logs the line's Spor path first
+    # Spor logs: the entry of the line's block (spor_extractors), on each of
+    # its lines. Block rules match it; it gives every line of the block its
+    # parsed type (only_entry_types, tags).
+    block_entries: tuple = ()
 
     @property
     def parsed_entry(self):
         """The first entry (ex.get_frst_entry)."""
         return self.parsed_entries[0] if self.parsed_entries else None
 
+    @property
+    def block_entry(self):
+        return self.block_entries[0] if self.block_entries else None
 
-def line_features(line: str) -> LineFeatures:
-    return LineFeatures(tuple(ex.iter_frst_entries(line)), ex.extract_any_frst_path(line))
+    @property
+    def entry_types(self) -> set:
+        """The parsed types of the line: its own FRST entries' and its block's."""
+        return {entry.entry_type for entry in self.parsed_entries + self.block_entries}
+
+
+def line_features(line: str, *, spor: bool = False, block_entries: tuple = (), spor_path=None,
+                  sub_line=None) -> LineFeatures:
+    """The features of `line`. In a Spor log (`spor`) its path is its Spor
+    path (`spor_path`, else spor_extractors.line_path; `sub_line` says
+    whether it is an indented line of its block, None: guessed), with FRST's
+    reading as a fallback, and `block_entries` are its block's entries."""
+    frst_path = ex.extract_any_frst_path(line)
+    if spor:
+        if spor_path is None:
+            spor_path = spor_extractors.line_path(line, sub_line=sub_line)
+        return LineFeatures(tuple(ex.iter_frst_entries(line)), spor_path or frst_path, tuple(block_entries))
+    return LineFeatures(tuple(ex.iter_frst_entries(line)), frst_path)
+
+
+class BlockFeatures(NamedTuple):
+    """What block rules read from a block (log_layout): built once per block."""
+    text: str            # normalize_block_text: the stripped lines joined by "\n"
+    entries: tuple       # the block's Spor entry, then the FRST entries of its lines
+    paths: frozenset     # ex.path_key of every line's path
+    entry_types: frozenset
+    label: str           # "L4" or "L4-L6", for match reasons
+
+
+def block_features(texts, features, line_nos=None) -> BlockFeatures:
+    """The BlockFeatures of a block: the stripped `texts` of its lines and
+    their LineFeatures (block entries taken from the first)."""
+    entries = list(features[0].block_entries) if features else []
+    for feature in features:
+        entries.extend(feature.parsed_entries)
+    paths = frozenset(ex.path_key(feature.filepath) for feature in features if feature.filepath)
+    if line_nos:
+        first, last = line_nos[0], line_nos[-1]
+        label = f"L{first}" if first == last else f"L{first}-L{last}"
+    else:
+        label = ""
+    return BlockFeatures(
+        "\n".join(texts), tuple(entries), paths, frozenset(entry.entry_type for entry in entries), label,
+    )
+
+
+def _flat_block_matches(block: BlockFeatures, block_buckets, exclude_rule_id=None) -> list[tuple]:
+    """Every (rule, reason, "block") of the block rules `block_buckets` on
+    `block`, one per rule, restricted to parsed types like line rules."""
+    if not block_buckets:
+        return []
+    where = f" in its block ({block.label})" if block.label else " in its block"
+    found = []
+    seen = set()
+
+    def add(rule, reason):
+        if rule.pk in seen or rule.pk == exclude_rule_id:
+            return
+        if not entry_types_allow(getattr(rule, "only_entry_types", None), block.entry_types):
+            return
+        seen.add(rule.pk)
+        found.append((rule, reason + where, "block"))
+
+    for rule in block_buckets["exact"].get(block.text, ()):
+        add(rule, "found exact match")
+    for entry in block.entries:
+        for rule in block_buckets["parsed"].get(entry, ()):
+            add(rule, f"matched {entry.entry_type or 'parsed'} entry")
+    for path in block.paths:
+        for rule in block_buckets["filepath"].get(path, ()):
+            add(rule, "found matching normalized path")
+    for rule in block_buckets["substring"]:
+        if rule.source_text in block.text:
+            add(rule, f'found substring "{rule.source_text}"')
+    regex_set = block_buckets["regex_set"]
+    if regex_set is not None:
+        set_rules = block_buckets["regex_set_rules"]
+        for idx in regex_engine.set_match(regex_set, block.text):
+            rule = set_rules[idx]
+            add(rule, f'found regex match for "{rule.source_text}"')
+    for rule, compiled in block_buckets["regex"]:
+        if compiled.search(block.text):
+            add(rule, f'found regex match for "{rule.source_text}"')
+    return found
 
 
 def _analyze_single_line(line: str, buckets, features: LineFeatures | None = None):
@@ -1704,14 +1981,14 @@ def _deciding_rule_ids(effective_matches) -> list:
 
 def _line_result(line, features, buckets, effective_matches, shadowed_matches, matcher_label, top_priority):
     """The analysis entry of a line from its matches, already split by priority."""
-    parsed_entry = features.parsed_entry
+    parsed_entry = features.parsed_entry or features.block_entry
     dates = _extract_dates(line, parsed_entry)
 
     if not effective_matches:
         unknown_entry_type = parsed_entry.entry_type if parsed_entry else ""
         return _build_line_result(
             line, "?", unknown_entry_type, [], "unknown",
-            dates=dates, parsed_entry=parsed_entry,
+            dates=dates, parsed_entry=parsed_entry, line_path=features.filepath,
         )
 
     # The verdict comes from the winning priority tier alone.
@@ -1729,7 +2006,7 @@ def _line_result(line, features, buckets, effective_matches, shadowed_matches, m
     # and every effective match outranks every shadowed one, so together they are
     # already in top-down paint order.
     paint_base, highlights = _resolve_line_paint(
-        line, effective_matches + shadowed_matches, buckets.get("__regex_by_rule_id"),
+        line, effective_matches + shadowed_matches, buckets.get("__regex_by_rule_id"), features.filepath,
     )
 
     deciding_rule_ids = _deciding_rule_ids(effective_matches)
@@ -1748,6 +2025,7 @@ def _line_result(line, features, buckets, effective_matches, shadowed_matches, m
         verdict_priority=top_priority,
         fallback_only=fallback_only,
         rule_ids=deciding_rule_ids,
+        line_path=features.filepath,
     )
 
 
@@ -1825,10 +2103,11 @@ _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY = 1
 
 
 def _matcher_preference(rule, matcher: str) -> int:
-    """Lower is preferred. Parsed entry beats everything; otherwise the rule's own match_type wins."""
+    """Lower is preferred. Parsed entry beats everything; otherwise the rule's
+    own match_type (for a block rule: its block match) wins."""
     if matcher == "parsed_entry":
         return 0
-    if matcher == _MATCH_TYPE_TO_PRIMARY_MATCHER.get(rule.match_type):
+    if matcher == "block" or matcher == _MATCH_TYPE_TO_PRIMARY_MATCHER.get(rule.match_type):
         return 1
     return 2
 
@@ -1875,7 +2154,7 @@ def _flat_matches(line: str, buckets, features: LineFeatures | None = None, excl
     flat = _dedupe_matches_by_rule(m for matches in groups.values() for m in matches)
 
     if any(getattr(match[0], "only_entry_types", None) for match in flat):
-        line_types = {entry.entry_type for entry in features.parsed_entries}
+        line_types = features.entry_types
         flat = [m for m in flat if entry_types_allow(getattr(m[0], "only_entry_types", None), line_types)]
 
     # Dropped before the priority split rather than filtered out of the result, so
@@ -1942,6 +2221,7 @@ def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]
                 "description": rule.description,
                 "source_name": rule.source_name,
                 "is_enabled": rule.is_enabled,
+                "match_unit": getattr(rule, "match_unit", ClassificationRule.MATCH_UNIT_LINE),
                 **{field: getattr(rule, field) for field in REPARSE_FIELDS},
                 "matcher": matcher,
                 "reason": reason_value,
@@ -1961,13 +2241,48 @@ def fact_rule_ids_matching_line(line: str, rule_set_key: str = SHARED_RULE_SET_K
     return [rule.pk for rule, _reason, _matcher in _flat_matches(line_value, fact_buckets)]
 
 
+def single_block_inputs(line: str, log_type=None, block_lines=None, *, read_entry: bool = True):
+    """`(features of line, BlockFeatures of its block)` for one line seen on
+    its own (inspector, review, rule tests): its block is `block_lines` (the
+    stripped lines of the block it is in, itself among them), else the line
+    alone. In a Spor log the lines' Spor paths are read as analyze_log_text
+    reads them, and so is the block's entry when `block_lines` are given and
+    `read_entry`: only then is the block one the analysis read an entry from
+    (Spor 0.7.0+; the analyzer page says so with `block_entry`)."""
+    line_value = (line or "").strip()
+    texts = [text.strip() for text in (block_lines or ()) if text and text.strip()]
+    if line_value not in texts:
+        texts = [line_value]
+    position = texts.index(line_value)
+    spor = rule_scope_log_type(log_type) == LOG_TYPE_SPOR
+    block_entries = ()
+    if spor and block_lines and read_entry:
+        entry = spor_extractors.parse_block(texts)
+        block_entries = (entry,) if entry is not None else ()
+    features = [
+        line_features(
+            text, spor=True, sub_line=number > 0,
+            block_entries=block_entries if spor_extractors.is_entry_line(text, sub_line=number > 0) else (),
+        ) if spor
+        else line_features(text)
+        for number, text in enumerate(texts)
+    ]
+    return features[position], block_features(texts, features)
+
+
 def inspect_line_matches(
     line: str,
     buckets=None,
     rule_set_key: str = SHARED_RULE_SET_KEY,
     exclude_rule_id=None,
     log_type: str | None = None,
+    block_lines=None,
+    block_entry: bool = True,
 ) -> dict:
+    """The matches of the rules of a rule set on `line`. Block rules test
+    the line's block: `block_lines` (the stripped lines of its block), else
+    the line alone. Without `block_entry` no Spor entry is read from the
+    block (one the analysis read none from, e.g. of a Spor log before 0.7.0)."""
     line_value = (line or "").strip()
     if not line_value:
         return {
@@ -1979,14 +2294,19 @@ def inspect_line_matches(
         }
 
     active_buckets = buckets or _get_cached_rule_buckets(rule_set_key, log_type)
+    features, block = single_block_inputs(line_value, log_type, block_lines, read_entry=block_entry)
+
+    def matches_of(matcher_set):
+        flat = _flat_matches(line_value, matcher_set, features, exclude_rule_id)
+        hits = _flat_block_matches(block, matcher_set.get("__block"), exclude_rule_id)
+        return _dedupe_matches_by_rule(flat + hits) if hits else flat
+
     (
         effective_matches,
         shadowed_matches,
         effective_matcher,
         effective_priority,
-    ) = _collect_effective_and_shadowed_matches_for_line(
-        line_value, active_buckets, exclude_rule_id=exclude_rule_id
-    )
+    ) = _split_by_priority(matches_of(active_buckets))
 
     statuses = [rule.status for rule, _, _ in effective_matches]
     status_codes = _ordered_status_codes(statuses)
@@ -2009,7 +2329,7 @@ def inspect_line_matches(
     # so they are listed apart, unchecked, and never change the verdict above.
     conditional = active_buckets.get("__conditional") if isinstance(active_buckets, dict) else None
     if conditional is not None:
-        conditional_matches = _flat_matches(line_value, conditional, exclude_rule_id=exclude_rule_id)
+        conditional_matches = matches_of(conditional)
         if conditional_matches:
             serialized, _ = _serialize_rule_matches(sorted(conditional_matches, key=_match_precedence_sort_key))
             conditions = active_buckets.get("__rule_conditions") or {}
@@ -2023,12 +2343,152 @@ def inspect_line_matches(
     return result
 
 
+class _LazyFeatures:
+    """The LineFeatures of every analyzed line, each read when first asked
+    for: a scan that looks at a few lines only (a block rule's text, a
+    deadline) never parses the rest."""
+
+    def __init__(self, compute, count):
+        self._compute = compute
+        self._items = [None] * count
+
+    def __len__(self):
+        return len(self._items)
+
+    def __getitem__(self, index):
+        found = self._items[index]
+        if found is None:
+            found = self._items[index] = self._compute(index)
+        return found
+
+
+class LogInputs:
+    """What the matchers read from a whole log, worked out once: its analyzed
+    lines, their layout (when anything needs it), every line's features
+    (read when first needed) and, for the block rules of a matcher set, their
+    matches per block.
+
+    In a Spor log every line has its Spor path and the entry of its block
+    (spor_extractors); elsewhere lines are read as before.
+    """
+
+    def __init__(self, raw_text, log_type, buckets):
+        self.walked = log_layout.analyzed_lines(raw_text)
+        self.spor = rule_scope_log_type(log_type) == LOG_TYPE_SPOR
+        conditional = buckets.get("__conditional")
+        needs_blocks = buckets.get("__block") is not None or (
+            conditional is not None and conditional.get("__block") is not None
+        )
+        self.structure = None
+        if self.spor or needs_blocks or buckets.get("__conditions_need_layout"):
+            self.structure = log_layout.layout(raw_text, log_type)
+        self.members = log_layout.block_members(self.structure) if self.structure is not None else {}
+        spor_lines = spor_extractors.analyze_lines(self.walked, self.structure) if self.spor else None
+
+        def compute(index):
+            text = self.walked[index].text
+            if spor_lines is None:
+                return line_features(text)
+            # Only the lines of a block's entry carry it: a sub-line naming
+            # another file ("module:", "file:") is an item of its own.
+            block = self.structure.block_of[index]
+            entries = spor_lines.entries_by_block.get(block, ()) if spor_lines.in_entry[index] else ()
+            return line_features(text, spor=True, block_entries=entries, spor_path=spor_lines.path_by_index[index])
+
+        self.features = _LazyFeatures(compute, len(self.walked))
+        self.block_entry_of = spor_lines.entries_by_block if spor_lines is not None else {}
+        self._blocks = {}            # block id -> BlockFeatures
+        self._block_hits = {}        # (id(block buckets), block id) -> matches
+
+    def block_of(self, index):
+        return self.structure.block_of[index] if self.structure is not None else index
+
+    def _block(self, block):
+        found = self._blocks.get(block)
+        if found is None:
+            indexes = self.members[block]
+            found = block_features(
+                [self.walked[index].text for index in indexes],
+                [self.features[index] for index in indexes],
+                [self.walked[index].line_no for index in indexes],
+            )
+            self._blocks[block] = found
+        return found
+
+    def block_text_at(self, index):
+        """(BlockFeatures with the block's text alone, analyzed-line indexes)
+        of the block line `index` is in: enough for exact, substring and
+        regex block rules, without reading any line's features."""
+        indexes = self.members[self.structure.block_of[index]] if self.structure is not None else [index]
+        text = "\n".join(self.walked[member].text for member in indexes)
+        return BlockFeatures(text, (), frozenset(), frozenset(), ""), indexes
+
+    def block_entry_at(self, index):
+        """(BlockFeatures with the block's text and its Spor entry alone,
+        analyzed-line indexes): enough for Spor parsed block rules."""
+        text_block, indexes = self.block_text_at(index)
+        entries = self.block_entry_of.get(self.block_of(index), ()) if self.structure is not None else ()
+        types = frozenset(entry.entry_type for entry in entries)
+        return text_block._replace(entries=tuple(entries), entry_types=types), indexes
+
+    def block_at(self, index):
+        """(BlockFeatures, analyzed-line indexes) of the block line `index` is
+        in; without a layout, the line on its own."""
+        if self.structure is None:
+            item = self.walked[index]
+            return block_features([item.text], [self.features[index]], [item.line_no]), [index]
+        block = self.structure.block_of[index]
+        return self._block(block), self.members[block]
+
+    def block_matches(self, index, buckets) -> list:
+        """The matches of the block rules of `buckets` on the block of line `index`."""
+        block_buckets = buckets.get("__block")
+        if block_buckets is None or self.structure is None:
+            return []
+        block = self.structure.block_of[index]
+        key = (id(block_buckets), block)
+        hits = self._block_hits.get(key)
+        if hits is None:
+            hits = _flat_block_matches(self._block(block), block_buckets)
+            self._block_hits[key] = hits
+        return hits
+
+    def line_matches(self, index, line, buckets) -> list:
+        """Every match of the matcher set `buckets` on line `index`: its line
+        rules' and its block's block rules', one per rule."""
+        flat = _flat_matches(line, buckets, self.features[index])
+        hits = self.block_matches(index, buckets)
+        return _dedupe_matches_by_rule(flat + hits) if hits else flat
+
+    def mark_blocks(self, analyzed_lines):
+        """Add where each line's block starts (lines of blocks of several
+        lines) and the block's parsed type (Spor) to the payload entries."""
+        if self.structure is None:
+            return
+        for block, indexes in self.members.items():
+            entries = self.block_entry_of.get(block)
+            if len(indexes) < 2 and not entries:
+                continue
+            for index in indexes:
+                if len(indexes) > 1:
+                    analyzed_lines[index]["block_start"] = indexes[0]
+                # The lines the entry is read from (LineFeatures.block_entries).
+                if entries and self.features[index].block_entries:
+                    analyzed_lines[index]["block_entry_type"] = entries[0].entry_type
+
+
+def log_inputs(raw_text, log_type, buckets) -> LogInputs:
+    return LogInputs(raw_text or "", log_type, buckets)
+
+
 # Bumped whenever the per-line payload changes shape, so payloads cached by an
 # older version are not handed to a page that expects the new one.
 # 2: line colouring as paint_base + highlights (replacing filepath_highlight).
 # 3: per-line rule_ids and top-level wholelog_rule_ids, for rule tags.
 # 4: rule_ids holds only the rules whose status is the line's verdict.
-ANALYSIS_PAYLOAD_FORMAT = 4
+# 5: block rules (match_unit), Spor parsed types and paths; block_start and
+#    block_entry_type on the lines of blocks.
+ANALYSIS_PAYLOAD_FORMAT = 5
 
 
 def analyze_log_text(
@@ -2051,36 +2511,24 @@ def analyze_log_text(
     tag_sources = buckets.get("__fact_tag_sources") or {}
     conditional_buckets = buckets.get("__conditional")
     facts = FactIndex()
-    walked = log_layout.analyzed_lines(raw_log_text)
+    inputs = log_inputs(raw_text, log_type, buckets)
+    walked, structure = inputs.walked, inputs.structure
     line_nos = [item.line_no for item in walked]
     # Lines a conditional rule matched: (index, features, main matches, conditional matches).
     pending = []
-    # With rules whose verdict applies to their block, every line's matches
-    # are kept (index -> (features, matches)) to re-resolve it in step 3.
-    block_rules = buckets.get("__block_rules", False)
-    line_matches = {}
-    structure = None
-
-    def _structure():
-        nonlocal structure
-        if structure is None:
-            structure = log_layout.layout(raw_log_text, log_type)
-        return structure
 
     # Pass 1: every line with the rules without conditions; facts are found here.
     for item in walked:
         line = item.text
-        features = line_features(line)
-        flat = _flat_matches(line, buckets, features)
+        features = inputs.features[item.index]
+        flat = inputs.line_matches(item.index, line, buckets)
         effective, shadowed, matcher_label, top_priority = _split_by_priority(flat)
         entry = _line_result(line, features, buckets, effective, shadowed, matcher_label, top_priority)
         analyzed_lines.append(entry)
-        if block_rules:
-            line_matches[item.index] = (features, flat)
         if tag_sources or fact_buckets is not None:
             _record_line_facts(facts, item.index, line, features, buckets, effective + shadowed, entry["rule_ids"])
         if conditional_buckets is not None:
-            conditional_matches = _flat_matches(line, conditional_buckets, features)
+            conditional_matches = inputs.line_matches(item.index, line, conditional_buckets)
             if conditional_matches:
                 pending.append((item.index, features, flat, conditional_matches))
 
@@ -2091,7 +2539,7 @@ def analyze_log_text(
     # depend on another conditional rule.
     if conditional_buckets is not None:
         conditions = buckets["__rule_conditions"]
-        condition_structure = _structure() if buckets["__conditions_need_layout"] else None
+        condition_structure = structure if buckets["__conditions_need_layout"] else None
         for index, features, flat, conditional_matches in pending:
             accepted = []
             for rule, reason, matcher in conditional_matches:
@@ -2104,16 +2552,11 @@ def analyze_log_text(
                 analyzed_lines[index] = _line_result(
                     line, features, buckets, effective, shadowed, matcher_label, top_priority,
                 )
-                if block_rules:
-                    line_matches[index] = (features, flat + accepted)
         for rule in _fired_wholelog_rules(raw_text, conditional_buckets):
             if _conditions_hold(conditions.get(rule.pk, ()), facts, None, None, line_nos) is not None:
                 fired_wholelog.append(rule)
 
-    # Step 3: a rule whose verdict applies to its block, and that decided a
-    # line, also matches the other lines of that line's block.
-    if block_rules:
-        _apply_block_verdicts(analyzed_lines, walked, buckets, line_matches, _structure(), line_nos)
+    inputs.mark_blocks(analyzed_lines)
 
     warnings.extend(_build_alert_rule_warnings(analyzed_lines))
     wholelog_warnings, wholelog_rule_ids = _build_wholelog_alert_warnings(raw_text, buckets, fired_wholelog)
@@ -2149,45 +2592,6 @@ def analyze_log_text(
     return payload
 
 
-def _apply_block_verdicts(analyzed_lines, walked, buckets, line_matches, structure, line_nos):
-    """Give the other lines of a block the match of a rule that applies to its
-    block (ClassificationRule.apply_to_block) and decided one of its lines.
-
-    The added match ("block" matcher, the rule's own priority) competes with
-    each line's own matches like any other, so a stronger rule on a sub-line
-    still wins. Runs after the facts are complete and feeds none.
-    """
-    members = {}
-    for index, block in enumerate(structure.block_of):
-        members.setdefault(block, []).append(index)
-
-    added = {}
-    for index, (_features, flat) in line_matches.items():
-        deciding = None
-        for rule, reason, matcher in flat:
-            # A match through a rule's stored path alone is weak (priority 1);
-            # spread at the rule's own priority it would outweigh real matches.
-            if not rule.apply_to_block or _is_filepath_fallback(rule, matcher):
-                continue
-            if deciding is None:
-                deciding = set(analyzed_lines[index]["rule_ids"])
-            if rule.pk not in deciding:
-                continue
-            block_reason = f"{reason}; applies to its block (L{line_nos[index]})"
-            for other in members.get(structure.block_of[index], ()):
-                if other != index:
-                    added.setdefault(other, []).append((rule, block_reason, "block"))
-
-    for index, extra in added.items():
-        features, flat = line_matches[index]
-        effective, shadowed, matcher_label, top_priority = _split_by_priority(
-            _dedupe_matches_by_rule(flat + extra),
-        )
-        analyzed_lines[index] = _line_result(
-            walked[index].text, features, buckets, effective, shadowed, matcher_label, top_priority,
-        )
-
-
 def _record_line_facts(facts, index, line, features, buckets, matches, deciding_rule_ids):
     """Record the facts found on analyzed line `index`: by tag sources, from
     the line's matches of rules without conditions (effective and shadowed;
@@ -2216,16 +2620,17 @@ def _record_wholelog_facts(facts, raw_text, buckets) -> list:
     return fired
 
 
-def find_facts(raw_text, buckets):
+def find_facts(raw_text, buckets, log_type=None):
     """`(FactIndex, analyzed lines)` of a text: the facts analyze_log_text
     would find in it, without classifying anything (rule previews)."""
     facts = FactIndex()
-    walked = log_layout.analyzed_lines(raw_text)
     if not (buckets.get("__fact_tag_sources") or buckets.get("__facts") is not None):
-        return facts, walked
+        return facts, log_layout.analyzed_lines(raw_text)
+    inputs = log_inputs(raw_text or "", log_type, buckets)
+    walked = inputs.walked
     for item in walked:
-        features = line_features(item.text)
-        flat = _flat_matches(item.text, buckets, features)
+        features = inputs.features[item.index]
+        flat = inputs.line_matches(item.index, item.text, buckets)
         effective, shadowed, _label, _priority = _split_by_priority(flat)
         _record_line_facts(
             facts, item.index, item.text, features, buckets, effective + shadowed, _deciding_rule_ids(effective),

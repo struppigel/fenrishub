@@ -73,8 +73,8 @@ async function acceptCentralboxSuggestion(index, suggestion) {
     if (typeof saveStatusSelection !== 'function') return;
     await saveStatusSelection(index, 'B');
     try {
-        const entry = analyzedLines[index];
-        const key = entry ? pendingOverrideKeyForEntry(entry, index) : null;
+        // Where saveStatusSelection keeps it (a Spor block's change: on its first line).
+        const key = analyzedLines[index] ? pendingTargetForIndex(index).key : null;
         const change = key ? pendingStatusChanges.get(key) : null;
         if (change && change.new_status === 'B' && !ruleDescriptionOverrides.has(String(change.id))) {
             ruleDescriptionOverrides.set(String(change.id), centralboxSuggestionDescription(suggestion));

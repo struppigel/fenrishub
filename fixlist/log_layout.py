@@ -89,6 +89,21 @@ def _pieces(text):
             yield piece, piece.strip()
 
 
+def block_members(structure):
+    """The analyzed-line indexes of every block of a layout, in order: block id -> [index]."""
+    members = {}
+    for index, block in enumerate(structure.block_of):
+        members.setdefault(block, []).append(index)
+    return members
+
+
+def normalize_block_text(text):
+    """A block's text in the form block rules match and store: every line
+    stripped, blank lines left out, joined with "\\n" (the analyzed lines of
+    the block, in order)."""
+    return '\n'.join(stripped for _raw, stripped in _pieces(text) if stripped)
+
+
 def layout(text, log_type=None):
     """The block and section of every analyzed line of `text` (same indexes
     as analyzed_lines)."""

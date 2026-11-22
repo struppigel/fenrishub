@@ -70,12 +70,21 @@ _FIELDS = [
 ]
 
 
+# A block rule's source holds the block's lines; in one row they are shown
+# joined by this mark.
+_LINE_BREAK_MARK = ' ⏎ '
+
+
+def _shown(text):
+    return str(escape(text)).replace('\n', _LINE_BREAK_MARK)
+
+
 @register.filter(name='highlight_parsed')
 def highlight_parsed(rule, max_chars=120):
     source = rule.source_text or ''
     if rule.match_type != 'parsed':
         truncated = source[:max_chars] + ('...' if len(source) > max_chars else '')
-        return escape(truncated)
+        return mark_safe(_shown(truncated))
 
     candidates = []
     path_start = ex.path_search_start(source)
@@ -111,20 +120,20 @@ def highlight_parsed(rule, max_chars=120):
             plain = source[cursor:start]
             remaining = max_chars - char_count
             if len(plain) > remaining:
-                parts.append(escape(plain[:remaining]))
+                parts.append(_shown(plain[:remaining]))
                 char_count += remaining
                 break
-            parts.append(escape(plain))
+            parts.append(_shown(plain))
             char_count += len(plain)
         if char_count >= max_chars:
             break
         segment = source[start:end]
         remaining = max_chars - char_count
         if len(segment) > remaining:
-            parts.append(f'<span class="{css_class}">{escape(segment[:remaining])}</span>')
+            parts.append(f'<span class="{css_class}">{_shown(segment[:remaining])}</span>')
             char_count += remaining
             break
-        parts.append(f'<span class="{css_class}">{escape(segment)}</span>')
+        parts.append(f'<span class="{css_class}">{_shown(segment)}</span>')
         char_count += len(segment)
         cursor = end
 
@@ -132,10 +141,10 @@ def highlight_parsed(rule, max_chars=120):
         remaining = max_chars - char_count
         tail = source[cursor:]
         if len(tail) > remaining:
-            parts.append(escape(tail[:remaining]))
+            parts.append(_shown(tail[:remaining]))
             char_count += remaining
         else:
-            parts.append(escape(tail))
+            parts.append(_shown(tail))
             char_count += len(tail)
 
     if char_count >= max_chars and cursor < len(source):

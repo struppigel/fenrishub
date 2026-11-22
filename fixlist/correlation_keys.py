@@ -440,6 +440,7 @@ def line_path_keys(text, components=None, arguments=None):
         arguments = components.get('arguments')
         if arguments is None:
             try:
+                # FRST's reading of the line alone (Spor lines have no arguments of their own).
                 entry = ex.get_frst_entry(text or '')
             except Exception:
                 entry = None

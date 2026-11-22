@@ -187,3 +187,22 @@ button.action-btn.delete-btn {
 .modal-backdrop.show {
     display: flex;
 }
+
+/* Loading ring after a status text (status_spinner.js). A transform
+   animation runs on the compositor, so it keeps turning while JS is busy. */
+.status-spinner {
+    display: inline-block;
+    width: 0.8em;
+    height: 0.8em;
+    margin-left: 0.5em;
+    vertical-align: -0.1em;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: status-spinner-turn 0.8s linear infinite;
+    will-change: transform;
+}
+
+@keyframes status-spinner-turn {
+    to { transform: rotate(360deg); }
+}

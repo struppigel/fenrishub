@@ -591,7 +591,7 @@ class TagConditionTests(TestCase):
         self.assertEqual(names('B'), [])
 
     def test_only_rules_deciding_the_verdict_bring_tags(self):
-        self.assertEqual(ANALYSIS_PAYLOAD_FORMAT, 4)
+        self.assertGreaterEqual(ANALYSIS_PAYLOAD_FORMAT, 4)  # deciding-only rule_ids came with format 4
         pup_tag = RuleTag.objects.create(name='pup tag')
         bad_rule = make_rule('SAME LINE', status='B', owner=self.user)
         pup_rule = make_rule('SAME LINE', status='P', owner=self.user)

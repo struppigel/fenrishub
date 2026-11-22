@@ -60,7 +60,10 @@ TARGET_MAX_CHARS = 200
 # rules (create / update), rule conditions on facts, parsed-type restrictions
 # (only_entry_types) and block verdicts (apply_to_block) on rule read / write,
 # both honoured by the rule dry run, and conditional matches in rule matching.
-API_VERSION = 6
+# Version 7: match units (match_unit "line" / "block" on rule read / write and
+# in the dry run) replace apply_to_block, still read on write as an alias;
+# Spor parsed types (spor_run, spor_task, ...) in only_entry_types.
+API_VERSION = 7
 API_VERSION_HEADER = 'X-FenrisHub-Api-Version'
 
 

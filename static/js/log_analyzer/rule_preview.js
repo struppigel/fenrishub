@@ -265,12 +265,17 @@ function renderRuleCandidates(ruleChanges) {
         text.className = 'rule-candidate-text';
         text.appendChild(
             document.createTextNode(
-                `${actionLabel} | ${change.from_status} -> ${change.to_status} | ${change.match_type} | `
+                `${actionLabel} | ${change.from_status} -> ${change.to_status} | ${change.match_type}`
+                + `${change.match_unit === 'block' ? ' (block)' : ''} | `
             )
         );
 
         const sourceLine = document.createElement('span');
         sourceLine.className = 'rule-candidate-source-line';
+        // A block rule's source is the block's lines.
+        if ((change.source_text || '').includes('\n')) {
+            sourceLine.style.whiteSpace = 'pre-wrap';
+        }
         appendHighlightedRuleLine(sourceLine, change.source_text || '', change);
         text.appendChild(sourceLine);
 

@@ -6,6 +6,7 @@ Handles: creating, editing, deleting, testing, and viewing classification rules.
 
 import heapq
 import json
+import re
 import time
 from urllib.parse import urlencode
 from django.shortcuts import render, redirect, get_object_or_404
@@ -18,13 +19,15 @@ from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Q, Case, When
 
-from .. import frst_extractors, script_matcher
+from .. import frst_extractors, script_matcher, spor_extractors
+from ..log_layout import normalize_block_text
 from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
     evaluate_regex_pattern, REPARSE_FIELDS, _load_rule_buckets, fact_rule_ids_matching_line,
 )
 from ..log_types import (
-    ALL_LOG_TYPES, DEFAULT_RULE_LOG_TYPES, default_rule_scope, normalize_log_type_selection, scope_payload,
+    ALL_LOG_TYPES, DEFAULT_RULE_LOG_TYPES, LOG_TYPE_SPOR, default_rule_scope, normalize_log_type_selection,
+    rule_scope_log_type, scope_payload,
 )
 from ..models import (
     ClassificationRule,
@@ -80,15 +83,52 @@ def _coerce_priority(raw_value, match_type: str) -> int:
     return max(PRIORITY_MIN, min(PRIORITY_MAX, value))
 
 
-def _patterns_for(match_type: str, source_text: str) -> list:
+def _patterns_for(match_type: str, source_text: str, match_unit: str = ClassificationRule.MATCH_UNIT_LINE) -> list:
     """Split source text into rule patterns.
 
     Script rules are a single multi-line snippet, so the whole blob is one rule.
-    Every other match type creates one rule per non-empty line.
+    Block rules get one rule per block: blocks are separated by blank lines,
+    each stored as log_layout.normalize_block_text gives it. Every other
+    match type creates one rule per non-empty line.
     """
     if match_type == ClassificationRule.MATCH_SCRIPT:
         return [source_text] if source_text.strip() else []
+    if match_unit == ClassificationRule.MATCH_UNIT_BLOCK:
+        chunks = re.split(r'\r?\n[ \t]*\r?\n', source_text)
+        patterns = []
+        for chunk in chunks:
+            text = normalize_block_text(chunk)
+            if text and text not in patterns:
+                patterns.append(text)
+        return patterns
     return _split_patterns(source_text)
+
+
+def _clean_match_unit(match_unit, match_type, whole_log) -> str:
+    """The match unit a rule is saved with: block only for per-line matcher
+    types (whole-log and script rules test lines)."""
+    if (
+        match_unit == ClassificationRule.MATCH_UNIT_BLOCK
+        and not whole_log
+        and match_type != ClassificationRule.MATCH_SCRIPT
+    ):
+        return ClassificationRule.MATCH_UNIT_BLOCK
+    return ClassificationRule.MATCH_UNIT_LINE
+
+
+def _keep_spor_block(match_unit, match_type, source_text, status) -> str:
+    """`match_unit`, but block for a parsed rule whose text reads as a Spor
+    block: a Spor entry is read from a whole block only, so as a line rule
+    it would never match."""
+    if match_unit != ClassificationRule.MATCH_UNIT_LINE or match_type != ClassificationRule.MATCH_PARSED_ENTRY:
+        return match_unit
+    try:
+        parsed = parse_rule_line(source_text, status=status, match_unit=ClassificationRule.MATCH_UNIT_BLOCK)
+    except ValueError:
+        return match_unit
+    if parsed and (parsed.get('entry_type') or '').startswith('spor_'):
+        return ClassificationRule.MATCH_UNIT_BLOCK
+    return match_unit
 
 
 def _creatable_match_type_choices(user):
@@ -117,11 +157,16 @@ def _whole_log_error(whole_log: bool, status: str, match_type: str) -> str | Non
     return None
 
 
-def _color_whole_line_for(color_whole_line: bool, match_type: str) -> bool:
-    """Only substring and file path rules can opt into colouring the whole analyzer
-    line; every other match type already does, so the flag is dropped rather than
-    rejected."""
-    return bool(color_whole_line) and match_type in ClassificationRule.COLOR_WHOLE_LINE_MATCH_TYPES
+def _color_whole_line_for(color_whole_line: bool, match_type: str,
+                          match_unit: str = ClassificationRule.MATCH_UNIT_LINE) -> bool:
+    """Only substring, file path and regex line rules can opt into colouring the
+    whole analyzer line; every other rule already does (block rules colour the
+    whole lines of their block), so the flag is dropped rather than rejected."""
+    return (
+        bool(color_whole_line)
+        and match_type in ClassificationRule.COLOR_WHOLE_LINE_MATCH_TYPES
+        and match_unit != ClassificationRule.MATCH_UNIT_BLOCK
+    )
 
 
 def _script_rule_error(match_type: str, source_text: str, user, whole_log: bool = False) -> str | None:
@@ -206,6 +251,20 @@ def _log_scope_from_post(request) -> tuple:
     return scope, None
 
 
+def _log_scope_is_default(request) -> bool:
+    """The picker's "default" choice was posted (it sends the FRST types
+    along): a Spor parsed rule's default is Spor (default_rule_scope)."""
+    return (request.POST.get('log_scope') or '').strip() == 'default'
+
+
+def _spor_default_scope(scope, entry_type):
+    """`scope`, or Spor's for a rule of a Spor parsed type whose scope is the
+    picker's default: such a rule can only match Spor logs."""
+    if (entry_type or '').startswith('spor_'):
+        return default_rule_scope(ClassificationRule.MATCH_PARSED_ENTRY, entry_type=entry_type)
+    return scope
+
+
 def _log_scope_from_query(params) -> tuple | None:
     """A scope carried in the add page's query string, or None (default / invalid)."""
     mode = params.get('log_scope')
@@ -228,7 +287,8 @@ def _conditions_from_post(request) -> tuple:
 
 def clean_entry_types(raw) -> tuple:
     """`(types, error)` for a parsed-type restriction (only_entry_types): the
-    names in frst_extractors.ENTRY_TYPES order, [] for none."""
+    names in spor_extractors.ALL_ENTRY_TYPES order (FRST's, then Spor's), []
+    for none."""
     if raw in (None, '', []):
         return [], None
     if isinstance(raw, str):
@@ -236,10 +296,10 @@ def clean_entry_types(raw) -> tuple:
     if not isinstance(raw, list) or not all(isinstance(value, str) for value in raw):
         return [], 'Parsed types must be a list of names.'
     wanted = set(raw)
-    unknown = sorted(wanted - set(frst_extractors.ENTRY_TYPES))
+    unknown = sorted(wanted - set(spor_extractors.ALL_ENTRY_TYPES))
     if unknown:
         return [], f'Unknown parsed type: {", ".join(unknown)}.'
-    return [name for name in frst_extractors.ENTRY_TYPES if name in wanted], None
+    return [name for name in spor_extractors.ALL_ENTRY_TYPES if name in wanted], None
 
 
 def entry_types_from_post(request) -> tuple:
@@ -253,15 +313,24 @@ def entry_types_from_post(request) -> tuple:
 
 def entry_type_choices():
     """(value, label) of every parsed type a rule can be restricted to."""
-    return [(name, name.replace('_', ' ')) for name in frst_extractors.ENTRY_TYPES]
+    return [(name, name.replace('_', ' ')) for name in spor_extractors.ALL_ENTRY_TYPES]
 
 
-def _apply_to_block_from_post(request):
-    """The advanced "apply the verdict to its block" checkbox, or None when
-    the form has none (the token API: keep the rule's)."""
-    if not request.POST.get('apply_to_block_present'):
+def entry_type_groups():
+    """[(group label, [(value, label)])]: the parsed types by log, FRST's first."""
+    return [
+        ('FRST', [(name, name.replace('_', ' ')) for name in frst_extractors.ENTRY_TYPES]),
+        ('Spor', [(name, name.removeprefix('spor_').replace('_', ' ')) for name in spor_extractors.SPOR_ENTRY_TYPES]),
+    ]
+
+
+def _match_unit_from_post(request):
+    """The "matches a line / a block" choice, or None when the form has none
+    (the token API: keep the rule's)."""
+    value = request.POST.get('match_unit')
+    if value is None:
         return None
-    return request.POST.get('apply_to_block') == 'on'
+    return ClassificationRule.MATCH_UNIT_BLOCK if value == ClassificationRule.MATCH_UNIT_BLOCK else ClassificationRule.MATCH_UNIT_LINE
 
 
 def _rule_form_from_post(request) -> dict:
@@ -272,6 +341,7 @@ def _rule_form_from_post(request) -> dict:
     return {
         'log_scope': log_scope,
         'log_scope_error': log_scope_error,
+        'log_scope_default': _log_scope_is_default(request),
         'conditions': conditions,
         'conditions_error': conditions_problem,
         'only_entry_types': only_entry_types,
@@ -284,7 +354,7 @@ def _rule_form_from_post(request) -> dict:
         'is_enabled': request.POST.get('is_enabled') == 'on',
         'whole_log': request.POST.get('whole_log') == 'on',
         'color_whole_line': request.POST.get('color_whole_line') == 'on',
-        'apply_to_block': _apply_to_block_from_post(request),
+        'match_unit': _match_unit_from_post(request),
         # Kept as a string: the template selects an option with `form_priority == value`
         # against the str-keyed `_priority_choices()`, and an int would never compare
         # equal -- leaving the select unselected and letting the page's JS overwrite
@@ -311,7 +381,7 @@ def _rule_form_from_rule(rule) -> dict:
         'is_enabled': rule.is_enabled,
         'whole_log': rule.whole_log,
         'color_whole_line': rule.color_whole_line,
-        'apply_to_block': rule.apply_to_block,
+        'match_unit': rule.match_unit,
         'priority': '' if rule.priority is None else str(rule.priority),
     }
 
@@ -349,7 +419,9 @@ def _assign_parsed_metadata(rule, form: dict) -> None:
     path does not leave the previous `normalized_filepath` behind still matching the
     old path. Same field set and semantics as the `reparse_rules` command.
     """
-    parsed = parse_rule_line(form['source_text'], status=form['status'])
+    parsed = parse_rule_line(
+        form['source_text'], status=form['status'], match_unit=form.get('match_unit') or ClassificationRule.MATCH_UNIT_LINE,
+    )
     if parsed and form['match_type'] in (
         ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH
     ):
@@ -395,6 +467,15 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
         form['match_type'], form['source_text'], user, form['whole_log']
     )
     whole_log_error = _whole_log_error(form['whole_log'], form['status'], form['match_type'])
+    # A form without the choice (the token API) keeps the rule's unit.
+    match_unit = _clean_match_unit(
+        form.get('match_unit') if form.get('match_unit') is not None else rule.match_unit,
+        form['match_type'], form['whole_log'],
+    )
+    match_unit = _keep_spor_block(match_unit, form['match_type'], form['source_text'], form['status'])
+    if match_unit == ClassificationRule.MATCH_UNIT_BLOCK:
+        form = {**form, 'source_text': normalize_block_text(form['source_text'])}
+    form = {**form, 'match_unit': match_unit}
 
     if not form['source_text']:
         return 'Rule source text is required.'
@@ -404,13 +485,14 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
         return 'Invalid match type.'
     # An edit saves one rule, so line breaks would be stored inside a single
     # source_text and that rule would then never match a real log line. Script
-    # rules are a genuine multi-line snippet and are exempt.
-    if form['match_type'] != ClassificationRule.MATCH_SCRIPT and (
+    # rules are a genuine multi-line snippet and block rules hold the lines of
+    # a block, so both are exempt.
+    if form['match_type'] != ClassificationRule.MATCH_SCRIPT and match_unit != ClassificationRule.MATCH_UNIT_BLOCK and (
         '\n' in form['source_text'] or '\r' in form['source_text']
     ):
         return (
-            'A rule matches a single line. Remove the line breaks, or use '
-            '"add rule" to create one rule per line.'
+            'A line rule matches a single line. Remove the line breaks, match a '
+            'block instead, or use "add rule" to create one rule per line.'
         )
     if whole_log_error:
         return whole_log_error
@@ -436,6 +518,7 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
     duplicate = ClassificationRule.objects.filter(
         owner_id=rule.owner_id, status=form['status'], match_type=form['match_type'],
         source_text=form['source_text'], whole_log=form['whole_log'], condition_key=condition_key,
+        match_unit=match_unit,
     ).exclude(pk=rule.pk).exists()
     if duplicate:
         if condition_key:
@@ -449,11 +532,8 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
     rule.is_enabled = form['is_enabled']
     rule.priority = priority
     rule.whole_log = form['whole_log']
-    rule.color_whole_line = _color_whole_line_for(form['color_whole_line'], form['match_type'])
-    if form.get('apply_to_block') is not None:
-        rule.apply_to_block = form['apply_to_block']
-    # A whole-log rule has no line, so no block either.
-    rule.apply_to_block = rule.apply_to_block and not form['whole_log']
+    rule.color_whole_line = _color_whole_line_for(form['color_whole_line'], form['match_type'], match_unit)
+    rule.match_unit = match_unit
     if form.get('only_entry_types') is not None:
         rule.only_entry_types = list(form['only_entry_types'])
     # Nor a parsed type.
@@ -461,8 +541,11 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
         rule.only_entry_types = []
     _assign_parsed_metadata(rule, form)
     scope_fields = []
-    if form.get('log_scope') is not None:
-        rule.all_log_types, rule.log_types = form['log_scope'][0], list(form['log_scope'][1])
+    log_scope = form.get('log_scope')
+    if log_scope is not None and form.get('log_scope_default') and rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
+        log_scope = _spor_default_scope(log_scope, rule.entry_type)
+    if log_scope is not None:
+        rule.all_log_types, rule.log_types = log_scope[0], list(log_scope[1])
         scope_fields = ['all_log_types', 'log_types']
     # Saved with the rest, so the rule never passes through an identity
     # (new text, old conditions) that another rule may have. The key encodes
@@ -475,7 +558,7 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
         with transaction.atomic():
             rule.save(update_fields=[
                 'status', 'match_type', 'source_text', 'description', 'is_enabled', 'priority',
-                'whole_log', 'color_whole_line', 'apply_to_block', 'only_entry_types', *scope_fields, *REPARSE_FIELDS,
+                'whole_log', 'color_whole_line', 'match_unit', 'only_entry_types', *scope_fields, *REPARSE_FIELDS,
                 'condition_key', 'updated_at',
             ])
             if conditions_changed:
@@ -536,10 +619,10 @@ def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', r
         'form_priority': form['priority'],
         'form_whole_log': form['whole_log'],
         'form_color_whole_line': form['color_whole_line'],
-        # None (a POST without the box): the rule's own.
-        'form_apply_to_block': bool(
-            form.get('apply_to_block') if form.get('apply_to_block') is not None
-            else isinstance(rule, ClassificationRule) and rule.apply_to_block
+        # None (a POST without the choice): the rule's own.
+        'form_match_unit': (
+            form.get('match_unit') if form.get('match_unit') is not None
+            else rule.match_unit if isinstance(rule, ClassificationRule) else ClassificationRule.MATCH_UNIT_LINE
         ),
         # Same for the parsed types; a fact rule has them too.
         'form_only_entry_types': (
@@ -547,6 +630,7 @@ def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', r
             else list(getattr(rule, 'only_entry_types', None) or [])
         ),
         'entry_type_choices': entry_type_choices(),
+        'entry_type_groups': entry_type_groups(),
         'form_is_enabled': form['is_enabled'],
         'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
         'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
@@ -850,7 +934,8 @@ class _MixedRules:
 
 def create_rules(user, *, status, match_type, source_text, description='', raw_priority='',
                  whole_log=False, color_whole_line=False, tag_ids=None, source_name='',
-                 log_scope=None, conditions=None, apply_to_block=False, only_entry_types=None):
+                 log_scope=None, conditions=None, match_unit=ClassificationRule.MATCH_UNIT_LINE,
+                 only_entry_types=None, log_scope_default=False):
     """Validate and create rules for `user`, one per line of `source_text` (a script rule stays one).
 
     Returns ``(created, skipped, error)``: the new rules, the patterns skipped
@@ -859,17 +944,18 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
     becomes the new rules' tags. `log_scope` is `(all_log_types, log_types)`;
     None gives the match type's default (log_types.default_rule_scope).
     `conditions` (fact_service.ConditionSpec list, advanced) makes them
-    conditional rules; `apply_to_block` (advanced) gives their verdict to the
-    whole block of a line they decide; `only_entry_types` (advanced) limits
-    them to lines parsed as those types. Shared by the add-rule page and the
-    token API.
+    conditional rules; `match_unit` "block" makes them test whole blocks
+    (one rule per block of `source_text`, blocks separated by blank lines);
+    `only_entry_types` (advanced) limits them to lines parsed as those types.
+    Shared by the add-rule page and the token API.
     """
     conditions = list(conditions or [])
     only_entry_types, entry_types_problem = clean_entry_types(only_entry_types)
     if entry_types_problem:
         return [], [], entry_types_problem
-    color_whole_line = _color_whole_line_for(color_whole_line, match_type)
-    patterns = _patterns_for(match_type, source_text)
+    match_unit = _clean_match_unit(match_unit, match_type, whole_log)
+    color_whole_line = _color_whole_line_for(color_whole_line, match_type, match_unit)
+    patterns = _patterns_for(match_type, source_text, match_unit)
     script_error = _script_rule_error(match_type, source_text, user, whole_log)
     whole_log_error = _whole_log_error(whole_log, status, match_type)
     if not patterns:
@@ -887,7 +973,6 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
         return [], [], conditions_problem
 
     priority = _coerce_priority(raw_priority, match_type)
-    all_log_types, log_types = log_scope or default_rule_scope(match_type)
     condition_key = condition_key_for(conditions)
     existing = set(
         ClassificationRule.objects.filter(
@@ -896,6 +981,7 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
             match_type=match_type,
             whole_log=whole_log,
             condition_key=condition_key,
+            match_unit=match_unit,
             source_text__in=patterns,
         ).values_list('source_text', flat=True)
     )
@@ -906,9 +992,15 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
         if pattern in existing:
             skipped.append(pattern)
             continue
-        parsed = parse_rule_line(pattern, status=status, source_name=source_name)
+        parsed = parse_rule_line(pattern, status=status, source_name=source_name, match_unit=match_unit)
         if parsed and match_type in (ClassificationRule.MATCH_PARSED_ENTRY, ClassificationRule.MATCH_FILEPATH):
             parsed['match_type'] = match_type
+        entry_type = (parsed or {}).get('entry_type', '') if match_type == ClassificationRule.MATCH_PARSED_ENTRY else ''
+        scope = log_scope
+        if scope is not None and log_scope_default:
+            # The picker's "default": a Spor parsed rule's own default.
+            scope = _spor_default_scope(scope, entry_type)
+        all_log_types, log_types = scope or default_rule_scope(match_type, entry_type=entry_type)
         create_kwargs = {
             'owner': user,
             'status': status,
@@ -918,7 +1010,7 @@ def create_rules(user, *, status, match_type, source_text, description='', raw_p
             'priority': priority,
             'whole_log': whole_log,
             'color_whole_line': color_whole_line,
-            'apply_to_block': bool(apply_to_block) and not whole_log,
+            'match_unit': match_unit,
             'only_entry_types': [] if whole_log else list(only_entry_types),
             'all_log_types': all_log_types,
             'log_types': list(log_types),
@@ -994,8 +1086,11 @@ def add_rule_view(request):
     form_priority = ''
     form_whole_log = request.GET.get('whole_log') == '1'
     form_color_whole_line = request.GET.get('color_whole_line') == '1'
-    form_apply_to_block = False
-    # Advanced: only lines parsed as these types (frst_extractors.ENTRY_TYPES).
+    form_match_unit = (
+        ClassificationRule.MATCH_UNIT_BLOCK if request.GET.get('match_unit') == ClassificationRule.MATCH_UNIT_BLOCK
+        else ClassificationRule.MATCH_UNIT_LINE
+    )
+    # Advanced: only lines parsed as these types (spor_extractors.ALL_ENTRY_TYPES).
     form_only_entry_types = []
     # None: the post had no tag picker, so auto-apply alone decides the tags.
     form_tag_ids = None
@@ -1063,8 +1158,9 @@ def add_rule_view(request):
         source_text = request.POST.get('source_text', '').strip()
         description = request.POST.get('description', '').strip()
         whole_log = request.POST.get('whole_log') == 'on'
+        form_match_unit = _clean_match_unit(_match_unit_from_post(request), match_type, whole_log)
         color_whole_line = _color_whole_line_for(
-            request.POST.get('color_whole_line') == 'on', match_type
+            request.POST.get('color_whole_line') == 'on', match_type, form_match_unit
         )
         raw_priority = request.POST.get('priority', '').strip()
         form_status = status
@@ -1077,7 +1173,6 @@ def add_rule_view(request):
         form_tag_ids = _tag_ids_from_post(request)
         form_log_scope, log_scope_error = _log_scope_from_post(request)
         form_conditions, conditions_problem = _conditions_from_post(request)
-        form_apply_to_block = bool(_apply_to_block_from_post(request))
         posted_types, entry_types_problem = entry_types_from_post(request)
         form_only_entry_types = posted_types or []
         if log_scope_error or conditions_problem or entry_types_problem:
@@ -1096,8 +1191,9 @@ def add_rule_view(request):
                 source_name=f'web-add-rule:{request.user.username}',
                 log_scope=form_log_scope,
                 conditions=form_conditions,
-                apply_to_block=form_apply_to_block,
+                match_unit=form_match_unit,
                 only_entry_types=form_only_entry_types,
+                log_scope_default=_log_scope_is_default(request),
             )
         if error:
             messages.error(request, error)
@@ -1107,6 +1203,8 @@ def add_rule_view(request):
                 keep_params['whole_log'] = '1'
             if color_whole_line:
                 keep_params['color_whole_line'] = '1'
+            if form_match_unit == ClassificationRule.MATCH_UNIT_BLOCK:
+                keep_params['match_unit'] = form_match_unit
             keep_params.update(_kept_log_scope_params(form_log_scope, match_type))
             return redirect(f"{reverse('add_rule')}?{urlencode(keep_params, doseq=True)}")
 
@@ -1118,7 +1216,7 @@ def add_rule_view(request):
         'priority': form_priority,
         'whole_log': form_whole_log,
         'color_whole_line': form_color_whole_line,
-        'apply_to_block': form_apply_to_block,
+        'match_unit': form_match_unit,
         'only_entry_types': form_only_entry_types,
         # New rules are always created enabled; the add form has no such field.
         'is_enabled': True,
@@ -1197,6 +1295,17 @@ def _regex_pattern_warnings(patterns) -> list[dict]:
     return regex_warnings
 
 
+def _is_spor_parsed_rule(rule) -> bool:
+    """Every pattern of a rule test payload is a Spor parsed rule."""
+    if rule['match_type'] != ClassificationRule.MATCH_PARSED_ENTRY or rule['whole_log']:
+        return False
+    for pattern in rule['patterns']:
+        parsed = parse_rule_line(pattern, status=rule['status'], match_unit=rule['match_unit'])
+        if not parsed or not (parsed.get('entry_type') or '').startswith('spor_'):
+            return False
+    return True
+
+
 def _single_scope_log_type(raw_scope):
     """The log type of a rule scope naming exactly one type (e.g. Spor), else None."""
     if not isinstance(raw_scope, list):
@@ -1223,6 +1332,7 @@ def _read_rule_test_payload(request):
     match_type = (payload.get('match_type') or '').strip()
     raw_priority = payload.get('priority')
     whole_log = bool(payload.get('whole_log'))
+    match_unit = _clean_match_unit(payload.get('match_unit'), match_type, whole_log)
 
     def refuse(message, status_code=400):
         return None, None, JsonResponse({'error': message}, status=status_code)
@@ -1245,7 +1355,7 @@ def _read_rule_test_payload(request):
         except (TypeError, ValueError):
             priority = None
 
-    patterns = _patterns_for(match_type, source_text)
+    patterns = _patterns_for(match_type, source_text, match_unit)
     if not patterns:
         return refuse('Field "source_text" is required.')
     if len(patterns) > 100:
@@ -1268,6 +1378,7 @@ def _read_rule_test_payload(request):
         'match_type': match_type,
         'priority': priority,
         'whole_log': whole_log,
+        'match_unit': match_unit,
         'only_entry_types': [] if whole_log else only_entry_types,
         'conditions': conditions,
         # Single-type scope: the type the preview's pasted text is laid out as.
@@ -1304,6 +1415,13 @@ def test_rule_api(request):
     if not isinstance(pasted, str):
         pasted = '\n'.join(str(line) for line in lines)
     preview_log_type = rule['scope_log_type'] or detect_log_type(pasted)
+    if (
+        rule_scope_log_type(preview_log_type) is None
+        and rule['match_unit'] == ClassificationRule.MATCH_UNIT_BLOCK
+        and spor_extractors.parse_block(patterns[0].split('\n')) is not None
+    ):
+        # Pasted Spor lines without the log's header: laid out as Spor.
+        preview_log_type = LOG_TYPE_SPOR
     fact_buckets = None
     if rule['conditions']:
         fact_buckets = _load_rule_buckets(resolve_user_rule_set_key(request.user), preview_log_type)
@@ -1315,7 +1433,7 @@ def test_rule_api(request):
         except ValueError as exc:
             return JsonResponse({'error': str(exc)}, status=400)
         if rule['conditions'] and result_payload.get('matched'):
-            holds, explanation = wholelog_condition_report(pasted, rule['conditions'], fact_buckets)
+            holds, explanation = wholelog_condition_report(pasted, rule['conditions'], fact_buckets, preview_log_type)
             result_payload['condition_note'] = (
                 f'conditions hold: {explanation}' if holds else f'not applied: {explanation}'
             )
@@ -1342,6 +1460,8 @@ def test_rule_api(request):
             exclude_rule_id=rule['exclude_rule_id'],
             only_entry_types=rule['only_entry_types'],
             condition_check=condition_check,
+            match_unit=rule['match_unit'],
+            log_type=preview_log_type,
         )
     except ValueError as exc:
         return JsonResponse({'error': str(exc)}, status=400)
@@ -1414,6 +1534,9 @@ def test_rule_logs_api(request):
     patterns = rule['patterns']
     match_type = rule['match_type']
     log_types = _log_preview_log_types(payload.get('log_types'))
+    if _is_spor_parsed_rule(rule):
+        # A Spor parsed rule only ever matches Spor logs, whatever the picker says.
+        log_types = [LOG_TYPE_SPOR]
 
     if match_type == ClassificationRule.MATCH_REGEX:
         # The paste preview only warns about slow patterns; run over dozens of
@@ -1463,6 +1586,8 @@ def test_rule_logs_api(request):
                 max_lines=LOG_PREVIEW_MAX_LINES, deadline=deadline,
                 only_entry_types=rule['only_entry_types'],
                 line_check=fact_check,
+                match_unit=rule['match_unit'],
+                log_type_for=log_type_by_upload.get,
             )
             matches = scan.pop('matches')
             response_payload = build_rule_test_results(
@@ -1474,6 +1599,8 @@ def test_rule_logs_api(request):
                 exclude_rule_id=rule['exclude_rule_id'],
                 line_log_types=_first_log_types(matches, log_type_by_upload),
                 only_entry_types=rule['only_entry_types'],
+                match_unit=rule['match_unit'],
+                blocks=rule['match_unit'] == ClassificationRule.MATCH_UNIT_BLOCK,
             )
             for result, entry in zip(response_payload['results'], matches):
                 result['logs'] = entry['logs']

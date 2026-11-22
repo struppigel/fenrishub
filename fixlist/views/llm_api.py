@@ -114,6 +114,7 @@ from .facts import (
 from .rules import (
     _apply_rule_edit,
     _first_log_types,
+    _clean_match_unit,
     _patterns_for,
     _read_rule_test_payload,
     _rule_form_from_rule,
@@ -1543,7 +1544,9 @@ def _rule_list_row(rule):
         'log_types': rule.log_scope_payload,
         # Applies only where its conditions on facts hold (get_rule lists them).
         'conditional': bool(rule.condition_key),
-        'apply_to_block': rule.apply_to_block,
+        # "line" or "block": what the rule tests; a block rule's verdict goes
+        # to every line of the block (a Spor item and its indented lines).
+        'match_unit': rule.match_unit,
         'only_entry_types': list(rule.only_entry_types or []),
         'updated_at': _iso(rule.updated_at),
         'tags': [{'tag_id': tag.pk, 'name': tag.name} for tag in rule.tags.all()],
@@ -1906,7 +1909,8 @@ def api_snippet_update(request, snippet_id):
 
 
 RULE_STRING_FIELDS = ('status', 'match_type', 'source_text', 'description')
-RULE_BOOL_FIELDS = ('is_enabled', 'whole_log', 'color_whole_line', 'apply_to_block')
+RULE_BOOL_FIELDS = ('is_enabled', 'whole_log', 'color_whole_line')
+RULE_MATCH_UNITS = (ClassificationRule.MATCH_UNIT_LINE, ClassificationRule.MATCH_UNIT_BLOCK)
 
 
 def _conditions_field(raw):
@@ -1947,6 +1951,17 @@ def _rule_write_fields(payload):
             if not isinstance(payload[field], bool):
                 return None, f'Field "{field}" must be a boolean.'
             fields[field] = payload[field]
+    if 'match_unit' in payload:
+        if payload['match_unit'] not in RULE_MATCH_UNITS:
+            return None, 'Field "match_unit" must be "line" or "block".'
+        fields['match_unit'] = payload['match_unit']
+    elif 'apply_to_block' in payload:
+        # API version 6 wrote block verdicts as apply_to_block: a block rule now.
+        if not isinstance(payload['apply_to_block'], bool):
+            return None, 'Field "apply_to_block" must be a boolean.'
+        fields['match_unit'] = (
+            ClassificationRule.MATCH_UNIT_BLOCK if payload['apply_to_block'] else ClassificationRule.MATCH_UNIT_LINE
+        )
     if 'priority' in payload:
         priority = payload['priority']
         if priority is not None and (isinstance(priority, bool) or not isinstance(priority, int)):
@@ -2003,7 +2018,9 @@ def api_rule_create(request):
 
     Body: {status, match_type, source_text, description?, priority?, whole_log?,
     color_whole_line?, tag_ids?, log_types?, conditions?, only_entry_types?,
-    apply_to_block?}. Without tag_ids the auto-apply tags decide.
+    match_unit?}. Without tag_ids the auto-apply tags decide. match_unit
+    "block" makes block rules (one per block of source_text, blocks separated
+    by blank lines; apply_to_block: true is read as that too).
     log_types is "all" or a list of log type names; without it file path rules
     apply to every log type and other rules to FRST&Addition, FRST and Addition.
     conditions ([{fact_id or fact, polarity, scope}]) make them conditional
@@ -2019,7 +2036,10 @@ def api_rule_create(request):
     for field in ('status', 'match_type', 'source_text'):
         if not fields.get(field):
             return _error(f'Field "{field}" is required.')
-    patterns = _patterns_for(fields['match_type'], fields['source_text'])
+    # Split as create_rules splits them (a whole-log or script rule tests lines).
+    patterns = _patterns_for(fields['match_type'], fields['source_text'], _clean_match_unit(
+        fields.get('match_unit', ClassificationRule.MATCH_UNIT_LINE), fields['match_type'], fields.get('whole_log', False),
+    ))
     warnings, message = _regex_check(fields['match_type'], patterns)
     if message:
         return _error(message)
@@ -2036,7 +2056,7 @@ def api_rule_create(request):
         source_name=f'api:{request.user.username}',
         log_scope=fields.get('log_scope'),
         conditions=fields.get('conditions'),
-        apply_to_block=fields.get('apply_to_block', False),
+        match_unit=fields.get('match_unit', ClassificationRule.MATCH_UNIT_LINE),
         only_entry_types=fields.get('only_entry_types'),
     )
     if message:
@@ -2060,7 +2080,7 @@ def api_rule_update(request, rule_id):
 
     Body: any of {status, match_type, source_text, description, is_enabled,
     whole_log, color_whole_line, priority, tag_ids, log_types, conditions,
-    only_entry_types, apply_to_block}. tag_ids replaces the rule's tags;
+    only_entry_types, match_unit}. tag_ids replaces the rule's tags;
     log_types is "all" or a list of log type names; conditions replaces the
     rule's conditions ([] removes them). A superuser may change any helper's
     rule; it keeps its owner, and duplicates are checked within that owner's
@@ -2589,6 +2609,7 @@ def api_rule_test(request):
                 else ClassificationRule.default_priority_for(match_type)
             ),
             'whole_log': rule['whole_log'],
+            'match_unit': rule['match_unit'],
             'only_entry_types': rule['only_entry_types'],
             'conditions': len(rule['conditions']),
         },
@@ -2618,6 +2639,7 @@ def api_rule_test(request):
             _rule_test_corpus(scope_pks, hidden, literals, log_type_by_upload, fact_check=fact_check),
             max_lines=sample_lines, deadline=deadline, count_all=True,
             only_entry_types=rule['only_entry_types'], line_check=fact_check,
+            match_unit=rule['match_unit'], log_type_for=log_type_by_upload.get,
         )
         matches = scan.pop('matches')
         built = build_rule_test_results(
@@ -2631,6 +2653,8 @@ def api_rule_test(request):
             buckets=_get_cached_rule_buckets(rule_set_key),
             line_log_types=_first_log_types(matches, log_type_by_upload),
             only_entry_types=rule['only_entry_types'],
+            match_unit=rule['match_unit'],
+            blocks=rule['match_unit'] == ClassificationRule.MATCH_UNIT_BLOCK,
         )
         results = built['results']
         response.update({
@@ -2648,21 +2672,24 @@ def api_rule_test(request):
         })
 
         if compare_rule is not None:
-            old_patterns = _patterns_for(compare_rule.match_type, compare_rule.source_text)
+            old_patterns = _patterns_for(compare_rule.match_type, compare_rule.source_text, compare_rule.match_unit)
             old_literals = literal_prefilter(old_patterns, compare_rule.match_type)
             both_literals = literals + old_literals if literals and old_literals else None
+            compare_log_types = {}
             compared = compare_rule_scans(
                 {
                     'patterns': patterns, 'status': status, 'match_type': match_type,
-                    'only_entry_types': rule['only_entry_types'],
+                    'only_entry_types': rule['only_entry_types'], 'match_unit': rule['match_unit'],
                 },
                 {
                     'patterns': old_patterns, 'status': compare_rule.status, 'match_type': compare_rule.match_type,
                     'only_entry_types': list(compare_rule.only_entry_types or []),
+                    'match_unit': compare_rule.match_unit,
                 },
-                _rule_test_corpus(scope_pks, hidden, both_literals),
+                _rule_test_corpus(scope_pks, hidden, both_literals, compare_log_types),
                 deadline=time.monotonic() + RULE_COMPARE_TIME_BUDGET_S,
                 sample_lines=sample_lines,
+                log_type_for=compare_log_types.get,
             )
             response['compare'] = {
                 'rule': _rule_row(compare_rule),
@@ -2699,6 +2726,8 @@ def _match_row(match):
 
 
 def _parsed_entry_payload(line):
+    # The FRST entry of a line on its own; Spor's parsed types need the
+    # line's whole block, which match_rules is not given.
     entry = ex.get_frst_entry(line)
     if entry is None:
         return None

@@ -7,8 +7,8 @@ from django.db.models.query import QuerySet
 from django.test import RequestFactory
 from django.urls import reverse
 
-from .. import log_layout
-from ..analyzer import _apply_block_verdicts, analyze_log_text, find_rule_duplicates
+from .. import frst_extractors as ex
+from ..analyzer import analyze_log_text, find_rule_duplicates
 from ..fact_service import ConditionSpec, condition_key_for, set_rule_conditions
 from ..models import ClassificationRule, Fact, FactRule
 from ..rule_sets import resolve_user_rule_set_key
@@ -33,23 +33,23 @@ class ReviewFixTests(LogAnalyzerApiBaseTestCase):
         self.client.force_login(self.user)
 
     def test_a_filepath_fallback_does_not_spread_over_the_block(self):
-        rule = ClassificationRule.objects.create(
-            owner=self.user, status=B, match_type="parsed", source_text="x", apply_to_block=True,
+        # A parsed block rule whose entry is not the block's matches the line
+        # holding its stored path, through that path alone: only that line.
+        path = r"C:\Users\anna\AppData\Roaming\svc\run.exe"
+        ClassificationRule.objects.create(
+            owner=self.user, status=B, match_type="parsed", source_text="x", all_log_types=True,
+            match_unit=ClassificationRule.MATCH_UNIT_BLOCK, entry_type="spor_task", name=r"\Other",
+            filepath=path, normalized_filepath=ex.path_key(path),
         )
-        walked = log_layout.analyzed_lines(SPOR)
-        structure = log_layout.layout(SPOR, "Spor")
-        lines = [{"rule_ids": []}, {"rule_ids": [rule.pk]}, {"rule_ids": []}]
-        before = [dict(line) for line in lines]
-        # The item line was decided through the rule's stored path alone.
-        line_matches = {1: (None, [(rule, "found matching normalized path", "filepath")]), 2: (None, [])}
-        _apply_block_verdicts(lines, walked, {}, line_matches, structure, [w.line_no for w in walked])
-        self.assertEqual(lines, before)
+        lines = analyze_log_text(SPOR, log_type="Spor")["lines"]
+        self.assertEqual([line["dominant_status"] for line in lines], ["?", "?", B])
+        self.assertTrue(lines[2]["fallback_only"])
 
     def test_duplicates_keep_rules_with_other_options_apart(self):
         path = r"C:\x\evil.exe"
         # Same normalized path (what duplicates are grouped by), own source text
         # each (the unique constraint), and different options.
-        for number, overrides in enumerate(({}, {"only_entry_types": ["service"]}, {"apply_to_block": True})):
+        for number, overrides in enumerate(({}, {"only_entry_types": ["service"]}, {"match_unit": "block"})):
             ClassificationRule.objects.create(
                 owner=self.user, status=B, match_type="filepath", source_text=f"{path} #{number}",
                 normalized_filepath=path.lower(), **overrides,

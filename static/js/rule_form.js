@@ -2,7 +2,7 @@
  * ids "rule…"), plus the log type scope picker the analyzer's rule review
  * also uses. The page passes its elements in `els`:
  *   {status, matchType, wholeLog, wholeLogGroup, priority, priorityGroup,
- *    colorWholeLine, colorWholeLineGroup}
+ *    colorWholeLine, colorWholeLineGroup, matchUnit?}
  * and keeps its own wording (labels, help text, placeholders). The editor page
  * also passes {factStatusValue, factGroup, verdictGroups} for recording a
  * fact: a choice in the status dropdown, though a fact is not a status. */
@@ -47,8 +47,10 @@ window.RuleForm = (function () {
     }
 
     function syncColorWholeLine(els) {
+        /* A block rule colours the whole lines of its block. */
+        const blockRule = Boolean(els.matchUnit) && els.matchUnit.value === 'block';
         const offered = COLOR_WHOLE_LINE_MATCH_TYPES.includes(els.matchType.value) && !wholeLogActive(els)
-            && !isFactMode(els);
+            && !isFactMode(els) && !blockRule;
         els.colorWholeLineGroup.style.display = offered ? '' : 'none';
         if (!offered) els.colorWholeLine.checked = false;
     }

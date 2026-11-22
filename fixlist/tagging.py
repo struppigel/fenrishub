@@ -251,7 +251,8 @@ def line_parsed_entry_type(line):
     """The parsed FRST entry type of an analysed line, '' for none.
 
     Read from the payload; analyses cached before it was recorded there get
-    the line parsed again, with the analyzer's own parser.
+    the line parsed again, with the analyzer's own parser (FRST's only: a
+    Spor block's type, read from its whole block, is always in the payload).
     """
     entry_type = line.get('parsed_entry_type')
     if entry_type is None:

@@ -90,15 +90,18 @@ def rule_applies_to(all_log_types: bool, log_types, log_type) -> bool:
     return log_type in (log_types or ())
 
 
-def default_rule_scope(match_type: str, context_log_type: str | None = None) -> tuple:
+def default_rule_scope(match_type: str, context_log_type: str | None = None, entry_type: str = '') -> tuple:
     """The `(all_log_types, log_types)` a new rule gets when none was chosen.
 
-    File path rules apply to every log type. Otherwise a rule created while a
-    log of some other type is open (e.g. Spor) applies to that type; everything
-    else gets the FRST types.
+    File path rules apply to every log type, a rule of a Spor parsed type
+    (`entry_type` spor_...) to Spor logs. Otherwise a rule created while a
+    log of some other type is open (e.g. Spor) applies to that type;
+    everything else gets the FRST types.
     """
     if match_type in _ALL_LOG_TYPES_MATCH_TYPES:
         return True, []
+    if (entry_type or '').startswith('spor_'):
+        return False, [LOG_TYPE_SPOR]
     context = (context_log_type or '').strip()
     if context and context != LOG_TYPE_UNKNOWN and context not in DEFAULT_RULE_LOG_TYPES:
         return False, [context]
