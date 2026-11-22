@@ -1,7 +1,6 @@
-/* Field logic shared by the two rule forms: the add / edit rule page
- * (add_rule.html, ids "rule…") and the quick-edit panel on the rules list
- * (rules.html, ids "edit…"), plus the log type scope picker the analyzer's
- * rule review also uses. Each page passes its elements in `els`:
+/* Field logic of the rule form, the add / edit rule page (add_rule.html,
+ * ids "rule…"), plus the log type scope picker the analyzer's rule review
+ * also uses. The page passes its elements in `els`:
  *   {status, matchType, wholeLog, wholeLogGroup, priority, priorityGroup,
  *    colorWholeLine, colorWholeLineGroup}
  * and keeps its own wording (labels, help text, placeholders). The editor page
@@ -87,7 +86,7 @@ window.RuleForm = (function () {
      * Which log types a rule classifies, as a dropdown: the default types
      * (FRST and Addition), custom types (a selection of exact names, shown
      * only then) or all log types (including ones added later). Shared by the
-     * rule editor, the rules list's quick edit and the analyzer's rule review.
+     * rule editor and the analyzer's rule review.
      *
      * opts: {root, choices: [names], value: 'all' | [names], formNames: bool
      *        (fields named log_scope / log_types for a form POST), unknown:
@@ -179,8 +178,18 @@ window.RuleForm = (function () {
             return checkedNames();
         }
 
+        /* The custom selection, kept while "default" or "all" is chosen so
+         * switching back to "custom" restores it. */
+        let customNames = null;
+        let lastMode = null;
+
         function sync() {
             const custom = mode.value === SCOPE_CUSTOM;
+            if (lastMode === SCOPE_CUSTOM && !custom) customNames = checkedNames();
+            if (custom && lastMode !== null && lastMode !== SCOPE_CUSTOM && customNames !== null) {
+                setChecked(customNames);
+            }
+            lastMode = mode.value;
             list.hidden = !custom;
             /* "default" posts the default types through the (hidden) boxes;
              * "all" disables them so no stale selection is sent. */
@@ -190,6 +199,9 @@ window.RuleForm = (function () {
         }
 
         function setValue(value) {
+            /* An explicit value replaces any remembered custom selection. */
+            customNames = null;
+            lastMode = null;
             if (value === ALL_LOG_TYPES) {
                 mode.value = ALL_LOG_TYPES;
                 setChecked([]);
@@ -220,7 +232,7 @@ window.RuleForm = (function () {
         if (opts.formNames) {
             const form = root.closest('form');
             if (form) {
-                /* A picker rebuilt in the same root (the quick edit does, per rule)
+                /* A picker rebuilt in the same root
                  * replaces the previous one's check instead of adding another. */
                 if (root.logScopeSubmitCheck) form.removeEventListener('submit', root.logScopeSubmitCheck);
                 root.logScopeSubmitCheck = function (event) {

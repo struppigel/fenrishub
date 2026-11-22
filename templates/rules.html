@@ -65,10 +65,6 @@
         font-variant-numeric: tabular-nums;
     }
 
-    .priority-input {
-        width: 60px;
-    }
-
     .rule-source {
         font-size: 12px;
         color: var(--la-text-neutral);
@@ -146,34 +142,18 @@
         border-color: var(--la-error-border);
     }
 
-    .rule-form-section {
-        margin-bottom: 16px;
-        padding: 10px;
-        background-color: var(--la-bg-1);
-        border: 1px solid var(--la-border);
+    a.rule-act {
+        text-decoration: none;
     }
 
-    .rule-form-section textarea {
-        min-height: 60px;
-    }
-
-    .rule-form-section select {
-        width: 100%;
-        padding: 8px;
-        background-color: var(--la-bg-1);
-        color: var(--la-text-main);
-        border: 1px solid var(--la-border);
-        font-family: inherit;
-        font-size: 12px;
-    }
-
-    .rule-form-section select:focus {
-        outline: none;
-        border-color: var(--la-focus);
-    }
-
-    #editSection {
-        display: none;
+    .rule-fact {
+        font-size: 11px;
+        color: var(--la-text-muted);
+        flex-shrink: 0;
+        max-width: 200px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .filter-tabs {
@@ -314,73 +294,6 @@
 
 {% block content %}
 <div>
-    <div id="editSection" class="rule-form-section">
-        <h3>edit rule</h3>
-        <form method="post">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="edit">
-            <input type="hidden" name="pk" id="editPk">
-            <input type="hidden" name="return_q" value="{{ current_query_string }}">
-            <div class="form-group">
-                <label for="editStatus">status</label>
-                <select id="editStatus" name="status" required>
-                    {% for code, label in creatable_status_choices %}
-                    <option value="{{ code }}">{{ code }} - {{ label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="editMatchType">match type</label>
-                <select id="editMatchType" name="match_type" required>
-                    {% for code, label in creatable_match_type_choices %}
-                    <option value="{{ code }}">{{ label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="editPriority">priority ({{ priority_min }}&ndash;{{ priority_max }}, higher wins)</label>
-                <select id="editPriority" name="priority" class="priority-input" required>
-                    {% for value, label in priority_choices %}
-                    <option value="{{ value }}">{{ label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="form-group" id="editWholeLogGroup" style="display: none;">
-                <label class="checkbox-label"><input type="checkbox" name="whole_log" id="editWholeLog"> run once against the whole log</label>
-            </div>
-            <div class="form-group" id="editColorWholeLineGroup" style="display: none;">
-                <label class="checkbox-label"><input type="checkbox" name="color_whole_line" id="editColorWholeLine"> color the whole line in the analyzer</label>
-            </div>
-            <div class="form-group">
-                <label for="editSourceText" id="editSourceTextLabel">source text</label>
-                <textarea id="editSourceText" name="source_text" required></textarea>
-                <div id="editCaseInsensitiveWarning" class="regex-warning" style="display: none;"></div>
-                <div id="editScriptHelp" style="display: none; font-size: 11px; color: var(--la-text-neutral); margin-top: 4px;">
-                    Python snippet. <code>line</code> holds the log line and the <code>re</code> module is available; set <code>result</code> to truthy or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="editDescription">description</label>
-                <input type="text" id="editDescription" name="description">
-            </div>
-            <div class="form-group">
-                <label class="checkbox-label"><input type="checkbox" name="is_enabled" id="editIsEnabled" checked> enabled</label>
-            </div>
-            <div class="button-group">
-                <button type="submit">save</button>
-                {% comment %}
-                Submits this form to the full editor instead of saving, so whatever
-                is typed above survives the jump -- including a multi-line script
-                snippet, which a query string could not carry safely.
-                {% endcomment %}
-                <button type="submit" id="editOpenFull" name="open_editor" value="1" formnovalidate>open full editor</button>
-                <button type="button" onclick="cancelForm()">cancel</button>
-            </div>
-        </form>
-    </div>
-
-    <div class="divider"></div>
-
     <div class="filter-tabs">
         <a href="?filter=own{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q|urlencode }}{% endif %}{% if search_mode != 'text' %}&search_mode={{ search_mode }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}" {% if filter_mode == 'own' %}class="active"{% endif %}>own</a>
         <a href="?filter=others{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q|urlencode }}{% endif %}{% if search_mode != 'text' %}&search_mode={{ search_mode }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}" {% if filter_mode == 'others' %}class="active"{% endif %}>others</a>
@@ -413,6 +326,7 @@
             {% for code, label in status_choices %}
             <option value="{{ code }}" {% if filter_status == code %}selected{% endif %}>{{ code }} - {{ label }}</option>
             {% endfor %}
+            <option value="{{ fact_status_value }}" {% if filter_status == fact_status_value %}selected{% endif %}>fact rules</option>
         </select>
         <select onchange="applyFilter('match', this.value)">
             <option value="">all match types</option>
@@ -442,6 +356,29 @@
 
     {% if page_obj %}
         {% for rule in page_obj %}
+        {% if rule.is_fact_rule %}
+        {# A fact rule: records its fact where it matches, sets no status. #}
+        <div class="rule-item{% if not rule.is_enabled %} disabled{% endif %}">
+            <div class="rule-row">
+                <span class="rule-status-badge" title="fact rule: records a fact where it matches, sets no status">fact</span>
+                <span class="rule-match-type">{{ rule.get_match_type_display }}</span>
+                {% if rule.whole_log %}<span class="rule-match-type" title="evaluated once against the whole log">whole log</span>{% endif %}
+                {% if rule.only_entry_types %}<span class="rule-match-type" title="matches only lines parsed as these types">only: {{ rule.only_entry_types|join:", " }}</span>{% endif %}
+                {% if not rule.has_default_log_scope %}<span class="rule-match-type" title="applies to these log types">{{ rule.log_scope_label }}</span>{% endif %}
+                <span class="rule-fact">&rarr; <a href="{% url 'fact_edit' rule.fact_id %}" title="the fact it records">{{ rule.fact.name }}</a></span>
+                <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
+                {% if filter_mode != 'own' or rule.owner_id != request.user.id %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
+                {% if rule.owner_id == request.user.id or request.user.is_superuser %}
+                <div class="rule-actions">
+                    <form method="post" action="{% url 'facts' %}"><input type="hidden" name="action" value="fact_rule_toggle"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_to" value="rules"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
+                    <a class="rule-act" href="{% url 'edit_fact_rule' rule.pk %}">edit</a>
+                    <form method="post" action="{% url 'facts' %}"><input type="hidden" name="action" value="fact_rule_delete"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_to" value="rules"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act rule-act-del" onclick="return confirm('Delete this fact rule?');">delete</button></form>
+                </div>
+                {% endif %}
+            </div>
+            {% if rule.description %}<div class="rule-description">{{ rule.description }}</div>{% endif %}
+        </div>
+        {% else %}
         <div class="rule-item{% if not rule.is_enabled %} disabled{% endif %}">
             <div class="rule-row">
                 <span class="rule-status-badge {{ rule.status_css_class }}">{{ rule.status }}</span>
@@ -459,7 +396,7 @@
                 {% if rule.owner_id == request.user.id or request.user.is_superuser %}
                 <div class="rule-actions">
                     <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
-                    <button type="button" class="rule-act" onclick="startEdit({{ rule.pk }}, '{{ rule.status|escapejs }}', '{{ rule.match_type|escapejs }}', '{{ rule.source_text|escapejs }}', '{{ rule.description|escapejs }}', {{ rule.is_enabled|yesno:'true,false' }}, {{ rule.priority }}, {{ rule.whole_log|yesno:'true,false' }}, {{ rule.color_whole_line|yesno:'true,false' }})">edit</button>
+                    <a class="rule-act" href="{% url 'edit_rule' rule.pk %}?return_q={{ current_query_string|urlencode }}">edit</a>
                     <form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act rule-act-del" onclick="return confirm('Delete this rule?');">delete</button></form>
                 </div>
                 {% endif %}
@@ -467,6 +404,7 @@
             {% if rule.description %}<div class="rule-description">{{ rule.description }}</div>{% endif %}
             {% if rule.tags.all %}<div class="rule-tags">{% for tag in rule.tags.all %}<a class="tag-chip{{ tag|tag_category_class }}" href="?filter=all&amp;tags={{ tag.pk }}" title="{{ tag.description }}">{{ tag.name }}</a> {% endfor %}</div>{% endif %}
         </div>
+        {% endif %}
         {% endfor %}
     {% else %}
         <div class="info-box">
@@ -495,107 +433,7 @@
     {% endif %}
 </div>
 
-<script src="{% static 'js/rule_form.js' %}"></script>
 <script>
-const DEFAULT_PRIORITY_BY_MATCH_TYPE = {{ default_priority_by_match_type_json|safe }};
-const PRIORITY_MAX = {{ priority_max }};
-const HIGHEST_PRIORITY_WARNING = 'highest priority should only be used in exceptional cases, are you sure?';
-const CASE_INSENSITIVE_WARNING = 'Regex warning: starts with (?i), this will make regex matching slow. Write the needed letter cases explicitly instead, e.g. [Ff]oo';
-
-function syncEditCaseInsensitiveWarning() {
-    const box = document.getElementById('editCaseInsensitiveWarning');
-    const show = document.getElementById('editMatchType').value === 'regex' &&
-        document.getElementById('editSourceText').value.trim().startsWith('(?i)');
-    box.textContent = show ? CASE_INSENSITIVE_WARNING : '';
-    box.style.display = show ? '' : 'none';
-}
-/* reverse('edit_rule', args=[0]) -> /rules/0/edit/; startEdit swaps in the real pk. */
-const EDIT_RULE_URL_TEMPLATE = "{% url 'edit_rule' 0 %}";
-
-/* The quick-edit panel's fields, for the logic shared with the rule editor (rule_form.js). */
-const EDIT_FORM = {
-    status: document.getElementById('editStatus'),
-    matchType: document.getElementById('editMatchType'),
-    wholeLog: document.getElementById('editWholeLog'),
-    wholeLogGroup: document.getElementById('editWholeLogGroup'),
-    priority: document.getElementById('editPriority'),
-    priorityGroup: document.getElementById('editPriority').closest('.form-group'),
-    colorWholeLine: document.getElementById('editColorWholeLine'),
-    colorWholeLineGroup: document.getElementById('editColorWholeLineGroup'),
-};
-
-function syncEditSourceTextMode() {
-    const isScript = EDIT_FORM.matchType.value === 'script';
-    document.getElementById('editSourceTextLabel').textContent = isScript ? 'python script' : 'source text';
-    RuleForm.styleScriptTextarea(document.getElementById('editSourceText'), isScript);
-    document.getElementById('editScriptHelp').style.display = isScript ? '' : 'none';
-}
-
-function syncEditWholeLogMode() {
-    const wholeLog = RuleForm.syncWholeLog(EDIT_FORM);
-    /* Whole-log scripts read the full log from `log`, per-line scripts one line
-     * from `line`. Set both branches so unticking whole-log restores the text. */
-    if (EDIT_FORM.matchType.value === 'script') {
-        const variable = wholeLog
-            ? '<code>log</code> holds the entire log'
-            : '<code>line</code> holds the log line';
-        document.getElementById('editScriptHelp').innerHTML =
-            'Python snippet. ' + variable + ' and the <code>re</code> module is available; set <code>result</code> to truthy or <code>"MATCH"</code> to flag a match. <code>import</code>, file, and network access are blocked.';
-    }
-}
-
-function syncEditColorWholeLineMode() {
-    RuleForm.syncColorWholeLine(EDIT_FORM);
-}
-
-function startEdit(pk, status, matchType, sourceText, description, isEnabled, priority, wholeLog, colorWholeLine) {
-    document.getElementById('editPk').value = pk;
-    document.getElementById('editStatus').value = status;
-    document.getElementById('editMatchType').value = matchType;
-    document.getElementById('editSourceText').value = sourceText;
-    document.getElementById('editDescription').value = description;
-    document.getElementById('editIsEnabled').checked = isEnabled;
-    document.getElementById('editPriority').value = String(priority);
-    document.getElementById('editPriority').dataset.prevValue = String(priority);
-    document.getElementById('editPriority').dataset.userTouched = 'true';
-    document.getElementById('editWholeLog').checked = !!wholeLog;
-    document.getElementById('editColorWholeLine').checked = !!colorWholeLine;
-    document.getElementById('editOpenFull').formAction =
-        EDIT_RULE_URL_TEMPLATE.replace(/\/0\/edit\/$/, '/' + pk + '/edit/');
-    document.getElementById('editSection').style.display = 'block';
-    syncEditSourceTextMode();
-    syncEditWholeLogMode();
-    syncEditColorWholeLineMode();
-    syncEditCaseInsensitiveWarning();
-    document.getElementById('editSourceText').focus();
-}
-
-document.getElementById('editMatchType').addEventListener('change', function () {
-    RuleForm.applyDefaultPriority(EDIT_FORM, DEFAULT_PRIORITY_BY_MATCH_TYPE);
-    syncEditSourceTextMode();
-    syncEditWholeLogMode();
-    syncEditColorWholeLineMode();
-    syncEditCaseInsensitiveWarning();
-});
-
-document.getElementById('editSourceText').addEventListener('input', syncEditCaseInsensitiveWarning);
-
-document.getElementById('editStatus').addEventListener('change', function () {
-    syncEditWholeLogMode();
-    syncEditColorWholeLineMode();
-});
-document.getElementById('editWholeLog').addEventListener('change', function () {
-    syncEditSourceTextMode();
-    syncEditWholeLogMode();
-    syncEditColorWholeLineMode();
-});
-
-RuleForm.bindPriorityConfirm(EDIT_FORM.priority, { max: PRIORITY_MAX, warning: HIGHEST_PRIORITY_WARNING });
-
-function cancelForm() {
-    document.getElementById('editSection').style.display = 'none';
-}
-
 function applyFilter(param, value) {
     const url = new URL(window.location);
     if (value) {

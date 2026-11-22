@@ -117,6 +117,12 @@
         font-size: 11px;
     }
 
+    .condition-note {
+        font-size: 11px;
+        color: var(--la-text-neutral);
+        padding: 0 6px 3px;
+    }
+
     .rule-entry-types[hidden] {
         display: none;
     }
@@ -361,7 +367,7 @@ textarea has no name, so it is never submitted.
                     {% endfor %}
                     {% endif %}
                     {# Not a status: the rule then records a fact (a FactRule). #}
-                    {% if fact_mode_offered %}<option value="{{ fact_status_value }}" {% if form_record_fact %}selected{% endif %} title="a fact rule sets no status: it records a fact where it matches">fact rule - records a fact</option>{% endif %}
+                    {% if fact_mode_offered %}<option value="{{ fact_status_value }}" {% if form_record_fact %}selected{% endif %} title="a fact rule sets no status: it records a fact where it matches">fact rule</option>{% endif %}
                 </select>
                 {% if fact_mode_offered %}<input type="hidden" name="record_fact" id="ruleRecordFact" value="{% if form_record_fact %}on{% endif %}">{% endif %}
             </div>
@@ -634,6 +640,13 @@ textarea has no name, so it is never submitted.
         return row;
     }
 
+    function buildConditionNote(text) {
+        const note = document.createElement('div');
+        note.className = 'condition-note';
+        note.textContent = text;
+        return note;
+    }
+
     /* The name of the fact the fact rule records, for the preview. */
     function chosenFactName() {
         const select = document.getElementById('ruleFact');
@@ -785,6 +798,10 @@ textarea has no name, so it is never submitted.
             wrapper.appendChild(buildStatusRow(result, statusLabels));
         }
 
+        /* Whether the rule's conditions held on this line (pasted text: its own
+         * facts; stored logs: their analyses' facts). */
+        if (result.condition_note) wrapper.appendChild(buildConditionNote(result.condition_note));
+
         /* ── new rule shadowed / outranked notices ── */
         if (factMode) {
             /* Nothing to shadow or outrank: no status. */
@@ -824,7 +841,13 @@ textarea has no name, so it is never submitted.
             const resp = await fetch(TEST_RULE_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': Fenris.csrfToken() },
-                body: JSON.stringify({ source_text: sourceText, status: status, match_type: matchType, priority: priority, lines: lines, exclude_rule_id: EXCLUDE_RULE_ID, only_entry_types: selectedEntryTypes() }),
+                body: JSON.stringify({
+                    source_text: sourceText, status: status, match_type: matchType, priority: priority,
+                    lines: lines, exclude_rule_id: EXCLUDE_RULE_ID, only_entry_types: selectedEntryTypes(),
+                    /* The pasted text as one small log: its facts decide the conditions. */
+                    log_text: document.getElementById('logLinesInput').value,
+                    conditions: currentConditions(), log_types: logScopePicker.getValue(),
+                }),
                 signal: fetchController.signal,
             });
 
@@ -876,7 +899,8 @@ textarea has no name, so it is never submitted.
                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': Fenris.csrfToken() },
                 body: JSON.stringify({
                     source_text: sourceText, match_type: matchType,
-                    status: 'A', whole_log: true, lines: [logText],
+                    status: 'A', whole_log: true, lines: [logText], log_text: logText,
+                    conditions: currentConditions(), log_types: logScopePicker.getValue(),
                 }),
                 signal: fetchController.signal,
             });
@@ -895,21 +919,26 @@ textarea has no name, so it is never submitted.
 
             renderRegexWarnings(data.regex_warnings);
 
-            /* Verdict line: matches (alert would fire) or no match. */
+            /* Verdict line: matches (the alert fires, or the fact rule records
+             * its fact about the log) or no match. */
+            const factMode = RuleForm.isFactMode(RULE_FORM);
             const verdict = document.createElement('div');
             verdict.className = 'line-status-row';
+            const label = document.createElement('span');
             if (data.matched) {
-                verdict.appendChild(makeStatusBadge('A'));
-                const label = document.createElement('span');
-                label.textContent = 'matches the whole log — this alert would fire';
-                verdict.appendChild(label);
+                if (!factMode) verdict.appendChild(makeStatusBadge('A'));
+                label.textContent = factMode
+                    ? 'matches the whole log — records ' + chosenFactName() + ' about the log'
+                    : 'matches the whole log — this alert would fire';
             } else {
-                verdict.appendChild(makeStatusBadge('?'));
-                const label = document.createElement('span');
-                label.textContent = 'no match — this alert would not fire';
-                verdict.appendChild(label);
+                if (!factMode) verdict.appendChild(makeStatusBadge('?'));
+                label.textContent = factMode
+                    ? 'no match — records nothing'
+                    : 'no match — this alert would not fire';
             }
+            verdict.appendChild(label);
             container.appendChild(verdict);
+            if (data.condition_note) container.appendChild(buildConditionNote(data.condition_note));
 
             if (data.script_error) {
                 const err = document.createElement('div');
@@ -959,6 +988,8 @@ textarea has no name, so it is never submitted.
         result.logs.forEach(function (ref, i) {
             if (i) row.appendChild(document.createTextNode(', '));
             row.appendChild(buildLogLink(ref.upload_id, ref.line_number));
+            /* No analysis since the facts changed: the conditions are unknown there. */
+            if (ref.conditions === 'unchecked') row.appendChild(document.createTextNode(' (not checked)'));
         });
         const more = result.log_count - result.logs.length;
         if (more > 0) row.appendChild(document.createTextNode(' and ' + more + ' more'));
@@ -1011,6 +1042,7 @@ textarea has no name, so it is never submitted.
                     exclude_rule_id: EXCLUDE_RULE_ID,
                     log_types: logScopePicker.getValue(),
                     only_entry_types: selectedEntryTypes(),
+                    conditions: currentConditions(),
                 }),
                 signal: logMatchesController.signal,
             });
@@ -1020,15 +1052,19 @@ textarea has no name, so it is never submitted.
             output.innerHTML = '';
             const scanned = data.logs_scanned + ' log' + (data.logs_scanned === 1 ? '' : 's');
 
+            const factMode = RuleForm.isFactMode(RULE_FORM);
             if (data.whole_log) {
                 data.logs.forEach(function (log) {
                     const row = document.createElement('div');
                     row.className = 'line-status-row';
-                    row.appendChild(makeStatusBadge('A'));
+                    if (!factMode) row.appendChild(makeStatusBadge('A'));
                     row.appendChild(buildLogLink(log.upload_id));
                     if (log.match_count) {
                         row.appendChild(document.createTextNode(
                             log.match_count + ' match' + (log.match_count === 1 ? '' : 'es')));
+                    }
+                    if (log.conditions === 'unchecked') {
+                        row.appendChild(document.createTextNode(' (conditions not checked)'));
                     }
                     output.appendChild(row);
                 });
@@ -1038,8 +1074,9 @@ textarea has no name, so it is never submitted.
                     err.textContent = 'Script error: ' + data.script_error;
                     output.appendChild(err);
                 }
-                countLine.textContent = describeLogScan(data,
-                    'alert would fire on ' + data.logs_matched + ' of ' + scanned);
+                countLine.textContent = describeLogScan(data, (factMode
+                    ? 'would record ' + chosenFactName() + ' on '
+                    : 'alert would fire on ') + data.logs_matched + ' of ' + scanned) + uncheckedText(data);
                 return;
             }
 
@@ -1053,7 +1090,7 @@ textarea has no name, so it is never submitted.
             const distinct = data.results.length;
             countLine.textContent = describeLogScan(data,
                 distinct + ' distinct line' + (distinct === 1 ? '' : 's') + ' in ' +
-                data.logs_matched + ' of ' + scanned + ' matched by ' + RULE_NOUN);
+                data.logs_matched + ' of ' + scanned + ' matched by ' + RULE_NOUN) + uncheckedText(data);
         } catch (e) {
             if (e.name === 'AbortError') return;
             showLogMatchesError('Request failed: ' + e.message);
@@ -1083,8 +1120,7 @@ textarea has no name, so it is never submitted.
         return Number.isFinite(parsed) ? parsed : null;
     }
 
-    /* The editor's fields, for the logic shared with the rules list's
-     * quick-edit panel (rule_form.js). */
+    /* The editor's fields, for the shared form logic (rule_form.js). */
     const RULE_FORM = {
         status: document.getElementById('ruleStatus'),
         matchType: document.getElementById('ruleMatchType'),
@@ -1103,6 +1139,27 @@ textarea has no name, so it is never submitted.
             document.getElementById('ruleConditionsGroup'), document.getElementById('ruleApplyToBlockGroup'),
         ].filter(Boolean),
     };
+
+    /* The condition rows as the previews send them ([] for a fact rule, which
+     * has none), gathered like the form submit does. */
+    function currentConditions() {
+        if (!conditionRows || RuleForm.isFactMode(RULE_FORM)) return [];
+        return Array.from(conditionRows.querySelectorAll('.rule-condition-row')).map(function (row) {
+            const factValue = row.querySelector('.rule-condition-fact').value;
+            return {
+                fact_id: factValue === '' ? null : parseInt(factValue, 10),
+                polarity: row.querySelector('.rule-condition-polarity').value,
+                scope: row.querySelector('.rule-condition-scope').value,
+            };
+        }).filter(function (condition) { return condition.fact_id !== null; });
+    }
+
+    /* Stored logs whose conditions could not be checked: no analysis since the
+     * facts changed. */
+    function uncheckedText(data) {
+        const n = data.conditions_unchecked_logs || 0;
+        return n ? ' · ' + n + ' log' + (n === 1 ? '' : 's') + ': conditions not checked (not analyzed since the fact changed)' : '';
+    }
 
     /* The ticked "only on lines parsed as" types, for the previews. */
     function selectedEntryTypes() {
@@ -1150,7 +1207,7 @@ textarea has no name, so it is never submitted.
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.textContent = 'remove';
-        remove.addEventListener('click', function () { row.remove(); syncConditionControls(); });
+        remove.addEventListener('click', function () { row.remove(); syncConditionControls(); scheduleRuleUpdate(); });
         row.append(polarity, fact, scope, remove);
         conditionRows.appendChild(row);
         syncConditionControls();
@@ -1176,18 +1233,17 @@ textarea has no name, so it is never submitted.
      * rest of a log. (A fact rule's preview shows what it records instead of a
      * status: buildFactRow.) */
     function syncAdvancedPreviewNote() {
+        /* Both previews check conditions now (each line says whether they
+         * held), so there is nothing left to warn about here. */
         const note = document.getElementById('ruleAdvancedPreviewNote');
-        if (!note) return;
-        const text = !RuleForm.isFactMode(RULE_FORM) && conditionRows && conditionRows.querySelector('.rule-condition-row')
-            ? 'The previews do not check conditions.'
-            : '';
-        note.textContent = text;
-        note.hidden = !text;
+        if (note) note.hidden = true;
     }
 
     if (conditionRows) {
         CONDITIONS.conditions.forEach(addConditionRow);
         document.getElementById('ruleAddCondition').addEventListener('click', function () { addConditionRow(); });
+        /* A changed condition changes what the previews show. */
+        conditionRows.addEventListener('change', scheduleRuleUpdate);
         document.getElementById('addRuleForm').addEventListener('submit', function () {
             const conditions = Array.from(conditionRows.querySelectorAll('.rule-condition-row')).map(function (row) {
                 const factValue = row.querySelector('.rule-condition-fact').value;

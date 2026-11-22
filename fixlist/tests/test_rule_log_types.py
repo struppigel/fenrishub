@@ -162,23 +162,15 @@ class RulePageScopeTests(TestCase):
         rule.refresh_from_db()
         self.assertEqual(rule.log_types, ['Spor'])
 
-    def test_quick_edit_keeps_the_scope(self):
+    def test_an_edit_without_the_picker_keeps_the_scope(self):
+        # As the token API edits: no log type fields at all.
         rule = make_rule('evil', owner=self.user, log_types=['Spor'])
-        self.client.post(reverse('rules'), {
-            'action': 'edit', 'pk': rule.pk, 'status': 'P', 'match_type': 'exact', 'source_text': 'evil',
+        self.client.post(reverse('edit_rule', args=[rule.pk]), {
+            'status': 'P', 'match_type': 'exact', 'source_text': 'evil',
             'priority': str(rule.priority), 'is_enabled': 'on',
         })
         rule.refresh_from_db()
         self.assertEqual((rule.status, rule.log_types), ('P', ['Spor']))
-
-    def test_open_full_editor_shows_the_rules_own_scope(self):
-        rule = make_rule('evil', owner=self.user, log_types=['Spor'])
-        response = self.client.post(reverse('edit_rule', args=[rule.pk]), {
-            'open_editor': '1', 'status': 'B', 'match_type': 'exact', 'source_text': 'evil',
-            'priority': str(rule.priority), 'is_enabled': 'on',
-        })
-        self.assertEqual(response.context['log_scope_picker']['value'], ['Spor'])
-        self.assertTrue(response.context['log_scope_picker']['chosen'])
 
 
 class AnalyzerPersistScopeTests(TestCase):

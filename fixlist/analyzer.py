@@ -912,6 +912,9 @@ def find_rule_duplicates(queryset):
 
     groups = defaultdict(list)
     for rule in queryset.iterator():
+        # Rules that differ in their conditions, parsed-type restriction or
+        # block verdict behave differently: no duplicates.
+        behaviour = (rule.condition_key, tuple(rule.only_entry_types or ()), bool(rule.apply_to_block))
         if rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
             clsid = (
                 "" if rule.entry_type in ex.SYSTEM_SPECIFIC_CLSID_TYPES
@@ -920,8 +923,7 @@ def find_rule_duplicates(queryset):
             key = (
                 rule.match_type,
                 rule.status,
-                # Rules that differ in their conditions are no duplicates.
-                rule.condition_key,
+                behaviour,
                 rule.entry_type or "",
                 clsid,
                 rule.name or "",
@@ -937,7 +939,7 @@ def find_rule_duplicates(queryset):
             normalized = (rule.normalized_filepath or "").strip().lower()
             if not normalized:
                 continue
-            key = (rule.match_type, rule.status, rule.condition_key, normalized)
+            key = (rule.match_type, rule.status, behaviour, normalized)
         else:
             continue
         groups[key].append(rule)
@@ -1688,6 +1690,18 @@ def _analyze_single_line(line: str, buckets, features: LineFeatures | None = Non
     )
 
 
+def _deciding_rule_ids(effective_matches) -> list:
+    """The rules that decide a line's verdict: the effective matches whose
+    status is the verdict. Only they carry their tags into the analysis (a P
+    rule beside the B rule that decides the line adds none)."""
+    if not effective_matches:
+        return []
+    verdict = _dominant_status(_ordered_status_codes(rule.status for rule, _reason, _matcher in effective_matches))
+    return list(dict.fromkeys(
+        rule.pk for rule, _reason, _matcher in effective_matches if rule.status == verdict
+    ))
+
+
 def _line_result(line, features, buckets, effective_matches, shadowed_matches, matcher_label, top_priority):
     """The analysis entry of a line from its matches, already split by priority."""
     parsed_entry = features.parsed_entry
@@ -1718,12 +1732,7 @@ def _line_result(line, features, buckets, effective_matches, shadowed_matches, m
         line, effective_matches + shadowed_matches, buckets.get("__regex_by_rule_id"),
     )
 
-    # Only the rules that decide the verdict carry their tags into the
-    # analysis: a P rule beside the B rule that decides the line adds none.
-    verdict = _dominant_status(status_codes)
-    deciding_rule_ids = list(dict.fromkeys(
-        rule.pk for rule, _reason, _matcher in effective_matches if rule.status == verdict
-    ))
+    deciding_rule_ids = _deciding_rule_ids(effective_matches)
 
     return _build_line_result(
         line,
@@ -1943,6 +1952,15 @@ def _serialize_rule_matches(matches: list[tuple]) -> tuple[list[dict], list[str]
     return serialized_matches, reasons
 
 
+def fact_rule_ids_matching_line(line: str, rule_set_key: str = SHARED_RULE_SET_KEY) -> list:
+    """The fact rules of a rule set that match `line` (rules page line search)."""
+    line_value = (line or "").strip()
+    fact_buckets = _get_cached_rule_buckets(rule_set_key).get("__facts") if line_value else None
+    if fact_buckets is None:
+        return []
+    return [rule.pk for rule, _reason, _matcher in _flat_matches(line_value, fact_buckets)]
+
+
 def inspect_line_matches(
     line: str,
     buckets=None,
@@ -2059,22 +2077,14 @@ def analyze_log_text(
         analyzed_lines.append(entry)
         if block_rules:
             line_matches[item.index] = (features, flat)
-        if tag_sources and flat:
-            _record_tag_source_facts(facts, item.index, entry["rule_ids"], effective + shadowed, tag_sources)
-        if fact_buckets is not None:
-            for rule, _reason, _matcher in _flat_matches(line, fact_buckets, features):
-                facts.add(rule.fact_id, item.index)
+        if tag_sources or fact_buckets is not None:
+            _record_line_facts(facts, item.index, line, features, buckets, effective + shadowed, entry["rule_ids"])
         if conditional_buckets is not None:
             conditional_matches = _flat_matches(line, conditional_buckets, features)
             if conditional_matches:
                 pending.append((item.index, features, flat, conditional_matches))
 
-    fired_wholelog = _fired_wholelog_rules(raw_text, buckets)
-    if tag_sources and fired_wholelog:
-        _record_wholelog_tag_source_facts(facts, fired_wholelog, tag_sources)
-    if fact_buckets is not None:
-        for rule in _fired_wholelog_rules(raw_text, fact_buckets):
-            facts.add(rule.fact_id)
+    fired_wholelog = _record_wholelog_facts(facts, raw_text, buckets)
 
     # The facts are complete now. Pass 2: the rules with conditions, only on
     # the lines they matched; they never add facts, so no condition can
@@ -2154,8 +2164,10 @@ def _apply_block_verdicts(analyzed_lines, walked, buckets, line_matches, structu
     added = {}
     for index, (_features, flat) in line_matches.items():
         deciding = None
-        for rule, reason, _matcher in flat:
-            if not rule.apply_to_block:
+        for rule, reason, matcher in flat:
+            # A match through a rule's stored path alone is weak (priority 1);
+            # spread at the rule's own priority it would outweigh real matches.
+            if not rule.apply_to_block or _is_filepath_fallback(rule, matcher):
                 continue
             if deciding is None:
                 deciding = set(analyzed_lines[index]["rule_ids"])
@@ -2174,6 +2186,52 @@ def _apply_block_verdicts(analyzed_lines, walked, buckets, line_matches, structu
         analyzed_lines[index] = _line_result(
             walked[index].text, features, buckets, effective, shadowed, matcher_label, top_priority,
         )
+
+
+def _record_line_facts(facts, index, line, features, buckets, matches, deciding_rule_ids):
+    """Record the facts found on analyzed line `index`: by tag sources, from
+    the line's matches of rules without conditions (effective and shadowed;
+    `deciding_rule_ids` those that decide it), and by fact rules."""
+    tag_sources = buckets.get("__fact_tag_sources") or {}
+    if tag_sources and matches:
+        _record_tag_source_facts(facts, index, deciding_rule_ids, matches, tag_sources)
+    fact_buckets = buckets.get("__facts")
+    if fact_buckets is not None:
+        for rule, _reason, _matcher in _flat_matches(line, fact_buckets, features):
+            facts.add(rule.fact_id, index)
+
+
+def _record_wholelog_facts(facts, raw_text, buckets) -> list:
+    """Record the facts about the whole log: of whole-log fact rules, and of
+    the tag sources of whole-log alert rules that fired. Returns those fired
+    alert rules (rules without conditions)."""
+    fired = _fired_wholelog_rules(raw_text, buckets)
+    tag_sources = buckets.get("__fact_tag_sources") or {}
+    if tag_sources and fired:
+        _record_wholelog_tag_source_facts(facts, fired, tag_sources)
+    fact_buckets = buckets.get("__facts")
+    if fact_buckets is not None:
+        for rule in _fired_wholelog_rules(raw_text, fact_buckets):
+            facts.add(rule.fact_id)
+    return fired
+
+
+def find_facts(raw_text, buckets):
+    """`(FactIndex, analyzed lines)` of a text: the facts analyze_log_text
+    would find in it, without classifying anything (rule previews)."""
+    facts = FactIndex()
+    walked = log_layout.analyzed_lines(raw_text)
+    if not (buckets.get("__fact_tag_sources") or buckets.get("__facts") is not None):
+        return facts, walked
+    for item in walked:
+        features = line_features(item.text)
+        flat = _flat_matches(item.text, buckets, features)
+        effective, shadowed, _label, _priority = _split_by_priority(flat)
+        _record_line_facts(
+            facts, item.index, item.text, features, buckets, effective + shadowed, _deciding_rule_ids(effective),
+        )
+    _record_wholelog_facts(facts, raw_text or "", buckets)
+    return facts, walked
 
 
 def _record_tag_source_facts(facts, index, deciding_rule_ids, matches, tag_sources):
@@ -2233,21 +2291,42 @@ def _fact_evidence(facts, fact_id, scope, index, structure):
     return None
 
 
-def _conditions_hold(conditions, facts, index, structure, line_nos):
-    """The explanation of why every condition holds for analyzed line `index`
-    (None: the whole log), e.g. 'requires "Kaspersky installed" in the log
-    (L312)', or None when one does not hold."""
+def condition_report(conditions, facts, index, structure, line_nos):
+    """`(holds, explanation)` of a rule's conditions on analyzed line `index`
+    (None: the whole log). Holding, the explanation says why every condition
+    holds, e.g. 'requires "Kaspersky installed" in the log (L312)'; failing,
+    why the first failing one fails, e.g. 'forbids "X" in its block (L3)'."""
     parts = []
     for condition in conditions:
         evidence = _fact_evidence(facts, condition.fact_id, condition.scope, index, structure)
         where = _SCOPE_WORDS.get(condition.scope, condition.scope)
+        found = None
+        if evidence is not None:
+            found = "the whole log" if evidence == "log" else f"L{line_nos[evidence]}"
         if condition.require:
             if evidence is None:
-                return None
-            found = "the whole log" if evidence == "log" else f"L{line_nos[evidence]}"
+                return False, f'requires "{condition.fact_name}" {where} (not found)'
             parts.append(f'requires "{condition.fact_name}" {where} ({found})')
         else:
             if evidence is not None:
-                return None
+                return False, f'forbids "{condition.fact_name}" {where} ({found})'
             parts.append(f'forbids "{condition.fact_name}" {where} (not found)')
-    return "; ".join(parts)
+    return True, "; ".join(parts)
+
+
+def _conditions_hold(conditions, facts, index, structure, line_nos):
+    """condition_report's explanation when every condition holds, else None."""
+    holds, explanation = condition_report(conditions, facts, index, structure, line_nos)
+    return explanation if holds else None
+
+
+def conditions_for_specs(specs) -> list:
+    """The analyzer's conditions for fact_service.ConditionSpecs (a rule not
+    saved yet, e.g. in a preview), with the facts' names."""
+    from .models import Fact
+
+    names = dict(Fact.objects.filter(pk__in=[spec.fact_id for spec in specs]).values_list('pk', 'name'))
+    return [
+        _Condition(spec.fact_id, names.get(spec.fact_id, '?'), spec.polarity == RuleCondition.POLARITY_REQUIRE, spec.scope)
+        for spec in specs
+    ]

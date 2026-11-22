@@ -4,6 +4,7 @@ Classification rule management views.
 Handles: creating, editing, deleting, testing, and viewing classification rules.
 """
 
+import heapq
 import json
 import time
 from urllib.parse import urlencode
@@ -20,7 +21,7 @@ from django.db.models import Q, Case, When
 from .. import frst_extractors, script_matcher
 from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
-    evaluate_regex_pattern, REPARSE_FIELDS,
+    evaluate_regex_pattern, REPARSE_FIELDS, _load_rule_buckets, fact_rule_ids_matching_line,
 )
 from ..log_types import (
     ALL_LOG_TYPES, DEFAULT_RULE_LOG_TYPES, default_rule_scope, normalize_log_type_selection, scope_payload,
@@ -35,19 +36,23 @@ from ..models import (
     PRIORITY_MAX,
     PRIORITY_MIN,
     RuleTag,
+    detect_log_type,
     known_log_type_names,
 )
 from ..fact_service import (
     DUPLICATE_CONDITIONS_ERROR, condition_key_for, conditions_error, conditions_from_payload,
     rule_condition_specs, set_rule_conditions,
 )
-from ..rule_sets import invalidate_for_rule_owner
+from ..rule_sets import invalidate_for_rule_owner, resolve_user_rule_set_key
 from ..tagging import auto_tag_rules, parse_tag_ids, selected_tags_for_picker, serialize_tag
 from ..rule_test_service import (
+    CachedFactCheck,
     build_rule_test_results,
     build_wholelog_rule_test_result,
+    pasted_condition_check,
     scan_logs_for_rule_matches,
     scan_logs_for_wholelog_matches,
+    wholelog_condition_report,
 )
 from ..validators import PayloadValidator
 from .guest import deny_guests, is_moderator
@@ -162,8 +167,8 @@ def _split_patterns(source_text: str) -> list:
 def _tag_ids_from_post(request):
     """The tag ids the form posted, or None when it had no tag picker.
 
-    The picker always posts `tags_present`, so a form without one - the quick-edit
-    panel on the rules list - leaves a rule's tags alone instead of clearing them.
+    The picker always posts `tags_present`, so a form without one (the token
+    API) leaves a rule's tags alone instead of clearing them.
     """
     if not request.POST.get('tags_present'):
         return None
@@ -239,7 +244,7 @@ def clean_entry_types(raw) -> tuple:
 
 def entry_types_from_post(request) -> tuple:
     """The advanced "only on lines parsed as" checkboxes: `(types, error)`;
-    types None when the form has none (the quick-edit panel, the token API:
+    types None when the form has none (the token API:
     keep the rule's own)."""
     if not request.POST.get('only_entry_types_present'):
         return None, None
@@ -253,7 +258,7 @@ def entry_type_choices():
 
 def _apply_to_block_from_post(request):
     """The advanced "apply the verdict to its block" checkbox, or None when
-    the form has none (the quick-edit panel, the token API: keep the rule's)."""
+    the form has none (the token API: keep the rule's)."""
     if not request.POST.get('apply_to_block_present'):
         return None
     return request.POST.get('apply_to_block') == 'on'
@@ -377,8 +382,8 @@ def _rule_for_editor_or_404(request, pk):
 def _apply_rule_edit(rule, form: dict, user) -> str | None:
     """Validate and save an edit to one rule. Returns an error message, or None.
 
-    Shared by the quick-edit panel on the rules list and the full-page editor so the
-    two cannot drift. `source_text` is a single value -- never split per line -- so a
+    Shared by the full-page editor and the token API so the two cannot drift.
+    `source_text` is a single value -- never split per line -- so a
     script rule keeps its newlines and one rule in stays one rule out.
 
     `user` is the editor and decides what may be authored (script rules). The
@@ -418,8 +423,8 @@ def _apply_rule_edit(rule, form: dict, user) -> str | None:
     if form.get('only_entry_types_error'):
         return form['only_entry_types_error']
 
-    # Conditions are an advanced option: a form without them (the quick-edit
-    # panel, the token API) keeps the rule's own, which must still suit it.
+    # Conditions are an advanced option: a form without them (the token API)
+    # keeps the rule's own, which must still suit it.
     new_conditions = form.get('conditions')
     conditions = new_conditions if new_conditions is not None else rule_condition_specs(rule)
     if conditions:
@@ -531,7 +536,7 @@ def _rule_form_context(user, form: dict, *, editing: bool, return_q: str = '', r
         'form_priority': form['priority'],
         'form_whole_log': form['whole_log'],
         'form_color_whole_line': form['color_whole_line'],
-        # None (a POST without the box, e.g. the quick edit's hand-off): the rule's own.
+        # None (a POST without the box): the rule's own.
         'form_apply_to_block': bool(
             form.get('apply_to_block') if form.get('apply_to_block') is not None
             else isinstance(rule, ClassificationRule) and rule.apply_to_block
@@ -653,16 +658,6 @@ def rules_view(request):
                 _report_created_rules(request, created, skipped)
             return redirect('rules')
 
-        if action == 'edit':
-            pk = request.POST.get('pk', '').strip()
-            rule = _rule_for_editor_or_404(request, pk)
-            error = _apply_rule_edit(rule, _rule_form_from_post(request), request.user)
-            if error:
-                messages.error(request, error)
-            else:
-                messages.success(request, 'Rule updated.')
-            return redirect_with_return_q('rules', request.POST.get('return_q', ''))
-
         if action == 'delete':
             pk = request.POST.get('pk', '').strip()
             rule = _rule_for_editor_or_404(request, pk)
@@ -736,10 +731,26 @@ def rules_view(request):
         extra_filter_params.append(('priority', filter_priority))
     extra_filter_query = ('&' + urlencode(extra_filter_params)) if extra_filter_params else ''
 
-    if filter_status and filter_status in dict(ClassificationRule.STATUS_CHOICES):
+    from .facts import FACT_STATUS_VALUE
+
+    # Fact rules are listed with the rules, unless a filter only rules have
+    # is set (a status, tags, a priority, a rule id); "fact rules" in the
+    # status filter lists only them.
+    show_fact_rules = (
+        filter_status in ('', FACT_STATUS_VALUE) and not filter_tag_ids and not filter_priority and not id_search
+    )
+    fact_rules = FactRule.objects.select_related('owner', 'fact').filter(owner_q) if show_fact_rules \
+        else FactRule.objects.none()
+    if filter_status == FACT_STATUS_VALUE:
+        rules = rules.none()
+    elif filter_status and filter_status in dict(ClassificationRule.STATUS_CHOICES):
         rules = rules.filter(status=filter_status)
+    else:
+        filter_status = ''
     if filter_match and filter_match in dict(ClassificationRule.MATCH_TYPE_CHOICES):
         rules = rules.filter(match_type=filter_match)
+        fact_rules = fact_rules.filter(match_type=filter_match)
+    merge_key = None
     if search_q:
         if search_mode == 'line':
             inspection = inspect_line_matches(search_q)
@@ -752,18 +763,26 @@ def rules_view(request):
             rules = rules.filter(id__in=ordered_ids).order_by(
                 Case(*[When(id=rid, then=pos) for pos, rid in enumerate(ordered_ids)])
             )
+            fact_rules = fact_rules.filter(id__in=fact_rule_ids_matching_line(search_q)).order_by('-updated_at')
         elif search_mode == 'id':
             rules = rules.filter(pk=search_rule_id) if search_rule_id is not None else rules.none()
         else:
             rules = rules.filter(Q(source_text__icontains=search_q) | Q(description__icontains=search_q))
+            fact_rules = fact_rules.filter(
+                Q(source_text__icontains=search_q) | Q(description__icontains=search_q)
+                | Q(fact__name__icontains=search_q)
+            ).order_by('-updated_at')
     else:
         sort_value = SORT_OPTIONS.get(sort, '-updated_at')
         if isinstance(sort_value, tuple):
             rules = rules.order_by(*sort_value)
+            fact_rules = fact_rules.order_by('match_type', 'source_text')
         else:
             rules = rules.order_by(sort_value)
+            fact_rules = fact_rules.order_by(sort_value)
+            merge_key = sort_value.lstrip('-')
 
-    paginator = Paginator(rules, 12)
+    paginator = Paginator(_MixedRules(rules, fact_rules, merge_key), 12)
     page_obj = paginator.get_page(request.GET.get('page'))
 
     context = {
@@ -780,18 +799,53 @@ def rules_view(request):
         'sort': sort,
         'current_query_string': request.GET.urlencode(),
         'status_choices': ClassificationRule.STATUS_CHOICES,
-        'creatable_status_choices': ClassificationRule.CREATABLE_STATUS_CHOICES,
+        'fact_status_value': FACT_STATUS_VALUE,
         'match_type_choices': ClassificationRule.MATCH_TYPE_CHOICES,
-        'creatable_match_type_choices': _creatable_match_type_choices(request.user),
         'status_map': STATUS_MAP,
         'match_type_map': MATCH_TYPE_MAP,
-        'default_priority_by_match_type': DEFAULT_PRIORITY_BY_MATCH_TYPE,
-        'default_priority_by_match_type_json': json.dumps(DEFAULT_PRIORITY_BY_MATCH_TYPE),
-        'priority_min': PRIORITY_MIN,
-        'priority_max': PRIORITY_MAX,
         'priority_choices': _priority_choices(),
     }
     return render(request, 'rules.html', context)
+
+
+class _MixedRules:
+    """Rules and fact rules as one list for the rules page's paginator: merged
+    by `merge_key` (a date field both have, newest first), or rules first and
+    fact rules after them (sorts only rules have, line search)."""
+
+    def __init__(self, rules, fact_rules, merge_key=None):
+        self.rules = rules
+        self.fact_rules = fact_rules
+        self.merge_key = merge_key
+        self._counts = None
+
+    def _rule_counts(self):
+        if self._counts is None:
+            self._counts = (self.rules.count(), self.fact_rules.count())
+        return self._counts
+
+    def count(self):
+        return sum(self._rule_counts())
+
+    def __len__(self):
+        return self.count()
+
+    def __getitem__(self, item):
+        if not isinstance(item, slice):
+            raise TypeError('only slices')
+        start, stop = item.start or 0, item.stop if item.stop is not None else self.count()
+        if self.merge_key is None:
+            rule_count = self._rule_counts()[0]
+            head = list(self.rules[start:min(stop, rule_count)]) if start < rule_count else []
+            tail_start, tail_stop = max(start - rule_count, 0), max(stop - rule_count, 0)
+            tail = list(self.fact_rules[tail_start:tail_stop]) if tail_stop > tail_start else []
+            return head + tail
+        # Both lists are sorted newest first: the first `stop` of each hold the page.
+        merged = heapq.merge(
+            self.rules[:stop], self.fact_rules[:stop],
+            key=lambda rule: getattr(rule, self.merge_key), reverse=True,
+        )
+        return list(merged)[start:stop]
 
 
 def create_rules(user, *, status, match_type, source_text, description='', raw_priority='',
@@ -1085,29 +1139,23 @@ def edit_rule_view(request, pk: int):
     """Full-page editor for one rule: the add-rule form plus its live line preview.
 
     Shares `add_rule.html` with `add_rule_view` (the same way `edit_log_type_rule_view`
-    shares its template) and saves through `_apply_rule_edit`, so the quick-edit panel
-    on the rules list and this page apply identical rules.
+    shares its template) and saves through `_apply_rule_edit`, as the token API does.
     """
     rule = _rule_for_editor_or_404(request, pk)
 
     if request.method == 'POST':
         return_q = request.POST.get('return_q', '')
         form = _rule_form_from_post(request)
-        # A POST without the picker (the quick edit's hand-off) keeps the
-        # rule's own scope, both when saving and when shown here.
+        # A POST without the picker keeps the rule's own scope, both when
+        # saving and when shown here.
         if form['log_scope'] is None and not form['log_scope_error']:
             form['log_scope'] = (rule.all_log_types, list(rule.log_types or []))
-        # The quick-edit panel hands over by POSTing its own form here so whatever the
-        # user had typed survives the jump. That hand-off only prefills this page --
-        # it never saves. Its own field name, so it cannot collide with the `action`
-        # the quick-edit form already carries for `rules_view`.
-        if not request.POST.get('open_editor'):
-            error = _apply_rule_edit(rule, form, request.user)
-            if error:
-                messages.error(request, error)
-            else:
-                messages.success(request, 'Rule updated.')
-                return redirect_with_return_q('rules', return_q)
+        error = _apply_rule_edit(rule, form, request.user)
+        if error:
+            messages.error(request, error)
+        else:
+            messages.success(request, 'Rule updated.')
+            return redirect_with_return_q('rules', return_q)
     else:
         return_q = request.GET.get('return_q', '')
         form = _rule_form_from_rule(rule)
@@ -1147,6 +1195,16 @@ def _regex_pattern_warnings(patterns) -> list[dict]:
             'worst_input': evaluation['worst_input'],
         })
     return regex_warnings
+
+
+def _single_scope_log_type(raw_scope):
+    """The log type of a rule scope naming exactly one type (e.g. Spor), else None."""
+    if not isinstance(raw_scope, list):
+        return None
+    scope, error = normalize_log_type_selection(raw_scope)
+    if error or scope[0] or len(scope[1]) != 1:
+        return None
+    return scope[1][0]
 
 
 def _read_rule_test_payload(request):
@@ -1197,6 +1255,12 @@ def _read_rule_test_payload(request):
     only_entry_types, entry_types_problem = clean_entry_types(payload.get('only_entry_types'))
     if entry_types_problem:
         return refuse(entry_types_problem)
+    conditions = []
+    if payload.get('conditions'):
+        conditions, conditions_problem = conditions_from_payload(payload.get('conditions'))
+        conditions_problem = conditions_problem or conditions_error(conditions, whole_log=whole_log)
+        if conditions_problem:
+            return refuse(conditions_problem)
 
     return payload, {
         'patterns': patterns,
@@ -1205,6 +1269,9 @@ def _read_rule_test_payload(request):
         'priority': priority,
         'whole_log': whole_log,
         'only_entry_types': [] if whole_log else only_entry_types,
+        'conditions': conditions,
+        # Single-type scope: the type the preview's pasted text is laid out as.
+        'scope_log_type': _single_scope_log_type(payload.get('log_types')),
         # The rule editor passes the rule it is editing so the preview reports the
         # lines as they would look without it -- otherwise the saved copy shows up
         # as an existing match and can appear to shadow the user's own pending
@@ -1231,18 +1298,40 @@ def test_rule_api(request):
 
     # Whole-log rules run once against the entire log (regex / script only), so the
     # preview reconstructs the pasted text and returns a single log-level verdict.
+    # The pasted text as one small log: the conditions of the rule are checked
+    # against the facts found in it (the editor sends it as `log_text`).
+    pasted = payload.get('log_text')
+    if not isinstance(pasted, str):
+        pasted = '\n'.join(str(line) for line in lines)
+    preview_log_type = rule['scope_log_type'] or detect_log_type(pasted)
+    fact_buckets = None
+    if rule['conditions']:
+        fact_buckets = _load_rule_buckets(resolve_user_rule_set_key(request.user), preview_log_type)
+
     if rule['whole_log']:
         log_text = '\n'.join(str(line) for line in lines)
         try:
             result_payload = build_wholelog_rule_test_result(patterns, match_type, log_text)
         except ValueError as exc:
             return JsonResponse({'error': str(exc)}, status=400)
+        if rule['conditions'] and result_payload.get('matched'):
+            holds, explanation = wholelog_condition_report(pasted, rule['conditions'], fact_buckets)
+            result_payload['condition_note'] = (
+                f'conditions hold: {explanation}' if holds else f'not applied: {explanation}'
+            )
+            if not holds:
+                result_payload['matched'] = False
         if match_type == ClassificationRule.MATCH_REGEX:
             regex_warnings = _regex_pattern_warnings(patterns)
             if regex_warnings:
                 result_payload['regex_warnings'] = regex_warnings
         return JsonResponse(result_payload)
 
+    condition_check = None
+    if rule['conditions']:
+        condition_check = pasted_condition_check(
+            pasted, len(lines), rule['conditions'], fact_buckets, preview_log_type,
+        )
     try:
         response_payload = build_rule_test_results(
             patterns=patterns,
@@ -1252,6 +1341,7 @@ def test_rule_api(request):
             priority=rule['priority'],
             exclude_rule_id=rule['exclude_rule_id'],
             only_entry_types=rule['only_entry_types'],
+            condition_check=condition_check,
         )
     except ValueError as exc:
         return JsonResponse({'error': str(exc)}, status=400)
@@ -1342,15 +1432,21 @@ def test_rule_logs_api(request):
     rows = (
         logs
         .order_by('-created_at')
-        .values_list('upload_id', 'content', 'log_type')[:LOG_PREVIEW_MAX_LOGS]
+        .values_list('pk', 'upload_id', 'content', 'log_type', 'content_hash')[:LOG_PREVIEW_MAX_LOGS]
         .iterator(chunk_size=10)
     )
     # Each matched line's existing verdict uses the rules of its log's type.
     log_type_by_upload = {}
+    # A rule with conditions: checked against the facts of each log's cached
+    # analysis (the viewer's rule set); logs without a usable one are unchecked.
+    fact_check = CachedFactCheck(rule['conditions'], resolve_user_rule_set_key(request.user)) \
+        if rule['conditions'] else None
 
     def corpus():
-        for upload_id, content, log_type in rows:
+        for upload_pk, upload_id, content, log_type, content_hash in rows:
             log_type_by_upload[upload_id] = log_type
+            if fact_check is not None:
+                fact_check.prepare(upload_pk, upload_id, content, content_hash, log_type)
             yield upload_id, content
 
     logs = corpus()
@@ -1359,13 +1455,14 @@ def test_rule_logs_api(request):
     try:
         if rule['whole_log']:
             response_payload = scan_logs_for_wholelog_matches(
-                patterns, match_type, logs, deadline=deadline,
+                patterns, match_type, logs, deadline=deadline, line_check=fact_check,
             )
         else:
             scan = scan_logs_for_rule_matches(
                 patterns, rule['status'], match_type, logs,
                 max_lines=LOG_PREVIEW_MAX_LINES, deadline=deadline,
                 only_entry_types=rule['only_entry_types'],
+                line_check=fact_check,
             )
             matches = scan.pop('matches')
             response_payload = build_rule_test_results(

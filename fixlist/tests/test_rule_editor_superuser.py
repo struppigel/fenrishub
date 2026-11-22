@@ -33,11 +33,9 @@ class SuperuserRuleEditingTests(TestCase):
         body.update(overrides)
         return body
 
-    def test_quick_edit_changes_rule_and_keeps_owner(self):
+    def test_editing_another_users_rule_invalidates_the_owners_rule_set(self):
         with patch("fixlist.views.rules.invalidate_for_rule_owner") as invalidate:
-            response = self.client.post(
-                reverse("rules"), {"action": "edit", "pk": self.rule.pk, **self._edit_body()}
-            )
+            response = self.client.post(reverse("edit_rule", args=[self.rule.pk]), self._edit_body())
         self.assertEqual(response.status_code, 302)
         self.rule.refresh_from_db()
         self.assertEqual(self.rule.source_text, "BOB-RULE-EDITED")
@@ -162,13 +160,6 @@ class RuleEditorWarningWiringTests(TestCase):
         response = self.client.get(reverse("add_rule"))
         self.assertContains(response, HIGHEST_PRIORITY_WARNING)
         self.assertContains(response, f"const PRIORITY_MAX = {PRIORITY_MAX};")
-
-    def test_rules_page_has_priority_and_case_insensitive_warnings(self):
-        response = self.client.get(reverse("rules"))
-        self.assertContains(response, HIGHEST_PRIORITY_WARNING)
-        self.assertContains(response, f"const PRIORITY_MAX = {PRIORITY_MAX};")
-        self.assertContains(response, 'id="editCaseInsensitiveWarning"')
-        self.assertContains(response, "this will make regex matching slow")
 
     def test_add_rule_page_labels_case_insensitive_regex_warning(self):
         response = self.client.get(reverse("add_rule"))

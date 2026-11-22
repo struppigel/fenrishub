@@ -101,7 +101,7 @@ class EntryTypeRestrictionTests(LogAnalyzerApiBaseTestCase):
 
     # -- editor --
 
-    def test_add_page_quick_edit_and_full_editor(self):
+    def test_add_page_and_edits(self):
         self.client.force_login(self.user)
         self.client.post(reverse("add_rule"), {
             "status": B, "match_type": "substring", "source_text": "evil", "priority": "",
@@ -109,9 +109,9 @@ class EntryTypeRestrictionTests(LogAnalyzerApiBaseTestCase):
         })
         rule = ClassificationRule.objects.get(source_text="evil")
         self.assertEqual(rule.only_entry_types, ["service", "runkey"])  # ENTRY_TYPES order
-        # The quick-edit panel has no such boxes: the rule keeps them.
-        self.client.post(reverse("rules"), {
-            "action": "edit", "pk": rule.pk, "status": B, "match_type": "substring",
+        # An edit without the boxes (as the token API edits) keeps them.
+        self.client.post(reverse("edit_rule", args=[rule.pk]), {
+            "status": B, "match_type": "substring",
             "source_text": "evil2", "is_enabled": "on", "priority": "7",
         })
         rule.refresh_from_db()

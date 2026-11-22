@@ -98,10 +98,10 @@ class RuleConditionIdentityTests(LogAnalyzerApiBaseTestCase):
         )
         self.assertIn("only one condition", error)
 
-    def test_quick_edit_keeps_the_conditions(self):
+    def test_an_edit_without_conditions_keeps_them(self):
         rule = self._conditional("evil")
-        self.client.post(reverse("rules"), {
-            "action": "edit", "pk": rule.pk, "status": B, "match_type": "substring",
+        self.client.post(reverse("edit_rule", args=[rule.pk]), {
+            "status": B, "match_type": "substring",
             "source_text": "evil2", "description": "", "is_enabled": "on", "priority": "7",
         })
         rule.refresh_from_db()
@@ -109,10 +109,10 @@ class RuleConditionIdentityTests(LogAnalyzerApiBaseTestCase):
         self.assertEqual(rule.condition_key, condition_key_for(self.specs))
         self.assertEqual(rule.conditions.count(), 1)
 
-    def test_quick_edit_turning_on_whole_log_checks_kept_conditions(self):
+    def test_an_edit_turning_on_whole_log_checks_kept_conditions(self):
         rule = self._conditional("x", status="A", match_type="regex", specs=[ConditionSpec(self.fact.pk, REQUIRE, BLOCK)])
-        self.client.post(reverse("rules"), {
-            "action": "edit", "pk": rule.pk, "status": "A", "match_type": "regex",
+        self.client.post(reverse("edit_rule", args=[rule.pk]), {
+            "status": "A", "match_type": "regex",
             "source_text": "x", "is_enabled": "on", "priority": "3", "whole_log": "on",
         })
         rule.refresh_from_db()
