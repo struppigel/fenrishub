@@ -240,6 +240,12 @@ body.clean-cursor-mode .line-text {
     opacity: 1;
 }
 
+/* Briefly, when every line of the fact is hidden by a filter. */
+.analysis-fact.analysis-fact-hidden {
+    color: var(--la-text-muted);
+    font-style: italic;
+}
+
 .analysis-warning {
     border: 1px solid var(--la-warning-border);
     background-color: var(--la-warning-bg);

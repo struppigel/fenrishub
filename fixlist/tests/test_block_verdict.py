@@ -76,7 +76,7 @@ class BlockVerdictTests(LogAnalyzerApiBaseTestCase):
 
     # -- editor --
 
-    def test_add_page_and_quick_edit(self):
+    def test_add_page_and_edits(self):
         self.client.force_login(self.user)
         self.client.post(reverse("add_rule"), {
             "status": B, "match_type": "substring", "source_text": "evil", "priority": "",
@@ -84,9 +84,9 @@ class BlockVerdictTests(LogAnalyzerApiBaseTestCase):
         })
         rule = ClassificationRule.objects.get(source_text="evil")
         self.assertTrue(rule.apply_to_block)
-        # The quick-edit panel has no such box: the rule keeps it.
-        self.client.post(reverse("rules"), {
-            "action": "edit", "pk": rule.pk, "status": B, "match_type": "substring",
+        # An edit without the box (as the token API edits) keeps it.
+        self.client.post(reverse("edit_rule", args=[rule.pk]), {
+            "status": B, "match_type": "substring",
             "source_text": "evil2", "is_enabled": "on", "priority": "7",
         })
         rule.refresh_from_db()

@@ -4,24 +4,120 @@ import re
 import time
 
 from . import frst_extractors as ex
-from . import regex_engine, script_matcher
+from . import log_layout, regex_engine, script_matcher
+from django.db.models import Max
+
 from .analyzer import (
+    ANALYSIS_PAYLOAD_FORMAT,
     RULE_ENTRY_FIELDS,
     STATUS_LABELS,
     STATUS_PRECEDENCE,
     _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY,
     _get_cached_rule_buckets,
     _load_rule_buckets,
+    condition_report,
+    conditions_for_specs,
     entry_types_allow,
+    find_facts,
     find_substring_ranges,
     inspect_line_matches,
     parse_rule_line,
     rule_frst_entry,
 )
-from .log_types import rule_scope_log_type
-from .models import ClassificationRule, PRIORITY_MAX, PRIORITY_MIN
+from .fact_index import FactIndex
+from .log_types import ANALYZED_LOG_TYPES, rule_scope_log_type
+from .models import (
+    ClassificationRule, Fact, FactRule, FactTagSource, PRIORITY_MAX, PRIORITY_MIN, RuleCondition,
+    UploadedLogAnalysis,
+)
 from .status_types import dominant_status
 from .rule_sets import SHARED_RULE_SET_KEY
+
+
+# ---------------------------------------------------------------------------
+# Conditions of a candidate rule in the previews
+# ---------------------------------------------------------------------------
+
+def _needs_layout(specs) -> bool:
+    return any(spec.scope != RuleCondition.SCOPE_LOG for spec in specs)
+
+
+def pasted_condition_check(log_text, line_count, specs, buckets, log_type):
+    """The `condition_check` of build_rule_test_results for pasted text: the
+    text is one small log, its facts found as the analyzer would find them.
+    Lines are checked by their position among the non-blank lines; when that
+    count differs from the preview's `line_count`, nothing is checked."""
+    facts, walked = find_facts(log_text, buckets)
+    if len(walked) != line_count:
+        return lambda _index: None
+    conditions = conditions_for_specs(specs)
+    structure = log_layout.layout(log_text, log_type) if _needs_layout(specs) else None
+    line_nos = [item.line_no for item in walked]
+    return lambda index: condition_report(conditions, facts, index, structure, line_nos)
+
+
+def wholelog_condition_report(log_text, specs, buckets):
+    """`(holds, explanation)` of a whole-log rule's conditions on a text."""
+    facts, walked = find_facts(log_text, buckets)
+    return condition_report(conditions_for_specs(specs), facts, None, None, [item.line_no for item in walked])
+
+
+class CachedFactCheck:
+    """The `line_check` of scan_logs_for_rule_matches: a candidate rule's
+    conditions checked against the facts saved with each log's cached
+    analysis (rule set `rule_set_key`).
+
+    A log counts only when its analysis is fresh (same content, format and
+    log type, like upload_utils.get_fresh_cached_analysis) and was written
+    after the last change to the facts the conditions name (their fact rules
+    and tag sources included). Changes of which rules carry a tag have no
+    timestamp, so they are not noticed. Other logs are 'unchecked'.
+    """
+
+    def __init__(self, specs, rule_set_key):
+        self.conditions = conditions_for_specs(specs)
+        self.needs_layout = _needs_layout(specs)
+        self.rule_set_key = rule_set_key
+        fact_ids = [spec.fact_id for spec in specs]
+        stamps = [
+            Fact.objects.filter(pk__in=fact_ids).aggregate(last=Max('updated_at'))['last'],
+            FactRule.objects.filter(fact_id__in=fact_ids).aggregate(last=Max('updated_at'))['last'],
+            FactTagSource.objects.filter(fact_id__in=fact_ids).aggregate(last=Max('updated_at'))['last'],
+        ]
+        self.since = max((stamp for stamp in stamps if stamp is not None), default=None)
+        self.logs = {}  # upload_id -> (FactIndex, layout or None, line numbers)
+
+    def prepare(self, upload_pk, upload_id, content, content_hash, log_type):
+        """Read one log's cached facts, before the scan reaches its lines."""
+        row = UploadedLogAnalysis.objects.filter(upload_id=upload_pk, rule_set_key=self.rule_set_key).values_list(
+            'payload__facts', 'payload__format', 'payload__log_type', 'source_content_hash', 'updated_at',
+        ).first()
+        if row is None:
+            return
+        facts, payload_format, payload_type, source_hash, updated_at = row
+        if source_hash != content_hash or payload_format != ANALYSIS_PAYLOAD_FORMAT:
+            return
+        if payload_type is None:
+            if log_type not in ANALYZED_LOG_TYPES and rule_scope_log_type(log_type):
+                return
+        elif payload_type != log_type:
+            return
+        if self.since is not None and updated_at < self.since:
+            return
+        walked = log_layout.analyzed_lines(content)
+        self.logs[upload_id] = (
+            FactIndex.from_payload(facts if isinstance(facts, list) else []),
+            log_layout.layout(content, log_type) if self.needs_layout else None,
+            [item.line_no for item in walked],
+        )
+
+    def __call__(self, upload_id, index):
+        state = self.logs.get(upload_id)
+        if state is None:
+            return 'unchecked'
+        facts, structure, line_nos = state
+        holds, _explanation = condition_report(self.conditions, facts, index, structure, line_nos)
+        return 'hold' if holds else 'fail'
 
 
 def _compile_regex(pattern: str):
@@ -189,6 +285,7 @@ def build_rule_test_results(
     buckets=None,
     line_log_types=None,
     only_entry_types=None,
+    condition_check=None,
 ) -> dict:
     """Build per-line rule test results for the rules test API.
 
@@ -213,6 +310,11 @@ def build_rule_test_results(
 
     ``only_entry_types`` restricts the candidate rule to lines parsed as one of
     those entry types, as the analyzer does (analyzer.entry_types_allow).
+
+    ``condition_check(line_index)`` (a candidate rule with conditions) gives
+    ``(holds, explanation)`` for a line, or None when they cannot be checked.
+    A matched line whose conditions fail is treated as not matched; each
+    matched line says why in ``condition_note``.
     """
     compiled_patterns = [
         _compile_pattern(pattern, status, match_type) for pattern in patterns
@@ -258,6 +360,16 @@ def build_rule_test_results(
         if result['matched'] and not _line_types_allow(only_entry_types, line):
             result['matched'] = False
             ranges = []
+        if result['matched'] and condition_check is not None:
+            report = condition_check(line_index)
+            if report is None:
+                result['condition_note'] = 'conditions not checked'
+            elif report[0]:
+                result['condition_note'] = f'conditions hold: {report[1]}'
+            else:
+                result['matched'] = False
+                ranges = []
+                result['condition_note'] = f'not applied: {report[1]}'
         result['match_ranges'] = _merge_ranges(ranges) or None
 
         # Inspect existing rule matches for this line.
@@ -368,8 +480,16 @@ def scan_logs_for_rule_matches(
     deadline: float,
     count_all: bool = False,
     only_entry_types=None,
+    line_check=None,
 ) -> dict:
     """Find the distinct lines a rule matches across stored logs.
+
+    ``line_check(upload_id, index)`` (a rule with conditions) answers 'hold',
+    'fail' or 'unchecked' for the analyzed line ``index`` of a log: failing
+    occurrences are not counted, unchecked ones are counted with their log
+    ref flagged, and ``conditions_unchecked_logs`` counts the logs concerned.
+    The lines are then walked like the analyzer walks them
+    (log_layout.analyzed_lines), so the indexes and line numbers agree.
 
     ``logs`` yields ``(upload_id, content)`` pairs. Identical lines from different
     logs collapse into one entry recording the logs it occurs in, so a line common
@@ -395,6 +515,7 @@ def scan_logs_for_rule_matches(
     logs_matched = 0
     truncated = False
     timed_out = False
+    unchecked_logs = set()
 
     for upload_id, content in logs:
         if time.monotonic() > deadline:
@@ -404,8 +525,12 @@ def scan_logs_for_rule_matches(
         if not _may_contain_match(compiled_patterns, match_type, content):
             continue
 
+        if line_check is None:
+            walk = ((number, raw, None) for number, raw in enumerate(content.splitlines(), start=1))
+        else:
+            walk = ((item.line_no, item.raw, item.index) for item in log_layout.analyzed_lines(content))
         matched_here = set()
-        for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        for line_number, raw_line, index in walk:
             if time.monotonic() > deadline:
                 timed_out = True
                 break
@@ -421,6 +546,11 @@ def scan_logs_for_rule_matches(
                 continue
             if not _line_types_allow(only_entry_types, line):
                 continue
+            check = line_check(upload_id, index) if line_check is not None else 'hold'
+            if check == 'fail':
+                continue
+            if check == 'unchecked':
+                unchecked_logs.add(upload_id)
 
             entry = found.get(line)
             if entry is None:
@@ -437,7 +567,10 @@ def scan_logs_for_rule_matches(
             line_hits += 1
             entry['log_count'] += 1
             if len(entry['logs']) < LOG_REFS_PER_LINE:
-                entry['logs'].append({'upload_id': upload_id, 'line_number': line_number})
+                ref = {'upload_id': upload_id, 'line_number': line_number}
+                if check == 'unchecked':
+                    ref['conditions'] = 'unchecked'
+                entry['logs'].append(ref)
 
         if matched_here:
             logs_matched += 1
@@ -452,15 +585,20 @@ def scan_logs_for_rule_matches(
         'distinct_lines': len(found) + len(overflow),
         'truncated': truncated,
         'timed_out': timed_out,
+        'conditions_unchecked_logs': len(unchecked_logs),
     }
 
 
-def scan_logs_for_wholelog_matches(patterns: list, match_type: str, logs, *, deadline: float) -> dict:
-    """Run a whole-log alert rule over stored logs and list the ones it fires on."""
+def scan_logs_for_wholelog_matches(patterns: list, match_type: str, logs, *, deadline: float,
+                                   line_check=None) -> dict:
+    """Run a whole-log alert rule over stored logs and list the ones it fires on.
+    ``line_check`` (see scan_logs_for_rule_matches, index None: the whole log)
+    leaves out the logs where the rule's conditions fail."""
     matched_logs = []
     logs_scanned = 0
     timed_out = False
     script_error = None
+    unchecked_logs = 0
 
     for upload_id, content in logs:
         if time.monotonic() > deadline:
@@ -471,10 +609,14 @@ def scan_logs_for_wholelog_matches(patterns: list, match_type: str, logs, *, dea
         if result.get('script_error') and script_error is None:
             script_error = result['script_error']
         if result['matched']:
-            matched_logs.append({
-                'upload_id': upload_id,
-                'match_count': len(result['match_ranges'] or []),
-            })
+            check = line_check(upload_id, None) if line_check is not None else 'hold'
+            if check == 'fail':
+                continue
+            entry = {'upload_id': upload_id, 'match_count': len(result['match_ranges'] or [])}
+            if check == 'unchecked':
+                entry['conditions'] = 'unchecked'
+                unchecked_logs += 1
+            matched_logs.append(entry)
 
     return {
         'whole_log': True,
@@ -483,6 +625,7 @@ def scan_logs_for_wholelog_matches(patterns: list, match_type: str, logs, *, dea
         'logs_matched': len(matched_logs),
         'timed_out': timed_out,
         'script_error': script_error,
+        'conditions_unchecked_logs': unchecked_logs,
     }
 
 

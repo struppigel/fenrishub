@@ -77,6 +77,7 @@ from ..rule_test_service import (
     scan_logs_for_wholelog_matches,
     summarize_rule_test,
 )
+from ..fact_service import attach_fact_info
 from ..tagging import (
     TagConditions,
     apply_tag,
@@ -432,6 +433,8 @@ def _served_analysis(request, uploaded_log):
             return None, rule_set_key, rate_limited_response(60)
     analysis, _computed = get_or_compute_upload_analysis(uploaded_log, rule_set_key)
     attach_rule_tags(analysis)
+    # Found facts get their names; deleted facts are left out (a copy).
+    analysis = attach_fact_info(analysis)
     return analysis, rule_set_key, None
 
 

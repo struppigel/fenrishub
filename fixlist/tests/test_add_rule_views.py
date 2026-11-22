@@ -548,20 +548,6 @@ class EditRuleViewTests(TestCase):
         self.rule.refresh_from_db()
         self.assertEqual(self.rule.source_text, "EDIT-ME")
 
-    def test_quick_edit_rejects_multiline_source_text(self):
-        response = self.client.post(
-            reverse("rules"),
-            {
-                **self._post_body(source_text="first-line\nsecond-line"),
-                "action": "edit",
-                "pk": self.rule.pk,
-            },
-            follow=True,
-        )
-        self.assertContains(response, "matches a single line")
-        self.rule.refresh_from_db()
-        self.assertEqual(self.rule.source_text, "EDIT-ME")
-
     def test_edit_page_warns_about_line_breaks_before_saving(self):
         response = self.client.get(self._url())
         self.assertContains(response, 'id="ruleMultilineWarning"')
@@ -624,59 +610,18 @@ class EditRuleViewTests(TestCase):
             response.context["cancel_url"], f"{reverse('rules')}?filter=own&status=B"
         )
 
-    # -- Hand-off from the quick edit --
+    # -- The rules list edits in the full editor (there is no quick edit) --
 
-    def test_open_editor_prefills_from_post_without_saving(self):
-        # The browser posts the whole quick-edit form, so `action=edit` and `pk` ride
-        # along too -- the editor must ignore them and not save.
+    def test_rules_list_edit_opens_the_full_editor(self):
+        response = self.client.get(reverse("rules") + "?filter=own&status=B")
+        self.assertContains(response, reverse("edit_rule", args=[self.rule.pk]) + "?return_q=")
+        self.assertNotContains(response, 'id="editSection"')
+        self.assertNotContains(response, 'name="open_editor"')
+
+    def test_the_rules_list_no_longer_saves_edits(self):
         response = self.client.post(
-            self._url(),
-            self._post_body(
-                open_editor="1",
-                action="edit",
-                pk=str(self.rule.pk),
-                source_text="TYPED-NOT-SAVED",
-            ),
+            reverse("rules"), {**self._post_body(source_text="CHANGED"), "action": "edit", "pk": self.rule.pk},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["form_source_text"], "TYPED-NOT-SAVED")
-        self.assertEqual(response.context["form_status"], ClassificationRule.STATUS_PUP)
         self.rule.refresh_from_db()
         self.assertEqual(self.rule.source_text, "EDIT-ME")
-
-    def test_open_editor_carries_the_filter_into_the_cancel_link(self):
-        response = self.client.post(
-            self._url(), self._post_body(open_editor="1", return_q="filter=own&status=B")
-        )
-        self.assertEqual(
-            response.context["cancel_url"], f"{reverse('rules')}?filter=own&status=B"
-        )
-
-    def test_quick_edit_panel_offers_the_full_editor(self):
-        response = self.client.get(reverse("rules"))
-        self.assertContains(response, 'name="open_editor"')
-        self.assertContains(response, reverse("edit_rule", args=[0]))
-
-    # -- The two editors must not drift --
-
-    def test_quick_edit_and_full_editor_produce_the_same_rule(self):
-        twin = make_rule("EDIT-ME-TOO", owner=self.user)
-        body = self._post_body(source_text="SAME-RESULT", color_whole_line="on")
-
-        self.client.post(self._url(), body)
-        self.client.post(
-            reverse("rules"),
-            {**body, "action": "edit", "pk": twin.pk, "source_text": "SAME-RESULT-2"},
-        )
-
-        self.rule.refresh_from_db()
-        twin.refresh_from_db()
-        self.assertTrue(self.rule.color_whole_line)
-        fields = (
-            "status", "match_type", "description", "is_enabled", "priority", "whole_log",
-            "color_whole_line",
-        )
-        for field in fields:
-            self.assertEqual(
-                getattr(self.rule, field), getattr(twin, field), f"{field} drifted"
-            )

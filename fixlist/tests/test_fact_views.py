@@ -102,11 +102,11 @@ class FactViewTests(LogAnalyzerApiBaseTestCase):
     # -- fact rules through the rule editor --
 
     def test_add_page_offers_fact_in_the_status_dropdown_and_the_rule_editor_does_not(self):
-        self.assertContains(self.client.get(reverse("add_rule")), '>fact rule - records a fact</option>')
+        self.assertContains(self.client.get(reverse("add_rule")), '>fact rule</option>')
         rule = ClassificationRule.objects.create(
             owner=self.user, status="B", match_type="substring", source_text="evil",
         )
-        self.assertNotContains(self.client.get(reverse("edit_rule", args=[rule.pk])), 'fact rule - records a fact')
+        self.assertNotContains(self.client.get(reverse("edit_rule", args=[rule.pk])), '>fact rule</option>')
 
     def test_choosing_fact_as_status_creates_a_fact_rule(self):
         fact = Fact.objects.create(name="Kaspersky installed")
@@ -120,7 +120,7 @@ class FactViewTests(LogAnalyzerApiBaseTestCase):
         rule = self._fact_rule(Fact.objects.create(name="f"))
         page = self.client.get(reverse("edit_fact_rule", args=[rule.pk]))
         self.assertContains(page, '<option value="fact" selected title=')
-        self.assertContains(page, '>fact rule - records a fact</option>')
+        self.assertContains(page, '>fact rule</option>')
         self.assertContains(page, '<h2 id="ruleHeading">edit fact rule</h2>')
         self.assertNotContains(page, '>B - ')
 
@@ -190,3 +190,73 @@ class FactViewTests(LogAnalyzerApiBaseTestCase):
     def test_other_helpers_cannot_edit_a_fact_rule(self):
         rule = self._fact_rule(Fact.objects.create(name="f"), owner=self.other_user)
         self.assertEqual(self.client.get(reverse("edit_fact_rule", args=[rule.pk])).status_code, 404)
+
+
+class RulesOverviewFactRuleTests(LogAnalyzerApiBaseTestCase):
+    """Fact rules are listed on the rules page with the rules."""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.user)
+        self.fact = Fact.objects.create(name="Kaspersky installed")
+        self.fact_rule = FactRule.objects.create(
+            owner=self.user, fact=self.fact, match_type="substring", source_text="AVP service",
+        )
+        self.rule = ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="substring", source_text="evil",
+        )
+
+    def _page(self, **params):
+        return self.client.get(reverse("rules"), params)
+
+    def test_listed_with_the_rules(self):
+        page = self._page()
+        self.assertContains(page, "AVP service")
+        self.assertContains(page, "evil")
+        self.assertContains(page, ">Kaspersky installed</a>")
+        self.assertContains(page, reverse("edit_fact_rule", args=[self.fact_rule.pk]))
+        self.assertContains(page, "2 rules found")
+
+    def test_fact_rules_filter(self):
+        page = self._page(status="fact")
+        self.assertContains(page, "AVP service")
+        self.assertNotContains(page, ">evil<")
+        self.assertContains(page, '<option value="fact" selected>fact rules</option>')
+
+    def test_rule_only_filters_hide_fact_rules(self):
+        tag = RuleTag.objects.create(name="t")
+        self.rule.tags.add(tag)
+        for params in ({"status": "B"}, {"tags": tag.pk}, {"priority": "7"}):
+            with self.subTest(params=params):
+                self.assertNotContains(self._page(**params), "AVP service")
+
+    def test_text_search_finds_fact_rules_by_fact_name(self):
+        page = self._page(q="kaspersky")
+        self.assertContains(page, "AVP service")
+        self.assertNotContains(page, ">evil<")
+
+    def test_line_search_finds_fact_rules(self):
+        page = self._page(q="AVP service started", search_mode="line")
+        self.assertContains(page, "AVP service")
+
+    def test_merged_paging_newest_first(self):
+        for number in range(12):
+            ClassificationRule.objects.create(
+                owner=self.user, status="B", match_type="substring", source_text=f"filler {number}",
+            )
+        self.fact_rule.description = "touched last"
+        self.fact_rule.save()  # newest of all: first on page 1
+        page = self._page()
+        self.assertContains(page, "14 rules found")
+        content = page.content.decode()
+        self.assertLess(content.index("AVP service"), content.index("filler 11"))
+        self.assertNotContains(self._page(page=2), "AVP service")
+
+    def test_actions_return_to_the_rules_page(self):
+        response = self.client.post(reverse("facts"), {
+            "action": "fact_rule_toggle", "pk": self.fact_rule.pk, "return_to": "rules",
+            "return_q": "filter=own&status=fact",
+        })
+        self.assertRedirects(response, reverse("rules") + "?filter=own&status=fact", fetch_redirect_response=False)
+        self.fact_rule.refresh_from_db()
+        self.assertFalse(self.fact_rule.is_enabled)

@@ -176,12 +176,12 @@ class RuleFormTagTests(TestCase):
 
     def _edit(self, rule, **extra):
         data = {
-            'action': 'edit', 'pk': rule.pk, 'status': 'B', 'match_type': 'exact',
+            'status': 'B', 'match_type': 'exact',
             'source_text': rule.source_text, 'description': '', 'is_enabled': 'on', **extra,
         }
-        return self.client.post(reverse('rules'), data)
+        return self.client.post(reverse('edit_rule', args=[rule.pk]), data)
 
-    def test_quick_edit_without_picker_keeps_tags(self):
+    def test_edit_without_picker_keeps_tags(self):
         rule = make_rule('line', owner=self.user)
         rule.tags.add(self.tag)
         self._edit(rule)

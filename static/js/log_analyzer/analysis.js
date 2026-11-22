@@ -499,7 +499,18 @@ function renderLineInspector(detailsPayload, entry) {
             ...conditionalMatches.map((match) => ({ ...match, _scope: 'conditional' })),
         ];
 
-        if (!allMatches.length) {
+        // A verdict this line got from another line of its block (a rule that
+        // applies to its whole block): the one-line inspection cannot see the
+        // block, but the line's analysis says why.
+        const blockReasons = (Array.isArray(entry.reasons) ? entry.reasons : [])
+            .filter((reason) => reason.includes('applies to its block'));
+        blockReasons.forEach((reason) => {
+            const item = document.createElement('li');
+            item.textContent = `block | ${reason}`;
+            matchesListEl.appendChild(item);
+        });
+
+        if (!allMatches.length && !blockReasons.length) {
             const empty = document.createElement('li');
             empty.textContent = 'No enabled rules currently match this line.';
             matchesListEl.appendChild(empty);
@@ -642,18 +653,36 @@ function renderFactsFound(facts) {
         } else {
             let next = 0;
             chip.addEventListener('click', () => {
-                scrollToAnalyzedLine(indexes[next % indexes.length]);
-                next += 1;
+                // The next of the fact's lines that is shown; lines a filter
+                // hides are skipped, and if all are hidden the chip says so.
+                for (let tried = 0; tried < indexes.length; tried += 1) {
+                    const index = indexes[next % indexes.length];
+                    next += 1;
+                    if (scrollToAnalyzedLine(index)) return;
+                }
+                flashFactChipHidden(chip);
             });
         }
         container.appendChild(chip);
     });
 }
 
+function flashFactChipHidden(chip) {
+    if (!chip.dataset.label) chip.dataset.label = chip.textContent;
+    chip.textContent = 'lines hidden by a filter';
+    chip.classList.add('analysis-fact-hidden');
+    clearTimeout(chip.hiddenTimer);
+    chip.hiddenTimer = setTimeout(() => {
+        chip.textContent = chip.dataset.label;
+        chip.classList.remove('analysis-fact-hidden');
+    }, 1800);
+}
+
+// Scrolls to an analyzed line and marks it; false when it is not shown (filtered).
 function scrollToAnalyzedLine(index) {
     const badge = document.querySelector(`#logLines .status-badge[data-line-index="${index}"]`);
     const row = badge ? badge.closest('.log-line') : null;
-    if (!row || row.offsetParent === null) return;
+    if (!row || row.offsetParent === null) return false;
     row.scrollIntoView({ block: 'center' });
     row.classList.remove('correlation-flash', 'correlation-flash-fade');
     void row.offsetWidth;
@@ -663,6 +692,7 @@ function scrollToAnalyzedLine(index) {
         row.classList.remove('correlation-flash');
         setTimeout(() => row.classList.remove('correlation-flash-fade'), 900);
     }, 2500);
+    return true;
 }
 
 function renderWarnings(warnings) {

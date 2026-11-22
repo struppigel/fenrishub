@@ -580,6 +580,8 @@ class RuleMatcherBase(models.Model):
 class ClassificationRule(RuleMatcherBase):
     objects = ClassificationRuleQuerySet.as_manager()
 
+    is_fact_rule = False
+
     STATUS_MALWARE = 'B'
     STATUS_PUP = 'P'
     STATUS_CLEAN = 'C'
@@ -886,6 +888,9 @@ class FactRule(RuleMatcherBase):
     """
 
     objects = ClassificationRuleQuerySet.as_manager()
+
+    # Listed with classification rules on the rules page, which tells them apart by this.
+    is_fact_rule = True
 
     owner = models.ForeignKey(
         User,

@@ -15,6 +15,20 @@ class FactIndex:
         self._lines = {}        # fact id -> [index, ...] in scan order, no repeats
         self._wholelog = set()  # fact ids found by whole-log rules
 
+    @classmethod
+    def from_payload(cls, items):
+        """The index a cached analysis payload's `facts` describe (see payload)."""
+        index = cls()
+        for item in items or ():
+            if not isinstance(item, dict) or not isinstance(item.get('id'), int):
+                continue
+            for line in item.get('line_indexes') or ():
+                if isinstance(line, int):
+                    index.add(item['id'], line)
+            if item.get('wholelog'):
+                index.add(item['id'])
+        return index
+
     def add(self, fact_id, index=None):
         """Record `fact_id` on analyzed line `index`, or (None) for the whole log."""
         if index is None:

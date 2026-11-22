@@ -16,8 +16,8 @@ from urllib.parse import urlencode
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db import transaction
-from django.db.models import Count, Q
+from django.db import IntegrityError, transaction
+from django.db.models import Count, ProtectedError, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
@@ -70,7 +70,15 @@ def _resolve_fact(user, fact_id: str, new_fact_name: str):
         existing = Fact.objects.filter(name__iexact=name).first()
         if existing is not None:
             return existing, None
-        return Fact.objects.create(name=name, created_by=user, updated_by=user), None
+        try:
+            with transaction.atomic():
+                return Fact.objects.create(name=name, created_by=user, updated_by=user), None
+        except IntegrityError:
+            # Another helper created it a moment ago: use theirs.
+            existing = Fact.objects.filter(name__iexact=name).first()
+            if existing is not None:
+                return existing, None
+            raise
     if fact_id and fact_id.isdigit():
         fact = Fact.objects.filter(pk=int(fact_id)).first()
         if fact is not None:
@@ -310,11 +318,16 @@ def facts_view(request):
         if action == 'delete':
             fact = get_object_or_404(Fact, pk=request.POST.get('pk', '').strip() or 0)
             error = fact_delete_error(fact, request.user)
+            if not error:
+                name = fact.name
+                try:
+                    _delete_fact(fact)
+                except ProtectedError:
+                    # A condition on the fact was added after the check above.
+                    error = 'Rules have conditions on this fact; remove those conditions first.'
             if error:
                 messages.error(request, error)
             else:
-                name = fact.name
-                _delete_fact(fact)
                 messages.success(request, f'Fact "{name}" deleted.')
                 return redirect_with_return_q('facts', request.POST.get('return_q'))
         elif action in ('fact_rule_toggle', 'fact_rule_delete'):
@@ -329,6 +342,9 @@ def facts_view(request):
             invalidate_for_rule_owner(rule.owner)
             if return_to == 'fact':
                 return redirect('fact_edit', pk=rule.fact_id)
+            if return_to == 'rules':
+                # From the rules page, which lists fact rules with the rules.
+                return redirect_with_return_q('rules', request.POST.get('return_q'))
         return redirect_with_return_q('facts', request.POST.get('return_q'))
 
     search_query = request.GET.get('q', '').strip()
@@ -394,23 +410,32 @@ def _sources_from_post(raw: str):
 
 
 def _save_fact(fact, user, name, description, sources):
-    """Create or update a fact and replace its tag sources."""
-    with transaction.atomic():
-        if fact is None:
-            fact = Fact(created_by=user)
-        fact.name = name
-        fact.description = description
-        fact.updated_by = user
-        fact.save()
-        keep = {source['tag_id'] for source in sources}
-        FactTagSource.objects.filter(fact=fact).exclude(tag_id__in=keep).delete()
-        for source in sources:
-            FactTagSource.objects.update_or_create(
-                fact=fact, tag_id=source['tag_id'],
-                defaults={key: source[key] for key in ('statuses', 'mode', 'include_filepath_fallback')},
-            )
+    """Create or update a fact and replace its tag sources: `(fact, error)`.
+    The error is set when another fact took the name meanwhile."""
+    created = fact is None
+    try:
+        with transaction.atomic():
+            if fact is None:
+                fact = Fact(created_by=user)
+            fact.name = name
+            fact.description = description
+            fact.updated_by = user
+            fact.save()
+            keep = {source['tag_id'] for source in sources}
+            FactTagSource.objects.filter(fact=fact).exclude(tag_id__in=keep).delete()
+            for source in sources:
+                FactTagSource.objects.update_or_create(
+                    fact=fact, tag_id=source['tag_id'],
+                    defaults={key: source[key] for key in ('statuses', 'mode', 'include_filepath_fallback')},
+                )
+    except IntegrityError:
+        if created:
+            fact = None
+        else:
+            fact.refresh_from_db()  # drop the refused name
+        return fact, f'A fact named "{name}" already exists.'
     invalidate_rule_buckets_cache(None)
-    return fact
+    return fact, None
 
 
 def _fact_editor(request, fact=None):
@@ -435,9 +460,11 @@ def _fact_editor(request, fact=None):
         error = error or _fact_name_error(name, exclude_pk=fact.pk if fact else None)
         if not error:
             created = fact is None
-            fact = _save_fact(fact, request.user, name, description, sources)
-            messages.success(request, f'Fact "{fact.name}" {"created" if created else "saved"}.')
-            return redirect('fact_edit', pk=fact.pk)
+            saved, error = _save_fact(fact, request.user, name, description, sources)
+            if not error:
+                messages.success(request, f'Fact "{saved.name}" {"created" if created else "saved"}.')
+                return redirect('fact_edit', pk=saved.pk)
+            fact = saved
 
     fact_rules = []
     if fact is not None and fact.pk:

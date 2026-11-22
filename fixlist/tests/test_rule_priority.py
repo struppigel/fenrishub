@@ -181,9 +181,7 @@ class PriorityViewTests(TestCase):
         )
         self.assertEqual(rule.priority, 7)
 
-        response = self.client.post(reverse("rules"), {
-            "action": "edit",
-            "pk": rule.pk,
+        response = self.client.post(reverse("edit_rule", args=[rule.pk]), {
             "status": ClassificationRule.STATUS_MALWARE,
             "match_type": ClassificationRule.MATCH_SUBSTRING,
             "source_text": "foo",
