@@ -747,7 +747,8 @@ def literal_prefilter(patterns: list, match_type: str):
 def compare_rule_scans(new_rule: dict, old_rule: dict, logs, *, deadline: float, sample_lines: int) -> dict:
     """Which distinct lines a candidate rule and an existing rule match, in one pass over `logs`.
 
-    Each rule is ``{'patterns', 'status', 'match_type'}``. Returns the counts of
+    Each rule is ``{'patterns', 'status', 'match_type'}`` and optionally
+    ``only_entry_types`` (see build_rule_test_results). Returns the counts of
     distinct lines only the new rule matches, only the old one, or both, with a
     sample of each one-sided kind (most widespread first): whether a new rule
     covers everything an old per-case rule caught, and what else it catches.
@@ -758,6 +759,7 @@ def compare_rule_scans(new_rule: dict, old_rule: dict, logs, *, deadline: float,
             'compiled': [_compile_pattern(p, rule['status'], rule['match_type']) for p in rule['patterns']],
             'match_type': rule['match_type'],
             'strip': rule['match_type'] in ('exact', 'parsed', 'filepath'),
+            'only_entry_types': rule.get('only_entry_types') or [],
         })
 
     seen = {'both': set(), 'only_new': set(), 'only_old': set()}
@@ -786,7 +788,7 @@ def compare_rule_scans(new_rule: dict, old_rule: dict, logs, *, deadline: float,
                 line = raw_line.strip() if side['strip'] else raw_line
                 hits.append(may and any(
                     _match_line(p, side['match_type'], line)['matched'] for p in side['compiled']
-                ))
+                ) and _line_types_allow(side['only_entry_types'], line))
             if not any(hits):
                 continue
             kind = 'both' if all(hits) else ('only_new' if hits[0] else 'only_old')

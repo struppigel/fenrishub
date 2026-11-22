@@ -56,7 +56,11 @@ TARGET_MAX_CHARS = 200
 # Version 5: rule log types (log_types on rule create / update / output, the
 # log_type filter of the rule list) and tag categories (the tag-categories
 # endpoint, a category by name on tag create / update).
-API_VERSION = 5
+# Version 6: facts (the facts endpoints, facts found in the analysis), fact
+# rules (create / update), rule conditions on facts, parsed-type restrictions
+# (only_entry_types) and block verdicts (apply_to_block) on rule read / write,
+# both honoured by the rule dry run, and conditional matches in rule matching.
+API_VERSION = 6
 API_VERSION_HEADER = 'X-FenrisHub-Api-Version'
 
 

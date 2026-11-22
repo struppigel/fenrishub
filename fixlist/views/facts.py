@@ -367,11 +367,12 @@ def facts_view(request):
     })
 
 
-def _sources_from_post(raw: str):
+def _sources_from_post(raw):
     """(sources, error) from the editor's JSON list of tag sources:
-    [{tag_id, statuses, mode, include_filepath_fallback}]."""
+    [{tag_id, statuses, mode, include_filepath_fallback}]. The token API
+    passes the list itself."""
     try:
-        items = json.loads(raw or '[]')
+        items = json.loads(raw or '[]') if isinstance(raw, str) else raw
     except ValueError:
         return None, 'The tag sources could not be read.'
     if not isinstance(items, list):

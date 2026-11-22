@@ -13,7 +13,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from ..analyzer import invalidate_rule_buckets_cache
-from ..models import ApiToken, ClassificationRule, FixlistSnippet, RuleTag, Speech
+from ..models import ApiToken, ClassificationRule, Fact, FactRule, FixlistSnippet, RuleTag, Speech
 from .factories import make_rule, make_uploaded_log, make_user
 from .test_llm_api import enable_api
 
@@ -84,14 +84,19 @@ class WriteAuthTests(ApiWriteBase):
             'api_v1_speech_create', 'api_v1_speech_update',
             'api_v1_snippet_create', 'api_v1_snippet_update',
             'api_v1_rule_create', 'api_v1_rule_update',
+            'api_v1_fact_create', 'api_v1_fact_update',
+            'api_v1_fact_rule_create', 'api_v1_fact_rule_update',
         })
         tag = RuleTag.objects.create(name='renloader')
         speech = Speech.objects.create(owner=self.admin, name='mine', content='x')
         snippet = FixlistSnippet.objects.create(owner=self.admin, name='fix', content='x')
         rule = make_rule('C:\\mine.exe', owner=self.admin)
+        fact = Fact.objects.create(name='kept')
+        fact_rule = FactRule.objects.create(owner=self.admin, fact=fact, match_type='exact', source_text='kept')
         args = {
             'api_v1_tag_update': [tag.pk], 'api_v1_tag_apply': [tag.pk], 'api_v1_speech_update': [speech.pk],
             'api_v1_rule_update': [rule.pk], 'api_v1_snippet_update': [snippet.pk],
+            'api_v1_fact_update': [fact.pk], 'api_v1_fact_rule_update': [fact_rule.pk],
         }
         body = {'name': 'changed', 'content': 'changed', 'mode': 'add_rules', 'rule_ids': [], 'confirm': True,
                 'snippet_ids': [snippet.pk], 'speech_ids': [speech.pk],
@@ -114,6 +119,10 @@ class WriteAuthTests(ApiWriteBase):
         rule.refresh_from_db()
         self.assertEqual((rule.source_text, rule.description), ('C:\\mine.exe', ''))
         self.assertFalse(ClassificationRule.objects.filter(source_text='changed').exists())
+        fact.refresh_from_db()
+        fact_rule.refresh_from_db()
+        self.assertEqual((fact.name, fact_rule.source_text), ('kept', 'kept'))
+        self.assertFalse(Fact.objects.filter(name='changed').exists())
 
     # Read-only endpoints whose input does not fit a URL: they also take a POST
     # with a JSON body, from any token, and change nothing.

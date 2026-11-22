@@ -1,8 +1,8 @@
 """
 Token API (/api/v1/) for LLM clients.
 
-Mostly read-only: the write endpoints (rule tags, speeches, fixlist snippets and
-classification rules) need a superuser's write token, see api_auth. Serves what a logged-in
+Mostly read-only: the write endpoints (rule tags, speeches, fixlist snippets,
+classification rules, facts and fact rules) need a superuser's write token, see api_auth. Serves what a logged-in
 helper can already read in the browser: every
 non-trashed upload, its verdicts under the caller's own rule set, content
 search, infection cases by id, the fixlist snippets and speeches the caller
@@ -20,8 +20,9 @@ and endpoints: a request without the new parameters gets the same response as
 before. Search, the rule dry run and rule matching also take a POST with a JSON
 body, for input that does not fit a URL. Versions 3 (correlations in the
 analysis and get_case), 4 (the correlations endpoint for every log type,
-get_case linked_findings) and 5 (rule log types, tag categories) are additive
-the same way.
+get_case linked_findings), 5 (rule log types, tag categories) and 6 (facts and
+fact rules, rule conditions, parsed-type restrictions and block verdicts) are
+additive the same way.
 """
 
 import re
@@ -64,11 +65,13 @@ from ..log_types import (
     ANALYZED_LOG_TYPES, LOG_TYPE_NAME_RE, LOG_TYPE_SPOR, normalize_log_type_selection, rule_scope_log_type,
 )
 from ..models import (
-    ClassificationRule, FixlistSnippet, InfectionCase, InfectionCaseLog, RuleTag, Speech, TagCategory, UploadedLog,
+    ClassificationRule, Fact, FactRule, FixlistSnippet, InfectionCase, InfectionCaseLog, RuleCondition, RuleTag,
+    Speech, TagCategory, UploadedLog,
 )
 from ..rule_sets import resolve_user_rule_set_key, rule_set_label
 from ..status_types import STATUS_LABELS, VALID_STATUSES
 from ..rule_test_service import (
+    CachedFactCheck,
     build_rule_test_results,
     compare_rule_scans,
     line_outcome,
@@ -77,7 +80,7 @@ from ..rule_test_service import (
     scan_logs_for_wholelog_matches,
     summarize_rule_test,
 )
-from ..fact_service import attach_fact_info
+from ..fact_service import attach_fact_info, conditions_from_payload
 from ..tagging import (
     TagConditions,
     apply_tag,
@@ -100,12 +103,21 @@ from .centralbox import _tags_by_sha
 from .guest import is_moderator
 from .infection_cases import _build_case_timeline
 from .log_search import _build_matcher, _logs_in_id_order
+from .facts import (
+    NEW_FACT,
+    _fact_name_error,
+    _save_fact,
+    _sources_from_post,
+    apply_fact_rule_edit,
+    create_fact_rules,
+)
 from .rules import (
     _apply_rule_edit,
     _first_log_types,
     _patterns_for,
     _read_rule_test_payload,
     _rule_form_from_rule,
+    clean_entry_types,
     create_rules,
 )
 from .library_items import library_validation_error
@@ -558,6 +570,24 @@ def _numbered_entries(uploaded_log, analysis):
     return list(zip(numbers, entries))
 
 
+def _found_facts(analysis, numbers):
+    """The facts found in a served analysis (names attached by
+    attach_fact_info): [{fact_id, name, description, lines, whole_log}].
+    `lines` are the log line numbers (`n`) of the lines that found the fact;
+    `numbers` maps an analyzed-line index to its `n`."""
+    found = []
+    for item in analysis.get('facts') or []:
+        indexes = [index for index in item.get('line_indexes') or () if isinstance(index, int)]
+        found.append({
+            'fact_id': item.get('id'),
+            'name': item.get('name', ''),
+            'description': item.get('description', ''),
+            'lines': [numbers[index] for index in indexes if 0 <= index < len(numbers)],
+            'whole_log': bool(item.get('wholelog')),
+        })
+    return found
+
+
 @api_token_required('api_v1_upload_analysis')
 def api_upload_analysis(request, upload_id):
     """Per-line verdicts for one upload under the caller's rule set.
@@ -645,9 +675,10 @@ def api_upload_analysis(request, upload_id):
 
     tag_names = {tag['id']: tag['name'] for tag in analysis.get('rule_tags', [])}
     wanted_tags = set(tag_ids)
+    numbered = _numbered_entries(uploaded_log, analysis)
     lines = [
         _compact_line(number, entry, tag_names)
-        for number, entry in _numbered_entries(uploaded_log, analysis)
+        for number, entry in numbered
         if (not statuses or entry.get('dominant_status') in statuses)
         and (not wanted_tags or wanted_tags.intersection(entry.get('tag_ids', [])))
         and (not only_correlated or (entry.get('line') or '').strip() in correlated_texts)
@@ -676,6 +707,7 @@ def api_upload_analysis(request, upload_id):
             'summary': analysis.get('summary', {}),
             'warnings': analysis.get('warnings', []),
             'rule_tags': analysis.get('rule_tags', []),
+            'facts': _found_facts(analysis, [number for number, _entry in numbered]),
         })
     payload.update({
         'matching_line_count': len(lines),
@@ -1509,6 +1541,10 @@ def _rule_list_row(rule):
         'whole_log': rule.whole_log,
         # "all" (every log type, including ones added later) or the log type names.
         'log_types': rule.log_scope_payload,
+        # Applies only where its conditions on facts hold (get_rule lists them).
+        'conditional': bool(rule.condition_key),
+        'apply_to_block': rule.apply_to_block,
+        'only_entry_types': list(rule.only_entry_types or []),
         'updated_at': _iso(rule.updated_at),
         'tags': [{'tag_id': tag.pk, 'name': tag.name} for tag in rule.tags.all()],
     }
@@ -1516,7 +1552,7 @@ def _rule_list_row(rule):
 
 def _visible_rules():
     """Every rule: the rules page shows every helper's rules to anyone logged in."""
-    return ClassificationRule.objects.select_related('owner').prefetch_related('tags')
+    return ClassificationRule.objects.select_related('owner').prefetch_related('tags', 'conditions__fact')
 
 
 def _rules_for_log_type(rules, log_type):
@@ -1602,11 +1638,22 @@ def api_rule(request, rule_id):
     return JsonResponse(_rule_detail(rule))
 
 
+def _rule_conditions(rule):
+    """A rule's conditions on facts (prefetched): each requires or forbids a
+    fact in the line's block, section or anywhere in the log."""
+    return [
+        {'fact_id': condition.fact_id, 'fact': condition.fact.name, 'polarity': condition.polarity,
+         'scope': condition.scope}
+        for condition in rule.conditions.all()
+    ]
+
+
 def _rule_detail(rule):
     """Every field of one rule (tags prefetched), as get_rule returns it."""
     return {
         **_rule_list_row(rule),
         'color_whole_line': rule.color_whole_line,
+        'conditions': _rule_conditions(rule),
         'source_name': rule.source_name,
         'created_at': _iso(rule.created_at),
         'parsed': {
@@ -1859,7 +1906,29 @@ def api_snippet_update(request, snippet_id):
 
 
 RULE_STRING_FIELDS = ('status', 'match_type', 'source_text', 'description')
-RULE_BOOL_FIELDS = ('is_enabled', 'whole_log', 'color_whole_line')
+RULE_BOOL_FIELDS = ('is_enabled', 'whole_log', 'color_whole_line', 'apply_to_block')
+
+
+def _conditions_field(raw):
+    """(specs, error) from a rule write body's `conditions`: a list of
+    {fact_id or fact (its name), polarity (require / forbid), scope (block /
+    section / log)}; [] or null for none."""
+    if raw is None:
+        return [], None
+    if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+        return None, 'Field "conditions" must be a list of {fact_id or fact, polarity, scope}.'
+    specs, message = conditions_from_payload(raw)
+    if message:
+        return None, f'Field "conditions": {message} list_facts shows the facts.'
+    return specs, None
+
+
+def _entry_types_field(payload):
+    """(types, error) from a write body's `only_entry_types` (null: none)."""
+    types, message = clean_entry_types(payload['only_entry_types'])
+    if message:
+        return None, f'Field "only_entry_types": {message}'
+    return types, None
 
 
 def _rule_write_fields(payload):
@@ -1893,6 +1962,16 @@ def _rule_write_fields(payload):
         if message:
             return None, f'Field "log_types": {message}.'
         fields['log_scope'] = scope
+    if 'only_entry_types' in payload:
+        types, message = _entry_types_field(payload)
+        if message:
+            return None, message
+        fields['only_entry_types'] = types
+    if 'conditions' in payload:
+        specs, message = _conditions_field(payload['conditions'])
+        if message:
+            return None, message
+        fields['conditions'] = specs
     return fields, None
 
 
@@ -1923,10 +2002,13 @@ def api_rule_create(request):
     """Create rules owned by the caller, as the add-rule page does: one per line of source_text.
 
     Body: {status, match_type, source_text, description?, priority?, whole_log?,
-    color_whole_line?, tag_ids?, log_types?}. Without tag_ids the auto-apply tags decide.
+    color_whole_line?, tag_ids?, log_types?, conditions?, only_entry_types?,
+    apply_to_block?}. Without tag_ids the auto-apply tags decide.
     log_types is "all" or a list of log type names; without it file path rules
     apply to every log type and other rules to FRST&Addition, FRST and Addition.
-    Patterns duplicating one of the caller's rules are skipped; 409 when all are.
+    conditions ([{fact_id or fact, polarity, scope}]) make them conditional
+    rules. Patterns duplicating one of the caller's rules (with the same
+    conditions) are skipped; 409 when all are.
     """
     payload, error = PayloadValidator.json_object(request)
     if error:
@@ -1953,6 +2035,9 @@ def api_rule_create(request):
         tag_ids=fields.get('tag_ids'),
         source_name=f'api:{request.user.username}',
         log_scope=fields.get('log_scope'),
+        conditions=fields.get('conditions'),
+        apply_to_block=fields.get('apply_to_block', False),
+        only_entry_types=fields.get('only_entry_types'),
     )
     if message:
         return _error(message)
@@ -1974,9 +2059,12 @@ def api_rule_update(request, rule_id):
     """Change a rule, as the rule editor does; fields left out keep their values.
 
     Body: any of {status, match_type, source_text, description, is_enabled,
-    whole_log, color_whole_line, priority, tag_ids, log_types}. tag_ids replaces the
-    rule's tags; log_types is "all" or a list of log type names. A superuser may change any helper's rule; it keeps its owner,
-    and duplicates are checked within that owner's rules.
+    whole_log, color_whole_line, priority, tag_ids, log_types, conditions,
+    only_entry_types, apply_to_block}. tag_ids replaces the rule's tags;
+    log_types is "all" or a list of log type names; conditions replaces the
+    rule's conditions ([] removes them). A superuser may change any helper's
+    rule; it keeps its owner, and duplicates are checked within that owner's
+    rules (conditions included).
     """
     rules = ClassificationRule.objects.filter(pk=rule_id)
     # Write tokens are superuser-only already; the check stays here in case that ever changes.
@@ -2002,6 +2090,349 @@ def api_rule_update(request, rule_id):
 
 
 # ---------------------------------------------------------------------------
+# Facts: named observations about a log ("Kaspersky installed"), found by
+# fact rules (own patterns) and tag sources (classification rules with a tag
+# that matched). Conditional rules require or forbid them. Facts are shared,
+# fact rules owned like classification rules. Writing goes through the same
+# services as the fact editor and the rule editor in fact mode (views.facts).
+# ---------------------------------------------------------------------------
+
+FACTS_DEFAULT_LIMIT = 50
+FACTS_MAX_LIMIT = 200
+FACT_RULES_DEFAULT_LIMIT = 100
+FACT_RULES_MAX_LIMIT = 500
+
+
+def _facts_with_counts():
+    return Fact.objects.annotate(
+        fact_rule_count=Count('fact_rules', distinct=True),
+        tag_source_count=Count('tag_sources', distinct=True),
+        conditional_rule_count=Count('conditions', distinct=True),
+    )
+
+
+def _fact_summary(fact):
+    """One fact with how many fact rules, tag sources and rule conditions use
+    it (annotated by _facts_with_counts)."""
+    return {
+        'fact_id': fact.pk,
+        'name': fact.name,
+        'description': fact.description,
+        'fact_rule_count': fact.fact_rule_count,
+        'tag_source_count': fact.tag_source_count,
+        'conditional_rule_count': fact.conditional_rule_count,
+        'updated_at': _iso(fact.updated_at),
+    }
+
+
+def _fact_rule_row(rule):
+    """One fact rule: what it matches and which fact it records there."""
+    return {
+        'fact_rule_id': rule.pk,
+        'fact_id': rule.fact_id,
+        'fact': rule.fact.name,
+        'match_type': rule.match_type,
+        'source_text': rule.source_text,
+        'description': rule.description,
+        'owner': rule.owner.username if rule.owner_id else '',
+        'is_enabled': rule.is_enabled,
+        'whole_log': rule.whole_log,
+        'log_types': rule.log_scope_payload,
+        'only_entry_types': list(rule.only_entry_types or []),
+        'updated_at': _iso(rule.updated_at),
+    }
+
+
+def _fact_detail(fact_id, limit=FACT_RULES_DEFAULT_LIMIT, offset=0):
+    """A fact with its tag sources, its fact rules and the rules with a
+    condition on it (both paged with limit/offset), or None."""
+    fact = _facts_with_counts().filter(pk=fact_id).first()
+    if fact is None:
+        return None
+    fact_rules = FactRule.objects.filter(fact=fact).select_related('owner', 'fact').order_by('pk')
+    conditions = RuleCondition.objects.filter(fact=fact).select_related('rule__owner').order_by('rule_id')
+    return {
+        **_fact_summary(fact),
+        'tag_sources': [
+            {
+                'tag_id': source.tag_id,
+                'tag': source.tag.name,
+                'statuses': list(source.statuses or []),
+                'mode': source.mode,
+                'include_filepath_fallback': source.include_filepath_fallback,
+            }
+            for source in fact.tag_sources.select_related('tag').order_by('tag__name')
+        ],
+        'offset': offset,
+        'limit': limit,
+        'fact_rules': [_fact_rule_row(rule) for rule in fact_rules[offset:offset + limit]],
+        'conditional_rules': [
+            {
+                **_rule_row(condition.rule),
+                'priority': condition.rule.priority,
+                'is_enabled': condition.rule.is_enabled,
+                'polarity': condition.polarity,
+                'scope': condition.scope,
+            }
+            for condition in conditions[offset:offset + limit]
+        ],
+    }
+
+
+@api_token_required('api_v1_facts')
+def api_facts(request):
+    """Every fact (q filters name and description), with how many fact rules,
+    tag sources and rule conditions use it; paged with limit/offset."""
+    limit = int_param(request.GET, 'limit', FACTS_DEFAULT_LIMIT, 1, FACTS_MAX_LIMIT)
+    offset = int_param(request.GET, 'offset', 0, 0, LIST_MAX_OFFSET)
+    facts = _facts_with_counts()
+    search_query = (request.GET.get('q') or '').strip()[:QUERY_MAX_CHARS]
+    if search_query:
+        facts = facts.filter(Q(name__icontains=search_query) | Q(description__icontains=search_query))
+    facts = facts.order_by('name', 'pk')
+    return JsonResponse({
+        'total': facts.count(),
+        'offset': offset,
+        'limit': limit,
+        'facts': [_fact_summary(fact) for fact in facts[offset:offset + limit]],
+    })
+
+
+@api_token_required('api_v1_fact')
+def api_fact(request, fact_id):
+    """One fact: its tag sources, fact rules and the rules with a condition on
+    it (both lists paged with limit/offset)."""
+    limit = int_param(request.GET, 'limit', FACT_RULES_DEFAULT_LIMIT, 1, FACT_RULES_MAX_LIMIT)
+    offset = int_param(request.GET, 'offset', 0, 0, LIST_MAX_OFFSET)
+    detail = _fact_detail(fact_id, limit, offset)
+    if detail is None:
+        return _not_found()
+    return JsonResponse(detail)
+
+
+def _tag_sources_field(raw):
+    """(sources, error) from a write body's `tag_sources`: a list of {tag_id or
+    tag (name), statuses?, mode? (matched / decided), include_filepath_fallback?}."""
+    if raw is None:
+        return [], None
+    if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+        return None, 'Field "tag_sources" must be a list of {tag_id or tag, statuses, mode, include_filepath_fallback}.'
+    items = []
+    for item in raw:
+        item = dict(item)
+        if item.get('tag_id') is None and isinstance(item.get('tag'), str) and item['tag'].strip():
+            tag = RuleTag.objects.filter(name__iexact=item['tag'].strip()).first()
+            if tag is None:
+                return None, f'Unknown tag: {item["tag"].strip()[:64]}. list_tags shows the tags.'
+            item['tag_id'] = tag.pk
+        if isinstance(item.get('tag_id'), bool):
+            return None, 'Field "tag_sources": tag_id must be an integer.'
+        items.append(item)
+    sources, message = _sources_from_post(items)
+    if message:
+        return None, f'Field "tag_sources": {message}'
+    return sources, None
+
+
+def _fact_write(request, fact=None):
+    """Create (fact None) or change a fact from a JSON body: name, description,
+    tag_sources (replacing the current ones when given)."""
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
+    for field in ('name', 'description'):
+        if field in payload and not isinstance(payload[field], str):
+            return _error(f'Field "{field}" must be a string.')
+    name = payload['name'].strip() if 'name' in payload else (fact.name if fact else '')
+    description = payload['description'].strip() if 'description' in payload else (fact.description if fact else '')
+    if 'tag_sources' in payload:
+        sources, message = _tag_sources_field(payload['tag_sources'])
+        if message:
+            return _error(message)
+    elif fact is not None:
+        sources = [
+            {
+                'tag_id': source.tag_id, 'statuses': list(source.statuses or []), 'mode': source.mode,
+                'include_filepath_fallback': source.include_filepath_fallback,
+            }
+            for source in fact.tag_sources.all()
+        ]
+    else:
+        sources = []
+    message = _fact_name_error(name, exclude_pk=fact.pk if fact else None)
+    if message:
+        return _error(message, 409 if 'already exists' in message else 400)
+    saved, message = _save_fact(fact, request.user, name, description, sources)
+    if message:
+        return _error(message, 409)
+    return JsonResponse(_fact_detail(saved.pk), status=201 if fact is None else 200)
+
+
+@api_token_required('api_v1_fact_create', write=True)
+def api_fact_create(request):
+    """Create a fact. Body: {name, description?, tag_sources?}. Fact rules
+    are added with fact-rules/create/."""
+    return _fact_write(request)
+
+
+@api_token_required('api_v1_fact_update', write=True)
+def api_fact_update(request, fact_id):
+    """Change a fact; fields left out keep their values, tag_sources replaces
+    the current ones ([] removes them all)."""
+    fact = Fact.objects.filter(pk=fact_id).first()
+    if fact is None:
+        return _not_found()
+    return _fact_write(request, fact)
+
+
+def _fact_rule_fact_field(payload):
+    """(fact_id, new_fact_name, error) as views.facts._resolve_fact takes them:
+    `fact_id`, or `fact` (a name; an existing fact of that name is reused,
+    else one is created). (None, None, None) when neither is given."""
+    if payload.get('fact_id') is not None:
+        fact_id = payload['fact_id']
+        if isinstance(fact_id, bool) or not isinstance(fact_id, int):
+            return None, None, 'Field "fact_id" must be an integer.'
+        return str(fact_id), '', None
+    if 'fact' in payload:
+        if not isinstance(payload['fact'], str) or not payload['fact'].strip():
+            return None, None, 'Field "fact" must be a fact name.'
+        return NEW_FACT, payload['fact'].strip(), None
+    return None, None, None
+
+
+FACT_RULE_STRING_FIELDS = ('match_type', 'source_text', 'description')
+FACT_RULE_BOOL_FIELDS = ('is_enabled', 'whole_log')
+
+
+def _fact_rule_write_fields(payload):
+    """(fields, error): the fact rule fields present in a write body, type-checked."""
+    fields = {}
+    for field in FACT_RULE_STRING_FIELDS:
+        if field in payload:
+            if not isinstance(payload[field], str):
+                return None, f'Field "{field}" must be a string.'
+            fields[field] = payload[field].strip()
+    for field in FACT_RULE_BOOL_FIELDS:
+        if field in payload:
+            if not isinstance(payload[field], bool):
+                return None, f'Field "{field}" must be a boolean.'
+            fields[field] = payload[field]
+    if 'log_types' in payload:
+        scope, message = normalize_log_type_selection(payload['log_types'])
+        if message:
+            return None, f'Field "log_types": {message}.'
+        fields['log_scope'] = scope
+    if 'only_entry_types' in payload:
+        types, message = _entry_types_field(payload)
+        if message:
+            return None, message
+        fields['only_entry_types'] = types
+    fact_id, new_fact_name, message = _fact_rule_fact_field(payload)
+    if message:
+        return None, message
+    if fact_id is not None:
+        fields['fact_id'], fields['new_fact_name'] = fact_id, new_fact_name
+    return fields, None
+
+
+@api_token_required('api_v1_fact_rule_create', write=True)
+def api_fact_rule_create(request):
+    """Create fact rules owned by the caller, one per line of source_text (a
+    script rule stays one), as the rule editor in fact mode does.
+
+    Body: {fact_id or fact (a name: reused, or created when new), match_type,
+    source_text, description?, whole_log?, log_types?, only_entry_types?}.
+    Patterns duplicating one of the caller's fact rules for that fact are
+    skipped; 409 when all are.
+    """
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
+    fields, message = _fact_rule_write_fields(payload)
+    if message:
+        return _error(message)
+    if 'fact_id' not in fields:
+        return _error('Give the fact: fact_id, or fact (a name) to reuse or create one.')
+    for field in ('match_type', 'source_text'):
+        if not fields.get(field):
+            return _error(f'Field "{field}" is required.')
+    warnings, message = _regex_check(fields['match_type'], _patterns_for(fields['match_type'], fields['source_text']))
+    if message:
+        return _error(message)
+    fact, created, skipped, message = create_fact_rules(
+        request.user,
+        fact_id=fields['fact_id'],
+        new_fact_name=fields['new_fact_name'],
+        match_type=fields['match_type'],
+        source_text=fields['source_text'],
+        description=fields.get('description', ''),
+        whole_log=fields.get('whole_log', False),
+        source_name=f'api:{request.user.username}',
+        log_scope=fields.get('log_scope'),
+        only_entry_types=fields.get('only_entry_types'),
+    )
+    if message:
+        return _error(message)
+    if not created:
+        return JsonResponse({
+            'error': 'No fact rules created: every pattern duplicates one of your fact rules for this fact.',
+            'skipped': skipped,
+        }, status=409)
+    rules = FactRule.objects.filter(pk__in=[rule.pk for rule in created]).select_related('owner', 'fact').order_by('pk')
+    return JsonResponse({
+        'fact': _fact_summary(_facts_with_counts().get(pk=fact.pk)),
+        'created': [_fact_rule_row(rule) for rule in rules],
+        'skipped': skipped,
+        'warnings': warnings,
+    }, status=201)
+
+
+@api_token_required('api_v1_fact_rule_update', write=True)
+def api_fact_rule_update(request, fact_rule_id):
+    """Change a fact rule; fields left out keep their values.
+
+    Body: any of {fact_id or fact, match_type, source_text, description,
+    is_enabled, whole_log, log_types, only_entry_types}. A superuser may
+    change any helper's fact rule; it keeps its owner.
+    """
+    rules = FactRule.objects.filter(pk=fact_rule_id)
+    if not request.user.is_superuser:
+        rules = rules.filter(owner=request.user)
+    rule = rules.select_related('owner', 'fact').first()
+    if rule is None:
+        return _not_found()
+    payload, error = PayloadValidator.json_object(request)
+    if error:
+        return error
+    fields, message = _fact_rule_write_fields(payload)
+    if message:
+        return _error(message)
+    form = {
+        'fact_id': str(rule.fact_id),
+        'new_fact_name': '',
+        'match_type': rule.match_type,
+        'source_text': rule.source_text,
+        'description': rule.description,
+        'is_enabled': rule.is_enabled,
+        'whole_log': rule.whole_log,
+        'log_scope': None,
+        'log_scope_error': None,
+        'only_entry_types': None,
+        'only_entry_types_error': None,
+        **fields,
+    }
+    warnings, message = _regex_check(form['match_type'], [form['source_text']])
+    if message:
+        return _error(message)
+    message = apply_fact_rule_edit(rule, form, request.user)
+    if message:
+        return _error(message)
+    saved = FactRule.objects.select_related('owner', 'fact').get(pk=rule.pk)
+    return JsonResponse({**_fact_rule_row(saved), 'warnings': warnings})
+
+
+# ---------------------------------------------------------------------------
 # Rule questions: what a candidate rule would do across the corpus (test_rule),
 # and which rules decide given lines today (match_rules). Read-only: nothing
 # is saved. They take a POST with a JSON body because their input (log lines,
@@ -2018,10 +2449,12 @@ RULE_COMPARE_TIME_BUDGET_S = 10.0
 RULE_COMPARE_EXTRA_UNITS = 10
 
 
-def _rule_test_corpus(scope_pks, hidden, literals, log_type_by_upload=None):
+def _rule_test_corpus(scope_pks, hidden, literals, log_type_by_upload=None, fact_check=None):
     """``(upload_id, content)`` of the logs in `scope_pks`, newest first, minus `hidden`.
 
     `log_type_by_upload` (a dict, optional) is filled with each yielded log's type.
+    `fact_check` (a CachedFactCheck, for a rule with conditions) reads each
+    log's cached facts before the scan reaches its lines.
 
     `literals` (or None) prefilter in the database: a log must contain one of
     them, case-insensitively - a superset of what a substring or exact rule
@@ -2034,12 +2467,14 @@ def _rule_test_corpus(scope_pks, hidden, literals, log_type_by_upload=None):
             contains_one |= Q(content__icontains=literal)
         logs = logs.filter(contains_one)
     rows = logs.order_by('-created_at', '-pk').values_list(
-        'pk', 'upload_id', 'content', 'log_type',
+        'pk', 'upload_id', 'content', 'log_type', 'content_hash',
     ).iterator(chunk_size=10)
-    for pk, upload_id, content, log_type in rows:
+    for pk, upload_id, content, log_type, content_hash in rows:
         if pk not in hidden:
             if log_type_by_upload is not None:
                 log_type_by_upload[upload_id] = log_type
+            if fact_check is not None:
+                fact_check.prepare(pk, upload_id, content, content_hash, log_type)
             yield upload_id, content
 
 
@@ -2076,8 +2511,8 @@ def _rule_test_sample_row(result, entry):
 def api_rule_test(request):
     """Dry run of a candidate rule against stored logs; nothing is saved.
 
-    Body: the rule (source_text, match_type, status, priority?, whole_log?) as
-    on the add-rule page, plus the scope (type / exclude_type, created_after /
+    Body: the rule (source_text, match_type, status, priority?, whole_log?,
+    only_entry_types?, conditions?) as on the add-rule page, plus the scope (type / exclude_type, created_after /
     created_before, dedupe; FRST, Addition and FRST&Addition logs by default),
     max_logs (newest logs in scope to scan), sample_lines and compare_rule_id.
 
@@ -2088,6 +2523,12 @@ def api_rule_test(request):
     on. compare_rule_id also scans with that saved rule and counts the lines
     only one of the two matches; it is left out of the verdicts, as if the
     new rule replaced it. Verdicts use the caller's rule set.
+
+    A rule with conditions is checked against the facts of each log's cached
+    analysis (the caller's rule set): lines where they fail are not counted,
+    and logs without a fresh analysis are counted unchecked
+    (`conditions_unchecked_logs`, their log refs marked). compare_rule_id does
+    not take rules with conditions.
     """
     payload, rule, error_response = _read_rule_test_payload(request)
     if error_response:
@@ -2122,6 +2563,11 @@ def api_rule_test(request):
             return _error(f'compare_rule_id: no rule {compare_rule_id}.')
         if rule['whole_log'] or compare_rule.whole_log:
             return _error('compare_rule_id compares line rules; whole-log alert rules cannot be compared.')
+        if rule['conditions'] or compare_rule.condition_key:
+            return _error(
+                'compare_rule_id cannot compare rules with conditions: test the candidate without '
+                'compare_rule_id, and check the saved rule with get_rule and match_rules.'
+            )
         if compare_rule.match_type == ClassificationRule.MATCH_SCRIPT and not is_moderator(request.user):
             return _error('Script rules can only be tested by moderators.', 403)
         if not charge_api_units(request, RULE_COMPARE_EXTRA_UNITS):
@@ -2143,6 +2589,8 @@ def api_rule_test(request):
                 else ClassificationRule.default_priority_for(match_type)
             ),
             'whole_log': rule['whole_log'],
+            'only_entry_types': rule['only_entry_types'],
+            'conditions': len(rule['conditions']),
         },
         'rule_set': rule_set_label(rule_set_key),
         'logs_in_scope': logs_in_scope,
@@ -2151,10 +2599,13 @@ def api_rule_test(request):
     if dedupe:
         response['duplicates_hidden'] = len(hidden)
 
+    fact_check = CachedFactCheck(rule['conditions'], rule_set_key) if rule['conditions'] else None
+
     try:
         if rule['whole_log']:
             scan = scan_logs_for_wholelog_matches(
-                patterns, match_type, _rule_test_corpus(scope_pks, hidden, None), deadline=deadline,
+                patterns, match_type, _rule_test_corpus(scope_pks, hidden, None, fact_check=fact_check),
+                deadline=deadline, line_check=fact_check,
             )
             response.update(scan)
             response['complete'] = not scan['timed_out']
@@ -2163,8 +2614,10 @@ def api_rule_test(request):
         literals = literal_prefilter(patterns, match_type)
         log_type_by_upload = {}
         scan = scan_logs_for_rule_matches(
-            patterns, status, match_type, _rule_test_corpus(scope_pks, hidden, literals, log_type_by_upload),
+            patterns, status, match_type,
+            _rule_test_corpus(scope_pks, hidden, literals, log_type_by_upload, fact_check=fact_check),
             max_lines=sample_lines, deadline=deadline, count_all=True,
+            only_entry_types=rule['only_entry_types'], line_check=fact_check,
         )
         matches = scan.pop('matches')
         built = build_rule_test_results(
@@ -2177,6 +2630,7 @@ def api_rule_test(request):
             rule_set_key=rule_set_key,
             buckets=_get_cached_rule_buckets(rule_set_key),
             line_log_types=_first_log_types(matches, log_type_by_upload),
+            only_entry_types=rule['only_entry_types'],
         )
         results = built['results']
         response.update({
@@ -2188,6 +2642,7 @@ def api_rule_test(request):
             'sample_truncated': scan['truncated'],
             'timed_out': scan['timed_out'],
             'complete': not scan['timed_out'],
+            'conditions_unchecked_logs': scan['conditions_unchecked_logs'],
             'summary': summarize_rule_test(results, status),
             'untrusted_sample': [_rule_test_sample_row(result, entry) for result, entry in zip(results, matches)],
         })
@@ -2197,8 +2652,14 @@ def api_rule_test(request):
             old_literals = literal_prefilter(old_patterns, compare_rule.match_type)
             both_literals = literals + old_literals if literals and old_literals else None
             compared = compare_rule_scans(
-                {'patterns': patterns, 'status': status, 'match_type': match_type},
-                {'patterns': old_patterns, 'status': compare_rule.status, 'match_type': compare_rule.match_type},
+                {
+                    'patterns': patterns, 'status': status, 'match_type': match_type,
+                    'only_entry_types': rule['only_entry_types'],
+                },
+                {
+                    'patterns': old_patterns, 'status': compare_rule.status, 'match_type': compare_rule.match_type,
+                    'only_entry_types': list(compare_rule.only_entry_types or []),
+                },
                 _rule_test_corpus(scope_pks, hidden, both_literals),
                 deadline=time.monotonic() + RULE_COMPARE_TIME_BUDGET_S,
                 sample_lines=sample_lines,
@@ -2255,7 +2716,10 @@ def api_rule_match(request):
     winning priority tier (`winning`, each rule with `decides` when its status
     is the verdict) and the lower tiers it shadows (`shadowed`), plus the
     line's parsed FRST entry. Whole-log alert rules and disabled rules never
-    match a line, so they are not listed.
+    match a line, so they are not listed. Rules with conditions on facts that
+    match the line too are listed apart (`conditional`, with their
+    conditions): whether those hold depends on the rest of the log, so they are
+    not checked here and never change the verdict above.
     """
     payload, error = PayloadValidator.json_object(request)
     if error:
@@ -2282,7 +2746,9 @@ def api_rule_match(request):
     results = []
     for line in lines:
         inspection = inspect_line_matches(line, buckets=buckets)
-        attach_tags_to_matches(inspection['matches'], inspection.get('shadowed_matches'))
+        attach_tags_to_matches(
+            inspection['matches'], inspection.get('shadowed_matches'), inspection.get('conditional_matches'),
+        )
         verdict = inspection['dominant_status']
         winning = []
         for match in inspection['matches']:
@@ -2300,6 +2766,22 @@ def api_rule_match(request):
         }
         if include_shadowed:
             result['shadowed'] = [_match_row(match) for match in inspection.get('shadowed_matches', [])]
+        if inspection.get('conditional_matches'):
+            result['conditional'] = [
+                {
+                    **_match_row(match),
+                    'conditions': [
+                        {
+                            'fact': condition['fact'],
+                            'polarity': RuleCondition.POLARITY_REQUIRE if condition['require']
+                            else RuleCondition.POLARITY_FORBID,
+                            'scope': condition['scope'],
+                        }
+                        for condition in match.get('conditions', [])
+                    ],
+                }
+                for match in inspection['conditional_matches']
+            ]
         results.append(result)
 
     return JsonResponse({

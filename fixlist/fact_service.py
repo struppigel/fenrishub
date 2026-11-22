@@ -37,7 +37,8 @@ def condition_key_for(specs) -> str:
 
 def conditions_from_payload(raw):
     """(specs, error) from the rule editor's JSON list of conditions:
-    [{fact_id, polarity, scope}]. Validates shape and values, not the rule."""
+    [{fact_id, polarity, scope}]. Validates shape and values, not the rule.
+    The token API may name the fact instead (`fact`, case-insensitive)."""
     try:
         items = json.loads(raw or '[]') if isinstance(raw, str) else raw
     except ValueError:
@@ -51,6 +52,11 @@ def conditions_from_payload(raw):
         if not isinstance(item, dict):
             return None, 'The conditions could not be read.'
         fact_id = item.get('fact_id')
+        if fact_id is None and isinstance(item.get('fact'), str) and item['fact'].strip():
+            name = item['fact'].strip()
+            fact_id = Fact.objects.filter(name__iexact=name).values_list('pk', flat=True).first()
+            if fact_id is None:
+                return None, f'Unknown fact: {name[:64]}.'
         if isinstance(fact_id, str) and fact_id.isdigit():
             fact_id = int(fact_id)
         if not isinstance(fact_id, int) or isinstance(fact_id, bool):
