@@ -974,6 +974,32 @@ def _spor_summary_item(b, no, body, profile=''):
     b.item(no, severity, name[:300], target, action)
 
 
+def _spor_url_tokens(text):
+    """A download's address ("from: ...", "page: ...", "referrer: ..."): the
+    value as one URL token, the blanks around it plain."""
+    stripped = text.strip()
+    if not stripped:
+        return [('', text)]
+    start = text.find(stripped)
+    return [('', text[:start]), ('hl-url', stripped), ('', text[start + len(stripped):])]
+
+
+def _spor_thumbprint_tokens(tokens, version_line=False):
+    """FILES "version: ...; thumbprint <SHA-1>": the certificate's thumbprint is
+    no file hash (the page offers a search for files signed with it). On a
+    "version:" sub-line no other hex is a file hash either ("file version
+    4.18.26100.4 (79b015c6...)" is a build's commit)."""
+    out = []
+    for cls, text in tokens:
+        if cls == 'hl-hash':
+            if len(text) == 40 and out and out[-1][1].endswith('thumbprint '):
+                cls = 'hl-thumbprint'
+            elif version_line:
+                cls = ''
+        out.append((cls, text))
+    return out
+
+
 def _spor_banner_tokens(body, title):
     start = body.find(title)
     end = start + len(title)
@@ -1036,7 +1062,15 @@ def _highlight_spor(lines):
         m = _SPOR_SUB_RE.match(body)
         if m:
             lead, key, rest = m.groups()
-            b.add(_mk(no, [('', lead), ('hl-key', key)] + _spor_item_tokens(rest, files, defender, section), cr))
+            if key[:-1] in spor_log.DOWNLOAD_KEYS:
+                # The whole address is one URL (with or without scheme), so
+                # hex in a host or path is no hash.
+                b.add(_mk(no, [('', lead), ('hl-key', key)] + _spor_url_tokens(rest), cr))
+                continue
+            tokens = _spor_item_tokens(rest, files, defender, section)
+            if files and key == 'version:':
+                tokens = _spor_thumbprint_tokens(tokens, version_line=True)
+            b.add(_mk(no, [('', lead), ('hl-key', key)] + tokens, cr))
             continue
         if body[:1].isspace():
             b.add(_mk(no, _inline(body), cr))
@@ -1052,7 +1086,8 @@ def _highlight_spor(lines):
             tag_cls = 'hl-sev-w' if tag == '[suspicious]' else 'hl-accent'
             b.add(_mk(no, [('hl-dim', number), ('', gap), (tag_cls, tag), ('', gap2), ('', command)] + flag_tokens, cr))
             continue
-        b.add(_mk(no, _spor_item_tokens(body, files, defender, section), cr))
+        tokens = _spor_item_tokens(body, files, defender, section)
+        b.add(_mk(no, _spor_thumbprint_tokens(tokens) if files else tokens, cr))
         if section == spor_log.SECTION_SUMMARY:
             _spor_summary_item(b, no, _split_cr(unfolded[i])[0], profile)
         elif files:

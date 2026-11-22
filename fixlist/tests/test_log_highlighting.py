@@ -1183,6 +1183,12 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, "const HASH_KINDS = { 32: 'MD5', 40: 'SHA-1', 64: 'SHA-256' };")
         self.assertContains(response, "'https://www.virustotal.com/gui/file/' + hash.toLowerCase()")
         self.assertContains(response, "encodeURIComponent('sectionmd5:' + hash.toLowerCase()) + '&section=IoCs&type=files'")
+        # URLs get a VirusTotal (address, domain) / urlscan / copy menu; Spor's
+        # certificate thumbprints a VirusTotal search for the files signed with them.
+        self.assertContains(response, "if (token.matches('.hl-url')) return openUrlMenu(token);")
+        self.assertContains(response, "run: () => openUrl(Fenris.virusTotal.urlSearch(url.value))")
+        self.assertContains(response, "if (token.matches('.hl-thumbprint')) return openThumbprintMenu(token);")
+        self.assertContains(response, "const url = Fenris.virusTotal.thumbprint(thumb);")
         # Detection names get a copy / Google menu.
         self.assertContains(response, '<span class="hl-threat hl-sev-b">Trojan.PavinLoader.E</span>')
         self.assertContains(response, "if (token.matches('.hl-threat')) return openThreatMenu(token);")
@@ -1235,7 +1241,7 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         )
         response = self._get(upload)
         self.assertContains(response, 'class="hl-copy-hint"')
-        self.assertContains(response, "closest('.hl-path, .hl-reg, .hl-guid, .hl-hash')")
+        self.assertContains(response, "closest('.hl-path, .hl-reg, .hl-guid, .hl-hash, .hl-thumbprint, .hl-url')")
         self.assertContains(response, 'id="toggleSectionsButton"')
 
     def test_summary_and_metadata_are_tabs_of_one_panel(self):
@@ -1397,3 +1403,98 @@ class SporSplitLineHighlightTests(SimpleTestCase):
             '==================== DEFENDER')
         tokens = _line(highlight_log('Spor', log), log, 'notes.txt').tokens
         self.assertNotIn(('hl-key', 'action '), tokens)
+
+
+# Spor 0.7.3 (the sleek-engine log): download addresses on sub-lines, as whole
+# URLs (DOWNLOADS), "blob:" URLs or "host/path" without scheme (TIMELINE,
+# SUMMARY), and FILES with MD5, certificate thumbprints and Amcache SHA-1s.
+SPOR_SHA = '932E18F4B8A9213F486E8F8E35CC8BA5F375D14819CEBB64D45E4E15F21DA798'
+SPOR_MD5 = '82BDDD07A5FF73C132BA7A733B00910F'
+SPOR_THUMB = '4FACB7032C7D66A9791DE4B457EA5E70140D21F2'
+SPOR_COMMIT = '79b015c6fabb20b1ccd067f376e490f0bac19809'
+SPOR_AMCACHE_SHA1 = '853518C785B5192A02FE1C3E8BF393CAD0770E96'
+PAWCHIVE_SHA = '771ebe3c5abcb0fc9d6fa631752e078439eb57f954b99239aca43bbfa8a2e71a'
+SPOR_V73_URLS = '\n'.join([
+    '==================== Spor 0.7.3 - forensic triage log ===========',
+    'Times:     UTC, except created and modified in FILES (local time of this PC, as FRST shows them)',
+    '',
+    '==================== TIMELINE - last 30 days, oldest first ==========',
+    r'2026-11-18 06:34:45 [DL] C:\Users\Seph\Downloads\a.zip [gone] => Chrome',
+    '    from: https://75d7a872dc641dc2ae.192169540.com/e6c2a626-f89c-4c8e-99df-8d925cdc5510',
+    '    page: cache-bodr.ko7u8b.space',
+    r'2026-11-18 06:35:00 [DL] C:\Users\Seph\Downloads\b.zip => Chrome',
+    '    from: itchio-mirror.cb031a832f44726753d6267436f3b414.r2.cloudflarestorage.com/upload2/game/4869872/19669083',
+    '    page: mega.nz/folder/s0lRhSzI',
+    r'2026-11-18 06:36:00 [DL] C:\Users\Seph\Downloads\c.rar => Chrome',
+    f'    from: n2.pawchive.pw/data/77/1e/{PAWCHIVE_SHA}.rar',
+    '',
+    '==================== DOWNLOADS AND OPENED FILES - browser downloads ====',
+    r'2026-11-18 06:37:00 [Chrome] C:\Users\Seph\Downloads\d.zip',
+    '    from: blob:https://mega.nz/03b67209-91f0-4936-92d3-64f0695baa27',
+    '    page: https://mega.nz/file/OowlCIYI#lUERPQvV',
+    '    referrer: https://www.malwarebytes.com/',
+    '',
+    '==================== FILES - SHA256, signature and version of the files ====',
+    '(line: file => sha256, signature)',
+    '',
+    rf'C:\Games\AnaDos\anados.exe => {SPOR_SHA}, signature valid; signer HABBIT CO.,LTD.',
+    f'    file: md5 {SPOR_MD5}; size 678392; created 2026-10-12 00:36:50; modified 2026-11-13 14:15:26',
+    f'    version: file version 4.18.26100.4 ({SPOR_COMMIT}); thumbprint {SPOR_THUMB}',
+    '',
+    '==================== AMCACHE FILES - SHA1 from Amcache ====',
+    '(line: file => sha1)',
+    '',
+    rf'C:\$winreagent\dismhost.exe => {SPOR_AMCACHE_SHA1}',
+    '',
+    '==================== End of log. Scan took 1.0 s ====',
+])
+
+
+class SporUrlAndHashTokenTests(SimpleTestCase):
+    def setUp(self):
+        self.result = highlight_log('Spor', SPOR_V73_URLS)
+
+    def _tokens(self, needle):
+        return _line(self.result, SPOR_V73_URLS, needle).tokens
+
+    def _of(self, needle, cls):
+        return [text for token_cls, text in self._tokens(needle) if cls in token_cls.split()]
+
+    def test_every_download_address_is_one_url_token(self):
+        for needle, value in [
+            ('from: https://75d7', 'https://75d7a872dc641dc2ae.192169540.com/e6c2a626-f89c-4c8e-99df-8d925cdc5510'),
+            ('page: cache-bodr', 'cache-bodr.ko7u8b.space'),
+            ('page: mega.nz/folder', 'mega.nz/folder/s0lRhSzI'),
+            ('from: blob:', 'blob:https://mega.nz/03b67209-91f0-4936-92d3-64f0695baa27'),
+            ('page: https://mega.nz/file', 'https://mega.nz/file/OowlCIYI#lUERPQvV'),
+            ('referrer:', 'https://www.malwarebytes.com/'),
+        ]:
+            with self.subTest(needle):
+                self.assertEqual(self._of(needle, 'hl-url'), [value])
+
+    def test_hex_inside_an_address_is_no_hash(self):
+        for needle in ('from: itchio-mirror', 'from: n2.pawchive'):
+            with self.subTest(needle):
+                self.assertEqual(len(self._of(needle, 'hl-url')), 1)
+                self.assertEqual(self._of(needle, 'hl-hash'), [])
+
+    def test_thumbprint_is_no_file_hash(self):
+        needle = f'thumbprint {SPOR_THUMB}'
+        self.assertEqual(self._of(needle, 'hl-thumbprint'), [SPOR_THUMB])
+        # Nor is a build's commit in the file version.
+        self.assertEqual(self._of(needle, 'hl-hash'), [])
+
+    def test_file_hashes_stay_hashes(self):
+        self.assertEqual(self._of(f'=> {SPOR_SHA}', 'hl-hash'), [SPOR_SHA])
+        self.assertEqual(self._of(f'md5 {SPOR_MD5}', 'hl-hash'), [SPOR_MD5])
+        self.assertEqual(self._of(f'=> {SPOR_AMCACHE_SHA1}', 'hl-hash'), [SPOR_AMCACHE_SHA1])
+
+    def test_older_files_line_with_its_thumbprint_on_the_line(self):
+        # Spor before 0.7.0: the FILES details on the line itself.
+        old = SPOR_V73_URLS.replace(
+            f'signer HABBIT CO.,LTD.\n    file: md5 {SPOR_MD5}; size 678392; created 2026-10-12 00:36:50; '
+            f'modified 2026-11-13 14:15:26\n    version: file version 4.18.26100.4 ({SPOR_COMMIT}); thumbprint {SPOR_THUMB}',
+            f'signer HABBIT CO.,LTD.; md5 {SPOR_MD5}; thumbprint {SPOR_THUMB}')
+        line = _line(highlight_log('Spor', old), old, f'=> {SPOR_SHA}')
+        self.assertIn(('hl-thumbprint', SPOR_THUMB), line.tokens)
+        self.assertEqual([text for cls, text in line.tokens if cls == 'hl-hash'], [SPOR_SHA, SPOR_MD5])

@@ -448,6 +448,9 @@ window.CorrelationInfo = (function () {
                 if (key === 'signed' && value === 'not signed') cls = 'cinfo-sev-w';
                 if (key === 'company') cls = 'hl-company';
                 dd.appendChild(el('span', cls, value));
+                // VirusTotal Intelligence: the files signed with this certificate.
+                const signed = key === 'thumbprint' ? Fenris.virusTotal.thumbprint(value) : '';
+                if (signed) dd.append(' ', lookupLink(signed, 'VirusTotal', 'files signed with this certificate'));
                 if (key === 'original_name' && entry.original_name_differs) {
                     dd.appendChild(el('span', 'cinfo-note cinfo-sev-w', ' differs from the file name'));
                 }
@@ -586,6 +589,18 @@ window.CorrelationInfo = (function () {
         return wrap;
     }
 
+    const DOWNLOAD_KEYS = new Set(['from', 'page', 'referrer']);
+
+    // A lookup action link (VirusTotal), opened in a new tab without a handle on this page.
+    function lookupLink(href, text, title = '') {
+        const link = el('a', 'cinfo-action', text);
+        link.href = href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        if (title) link.title = title;
+        return link;
+    }
+
     function extraNode(extra) {
         const list = el('dl', 'cinfo-grid cinfo-extra');
         (Array.isArray(extra) ? extra : []).forEach((pair) => {
@@ -603,6 +618,10 @@ window.CorrelationInfo = (function () {
                 dd.appendChild(link);
             } else {
                 appendTokens(dd, value);
+                // A download's address (Spor "from" / "page" / "referrer"): looked
+                // up on VirusTotal, never opened itself.
+                const url = DOWNLOAD_KEYS.has(str(pair[0])) ? Fenris.lookupUrl(value) : null;
+                if (url && url.value) dd.append(' ', lookupLink(Fenris.virusTotal.urlSearch(url.value), 'VirusTotal'));
             }
             list.appendChild(dd);
         });

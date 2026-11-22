@@ -418,6 +418,18 @@ class SporLinkDetailTests(SimpleTestCase):
         self.assertTrue(rows[REPORT_LNK].auto)
         self.assertFalse(rows[LOADER].auto)
 
+    def test_loader_is_not_flagged_with_flags_after_the_mark(self):
+        # Spor 0.7.2+: "path => loaded by <program> <==== !flag" instead of the inline form.
+        old = f'[Prefetch] {REPORT_LNK}  !double-extension  (loaded by {LOADER})'
+        new = f'[Prefetch] {REPORT_LNK} => loaded by {LOADER} <==== !double-extension'
+        self.assertIn(old, SPOR_V3)
+        rows = {row.path: row for row in extract_file_hashes('Spor', SPOR_V3.replace(old, new)) if row.source == 'spor'}
+        self.assertTrue(rows[REPORT_LNK].auto)
+        self.assertFalse(rows[LOADER].auto)
+        result = highlight_log('Spor', SPOR_V3.replace(old, new))
+        (item,) = [item for item in result.summary if REPORT_LNK in item.name]
+        self.assertEqual((item.name, item.severity), (REPORT_LNK, 'w'))
+
     def test_summary_flags_written_inline(self):
         result = highlight_log('Spor', SPOR_V3)
         (item,) = [item for item in result.summary if REPORT_LNK in item.name]

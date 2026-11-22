@@ -453,7 +453,11 @@ def is_sub_line(body):
 
 _RUN_TASK_KINDS = frozenset({'run', 'runonce', 'policy-run', 'task'})
 _DEFENDER_ITEM_KEYS = ('file', 'process', 'resource')
-_DOWNLOAD_KEYS = ('from', 'page', 'referrer')
+# A download's addresses: whole URLs (DOWNLOADS), "blob:https://..." or
+# "host/path" without scheme and query (TIMELINE, SUMMARY: Spor's Host()).
+# log_highlighting marks each value as one URL.
+DOWNLOAD_KEYS = ('from', 'page', 'referrer')
+_DOWNLOAD_KEYS = DOWNLOAD_KEYS
 _FOLD_KEYS = frozenset({'program', 'arguments', 'value', 'folder', 'key', 'signer', 'version', *_DEFENDER_ITEM_KEYS, *_DOWNLOAD_KEYS})
 # FILES: "    file: md5 M; size N; created T; modified T; amcache sha1 S" and
 # "    version: file version X; ...; thumbprint T" under the hash line.

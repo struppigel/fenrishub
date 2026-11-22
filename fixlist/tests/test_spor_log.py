@@ -68,6 +68,15 @@ class ParserTests(SimpleTestCase):
         self.assertEqual(files['C:\\Users\\Bob\\Desktop\\big.iso'][1:], ('', ''))
         self.assertNotIn('C:\\Users\\Bob\\Desktop\\old.exe', files)  # AMCACHE FILES is another section
 
+    def test_files_hidden_comment_is_no_file(self):
+        # Spor 0.7.2+: FILES counts the validly signed files the whitelist leaves out in a comment.
+        at = LINES.index('(line: file => sha256, signature; version; amcache sha1)') + 1
+        hidden = ('(Hidden: 844 validly signed files no section above shows (Windows drivers and system files, '
+                  'programs of trusted services); -nowhitelist lists them.)')
+        lines = LINES[:at] + [hidden] + LINES[at:]
+        rows = lambda found: [(path, value, signature) for _no, path, value, signature in found]
+        self.assertEqual(rows(spor_log.iter_files(lines)), rows(spor_log.iter_files(LINES)))
+
     def test_defender_detections_one_per_file_and_threat_with_the_action(self):
         found = spor_log.iter_defender_detections(LINES)
         self.assertEqual(found, [

@@ -248,9 +248,11 @@ def _extract_trojan_killer(bodies, out):
 # unfold() also right after " => "): not flagged files.
 _SPOR_PROCESS_RE = re.compile(r'(?:; |(?<= => ))process:? [^;]*')
 # SUMMARY: "... .pdf.lnk  !double-extension  (loaded by C:\...\host.exe)" names the
-# program that loaded the flagged file: not flagged itself.
+# program that loaded the flagged file: not flagged itself. Spor 0.7.2+ writes
+# "... .pdf.lnk => loaded by C:\...\host.exe <==== !double-extension" (the flags
+# are cut off before this applies).
 # At the end of the line: the path itself can hold parens ("Program Files (x86)").
-_SPOR_LOADED_BY_RE = re.compile(r' \(loaded by [^\r\n]{1,600}\)\s*$')
+_SPOR_LOADED_BY_RE = re.compile(r'(?: \(loaded by [^\r\n]{1,600}\)| => loaded by [^\r\n]{1,600})\s*$')
 
 
 def _line_paths(text):

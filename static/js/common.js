@@ -124,6 +124,50 @@ window.Fenris = (function () {
         if (url) window.open(url, '_blank', 'noopener,noreferrer');
     }
 
+    /* Lookups of URLs, domains and certificates, shared by the analyzer's
+     * menus (log_analyzer/analysis.js), the log page and the correlation
+     * info box. A log's own URL is never opened: it only goes, escaped, into
+     * these lookup addresses. */
+    // "hxxps://" (defanged, common in malware reports) -> "https://".
+    function refangUrl(value) {
+        return String(value || '').replace(/^hxxp(s?):\/\//i, 'http$1://');
+    }
+
+    // A URL as a log writes it, ready for a lookup: refanged, without a
+    // "blob:" prefix (the page's own address follows it), a "…" where the log
+    // cut it, or punctuation of the text around it. `cut`: it was cut.
+    // `host`: its host name, also for Spor's "host/path" without scheme.
+    function lookupUrl(text) {
+        let value = String(text || '').trim();
+        const cut = /…$/.test(value);
+        value = value.replace(/…+$/, '').replace(/^blob:/i, '').replace(/[;,.:!?]+$/, '');
+        value = refangUrl(value);
+        let host = '';
+        try {
+            host = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? new URL(value).hostname : '';
+        } catch (error) {
+            host = '';
+        }
+        if (!host) host = value.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[\/?#]/)[0].replace(/:\d+$/, '');
+        return { value, cut, host: host.toLowerCase() };
+    }
+
+    const THUMBPRINT_RE = /^[0-9A-Fa-f]{40}$/;
+    const virusTotal = {
+        urlSearch: (url) => 'https://www.virustotal.com/gui/search?query=' + encodeURIComponent(refangUrl(url)),
+        domain: (host) => 'https://www.virustotal.com/gui/domain/' + encodeURIComponent(host),
+        // VT Intelligence: the files whose signature names this certificate
+        // (its SHA-1 thumbprint); '' for anything but 40 hex digits.
+        thumbprint: (thumb) => (THUMBPRINT_RE.test(String(thumb || '').trim())
+            ? 'https://www.virustotal.com/gui/search?query='
+              + encodeURIComponent('signature:' + String(thumb).trim().toUpperCase()) + '&type=files'
+            : ''),
+    };
+    const urlscan = {
+        search: (url) => 'https://urlscan.io/search/#' + encodeURIComponent(refangUrl(url)),
+        domain: (host) => 'https://urlscan.io/domain/' + encodeURIComponent(host),
+    };
+
     /* localStorage that never throws (private windows, disabled storage). */
     const storage = {
         get(key, fallback = null) {
@@ -199,5 +243,6 @@ window.Fenris = (function () {
         csrfToken, requestJson, postJson,
         copyText, flashButton, copyWithFeedback, flashClass,
         openUrl, storage, realPath,
+        refangUrl, lookupUrl, virusTotal, urlscan,
     };
 })();

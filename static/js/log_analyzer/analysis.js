@@ -1221,8 +1221,9 @@ const URL_RE = /\b(?:https?|hxxps?):\/\/[^\s"'<>()\[\]]+/gi;
 // `.`, `,` or `:` glued to the match — none of it belongs in a VT/urlscan lookup.
 const URL_TRAILING_PUNCT_RE = /[;,.:!?]+$/;
 
+// Shared with the log page (common.js).
 function refangUrl(v) {
-    return v.replace(/^hxxp(s?):\/\//i, 'http$1://');
+    return Fenris.refangUrl(v);
 }
 // DNS contexts where a bare hostname follows the bracketed keyword.
 const DNS_DOMAIN_CTX_RE = /\[Dhcp(?:Domain(?:SearchList)?)\]\s*/g;
@@ -1276,14 +1277,14 @@ const LOOKUP_KINDS = {
         title: (v) => `URL: ${v}`,
         menuHeader: 'open url in',
         items: [
-            { label: 'virustotal', url: (v) => `https://www.virustotal.com/gui/search?query=${encodeURIComponent(refangUrl(v))}` },
+            { label: 'virustotal', url: (v) => Fenris.virusTotal.urlSearch(v) },
             { label: 'who.is', url: (v) => {
                 const refanged = refangUrl(v);
                 let host = refanged;
                 try { host = new URL(refanged).hostname || refanged; } catch (e) { /* keep raw */ }
                 return `https://who.is/whois/${encodeURIComponent(host)}`;
             } },
-            { label: 'urlscan.io', url: (v) => `https://urlscan.io/search/#${encodeURIComponent(refangUrl(v))}` },
+            { label: 'urlscan.io', url: (v) => Fenris.urlscan.search(v) },
             { label: 'copy url instead', copy: refangUrl },
         ],
     },
@@ -1291,9 +1292,9 @@ const LOOKUP_KINDS = {
         title: (v) => `domain: ${v}`,
         menuHeader: 'open domain in',
         items: [
-            { label: 'virustotal', url: (v) => `https://www.virustotal.com/gui/domain/${encodeURIComponent(v)}` },
+            { label: 'virustotal', url: (v) => Fenris.virusTotal.domain(v) },
             { label: 'who.is', url: (v) => `https://who.is/whois/${encodeURIComponent(v)}` },
-            { label: 'urlscan.io', url: (v) => `https://urlscan.io/domain/${encodeURIComponent(v)}` },
+            { label: 'urlscan.io', url: (v) => Fenris.urlscan.domain(v) },
             { label: 'copy domain instead', copy: true },
         ],
     },

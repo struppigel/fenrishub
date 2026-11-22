@@ -63,7 +63,8 @@
 .hl-reg { color: var(--la-parsed-name); }
 .hl-guid { color: var(--la-parsed-clsid); }
 .hl-url { color: var(--la-info); }
-.hl-hash { color: var(--la-text-disabled); }
+.hl-hash,
+.hl-thumbprint { color: var(--la-text-disabled); }
 .hl-company { color: var(--la-parsed-company); }
 .hl-entry { font-weight: 600; }
 .hl-bold { font-weight: 600; }
@@ -98,10 +99,13 @@
     cursor: copy;
 }
 
-/* Paths, hashes, detection names and entry point bytes open a copy / Google /
-   VirusTotal / CyberChef menu instead of copying straight away. */
+/* Paths, hashes, thumbprints, URLs, detection names and entry point bytes open
+   a copy / Google / VirusTotal / urlscan / CyberChef menu instead of copying
+   straight away. */
 .uploaded-content .hl-path,
 .uploaded-content .hl-hash,
+.uploaded-content .hl-thumbprint,
+.uploaded-content span.hl-url,
 .uploaded-content .hl-threat,
 .uploaded-content .hl-ep {
     cursor: pointer;
@@ -117,7 +121,9 @@
 .uploaded-content .hl-path:hover,
 .uploaded-content .hl-reg:hover,
 .uploaded-content .hl-guid:hover,
-.uploaded-content .hl-hash:hover {
+.uploaded-content .hl-hash:hover,
+.uploaded-content .hl-thumbprint:hover,
+.uploaded-content span.hl-url:hover {
     text-decoration: underline;
 }
 

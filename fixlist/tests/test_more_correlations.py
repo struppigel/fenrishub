@@ -342,6 +342,9 @@ class ParserTests(SimpleTestCase):
         self.assertEqual(spor_log.local_offset_minutes(lines), 480)
         self.assertEqual(spor_log.local_offset_minutes([lines[1].replace('+08:00', '-03:30'), 'Times:     UTC']), -210)
         self.assertEqual(spor_log.local_offset_minutes([lines[1], 'Times:     local']), 0)
+        # Spor 0.7.2+ names the exception (FILES' created / modified are local time): still UTC
+        self.assertEqual(spor_log.local_offset_minutes([lines[1], 'Times:     UTC, except created and modified in FILES '
+                                                                  '(local time of this PC, as FRST shows them)']), 480)
         self.assertIsNone(spor_log.local_offset_minutes([lines[1]]))
         times = [(no, item.time) for no, item in spor_log.iter_timeline_items(lines)]
         self.assertEqual(times, [(8, '2026-11-18 10:40:00'), (9, '2026-11-18 07:26:37'), (10, '2026-11-18 07:25:18')])

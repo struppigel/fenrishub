@@ -65,7 +65,8 @@ let entries = [
       centralbox: { verdict: 'malicious', family: 'asyncrat', report_url: 'https://centralbox.dev/analysis/' + KNOWN_SHA } },
     { kind: 'file_info', upload_id: 'spor-log', log_type: 'Spor', line_no: 47, source: 'spor_files', file: 'evil.exe',
       path: 'C:\\x\\evil.exe', signature: 'unsigned', company: 'Microsoft Corporation', original_name: 'svchost.exe',
-      original_name_differs: true, sha256: SHA, sha1: SHA1, severity: '', system: 'same' },
+      original_name_differs: true, sha256: SHA, sha1: SHA1, severity: '', system: 'same',
+      thumbprint: '4FACB7032C7D66A9791DE4B457EA5E70140D21F2' },
     { kind: 'evidence', upload_id: 'spor-log', log_type: 'Spor', line_no: 19, time: '2026-11-18 07:48:46',
       sources: 'PF PCA BAM', file_status: 'unsigned', details: 'PCA: Installer failed', flags: [], severity: '',
       file: 'evil.exe', system: 'same' },
@@ -124,6 +125,12 @@ assert('activity is newest first', times.join() === ['2026-11-18 07:48', '2026-1
 assert('a VirusTotal address is a link, other addresses stay text',
     !!document.querySelector('.cinfo-extra a[href="https://www.virustotal.com/gui/file/abc"]')
     && !document.querySelector('.cinfo-extra a[href="https://evil.example/x"]') && text().includes('https://evil.example/x'));
+assert('a download address gets a VirusTotal lookup (the address itself still no link)',
+    !!document.querySelector('.cinfo-extra a.cinfo-action[href="https://www.virustotal.com/gui/search?query='
+        + encodeURIComponent('https://evil.example/x') + '"]'));
+assert('a certificate thumbprint gets a VirusTotal search for the files signed with it',
+    !!document.querySelector('a.cinfo-action[href="https://www.virustotal.com/gui/search?query=signature%3A'
+        + '4FACB7032C7D66A9791DE4B457EA5E70140D21F2&type=files"]'));
 const links = [...document.querySelectorAll('a.cinfo-link')].map((node) => node.getAttribute('href'));
 assert('rows of other logs link to their line', links.includes('/uploads/spor-log/#L47') && links.includes('/uploads/mb-log/#L3'),
     links.join(' '));
