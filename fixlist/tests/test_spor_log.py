@@ -13,7 +13,7 @@ from .. import centralbox, centralbox_auto, spor_log
 from ..file_hashes import extract_file_hashes
 from ..log_highlighting import compute_tool_stats, highlight_log, iter_lines
 from ..machine_signals import extract_signals
-from ..models import CentralboxAutoQueue, InfectionCase, InfectionCaseLog, UploadedLogFileHash
+from ..models import CentralboxAutoQueue, InfectionCase, InfectionCaseLog, LogTypeDetectionRule, UploadedLogFileHash
 from .factories import make_uploaded_log, make_user
 from .spor_sample import DROP_SHA, DROPPER, EVIL, EVIL_SHA, INVOICE, LINES, NOTES_MD5, OK_SHA, SHA1, SPOR
 from .test_case_correlations import RUN_LINE, cache_analysis
@@ -168,9 +168,60 @@ class HighlightTests(SimpleTestCase):
             ('Defender', '2', 'b'), ('Flagged', '5', 'w'), ('Unsigned', '2', 'w'), ('Bad signature', '1', 'b'),
         ])
 
-    def test_list_chips(self):
-        self.assertEqual(compute_tool_stats('Spor', SPOR),
-                         [['defender', 2, 'b'], ['flagged', 5, 'w'], ['bad sig', 1, 'b']])
+    def test_no_tool_chips(self):
+        # Spor lists show the analyzer's status counts like FRST (StatusChipTests).
+        self.assertEqual(compute_tool_stats('Spor', SPOR), [])
+
+
+class StatusChipTests(TestCase):
+    """Spor logs show the FRST status chips (B P C ... -> % known) in the
+    lists and before the Spor stats on the log page."""
+
+    COUNTS = dict(total_line_count=10, count_malware=2, count_warning=1, count_junk=5, count_unknown=2)
+
+    def setUp(self):
+        # The page detects the log type again (a database rule in production).
+        LogTypeDetectionRule.objects.create(
+            name='Spor', log_type='Spor', pattern=r'Spor [\d.]+ - forensic triage log',
+            scope=LogTypeDetectionRule.SCOPE_START,
+        )
+        self.user = make_user()
+        self.client.force_login(self.user)
+        # Old rows still hold the Spor tool chips; they are no longer shown.
+        self.spor = make_uploaded_log(
+            'spor-chips', log_type='Spor', content=SPOR, recipient_user=self.user,
+            tool_stats=[['defender', 2, 'b'], ['flagged', 5, 'w']], **self.COUNTS,
+        )
+
+    def assert_status_chips(self, response):
+        self.assertContains(response, '<span class="stat-b">B 2</span>')
+        self.assertContains(response, '<span class="stat-w">! 1</span>')
+        self.assertContains(response, '<span class="stat-j">P 0</span>')
+        self.assertContains(response, '<span class="stat-u">? 2</span>')
+        self.assertContains(response, '80% known')
+        self.assertNotContains(response, 'defender 2')
+
+    def test_uploads_list(self):
+        response = self.client.get(reverse('uploaded_logs'))
+        self.assert_status_chips(response)
+        self.assertContains(response, 'shared rules</span>')
+
+    def test_case_page(self):
+        case = InfectionCase.objects.create(owner=self.user, username='forum_user', auto_assign_new_items=False)
+        InfectionCaseLog.objects.create(case=case, uploaded_log=self.spor)
+        self.assert_status_chips(self.client.get(reverse('view_infection_case', args=[case.case_id])))
+
+    def test_log_page_summary_head(self):
+        response = self.client.get(reverse('view_uploaded_log', args=['spor-chips']))
+        stats = [(stat.label, stat.value, stat.severity) for stat in response.context['highlight'].stats]
+        self.assertEqual(stats[:11], [
+            ('B', '2', 'b'), ('P', '0', 'j'), ('C', '0', 'j'), ('A', '0', 'j'), ('!', '1', 'w'), ('G', '0', 'j'),
+            ('S', '0', 'j'), ('I', '0', 'j'), ('J', '5', 'j'), ('?', '2', 'u'), ('known', '80%', ''),
+        ])
+        self.assertEqual(stats[11][0], 'Defender')
+
+    def test_known_percent_without_lines(self):
+        self.assertEqual(make_uploaded_log('spor-empty', log_type='Spor', content=SPOR).known_percent(), 0)
 
 
 BIG_ISO = 'C:\\Users\\anna\\Downloads\\big.iso'

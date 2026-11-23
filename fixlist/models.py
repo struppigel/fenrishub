@@ -1002,7 +1002,7 @@ class RuleCondition(models.Model):
 
 from .log_types import (  # noqa: E402 - re-exported, many modules import these from models
     ANALYZED_LOG_TYPES, DEFAULT_RULE_LOG_TYPES, LOG_TYPE_ADDITION, LOG_TYPE_FRST, LOG_TYPE_FRST_AND_ADDITION,
-    LOG_TYPE_NAME_RE, LOG_TYPE_UNKNOWN,
+    LOG_TYPE_NAME_RE, LOG_TYPE_SPOR, LOG_TYPE_UNKNOWN,
 )
 
 _HEADER_WINDOW_CHARS = 4096
@@ -1425,6 +1425,38 @@ class UploadedLog(AnalysisCountsBase):
             setattr(self, field_name, value)
 
     ANALYZED_LOG_TYPES = ANALYZED_LOG_TYPES
+    # Types whose lists and log page show the count_* status chips (B P C ...
+    # and % known); other types show their tool_stats chips.
+    STATUS_CHIP_LOG_TYPES = (*ANALYZED_LOG_TYPES, LOG_TYPE_SPOR)
+    # The chip colour (stat-<x> / hl-sev-<x>) of each status code.
+    _STATUS_CHIP_SEVERITY = {
+        'B': 'b', 'P': 'p', 'C': 'c', 'A': 'a', '!': 'w', 'G': 'g', 'S': 's', 'I': 'i', 'J': 'j', '?': 'u',
+    }
+
+    @property
+    def shows_status_counts(self) -> bool:
+        return self.log_type in self.STATUS_CHIP_LOG_TYPES
+
+    def known_percent(self) -> int:
+        """The share of lines a rule classified (every status but ?), rounded
+        like the chips' {% widthratio %}; 0 without lines."""
+        total = self.total_line_count or 0
+        if total <= 0:
+            return 0
+        known = sum(getattr(self, field_name) or 0 for code, field_name in self.ANALYSIS_STATUS_FIELD_MAP.items()
+                    if code != '?')
+        return int(round(known * 100 / total))
+
+    def status_count_stats(self) -> list:
+        """The status chips (upload_stat_chips.html) as log page Stats: a count
+        per status, grey when 0, then the % known."""
+        from .log_highlighting import Stat
+        stats = []
+        for code, field_name in self.ANALYSIS_STATUS_FIELD_MAP.items():
+            count = getattr(self, field_name) or 0
+            stats.append(Stat(code, str(count), self._STATUS_CHIP_SEVERITY[code] if count else 'j'))
+        stats.append(Stat('known', f'{self.known_percent()}%', ''))
+        return stats
 
     def recalculate_analysis_stats(self):
         from .rule_sets import SHARED_RULE_SET_KEY, resolve_effective_rule_set_key

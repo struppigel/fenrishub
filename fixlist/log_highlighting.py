@@ -1894,8 +1894,9 @@ def render_highlighted_html(result):
 # ---------------------------------------------------------------------------
 
 DETECTION_CHIP_TYPES = frozenset(DETECTION_LOG_TYPES)
-# These keep their analyzer-based count_* fields (and chips) instead.
-FRST_TYPES = frozenset(ANALYZED_LOG_TYPES)
+# These show their analyzer-based count_* fields as chips instead
+# (UploadedLog.STATUS_CHIP_LOG_TYPES).
+STATUS_COUNT_CHIP_TYPES = frozenset((*ANALYZED_LOG_TYPES, LOG_TYPE_SPOR))
 
 
 def _chip(label, value, severity):
@@ -1912,8 +1913,8 @@ def _stat_value(result, *labels):
 def compute_tool_stats(log_type, content):
     """Return [[label, value, severity], ...] chips for the uploads/cases lists.
 
-    Fixlog and the FRST types keep their dedicated count fields; types without
-    a highlighter (or logs over the size cap) get no chips.
+    Fixlog, the FRST types and Spor keep their dedicated count fields; types
+    without a highlighter (or logs over the size cap) get no chips.
     """
     if log_type == 'SecurityCheck':
         from .log_converters import parse_securitycheck
@@ -1927,7 +1928,7 @@ def compute_tool_stats(log_type, content):
             _chip('rdp', counts.get('remote_desktop', 0), 'g'),
             _chip('set', counts.get('setting', 0), 'w'),
         ]
-    if log_type in FRST_TYPES or log_type == 'Fixlog' or log_type not in HIGHLIGHTERS:
+    if log_type in STATUS_COUNT_CHIP_TYPES or log_type == 'Fixlog' or log_type not in HIGHLIGHTERS:
         return []
     result = highlight_log(log_type, content)
     if result is None:
@@ -1950,10 +1951,6 @@ def compute_tool_stats(log_type, content):
         return [_chip('deleted', deleted, 'c'),
                 _chip('sched', _stat_value(result, 'Scheduled') or 0, 'w'),
                 _chip('failed', _stat_value(result, 'Failed') or 0, 'b')]
-    if log_type == LOG_TYPE_SPOR:
-        return [_chip('defender', _stat_value(result, 'Defender') or 0, 'b'),
-                _chip('flagged', _stat_value(result, 'Flagged') or 0, 'w'),
-                _chip('bad sig', _stat_value(result, 'Bad signature') or 0, 'b')]
     if log_type == 'KpRm':
         scheduled = sum(int(s.value) for s in result.stats if 'schedul' in s.label.lower())
         return [_chip('removed', _stat_value(result, 'Removed') or 0, 'c'),

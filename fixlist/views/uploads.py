@@ -530,6 +530,9 @@ def view_uploaded_log(request, upload_id):
             highlight = HighlightResult(sections=[], summary=[], summary_title='Fixlog', stats=fixlog_stats)
         else:
             highlight.stats = fixlog_stats + highlight.stats
+    elif uploaded_log.log_type == LOG_TYPE_SPOR and highlight is not None:
+        # Same numbers as the status chips in the uploads / cases lists.
+        highlight.stats = uploaded_log.status_count_stats() + highlight.stats
 
     # Stored centralbox verdicts for the log's SHA256s (database only; the page
     # asks for missing ones afterwards, so it never waits on centralbox).

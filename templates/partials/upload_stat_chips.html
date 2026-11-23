@@ -1,10 +1,11 @@
 {% load rule_tags %}{% comment %}
-The stats chips of one uploaded log (as on the case page): FRST status counts
-with % known (and, with show_rule_set, the rule set they were computed with),
-Fixlog operations, or the stored tool chips. Colours: .upload-stats in base.html.
+The stats chips of one uploaded log (as on the case page): status counts with
+% known for FRST types and Spor (UploadedLog.STATUS_CHIP_LOG_TYPES; with
+show_rule_set, also the rule set they were computed with), Fixlog operations,
+or the stored tool chips. Colours: .upload-stats in base.html.
 {% endcomment %}<div class="fixlist-meta upload-stats">
     lines {{ uploaded_log.total_line_count }}
-    {% if uploaded_log.log_type == 'FRST' or uploaded_log.log_type == 'Addition' or uploaded_log.log_type == 'FRST&Addition' %}
+    {% if uploaded_log.shows_status_counts %}
     |
     <span class="{{ uploaded_log.count_malware|stat_class:'b' }}">B {{ uploaded_log.count_malware }}</span>
     <span class="{{ uploaded_log.count_pup|stat_class:'p' }}">P {{ uploaded_log.count_pup }}</span>
