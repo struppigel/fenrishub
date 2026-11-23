@@ -399,7 +399,11 @@
     text-indent: calc(-1 * (var(--hl-summary-line, 5ch) + 1ch));
 }
 
-.hl-summary-list li.hl-summary-group .hl-jump-line {
+/* text-indent is inherited, and an inline-block applies it to its own first
+   line: without this the "L<n>" label and the verdict letter would be pulled
+   left by the hanging indent, onto the line number. */
+.hl-summary-list li.hl-summary-group .hl-jump-line,
+.hl-summary-list li.hl-summary-group .hl-jump-status {
     text-indent: 0;
 }
 
