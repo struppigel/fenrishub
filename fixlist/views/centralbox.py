@@ -16,7 +16,7 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
-from ..log_highlighting import SummaryItem
+from ..log_highlighting import SummaryItem, iter_lines
 
 from .. import centralbox, centralbox_auto
 from ..correlations import spor_self
@@ -617,6 +617,12 @@ def page_correlation_context(uploaded_log, user, highlight):
                     correlation=note, correlation_added=True,
                 ))
             if added:
+                # The lines' syntax tokens, so the entries read like the log
+                # lines in syntax colours (SummaryItem.name_html).
+                by_no = {item.line_no: item for item in added}
+                for line in iter_lines(highlight):
+                    if line.no in by_no:
+                        by_no[line.no].tokens = line.tokens
                 highlight.summary = sorted(highlight.summary + added, key=lambda item: item.line_no)
         for data in lines.values():
             data.pop('text', None)

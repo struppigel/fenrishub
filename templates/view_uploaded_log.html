@@ -247,7 +247,7 @@
     <ul class="hl-summary-list" style="--hl-summary-line: {{ highlight.summary_line_ch }}ch">
         {% for item in highlight.summary_shown %}
         {# Entries that say the same are shown once: "also L22 L23" links to their other lines (HighlightResult.summary_groups). #}
-        <li data-line="{{ item.line_no }}"{% if item.also_lines %} data-lines="{{ item.all_lines|join:' ' }}" class="hl-summary-group"{% endif %}{% if item.correlation_added %} data-cor-added{% endif %}><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}" title="{{ item.name }}"><span class="hl-jump-line">L{{ item.line_no }}</span> {% if item.status %}<span class="hl-jump-status hl-sev-{{ item.severity }}">{{ item.status }}</span> {% endif %}<span class="hl-jump-name hl-sev-{{ item.severity }}">{{ item.name }}</span>{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}{% if item.correlation %} <span class="hl-jump-cor">{{ item.correlation }}</span>{% endif %}</a>{% if item.also_lines %} <span class="hl-jump-also-label">also</span>{% for no in item.also_lines %} <a href="#L{{ no }}" class="hl-jump hl-jump-also" data-line="{{ no }}">L{{ no }}</a>{% endfor %}{% endif %}</li>
+        <li data-line="{{ item.line_no }}"{% if item.also_lines %} data-lines="{{ item.all_lines|join:' ' }}" class="hl-summary-group"{% endif %}{% if item.correlation_added %} data-cor-added{% endif %}><a href="#L{{ item.line_no }}" class="hl-jump" data-line="{{ item.line_no }}" title="{{ item.name }}"><span class="hl-jump-line">L{{ item.line_no }}</span> {% if item.status %}<span class="hl-jump-status hl-sev-{{ item.severity }}">{{ item.status }}</span> {% endif %}{% with name_html=item.name_html %}<span class="hl-jump-name hl-sev-{{ item.severity }}">{% if name_html %}<span class="hl-jump-tokens">{{ name_html }}</span>{% else %}{{ item.name }}{% endif %}</span>{% endwith %}{% if item.target and item.target != item.name %} <span class="hl-jump-target">{{ item.target }}</span>{% endif %}{% if item.action %} <span class="hl-jump-action">{{ item.action }}</span>{% endif %}{% if item.correlation %} <span class="hl-jump-cor">{{ item.correlation }}</span>{% endif %}</a>{% if item.also_lines %} <span class="hl-jump-also-label">also</span>{% for no in item.also_lines %} <a href="#L{{ no }}" class="hl-jump hl-jump-also" data-line="{{ no }}">L{{ no }}</a>{% endfor %}{% endif %}</li>
         {% endfor %}
     </ul>
     {% if highlight.summary_hidden_count %}<div class="hl-summary-more">and {{ highlight.summary_hidden_count }} more</div>{% endif %}
@@ -384,15 +384,17 @@ function toggleLogMaximized(force) {
 }
 
 // FRST logs with rule statuses: syntax colours with a status bar and letter
-// (default), or whole lines in their status colour. Remembered per browser.
+// (default), or whole lines and summary entries in their status colour. Set on
+// the page, so it reaches both the log and the summary box (log_highlight.css).
+// Remembered per browser.
 const LOG_VERDICT_COLORS_KEY = 'uploadedLogVerdictColors';
 
 function toggleVerdictColors(force) {
-    const root = document.getElementById('uploadedContent');
+    const page = document.querySelector('.uploaded-log-page');
     const button = document.getElementById('toggleVerdictColorsButton');
-    if (!root || !button) return;
-    const on = typeof force === 'boolean' ? force : !root.classList.contains('hl-verdict-colors');
-    root.classList.toggle('hl-verdict-colors', on);
+    if (!page || !button) return;
+    const on = typeof force === 'boolean' ? force : !page.classList.contains('hl-verdict-colors');
+    page.classList.toggle('hl-verdict-colors', on);
     button.textContent = on ? 'syntax colours' : 'verdict colours';
     button.title = on ? 'keep the syntax colours and mark the rule status at the line start'
         : 'colour whole lines by their rule status instead of the syntax colours';
@@ -1333,6 +1335,33 @@ const CaseCorrelations = (function () {
         return el;
     }
 
+    // A summary name in the log line's syntax tokens, like the server's
+    // (SummaryItem.name_html): the line's tokens as plain spans (no links
+    // inside the entry's jump link), without the whitespace the name is
+    // stripped of. Null when the line doesn't spell the name.
+    function nameSpan(no, severity, text) {
+        const name = span('hl-jump-name hl-sev-' + severity, '');
+        name.append(tokenName(no, text) || text);
+        return name;
+    }
+
+    function tokenName(no, text) {
+        const line = document.getElementById('L' + no);
+        if (!line || !text) return null;
+        const parts = Array.from(line.childNodes, node => [
+            node.nodeType === Node.ELEMENT_NODE ? node.className : '', node.textContent,
+        ]).filter(part => part[1]);
+        while (parts.length && !parts[0][1].trim()) parts.shift();
+        while (parts.length && !parts[parts.length - 1][1].trim()) parts.pop();
+        if (!parts.length) return null;
+        parts[0][1] = parts[0][1].trimStart();
+        parts[parts.length - 1][1] = parts[parts.length - 1][1].trimEnd();
+        if (parts.map(part => part[1]).join('') !== text) return null;
+        const wrap = span('hl-jump-tokens', '');
+        parts.forEach(([cls, value]) => wrap.append(cls ? span(cls, value) : value));
+        return wrap;
+    }
+
     // The summary entries of the correlations, built like the server's
     // (the summary list in this template; views/centralbox.py
     // page_correlation_context): "correlated: ..." after a line the rules
@@ -1393,7 +1422,7 @@ const CaseCorrelations = (function () {
             link.append(
                 span('hl-jump-line', 'L' + no), ' ',
                 span('hl-jump-status hl-sev-' + severity, item.status), ' ',
-                span('hl-jump-name hl-sev-' + severity, item.text || ''), ' ',
+                nameSpan(no, severity, item.text || ''), ' ',
                 span('hl-jump-cor', note),
             );
             li.appendChild(link);

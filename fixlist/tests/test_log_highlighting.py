@@ -1,10 +1,12 @@
+import re
+from html import unescape
 from unittest import mock
 
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from ..log_highlighting import (
-    HIGHLIGHTERS, HighlightResult, Stat, _inline, apply_analysis_statuses, compute_tool_stats, highlight_log, iter_lines,
+    HIGHLIGHTERS, HighlightResult, Stat, SummaryItem, _inline, apply_analysis_statuses, compute_tool_stats, highlight_log, iter_lines,
     render_highlighted_html, threat_severity,
 )
 from ..templatetags.rule_tags import stat_class
@@ -779,6 +781,15 @@ class PerToolHighlightTests(SimpleTestCase):
         self.assertTrue(_classes(dated)['hl-path'].endswith('New folder (2)\\x.dat'))
         self.assertEqual(_classes(_line(result, FRST, 'Boot Mode'))['hl-key'], 'Boot Mode:')
 
+    def test_summary_name_html_needs_tokens_that_spell_the_name(self):
+        tokens = [('', '  '), ('hl-path', 'C:/a<b>.exe'), ('hl-url', 'https://www.virustotal.com/x'), ('', ' ')]
+        item = SummaryItem(1, 'b', 'C:/a<b>.exehttps://www.virustotal.com/x', status='B', tokens=tokens)
+        # Stripped like the name, escaped, and no link inside the summary's jump link.
+        self.assertEqual(str(item.name_html), '<span class="hl-path">C:/a&lt;b&gt;.exe</span>'
+                         '<span class="hl-url">https://www.virustotal.com/x</span>')
+        self.assertEqual(SummaryItem(1, 'b', 'other', tokens=tokens).name_html, '')
+        self.assertEqual(SummaryItem(1, 'b', 'plain').name_html, '')
+
     def test_frst_rule_statuses_paint_lines_and_fill_summary(self):
         result = highlight_log('FRST', FRST)
         self.assertTrue(apply_analysis_statuses(result, FRST, _frst_payload(FRST)))
@@ -797,6 +808,10 @@ class PerToolHighlightTests(SimpleTestCase):
         html = render_highlighted_html(result)
         no = _no(FRST, 'evil.exe')
         self.assertIn(f'<span class="hl-line hl-st-b" id="L{no}" data-n="{no}" data-st="B">', html)
+        # The summary entry carries the line's tokens, so it can show syntax colours.
+        name_html = str(result.summary[1].name_html)
+        self.assertIn('<span class="hl-path">', name_html)
+        self.assertEqual(unescape(re.sub(r'<[^>]+>', '', name_html)), result.summary[1].name)
         self.assertEqual('\n'.join(line.text for line in iter_lines(result)), FRST)
 
     def test_frst_summary_keeps_long_lines_whole(self):
@@ -1312,8 +1327,10 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         no = _no(FRST, 'evil.exe')
         self.assertContains(response, f'data-n="{no}" data-st="B"')
-        # Switch between syntax colours (default) and whole-line verdict colours.
+        # Switch between syntax colours (default) and whole-line verdict colours;
+        # the summary entry carries the line's syntax tokens for it.
         self.assertContains(response, 'id="toggleVerdictColorsButton"')
+        self.assertContains(response, '<span class="hl-jump-name hl-sev-b"><span class="hl-jump-tokens">')
         self.assertNotContains(response, 'hl-verdict-colors"')
         self.assertContains(response, f'href="#L{no}" class="hl-jump" data-line="{no}"')
         # Verdict right after the line label, before the line text.

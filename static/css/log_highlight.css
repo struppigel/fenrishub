@@ -234,21 +234,23 @@
     color: var(--la-text-disabled);
 }
 
-/* FRST types: a line classified by the rules takes its status colour (over
-   the syntax token colours, like in the analyzer) and shows the status
-   letter next to its line number. Unknown (?) lines keep the syntax colours. */
+/* FRST types: a line classified by the rules shows its status letter next to
+   its line number. Unknown (?) lines have no letter and keep the syntax colours.
+   How a classified line is coloured is the page's toggle (view_uploaded_log.html
+   puts .hl-verdict-colors on .uploaded-log-page): syntax colours by default,
+   verdict colours on request. */
 .uploaded-content.hl-has-status .hl-line::before {
     content: attr(data-n) '\00a0\00a0';
 }
 
-/* Room on the left for the status bar (syntax colours, below), on every line
-   and in both looks, so switching never moves the text. */
-.uploaded-content.hl-has-status .hl-line {
-    padding-left: calc(var(--hl-gutter, 4ch) + 1.5ch + 6px);
-}
-
 .uploaded-content.hl-has-status .hl-line[data-st]::before {
     content: attr(data-n) '\00a0' attr(data-st);
+}
+
+/* Room on the left for the status bar, on every line and in both looks, so
+   switching never moves the text. */
+.uploaded-content.hl-has-status .hl-line {
+    padding-left: calc(var(--hl-gutter, 4ch) + 1.5ch + 6px);
 }
 
 /* The status colour of a classified line, used by both looks below. */
@@ -262,28 +264,50 @@
 .uploaded-content .hl-st-i { --hl-st: var(--la-status-i); }
 .uploaded-content .hl-st-j { --hl-st: var(--la-status-j); }
 
-/* Verdict colours (the "verdict colours" button): the whole line takes its
-   status colour, over the syntax token colours. */
-.uploaded-content.hl-verdict-colors .hl-line[class*="hl-st-"],
-.uploaded-content.hl-verdict-colors .hl-line[class*="hl-st-"] * {
-    color: var(--hl-st);
-}
-
 /* Syntax colours (the default): tokens keep their colours; a classified line
    shows its status as a bar on its left edge and as the colour of the gutter
    letter. The gutter is right-aligned monospace text ending in the letter, so
    its last 1ch is painted in the status colour and the number stays grey. A
    box-shadow leaves background-color (jump flash) and background-image (hover
    tint) free. */
-.uploaded-content.hl-has-status:not(.hl-verdict-colors) .hl-line[class*="hl-st-"] {
+.uploaded-content.hl-has-status .hl-line[class*="hl-st-"] {
     box-shadow: inset 3px 0 0 var(--hl-st);
 }
 
-.uploaded-content.hl-has-status:not(.hl-verdict-colors) .hl-line[class*="hl-st-"]::before {
+.uploaded-content.hl-has-status .hl-line[class*="hl-st-"]::before {
     background-image: linear-gradient(to left, var(--hl-st) 1ch, var(--la-text-disabled) 1ch);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+}
+
+/* Summary entries of FRST verdicts carry the line's tokens (.hl-jump-tokens):
+   in syntax colours they read like the log line; the verdict letter before
+   them keeps the status colour. */
+.hl-summary-list .hl-jump-tokens {
+    color: var(--la-text-main);
+}
+
+/* Verdict colours: the whole line, and the whole summary entry, take the
+   status colour over the syntax token colours; the gutter letter is grey and
+   there is no bar. */
+.hl-verdict-colors .uploaded-content .hl-line[class*="hl-st-"],
+.hl-verdict-colors .uploaded-content .hl-line[class*="hl-st-"] * {
+    color: var(--hl-st);
+}
+
+.hl-verdict-colors .uploaded-content.hl-has-status .hl-line[class*="hl-st-"] {
+    box-shadow: none;
+}
+
+.hl-verdict-colors .uploaded-content.hl-has-status .hl-line[class*="hl-st-"]::before {
+    background-image: none;
+    color: var(--la-text-disabled);
+}
+
+.hl-verdict-colors .hl-summary-list .hl-jump-tokens,
+.hl-verdict-colors .hl-summary-list .hl-jump-tokens * {
+    color: inherit;
 }
 
 .hl-sev-a { color: var(--la-status-a); }

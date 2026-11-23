@@ -425,6 +425,9 @@ class LogViewCorrelationTests(TestCase):
         self.assertEqual(summary[0].correlation, 'correlated: asyncrat · centralbox: malicious · Malwarebytes')
         self.assertIn('<span class="hl-jump-cor">correlated: asyncrat', html)
         self.assertIn(f'<li data-line="{run_line_no}" data-cor-added>', html)
+        # Its name is the line's syntax tokens, like the rule-verdict entries.
+        self.assertTrue(summary[0].name_html)
+        self.assertIn('<span class="hl-jump-name hl-sev-b"><span class="hl-jump-tokens">', html)
         self.assertTrue(response.context['correlations']['fresh'])
         # The line itself carries no extra text (the marker is CSS only).
         self.assertNotIn('ⓘ', html.split('id="uploadedContent"', 1)[1].split('</div>', 1)[0])

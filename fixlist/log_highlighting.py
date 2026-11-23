@@ -82,10 +82,19 @@ class SummaryItem:
     # The summary box only (HighlightResult.summary_groups): the later lines of
     # entries that say exactly the same, shown once at this item's line.
     also_lines: list = field(default_factory=list)
+    # FRST types only: the line's syntax tokens, so the summary can show the
+    # name in the log's syntax colours (the page's colour toggle).
+    tokens: list = field(default_factory=list)
 
     @property
     def all_lines(self):
         return [self.line_no] + self.also_lines
+
+    @property
+    def name_html(self):
+        """The name as syntax token spans, or '' when there are no tokens or
+        they don't spell the name."""
+        return _summary_tokens_html(self.tokens, self.name)
 
 
 @dataclass
@@ -1770,7 +1779,7 @@ def apply_analysis_statuses(result, content, payload):
         line.paint = paint
         severity = _STATUS_SUMMARY_SEVERITY.get(status)
         if severity:
-            items.append(SummaryItem(no, severity, text, status=status))
+            items.append(SummaryItem(no, severity, text, status=status, tokens=line.tokens))
     result.summary = items + result.summary
     result.summary.sort(key=lambda item: item.line_no)
     return True
@@ -1855,6 +1864,29 @@ def _line_html(line, tag='span', extra_class='', extra_attrs=''):
         extra_attrs += f' data-st="{_escape(line.status)}"'
     return (f'<{tag} class="hl-line{extra_class}" id="L{line.no}" data-n="{line.no}"{extra_attrs}>'
             f'{"".join(parts)}</{tag}>')
+
+
+def _summary_tokens_html(tokens, name):
+    """Token spans for a summary name: the line's tokens without the leading
+    and trailing whitespace the name is stripped of. Plain spans only (the name
+    sits inside the entry's jump link, so no VirusTotal links); '' when the
+    tokens don't spell the name exactly."""
+    if not tokens or not name:
+        return ''
+    parts = [[cls, text] for cls, text in tokens if text]
+    while parts and not parts[0][1].lstrip():
+        parts.pop(0)
+    while parts and not parts[-1][1].rstrip():
+        parts.pop()
+    if not parts:
+        return ''
+    parts[0][1] = parts[0][1].lstrip()
+    parts[-1][1] = parts[-1][1].rstrip()
+    if ''.join(text for _, text in parts) != name:
+        return ''
+    html = ''.join(f'<span class="{cls}">{_escape(text)}</span>' if cls else _escape(text)
+                   for cls, text in parts)
+    return mark_safe(html)
 
 
 def _chunks_html(lines):
