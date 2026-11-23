@@ -1,6 +1,7 @@
 """Minimal test helpers used across the fixlist test suite."""
 from django.contrib.auth.models import User
 
+from ..analyzer import invalidate_rule_buckets_cache
 from ..models import ClassificationRule, UploadedLog
 
 
@@ -31,4 +32,8 @@ def make_rule(source_text, status=ClassificationRule.STATUS_MALWARE,
         match_type=match_type,
     )
     defaults.update(overrides)
-    return ClassificationRule.objects.create(**defaults)
+    rule = ClassificationRule.objects.create(**defaults)
+    # As the views that save rules do: buckets a worker cached earlier (an
+    # earlier test, same rolled-back rules_version) must not hide this rule.
+    invalidate_rule_buckets_cache()
+    return rule
