@@ -158,12 +158,17 @@ BUDGET_READS = ''
 BUDGET_FRESH = 'fresh'
 
 
+def current_minute():
+    """The number of the current minute: the key of this minute's budget buckets."""
+    return int(time.time()) // 60
+
+
 def take_budget(key_id=BUDGET_READS, limit=None):
     """Count one call against this minute's limit of a bucket; False when it is used up."""
     if limit is None:
         limit = int(_setting('CENTRALBOX_CALLS_PER_MINUTE', 60))
     limit = max(1, int(limit))
-    minute = int(time.time()) // 60
+    minute = current_minute()
     try:
         CentralboxUsageMinute.objects.get_or_create(minute=minute, key_id=key_id)
     except IntegrityError:
@@ -176,7 +181,7 @@ def take_budget(key_id=BUDGET_READS, limit=None):
 
 def budget_used(key_id=BUDGET_READS):
     """Calls counted in this minute's bucket so far."""
-    minute = int(time.time()) // 60
+    minute = current_minute()
     return CentralboxUsageMinute.objects.filter(minute=minute, key_id=key_id).values_list('calls', flat=True).first() or 0
 
 
@@ -208,7 +213,7 @@ def _record_failure(failure, key_id=BUDGET_READS):
     _last_failure.kind = failure.kind
     try:
         CentralboxUsageMinute.objects.filter(
-            minute=int(time.time()) // 60, key_id=key_id,
+            minute=current_minute(), key_id=key_id,
         ).update(failures=F('failures') + 1)
     except Exception:
         pass

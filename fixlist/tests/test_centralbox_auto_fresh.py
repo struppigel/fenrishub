@@ -270,6 +270,11 @@ class DrainTests(TestCase):
     def setUp(self):
         cache.clear()
         centralbox._consecutive_failures = 0
+        # One fixed minute: a test crossing a minute boundary would otherwise
+        # start with fresh per-minute budgets halfway through.
+        minute = mock.patch.object(centralbox, 'current_minute', return_value=29_000_000)
+        minute.start()
+        self.addCleanup(minute.stop)
 
     def enqueue(self, value, priority=2, minutes_ago=0):
         return CentralboxAutoQueue.objects.create(

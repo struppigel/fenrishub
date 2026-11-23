@@ -95,6 +95,7 @@ class FreshLookupTests(TestCase):
         self.assertEqual(len(calls), 1)
 
     @override_settings(CENTRALBOX_FRESH_LOOKUPS_PER_MINUTE=2)
+    @mock.patch.object(centralbox, 'current_minute', lambda: 29_000_000)  # no minute boundary midway
     def test_fresh_lookups_per_minute_are_capped(self):
         shas = [f'{n:064x}' for n in range(1, 4)]
         upload = make_uploaded_log('many-log', log_type='Malwarebytes', forum_username='nobody', content='\n'.join(

@@ -181,6 +181,7 @@ class CentralboxClientTests(TestCase):
         self.assertLess(abs((paused - timezone.now()).total_seconds() - 120), 10)
 
     @override_settings(CENTRALBOX_CALLS_PER_MINUTE=1)
+    @mock.patch.object(centralbox, 'current_minute', lambda: 29_000_000)  # no minute boundary midway
     def test_the_shared_minute_budget_is_respected(self):
         answers = {f'/status/{h}': status_answer(h, analysed=False) for h in (H1, H2)}
         with self.answers(answers) as http:
