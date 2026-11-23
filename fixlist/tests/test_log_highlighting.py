@@ -1312,6 +1312,9 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         no = _no(FRST, 'evil.exe')
         self.assertContains(response, f'data-n="{no}" data-st="B"')
+        # Switch between syntax colours (default) and whole-line verdict colours.
+        self.assertContains(response, 'id="toggleVerdictColorsButton"')
+        self.assertNotContains(response, 'hl-verdict-colors"')
         self.assertContains(response, f'href="#L{no}" class="hl-jump" data-line="{no}"')
         # Verdict right after the line label, before the line text.
         self.assertContains(
@@ -1342,6 +1345,7 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         response = self._get(upload)
         self.assertContains(response, 'class="hl-line"')
         self.assertNotContains(response, 'data-st=')
+        self.assertNotContains(response, 'id="toggleVerdictColorsButton"')
         self.assertContains(response, 'shared rules (analysis is being refreshed, reload in a moment)')
         # The refresh (synchronous under the test runner) caches a fresh analysis
         # without touching the upload's list counts.

@@ -325,6 +325,7 @@
     <div class="log-view-toolbar">
         {% if highlighted_html %}<div class="hl-copy-hint">
             {% if highlight.has_sections %}<button type="button" id="toggleSectionsButton" class="hl-toggle-sections" onclick="toggleAllSections(this)">collapse all</button>{% endif %}
+            {% if highlight.has_status %}<button type="button" id="toggleVerdictColorsButton" class="hl-toggle-sections" title="colour whole lines by their rule status instead of the syntax colours" onclick="toggleVerdictColors()">verdict colours</button>{% endif %}
         </div>{% else %}<div></div>{% endif %}
         <span id="maximizeLogToggle" class="log-maximize-toggle" role="button" tabindex="0"
               aria-label="maximize log view" title="maximize log view (Esc restores)"
@@ -381,6 +382,24 @@ function toggleLogMaximized(force) {
     Fenris.storage.setFlag(LOG_MAXIMIZED_KEY, on);
     if (on) page.querySelector('.log-action-bar').scrollIntoView({ block: 'start' });
 }
+
+// FRST logs with rule statuses: syntax colours with a status bar and letter
+// (default), or whole lines in their status colour. Remembered per browser.
+const LOG_VERDICT_COLORS_KEY = 'uploadedLogVerdictColors';
+
+function toggleVerdictColors(force) {
+    const root = document.getElementById('uploadedContent');
+    const button = document.getElementById('toggleVerdictColorsButton');
+    if (!root || !button) return;
+    const on = typeof force === 'boolean' ? force : !root.classList.contains('hl-verdict-colors');
+    root.classList.toggle('hl-verdict-colors', on);
+    button.textContent = on ? 'syntax colours' : 'verdict colours';
+    button.title = on ? 'keep the syntax colours and mark the rule status at the line start'
+        : 'colour whole lines by their rule status instead of the syntax colours';
+    if (typeof force !== 'boolean') Fenris.storage.setFlag(LOG_VERDICT_COLORS_KEY, on);
+}
+
+if (Fenris.storage.flag(LOG_VERDICT_COLORS_KEY)) toggleVerdictColors(true);
 
 (function () {
     if (Fenris.storage.flag(LOG_MAXIMIZED_KEY)) toggleLogMaximized(true);
