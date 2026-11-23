@@ -1,0 +1,94 @@
+{% comment %}
+The performance tab of the statistics page (views/statistics_performance.py).
+Context: `perf` = performance_stats(...), plus `granularity`.
+{% endcomment %}
+{% if not perf.headline.scans %}
+<div class="info-box">no timed scans in the selected range. Scan times are recorded for every analyzed upload from now on.</div>
+{% else %}
+<div class="stats-cards">
+    <div class="stats-card">
+        <div class="stats-card-label">scans</div>
+        <div class="stats-card-value">{{ perf.headline.scans }}</div>
+    </div>
+    <div class="stats-card">
+        <div class="stats-card-label">median ms / 1,000 lines</div>
+        <div class="stats-card-value">{{ perf.headline.median_speed }}</div>
+    </div>
+    <div class="stats-card warning">
+        <div class="stats-card-label">90th percentile ms / 1,000 lines</div>
+        <div class="stats-card-value">{{ perf.headline.p90_speed }}</div>
+    </div>
+    <div class="stats-card">
+        <div class="stats-card-label">median scan</div>
+        <div class="stats-card-value">{{ perf.headline.median_seconds }} s</div>
+    </div>
+    <div class="stats-card">
+        <div class="stats-card-label">slowest scan</div>
+        <div class="stats-card-value">{{ perf.headline.max_seconds }} s</div>
+    </div>
+</div>
+<div class="stats-tag-note">
+    Speed is the shared analysis of an upload, in milliseconds per 1,000 lines, with the rules already loaded.
+    {% if perf.headline.rule_loads %}Loading the rules first (after a rule change or a restart) took a median of {{ perf.headline.median_rule_load_seconds }} s, in {{ perf.headline.rule_loads }} of the scans; it is not part of the speed.{% endif %}
+</div>
+
+<div class="stats-section">
+    <h3>scan speed per {{ granularity }} (ms per 1,000 lines)</h3>
+    <div class="stats-chart-wrap">
+        <canvas id="perfSpeedChart"></canvas>
+    </div>
+</div>
+
+<div class="stats-section">
+    <h3>median scan speed per log type, per {{ granularity }}</h3>
+    <div class="stats-chart-wrap">
+        <canvas id="perfTypeChart"></canvas>
+    </div>
+    <table class="stats-table" style="margin-top: 12px;">
+        <thead>
+            <tr>
+                <th>log type</th><th class="num">scans</th><th class="num">median lines</th>
+                <th class="num">median scan (s)</th><th class="num">median ms / 1,000 lines</th>
+                <th class="num">90th percentile</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in perf.types %}
+            <tr>
+                <td>{{ row.log_type }}</td><td class="num">{{ row.scans }}</td><td class="num">{{ row.median_lines|floatformat:0 }}</td>
+                <td class="num">{{ row.median_seconds }}</td><td class="num">{{ row.median_speed }}</td><td class="num">{{ row.p90_speed }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="stats-section">
+    <h3>enabled rules per {{ granularity }}</h3>
+    <div class="stats-chart-wrap">
+        <canvas id="perfRuleChart"></canvas>
+    </div>
+</div>
+
+<div class="stats-section">
+    <h3>slowest {{ perf.slowest_n }} scans</h3>
+    <table class="stats-table">
+        <thead>
+            <tr>
+                <th>scanned</th><th>log</th><th>type</th><th class="num">lines</th><th class="num">scan (s)</th>
+                <th class="num">ms / 1,000 lines</th><th class="num">rules</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in perf.slowest %}
+            <tr>
+                <td>{{ row.created_at|date:"Y-m-d H:i" }}</td>
+                <td>{% if row.url %}<a href="{{ row.url }}">{{ row.upload_id }}</a>{% else %}{{ row.upload_id|default:"-" }}{% endif %}</td>
+                <td>{{ row.log_type }}</td><td class="num">{{ row.line_count }}</td><td class="num">{{ row.seconds }}</td>
+                <td class="num">{{ row.speed }}</td><td class="num">{{ row.rule_count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}

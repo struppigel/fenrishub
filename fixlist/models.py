@@ -1465,14 +1465,22 @@ class UploadedLog(AnalysisCountsBase):
         shared_payload = None
         effective_payload = None
         if is_analyzed_log_type(self.log_type):
-            from .analyzer import analyze_log_text, _detect_incomplete_log_warning
+            from .analyzer import analyze_log_text, _detect_incomplete_log_warning, _warm_rule_buckets
             content = self.content or ''
             # Analysis is linear in line count and is the single most expensive
             # thing this app does. Recording size and duration together makes a
             # creeping regression visible in the logs before it starts timing
             # out requests -- and identifies the log when one does.
             started = time.monotonic()
+            # Loaded (or found cached) before the clock starts, so the timing
+            # below is the analysis alone; 0 when the cached rules were current.
+            rules_load_s = _warm_rule_buckets(SHARED_RULE_SET_KEY, self.log_type)
+            analysis_started = time.monotonic()
             shared_payload = analyze_log_text(content, SHARED_RULE_SET_KEY, self.log_type)
+            self._record_analysis_timing(
+                content, shared_payload, rules_load_s=rules_load_s,
+                duration_s=time.monotonic() - analysis_started,
+            )
             if effective_key == SHARED_RULE_SET_KEY:
                 effective_payload = shared_payload
             else:
@@ -1525,6 +1533,26 @@ class UploadedLog(AnalysisCountsBase):
             UploadedLogAnalysis.objects.filter(upload=self).delete()
 
         update_uploaded_log_stat_snapshot(self, shared_payload, shared_line_tags)
+
+    def _record_analysis_timing(self, content, payload, *, rules_load_s, duration_s):
+        """Store how long the shared analysis took (AnalysisTiming); never raises."""
+        from .analyzer import _rule_set_rules
+        from .rule_sets import SHARED_RULE_SET_KEY
+
+        try:
+            # A savepoint: a failed insert must not break the caller's transaction.
+            with transaction.atomic():
+                AnalysisTiming.objects.create(
+                    upload_id=self.upload_id or '',
+                    log_type=self.log_type,
+                    line_count=(payload or {}).get('summary', {}).get('total_lines', 0),
+                    char_count=len(content),
+                    rule_count=_rule_set_rules(ClassificationRule, SHARED_RULE_SET_KEY).count(),
+                    duration_ms=round(duration_s * 1000),
+                    rules_load_ms=round(rules_load_s * 1000),
+                )
+        except Exception:
+            logger.exception('Could not record the analysis timing of upload %s', self.upload_id)
 
     def _compute_fixlog_stats(self, content):
         counts = count_fixlog_results(content)
@@ -2243,6 +2271,34 @@ class FixlistStat(models.Model):
 
     def __str__(self):
         return f'FixlistStat(source_id={self.source_id})'
+
+
+class AnalysisTiming(models.Model):
+    """How long one shared analysis of an upload took (recalculate_analysis_stats),
+    for the performance tab of /stats/. One row per analysis, also for a log
+    analyzed again; kept when the log is deleted, so a slowdown shows over time.
+
+    `duration_ms` is the analysis with the rule set already loaded; loading it
+    (after a rule change, or in a fresh process) is `rules_load_ms`, so a cold
+    cache does not look like a slow scan.
+    """
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    # The log's slug, for a link while it exists; not a key.
+    upload_id = models.CharField(max_length=64, blank=True, default='')
+    log_type = models.CharField(max_length=32, default='Unknown', db_index=True)
+    line_count = models.PositiveIntegerField(default=0)
+    char_count = models.PositiveIntegerField(default=0)
+    # Enabled classification rules of the shared rule set at the time: more
+    # rules can explain slower scans.
+    rule_count = models.PositiveIntegerField(default=0)
+    duration_ms = models.PositiveIntegerField(default=0)
+    rules_load_ms = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'AnalysisTiming({self.log_type}, {self.line_count} lines, {self.duration_ms} ms)'
 
 
 def stat_username(value):

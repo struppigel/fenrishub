@@ -1061,6 +1061,19 @@ def _get_cached_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: 
     return buckets
 
 
+def _warm_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | None = None) -> float:
+    """Load a rule set's buckets into the cache unless current ones are there.
+    The seconds the load took; 0.0 when the cached buckets were used (the
+    version check alone is not a load)."""
+    cache_key = (rule_set_key, rule_scope_log_type(log_type))
+    before = _rule_buckets_cache.get(cache_key)
+    started = time.monotonic()
+    _get_cached_rule_buckets(rule_set_key, log_type)
+    if _rule_buckets_cache.get(cache_key) is before:
+        return 0.0
+    return time.monotonic() - started
+
+
 def rule_frst_entry(rule) -> ex.FrstEntry:
     """The FrstEntry a parsed_entry rule matches lines against.
 
@@ -1111,7 +1124,15 @@ def _new_buckets(parsed_filepath_exclusions, regex_by_rule_id=None) -> dict:
         ClassificationRule.MATCH_FILEPATH: [],
         ClassificationRule.MATCH_PARSED_ENTRY: [],
         ClassificationRule.MATCH_SCRIPT: [],
-        "__filepath_any": [],
+        # path key -> [(rule, path, parsed_fallback)]: lines are matched by
+        # lookup, not by scanning every rule.
+        "__filepath_index": {},
+        # Exact rules by stripped source text; substring rules as a literal
+        # re2 Set plus the ones it could not take (see _index_line_lookups).
+        "__exact_index": {},
+        "__substring_set": None,
+        "__substring_set_rules": [],
+        "__substring_rest": [],
         "__parsed_entry_index": {},
         "__parsed_filepath_exclusions": parsed_filepath_exclusions,
         "__regex_set": None,
@@ -1276,7 +1297,33 @@ def _index_path_fallbacks(buckets, rules):
             continue
         rule_path = _rule_path(rule)
         if rule_path:
-            buckets["__filepath_any"].append((rule, rule_path, True))
+            _add_filepath_match(buckets, rule, rule_path, True)
+
+
+def _add_filepath_match(buckets, rule, rule_path, parsed_fallback):
+    """Let `rule` match lines whose path key is `rule_path`."""
+    buckets["__filepath_index"].setdefault(rule_path, []).append((rule, rule_path, parsed_fallback))
+
+
+def _index_line_lookups(buckets):
+    """Index the exact and substring rules of `buckets` for per-line matching:
+    exact rules by their stripped text, substring rules in one literal re2 Set
+    (rules it refuses, and all of them without re2, are tested one by one)."""
+    exact_index = {}
+    for rule in buckets[ClassificationRule.MATCH_EXACT]:
+        exact_index.setdefault(rule.source_text.strip(), []).append(rule)
+    buckets["__exact_index"] = exact_index
+
+    substring_rules = [rule for rule in buckets[ClassificationRule.MATCH_SUBSTRING] if rule.source_text]
+    regex_set, positions = regex_engine.build_set([rule.source_text for rule in substring_rules], literal=True)
+    in_set = set(positions)
+    # (place among the substring rules, rule): Set hits and the rest are put
+    # back in list order, the order the plain loop gave them.
+    buckets["__substring_set"] = regex_set
+    buckets["__substring_set_rules"] = [(index, substring_rules[index]) for index in positions]
+    buckets["__substring_rest"] = [
+        (index, rule) for index, rule in enumerate(substring_rules) if index not in in_set
+    ]
 
 
 def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True):
@@ -1284,7 +1331,7 @@ def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True)
 
     `require_status` skips rules without a valid status (classification
     rules). Every rule with a file path also matches through it as a weak
-    fallback (`__filepath_any`); without `filepath_fallback` only file path
+    fallback (`__filepath_index`); without `filepath_fallback` only file path
     rules go there.
     """
     pending_regex_rules = []
@@ -1318,13 +1365,13 @@ def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True)
             # A parsed block rule still matches single lines through its stored
             # path, as the weak fallback every parsed rule has.
             if rule_path and filepath_fallback and rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY:
-                buckets["__filepath_any"].append((rule, rule_path, True))
+                _add_filepath_match(buckets, rule, rule_path, True)
             block_rules.append((rule, rule_path))
             continue
 
         if rule_path and (filepath_fallback or rule.match_type == ClassificationRule.MATCH_FILEPATH):
-            buckets["__filepath_any"].append(
-                (rule, rule_path, rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY)
+            _add_filepath_match(
+                buckets, rule, rule_path, rule.match_type == ClassificationRule.MATCH_PARSED_ENTRY,
             )
 
         if rule.match_type == ClassificationRule.MATCH_REGEX:
@@ -1347,6 +1394,7 @@ def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True)
         buckets[rule.match_type].append(rule)
 
     _build_parsed_entry_index(buckets)
+    _index_line_lookups(buckets)
     _build_regex_matchers(buckets, pending_regex_rules)
     buckets["__block"] = _index_block_rules(block_rules) if block_rules else None
 
@@ -2077,9 +2125,8 @@ def _collect_match_groups_for_line(line: str, buckets, features: LineFeatures | 
         "regex": [],
     }
 
-    for rule in buckets[ClassificationRule.MATCH_EXACT]:
-        if rule.source_text.strip() == line.strip():
-            groups["exact"].append((rule, "found exact match", "exact"))
+    for rule in buckets["__exact_index"].get(line.strip(), ()):
+        groups["exact"].append((rule, "found exact match", "exact"))
 
     parsed_entries = features.parsed_entries
 
@@ -2097,15 +2144,20 @@ def _collect_match_groups_for_line(line: str, buckets, features: LineFeatures | 
     filepath = features.filepath
     if filepath:
         normalized = ex.path_key(filepath)
-        for rule, rule_path, parsed_fallback in buckets["__filepath_any"]:
-            if parsed_fallback and rule_path in buckets["__parsed_filepath_exclusions"]:
+        exclusions = buckets["__parsed_filepath_exclusions"]
+        for rule, rule_path, parsed_fallback in buckets["__filepath_index"].get(normalized, ()):
+            if parsed_fallback and rule_path in exclusions:
                 continue
-            if normalized == rule_path:
-                groups["filepath"].append((rule, "found matching normalized path", "filepath"))
+            groups["filepath"].append((rule, "found matching normalized path", "filepath"))
 
-    for rule in buckets[ClassificationRule.MATCH_SUBSTRING]:
-        if rule.source_text and rule.source_text in line:
-            groups["substring"].append((rule, f'found substring "{rule.source_text}"', "substring"))
+    substring_hits = [(index, rule) for index, rule in buckets["__substring_rest"] if rule.source_text in line]
+    substring_set = buckets["__substring_set"]
+    if substring_set is not None:
+        set_rules = buckets["__substring_set_rules"]
+        substring_hits.extend(set_rules[idx] for idx in regex_engine.set_match(substring_set, line))
+        substring_hits.sort(key=lambda hit: hit[0])
+    for _index, rule in substring_hits:
+        groups["substring"].append((rule, f'found substring "{rule.source_text}"', "substring"))
 
     for rule, code in buckets[ClassificationRule.MATCH_SCRIPT]:
         matched, _error = script_matcher.run_script(code, line)

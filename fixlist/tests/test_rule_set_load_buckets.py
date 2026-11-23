@@ -90,3 +90,63 @@ class PerKeyCacheTests(TestCase):
 
         invalidate_rule_buckets_cache(None)
         self.assertEqual(_rule_buckets_cache, {})
+
+
+class LineLookupIndexTests(TestCase):
+    """Exact, substring and file path rules are matched through indexes
+    (_index_line_lookups, __filepath_index) with the results the plain loops gave."""
+
+    LINE = r'Task: {X} C:\Program Files (x86)\a+b\tool.exe [unsigned] => .*'
+
+    def setUp(self):
+        invalidate_rule_buckets_cache()
+        self.owner = User.objects.create_user(username='owner', password='pw')
+
+    def _rule(self, match_type, source_text, **extra):
+        return ClassificationRule.objects.create(
+            owner=self.owner, status=ClassificationRule.STATUS_MALWARE,
+            match_type=match_type, source_text=source_text, **extra,
+        )
+
+    def _groups(self, line=LINE):
+        from ..analyzer import _collect_match_groups_for_line
+        return _collect_match_groups_for_line(line, _load_rule_buckets('shared'))
+
+    def test_substrings_are_literal_and_keep_rule_order(self):
+        # Regex metacharacters are plain text in a substring rule.
+        later = self._rule(ClassificationRule.MATCH_SUBSTRING, '=> .*')
+        first = self._rule(ClassificationRule.MATCH_SUBSTRING, r'(x86)\a+b')
+        self._rule(ClassificationRule.MATCH_SUBSTRING, 'a+b\nope')
+        self._rule(ClassificationRule.MATCH_SUBSTRING, 'x86)\A+B')    # case-sensitive
+        expected = sorted([later, first], key=lambda rule: rule.pk)
+        buckets = _load_rule_buckets('shared')
+        # Bucket order is the queryset's; the matches must follow it.
+        order = [rule for rule in buckets[ClassificationRule.MATCH_SUBSTRING] if rule in expected]
+        self.assertEqual([rule for rule, _reason, _m in self._groups()['substring']], order)
+        self.assertEqual(sorted(order, key=lambda rule: rule.pk), expected)
+
+    def test_substrings_without_re2(self):
+        from .. import regex_engine
+        from unittest import mock
+        hit = self._rule(ClassificationRule.MATCH_SUBSTRING, r'(x86)\a+b')
+        self._rule(ClassificationRule.MATCH_SUBSTRING, 'not in the line')
+        with mock.patch.object(regex_engine, '_re2', None):
+            buckets = _load_rule_buckets('shared')
+            self.assertIsNone(buckets['__substring_set'])
+            groups = self._groups()
+        self.assertEqual([rule for rule, _reason, _m in groups['substring']], [hit])
+
+    def test_exact_rules_match_stripped_text(self):
+        one = self._rule(ClassificationRule.MATCH_EXACT, '  ' + self.LINE + ' ')
+        two = self._rule(ClassificationRule.MATCH_EXACT, self.LINE)
+        self._rule(ClassificationRule.MATCH_EXACT, self.LINE[:-1])
+        self.assertEqual({rule for rule, _reason, _m in self._groups()['exact']}, {one, two})
+
+    def test_filepath_rule_matches_through_index(self):
+        path = r'C:\Program Files (x86)\a+b\tool.exe'
+        rule = self._rule(ClassificationRule.MATCH_FILEPATH, path, filepath=path, normalized_filepath=path.lower())
+        self._rule(ClassificationRule.MATCH_FILEPATH, r'C:\other.exe', filepath=r'C:\other.exe',
+                   normalized_filepath=r'c:\other.exe')
+        buckets = _load_rule_buckets('shared')
+        self.assertIn(path.lower(), buckets['__filepath_index'])
+        self.assertEqual([r for r, _reason, _m in self._groups(path)['filepath']], [rule])

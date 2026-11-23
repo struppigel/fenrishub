@@ -51,6 +51,15 @@ class Re2FastSetPathTests(TestCase):
             'regex set must be built when there is at least one eligible rule',
         )
 
+    def test_pattern_over_re2_default_memory_stays_in_set(self):
+        """Too large for re2's 8 MB default alone, small enough for the Set's budget."""
+        large_pattern = r'(?:\p{L}|\d){500}x'
+        _add_regex_rule(large_pattern)
+        buckets = _load_rule_buckets('shared')
+
+        self.assertIn(large_pattern, self._set_texts(buckets))
+        self.assertNotIn(large_pattern, self._fallback_texts(buckets))
+
     def test_lookahead_pattern_falls_back_to_stdlib(self):
         """Patterns using lookahead are unsupported by re2 and must fall back."""
         lookahead_pattern = r'(?=.*foo)(?=.*bar)'

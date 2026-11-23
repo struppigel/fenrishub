@@ -54,23 +54,43 @@ def re2_error(pattern: str):
     return None
 
 
-def build_set(patterns, *, ignore_case: bool = False):
+def build_set(patterns, *, ignore_case: bool = False, literal: bool = False):
     """``(re2 Set, positions)`` matching all `patterns` in one pass.
 
     `positions` maps a Set index back to the pattern's index in `patterns`;
     patterns re2 refuses are left out, for the caller to run one by one.
+    With `literal` the patterns are plain text, found anywhere in a line
+    (`pattern in text`), case-sensitive.
     ``(None, [])`` without re2, without patterns, or when the Set fails to build.
     """
     if _re2 is None or not patterns:
         return None, []
+    if literal and ignore_case:
+        raise ValueError('literal sets are case-sensitive')
     try:
         options = _re2.Options()
         options.max_mem = SET_MAX_MEM
+        options.literal = literal
+        # The Set keeps logging errors (a DFA out of memory matches nothing,
+        # and its log line is the only sign); patterns are screened quietly
+        # first, since one re2 refuses is the caller's to run with stdlib re.
+        screen = None
+        if not literal:
+            screen = _re2.Options()
+            screen.log_errors = False
+            # The Set's budget, not re2's 8 MB default: a pattern too large for
+            # that alone still fits the Set and must not fall back to stdlib re.
+            screen.max_mem = SET_MAX_MEM
         regex_set = _re2.Set(_re2._Anchor.UNANCHORED, options)
         positions = []
         for index, pattern in enumerate(patterns):
             try:
-                regex_set.Add(_case(pattern, ignore_case))
+                if literal:
+                    regex_set.Add(pattern)
+                else:
+                    pattern = _case(pattern, ignore_case)
+                    _re2.compile(pattern, options=screen)
+                    regex_set.Add(pattern)
             except Exception:
                 continue
             positions.append(index)

@@ -335,7 +335,10 @@ def _bucket_owner(row):
 TAB_LOGS = 'logs'
 TAB_USERS = 'users'
 TAB_CENTRALBOX = 'centralbox'
-TABS = (TAB_LOGS, TAB_USERS, TAB_CENTRALBOX)
+TAB_PERFORMANCE = 'performance'
+TABS = (TAB_LOGS, TAB_USERS, TAB_CENTRALBOX, TAB_PERFORMANCE)
+# Tabs without the tag chart: they carry its choices along unchanged.
+TABS_WITHOUT_TAGS = (TAB_CENTRALBOX, TAB_PERFORMANCE)
 
 
 def _stat_querysets(log_range):
@@ -388,10 +391,15 @@ def statistics_view(request):
         'end_date': end_date.isoformat(),
         'granularity': granularity,
     }
-    if tab == TAB_CENTRALBOX:
-        from .statistics_centralbox import centralbox_stats
+    if tab in TABS_WITHOUT_TAGS:
+        if tab == TAB_CENTRALBOX:
+            from .statistics_centralbox import centralbox_stats
 
-        context['cb'] = centralbox_stats(start_dt, end_dt, axis, granularity, tz)
+            context['cb'] = centralbox_stats(start_dt, end_dt, axis, granularity, tz)
+        else:
+            from .statistics_performance import performance_stats
+
+            context['perf'] = performance_stats(start_dt, end_dt, axis, granularity, tz)
         # The logs tab's tag choices ride along, so switching back keeps them.
         raw_category = request.GET.get('tag_category')
         carry = [] if raw_category is None else [('tag_category', raw_category)]

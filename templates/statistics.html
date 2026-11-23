@@ -182,6 +182,7 @@
         <a class="panel-tab{% if tab == 'logs' %} tab-active{% endif %}" href="{% url 'statistics' %}?start={{ start_date }}&amp;end={{ end_date }}{% if carry_query %}&amp;{{ carry_query }}{% endif %}"{% if tab == 'logs' %} aria-current="page"{% endif %}>logs</a>
         <a class="panel-tab{% if tab == 'users' %} tab-active{% endif %}" href="{% url 'statistics' %}?tab=users&amp;start={{ start_date }}&amp;end={{ end_date }}{% if carry_query %}&amp;{{ carry_query }}{% endif %}"{% if tab == 'users' %} aria-current="page"{% endif %}>users</a>
         <a class="panel-tab{% if tab == 'centralbox' %} tab-active{% endif %}" href="{% url 'statistics' %}?tab=centralbox&amp;start={{ start_date }}&amp;end={{ end_date }}{% if carry_query %}&amp;{{ carry_query }}{% endif %}"{% if tab == 'centralbox' %} aria-current="page"{% endif %}>centralbox</a>
+        <a class="panel-tab{% if tab == 'performance' %} tab-active{% endif %}" href="{% url 'statistics' %}?tab=performance&amp;start={{ start_date }}&amp;end={{ end_date }}{% if carry_query %}&amp;{{ carry_query }}{% endif %}"{% if tab == 'performance' %} aria-current="page"{% endif %}>performance</a>
     </nav>
 
     <form method="get" class="stats-range-form">
@@ -199,6 +200,8 @@
 
     {% if tab == 'centralbox' %}
     {% include "partials/statistics_centralbox.html" %}
+    {% elif tab == 'performance' %}
+    {% include "partials/statistics_performance.html" %}
     {% elif tab == 'users' %}
     {% include "partials/statistics_users.html" %}
     {% else %}
@@ -312,6 +315,10 @@
 {{ cb.verdicts.series|json_script:"data-cb-verdict-series" }}
 {{ cb.fresh.series|json_script:"data-cb-fresh-series" }}
 {{ cb.usage.series|json_script:"data-cb-usage-series" }}
+{% elif tab == 'performance' %}
+{{ perf.speed_series|json_script:"data-perf-speed-series" }}
+{{ perf.type_series|json_script:"data-perf-type-series" }}
+{{ perf.rule_series|json_script:"data-perf-rule-series" }}
 {% elif tab == 'users' %}
 {{ users_series|json_script:"data-users-series" }}
 {{ logs_per_user.groups|json_script:"data-logs-per-user" }}
@@ -426,7 +433,9 @@
     ];
     // One line per series over the bucket axis: {days, series: [{label|username, data}]}.
     // `colorFor(label)` may pin a series' color; others take the palette's.
-    function seriesLineChart(canvasId, dataId, colorFor) {
+    // `opts.spanGaps` joins the line over null points; `opts.beginAtZero` false lets the y axis fit the data.
+    function seriesLineChart(canvasId, dataId, colorFor, opts) {
+        opts = opts || {};
         const seriesData = readJson(dataId) || { days: [], series: [] };
         const canvas = document.getElementById(canvasId);
         if (!canvas || !seriesData.series.length) return;
@@ -445,10 +454,13 @@
                         tension: 0.2,
                         pointRadius: 2,
                         fill: false,
+                        spanGaps: !!opts.spanGaps,
                     };
                 }),
             },
-            options: baseOptions,
+            options: opts.beginAtZero === false
+                ? { ...baseOptions, scales: { ...baseOptions.scales, y: { ...baseOptions.scales.y, beginAtZero: false } } }
+                : baseOptions,
         });
     }
 
@@ -477,6 +489,12 @@
     seriesLineChart('cbVerdictChart', 'data-cb-verdict-series', cbColor);
     seriesLineChart('cbFreshChart', 'data-cb-fresh-series', cbColor);
     seriesLineChart('cbUsageChart', 'data-cb-usage-series', cbColor);
+
+    // Buckets without scans are gaps (null), bridged so a line stays readable.
+    const perfColor = (label) => ({ 'median': colors.primary, '90th percentile': colors.warning, 'enabled rules': colors.info })[label];
+    seriesLineChart('perfSpeedChart', 'data-perf-speed-series', perfColor, { spanGaps: true });
+    seriesLineChart('perfTypeChart', 'data-perf-type-series', null, { spanGaps: true });
+    seriesLineChart('perfRuleChart', 'data-perf-rule-series', perfColor, { spanGaps: true, beginAtZero: false });
 })();
 </script>
 {% endblock %}
