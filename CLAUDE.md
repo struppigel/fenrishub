@@ -77,7 +77,8 @@ Within it, status precedence: B > P > C > ! > G > S > I > J > ?
 A rule matches a line or a block (`match_unit`; blocks from `log_layout.layout`: a Spor item and its
 indented lines, an FRST Search file entry, an Addition event). A block rule tests the block's lines joined
 by "\n" (regex `^`/`$` per line); its match is added to every line of the block and competes there by
-priority. Spor logs (0.7.0+) also get parsed types (`spor_extractors`: spor_run, spor_task, ...), read
+priority. A rule applies only to its log types (`log_types` / `all_log_types`), except that a plain parsed
+rule's file path is a priority 1 fallback in logs of every type. Spor logs (0.7.0+) also get parsed types (`spor_extractors`: spor_run, spor_task, ...), read
 from a whole block and always block rules, and each Spor line's path for file path rules.
 
 Facts (advanced): a `Fact` is found by `FactRule`s (own pattern, never a status) and `FactTagSource`s

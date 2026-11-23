@@ -415,7 +415,7 @@
 
     <p><strong>tags</strong> - see <a href="#rule-tags">rule tags</a>.</p>
 
-    <p><strong>applies to</strong> - the log types the rule classifies lines of: <strong>all log types</strong> (including log types added later) or the <strong>selected log types</strong>. Log types match by name, so a rule for FRST only does not apply to an FRST&amp;Addition log. New rules apply to FRST&amp;Addition, FRST and Addition; file path rules apply to all log types. A rule saved in the log analyzer while a log of another type is open (e.g. a Spor log) applies to that log type. Every uploaded log of a known type is analyzed with the rules for its type; logs of unknown type and Fixlogs are not.</p>
+    <p><strong>applies to</strong> - the log types the rule classifies lines of: <strong>all log types</strong> (including log types added later) or the <strong>selected log types</strong>. Log types match by name, so a rule for FRST only does not apply to an FRST&amp;Addition log. New rules apply to FRST&amp;Addition, FRST and Addition; file path rules apply to all log types. The file path of a parsed rule also matches in logs of every other type, at the lowest priority like its normal file path fallback; the full parsed match applies only to the rule's own log types. A rule saved in the log analyzer while a log of another type is open (e.g. a Spor log) applies to that log type. Every uploaded log of a known type is analyzed with the rules for its type; logs of unknown type and Fixlogs are not.</p>
 
     <h3 id="rule-priorities">Rule priorities</h3>
 

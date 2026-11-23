@@ -19,7 +19,9 @@ from ..log_types import (
     DEFAULT_RULE_LOG_TYPES, default_rule_scope, is_analyzed_log_type, normalize_log_type_selection,
     rule_applies_to,
 )
-from ..models import ClassificationRule, LogTypeBadge, UploadedLog, UploadedLogAnalysis, count_fixlog_results
+from ..models import (
+    ClassificationRule, LogTypeBadge, ParsedFilepathExclusion, UploadedLog, UploadedLogAnalysis, count_fixlog_results,
+)
 from ..rule_utils import _persist_selected_pending_rules
 from ..upload_utils import get_fresh_cached_analysis
 from .factories import make_rule, make_uploaded_log, make_user
@@ -107,6 +109,72 @@ class RuleBucketScopeTests(TestCase):
         self.assertEqual(_verdict(spor, 'frst-line'), '?')
         self.assertEqual(inspect_line_matches('frst-line', log_type='Spor')['dominant_status'], '?')
         self.assertEqual(inspect_line_matches('frst-line', log_type='FRST')['dominant_status'], 'B')
+
+
+SERVICE_LINE = r"R3 EvilSvc; C:\evil\evilsvc.exe [477424 2026-03-06] (Evil Corp -> Evil Corp)"
+PATH_LINE = r"2026-03-18 13:45 - 2026-03-18 13:45 - 000477424 _____ C:\evil\evilsvc.exe"
+
+
+def _line_result(analysis, line):
+    return next(entry for entry in analysis['lines'] if entry['line'] == line)
+
+
+class OutOfScopePathFallbackTests(TestCase):
+    """A parsed rule's file path matches, as the weak fallback, in logs of
+    every type; its full parsed match stays with its own log types."""
+
+    def setUp(self):
+        invalidate_rule_buckets_cache()
+        self.addCleanup(invalidate_rule_buckets_cache)
+
+    def parsed_rule(self, status=ClassificationRule.STATUS_MALWARE, **overrides):
+        data = parse_rule_line(SERVICE_LINE, status=status, source_name='test-suite')
+        self.assertEqual(data['match_type'], ClassificationRule.MATCH_PARSED_ENTRY)
+        data.update(overrides)
+        return ClassificationRule.objects.create(**data)
+
+    def test_frst_rule_path_matches_in_a_log_of_another_type(self):
+        self.parsed_rule()  # model default: the FRST types
+        result = _line_result(analyze_log_text(PATH_LINE, 'shared', 'Brand New Type'), PATH_LINE)
+        self.assertEqual(result['dominant_status'], 'B')
+        self.assertEqual(result['matcher'], 'filepath')
+        self.assertTrue(result['fallback_only'])
+        inspection = inspect_line_matches(PATH_LINE, log_type='Brand New Type')
+        self.assertEqual(inspection['effective_priority'], 1)
+
+    def test_out_of_scope_rule_gives_only_its_path_not_its_parsed_match(self):
+        self.parsed_rule(log_types=['FRST'])
+        result = _line_result(analyze_log_text(SERVICE_LINE, 'shared', 'FRST&Addition'), SERVICE_LINE)
+        self.assertEqual(result['dominant_status'], 'B')
+        self.assertEqual(result['matcher'], 'filepath')
+        self.assertTrue(result['fallback_only'])
+        in_scope = _line_result(analyze_log_text(SERVICE_LINE, 'shared', 'FRST'), SERVICE_LINE)
+        self.assertEqual(in_scope['matcher'], 'parsed_entry')
+        self.assertFalse(in_scope['fallback_only'])
+
+    def test_spor_scoped_rule_path_matches_in_a_frst_log(self):
+        self.parsed_rule(log_types=['Spor'])
+        inspection = inspect_line_matches(PATH_LINE, log_type='FRST')
+        self.assertEqual(inspection['dominant_status'], 'B')
+        self.assertEqual(inspection['effective_matcher'], 'filepath')
+
+    def test_an_in_scope_rule_beats_the_fallback(self):
+        self.parsed_rule()
+        make_rule('evilsvc.exe', status=ClassificationRule.STATUS_CLEAN,
+                  match_type=ClassificationRule.MATCH_SUBSTRING, all_log_types=True, log_types=[])
+        inspection = inspect_line_matches(PATH_LINE, log_type='Brand New Type')
+        self.assertEqual(inspection['dominant_status'], 'C')
+        self.assertEqual(inspection['effective_matcher'], 'substring')
+
+    def test_exclusion_list_holds_for_out_of_scope_fallbacks(self):
+        self.parsed_rule()
+        ParsedFilepathExclusion.objects.create(normalized_filepath=r'c:\evil\evilsvc.exe')
+        self.assertEqual(inspect_line_matches(PATH_LINE, log_type='Brand New Type')['dominant_status'], '?')
+
+    def test_only_plain_parsed_rules_give_out_of_scope_fallbacks(self):
+        make_rule(SERVICE_LINE)  # exact, FRST types, with a path in its text
+        self.parsed_rule(condition_key='needs-a-fact')
+        self.assertEqual(inspect_line_matches(PATH_LINE, log_type='Brand New Type')['dominant_status'], '?')
 
 
 class MigrationBackfillTests(TestCase):

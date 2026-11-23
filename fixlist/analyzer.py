@@ -1084,17 +1084,21 @@ def _rule_set_queryset(model, rule_set_key: str = SHARED_RULE_SET_KEY, log_type:
     `log_type`, only rules whose log type scope covers it are returned (see
     log_types.rule_applies_to; None or 'Unknown' returns every rule).
     """
+    qs = _rule_set_rules(model, rule_set_key)
+    scope_log_type = rule_scope_log_type(log_type)
+    return qs if scope_log_type is None else [rule for rule in qs if rule.applies_to_log_type(scope_log_type)]
+
+
+def _rule_set_rules(model, rule_set_key: str = SHARED_RULE_SET_KEY):
+    """The enabled rules of `model` in a rule set, of every log type scope."""
     qs = model.objects.filter(is_enabled=True).select_related('owner')
     scope, scope_user_id = parse_rule_set_key(rule_set_key)
     if scope == 'private':
-        qs = qs.filter(owner_id=scope_user_id)
-    else:
-        qs = qs.filter(
-            Q(owner__fenris_profile__rule_set_mode=SHARED_RULE_SET_KEY)
-            | Q(owner__fenris_profile__isnull=True)
-        )
-    scope_log_type = rule_scope_log_type(log_type)
-    return qs if scope_log_type is None else [rule for rule in qs if rule.applies_to_log_type(scope_log_type)]
+        return qs.filter(owner_id=scope_user_id)
+    return qs.filter(
+        Q(owner__fenris_profile__rule_set_mode=SHARED_RULE_SET_KEY)
+        | Q(owner__fenris_profile__isnull=True)
+    )
 
 
 def _new_buckets(parsed_filepath_exclusions, regex_by_rule_id=None) -> dict:
@@ -1138,18 +1142,24 @@ def _load_rule_buckets(rule_set_key: str = SHARED_RULE_SET_KEY, log_type: str | 
     """Index the enabled rules of a rule set by matcher.
 
     With a `log_type`, only rules whose log type scope covers it are loaded
-    (see log_types.rule_applies_to; None or 'Unknown' loads every rule).
+    (see log_types.rule_applies_to; None or 'Unknown' loads every rule). The
+    parsed rules of other scopes still match through their file path, as the
+    weak fallback (_index_path_fallbacks).
     """
-    rules = _rule_set_queryset(ClassificationRule, rule_set_key, log_type)
+    scope_log_type = rule_scope_log_type(log_type)
     exclusions = _load_parsed_filepath_exclusions()
     buckets = _new_buckets(exclusions)
-    plain, conditional = [], []
-    for rule in rules:
-        (conditional if rule.condition_key else plain).append(rule)
+    plain, conditional, out_of_scope = [], [], []
+    for rule in _rule_set_rules(ClassificationRule, rule_set_key):
+        if scope_log_type is not None and not rule.applies_to_log_type(scope_log_type):
+            out_of_scope.append(rule)
+        else:
+            (conditional if rule.condition_key else plain).append(rule)
     # Only rules without conditions are in the main set, so everything that
     # reads it (rule previews, the analyzer review, line search) sees exactly
     # the rules it always saw.
     _index_rules(buckets, plain)
+    _index_path_fallbacks(buckets, out_of_scope)
     _load_conditional_rules(buckets, conditional, exclusions)
     _load_fact_sources(buckets, rule_set_key, log_type, exclusions)
     return buckets
@@ -1237,6 +1247,38 @@ def _load_fact_sources(buckets, rule_set_key, log_type, exclusions):
     buckets["__fact_tag_sources"] = by_rule
 
 
+def _rule_path(rule) -> str:
+    """The path key a rule matches lines through ('' without one): its stored
+    path, else the path in its one-line source text."""
+    rule_path = (rule.normalized_filepath or "").strip().lower()
+    if not rule_path and rule.filepath:
+        rule_path = ex.path_key(rule.filepath)
+    if not rule_path and rule.source_text and "\n" not in rule.source_text:
+        source_path = ex.extract_any_frst_path(rule.source_text)
+        if source_path:
+            rule_path = ex.path_key(source_path)
+    return rule_path
+
+
+def _index_path_fallbacks(buckets, rules):
+    """Add only the weak file path fallback of the parsed rules among `rules`,
+    the rules whose log type scope does not cover the log: a path means the
+    same file in any log, while the rule's full match stays with its own log
+    types. Conditional rules are left out (their conditions were written for
+    their own log types)."""
+    for rule in rules:
+        if (
+            rule.match_type != ClassificationRule.MATCH_PARSED_ENTRY
+            or rule.status not in VALID_STATUSES
+            or rule.whole_log
+            or rule.condition_key
+        ):
+            continue
+        rule_path = _rule_path(rule)
+        if rule_path:
+            buckets["__filepath_any"].append((rule, rule_path, True))
+
+
 def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True):
     """Put `rules` into the matcher set `buckets`.
 
@@ -1270,13 +1312,7 @@ def _index_rules(buckets, rules, *, require_status=True, filepath_fallback=True)
                     pass
             continue
 
-        rule_path = (rule.normalized_filepath or "").strip().lower()
-        if not rule_path and rule.filepath:
-            rule_path = ex.path_key(rule.filepath)
-        if not rule_path and rule.source_text and "\n" not in rule.source_text:
-            source_path = ex.extract_any_frst_path(rule.source_text)
-            if source_path:
-                rule_path = ex.path_key(source_path)
+        rule_path = _rule_path(rule)
 
         if _is_block_rule(rule):
             # A parsed block rule still matches single lines through its stored
