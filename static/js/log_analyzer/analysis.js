@@ -1372,6 +1372,7 @@ const LOOKUP_KINDS = {
         menuHeader: 'open extension id in',
         items: [
             { label: 'crxplorer', url: (v) => `https://crxplorer.com/extension/${v}` },
+            { label: 'crxaminer', url: (v) => `https://crxaminer.tech/scan/${v}` },
             { label: 'chrome web store', url: (v) => `https://chromewebstore.google.com/detail/${v}` },
             { label: 'chrome-stats', url: (v) => `https://chrome-stats.com/d/${v}` },
             { label: 'crxviewer', url: (v) => `https://robwu.nl/crxviewer/?crx=${encodeURIComponent(`https://chromewebstore.google.com/detail/${v}`)}` },
@@ -1387,6 +1388,9 @@ const LOOKUP_KINDS = {
                 const tmpl = (window.logAnalyzerConfig || {}).edgeAddonRedirectUrlTemplate || '';
                 return tmpl.replace('__CRXID__', encodeURIComponent(v));
             } },
+            // Edge also installs Chrome Web Store extensions, which keep their store ID.
+            { label: 'crxplorer', url: (v) => `https://crxplorer.com/extension/${v}` },
+            { label: 'crxaminer', url: (v) => `https://crxaminer.tech/scan/${v}` },
             { label: 'crxviewer', url: (v) => `https://robwu.nl/crxviewer/?crx=${encodeURIComponent(`https://microsoftedge.microsoft.com/addons/detail/${v}`)}` },
             { label: 'google search', url: (v) => `https://www.google.com/search?q=${encodeURIComponent(v)}` },
             { label: 'copy id instead', copy: true },
