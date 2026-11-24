@@ -248,10 +248,19 @@ async function run() {
     // A scroll right after the re-render (the user's, a jump to a line) is not undone
     // -----------------------------------------------------------------------
     renderLogLines();
-    container.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -100 }));
     container.scrollTop = 0;
     await frames(12);
-    assert('a scroll by the user right after the re-render stands', container.scrollTop === 0,
+    assert('a scroll right after the re-render stands', container.scrollTop === 0,
+        String(container.scrollTop));
+
+    // A scroll already under way (a scrollbar drag, a fling) when a re-render
+    // comes in on its own (correlations, suggestions): no input event marks it.
+    await scrollDownTo(9000);
+    renderLogLines();
+    await frames(1);
+    container.scrollTop = 3000;
+    await frames(12);
+    assert('a scroll in the frames after a re-render stands', container.scrollTop === 3000,
         String(container.scrollTop));
 
     await scrollDownTo(9000);
@@ -292,6 +301,43 @@ async function run() {
     assert('a badge out of view is scrolled into the list',
         badgeRect.top >= listRect.top && badgeRect.bottom <= listRect.bottom,
         JSON.stringify({ list: [listRect.top, listRect.bottom], badge: [badgeRect.top, badgeRect.bottom] }));
+
+    // -----------------------------------------------------------------------
+    // A status change on a line cut off at the bottom edge: its badge is
+    // brought into view, and the re-render's settle step leaves it there
+    // -----------------------------------------------------------------------
+    await scrollDownTo(6000);
+    // A line in view, scrolled down to the bottom edge so its badge sticks out 6px.
+    const cutRow = rowFor(Number(topLine().index) + 10);
+    const listBottom = () => container.getBoundingClientRect().bottom;
+    container.scrollTop += cutRow.querySelector('.status-badge').getBoundingClientRect().bottom - (listBottom() + 6);
+    await frames(3);
+    const cutRect = cutRow.querySelector('.status-badge').getBoundingClientRect();
+    const cut = cutRect.top < listBottom() && cutRect.bottom > listBottom() ? cutRow : null;
+    assert('a badge is cut off at the bottom edge', Boolean(cut),
+        JSON.stringify({ bottom: listBottom(), badge: [cutRect.top, cutRect.bottom] }));
+    if (cut) {
+        const cutIndex = Number(cut.dataset.lineIndex);
+        await saveStatusSelection(cutIndex, 'P');
+        await frames(12);
+        const cutBadge = rowFor(cutIndex).querySelector('.status-badge');
+        const r = cutBadge.getBoundingClientRect();
+        const b = container.getBoundingClientRect();
+        assert('the changed line\'s cut-off badge is in view and stays there',
+            document.activeElement === cutBadge && r.top >= b.top && r.bottom <= b.bottom,
+            JSON.stringify({ list: [b.top, b.bottom], badge: [r.top, r.bottom] }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Another log is not drawn with the heights of the one before
+    // -----------------------------------------------------------------------
+    renderLogLines();
+    const carried = container.querySelectorAll(':scope > [style*="contain-intrinsic-size"]').length;
+    assert('the same log keeps its wrapped rows\' heights', carried > 0, String(carried));
+    analyzedLines = analyzedLines.map((entry, i) => ({ ...entry, line: `other ${i}` }));
+    renderLogLines();
+    const inherited = container.querySelectorAll(':scope > [style*="contain-intrinsic-size"]').length;
+    assert('another log does not take them over', inherited === 0, String(inherited));
 }
 
 run().catch((error) => assert('the tests ran to the end', false, error && error.stack)).finally(() => {

@@ -898,6 +898,7 @@ function focusStatusBadge(index) {
             const view = list.getBoundingClientRect();
             const rect = badge.getBoundingClientRect();
             if (rect.top < view.top || rect.bottom > view.bottom) {
+                // The re-render's settle step sees the scroll and stops.
                 badge.scrollIntoView({ block: 'nearest' });
             }
         }
@@ -1967,13 +1968,18 @@ function restoreScrollAnchor(container, anchor) {
 // log_analyzer.css): one line. Its padding and border come on top.
 const ROW_CONTENT_ESTIMATE_PX = 16;
 
-// The vertical padding and border of a row: offsetHeight less these is the
+// The vertical padding and border of a row: its height less these is the
 // content height that contain-intrinsic-size takes.
 function rowFrameHeight(row) {
     const style = getComputedStyle(row);
     return ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
         .reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0);
 }
+
+// The line texts the rows in the list were built from (renderLogLines), so a
+// height is only carried over to a row of the same line, not to line N of
+// another log.
+let renderedLineTexts = [];
 
 // The content height of every row whose height is not the estimate, before a
 // rebuild: lines by index, blank spacer rows by the line they stand before and
@@ -1982,22 +1988,25 @@ function rowFrameHeight(row) {
 // came back at the estimate and took its real (e.g. wrapped) height as it came
 // near the view, and the lines in view moved. Rows at the estimate (one line,
 // or never laid out) and rows hidden by a filter (0) are left out.
+// Fractional heights (display scaling, e.g. 125%): rects, not offsetHeight.
 function captureRowHeights(container) {
     const heights = new Map();
     if (document.body.classList.contains('no-word-wrap')) return heights;
-    let lineFrame = null;
-    let spacerFrame = null;
-    const contentHeight = (row, frame) => {
-        const height = row.offsetHeight;
+    const frames = new Map();
+    const last = container.lastElementChild;
+    const contentHeight = (row, kind) => {
+        const height = row.getBoundingClientRect().height;
         if (height === 0) return 0;
-        const content = height - frame;
-        return content > 0 && content !== ROW_CONTENT_ESTIMATE_PX ? content : 0;
+        // The last row has no bottom border (.log-line:last-child).
+        const frameKey = row === last ? 'last' : kind;
+        if (!frames.has(frameKey)) frames.set(frameKey, rowFrameHeight(row));
+        const content = height - frames.get(frameKey);
+        return content > 0 && Math.abs(content - ROW_CONTENT_ESTIMATE_PX) >= 0.5 ? content : 0;
     };
     let spacers = [];
     for (const child of container.children) {
         if (child.classList.contains('log-blank-line')) {
-            if (spacerFrame === null) spacerFrame = rowFrameHeight(child);
-            spacers.push(contentHeight(child, spacerFrame));
+            spacers.push(contentHeight(child, 'spacer'));
             continue;
         }
         const lineIndex = child.dataset.lineIndex;
@@ -2006,26 +2015,29 @@ function captureRowHeights(container) {
             if (content) heights.set(`${lineIndex}:${spacers.length - position}`, content);
         });
         spacers = [];
-        if (lineFrame === null) lineFrame = rowFrameHeight(child);
-        const content = contentHeight(child, lineFrame);
+        const content = contentHeight(child, 'line');
         if (content) heights.set(lineIndex, content);
     }
     return heights;
 }
 
-function applyRowHeight(row, heights, key) {
+// key: a line's index, or a spacer's "<index>:<position>"; index: the line the
+// row is (or stands before), whose text must be the one the height was taken from.
+function applyRowHeight(row, heights, key, index) {
     const height = heights.get(key);
-    if (height) row.style.containIntrinsicSize = `auto ${height}px`;
+    if (!height || renderedLineTexts[index] !== analyzedLines[index].line) return;
+    row.style.containIntrinsicSize = `auto ${height}px`;
 }
 
 // Backstop for rows whose height did change (the changed line, a line shown
 // anew): for a few frames, while the browser lays out the rows near the view,
 // the anchor line is put back where it was if it moved. It stops once the line
-// stays put, on the next render, or when the list is scrolled on purpose
-// (cancelScrollAnchorSettle: the user's input, a jump to a line).
+// stays put, on the next render, when the anchor line is hidden, or when
+// anything else scrolled the list since its last step (the user, a jump to a
+// line, the browser's own scroll anchoring). Code that scrolls the list right
+// after a render also cancels it (cancelScrollAnchorSettle).
 const SCROLL_SETTLE_MAX_FRAMES = 10;
 let scrollAnchorFrameToken = 0;
-let scrollSettleInputWatched = false;
 
 function cancelScrollAnchorSettle() {
     scrollAnchorFrameToken += 1;
@@ -2033,20 +2045,18 @@ function cancelScrollAnchorSettle() {
 
 function settleScrollAnchor(container, row, offset) {
     const token = ++scrollAnchorFrameToken;
-    if (!scrollSettleInputWatched) {
-        scrollSettleInputWatched = true;
-        ['wheel', 'pointerdown', 'keydown', 'touchstart'].forEach((type) => {
-            document.addEventListener(type, cancelScrollAnchorSettle, { capture: true, passive: true });
-        });
-    }
+    let expectedTop = container.scrollTop;
     let frame = 0;
     let still = 0;
     const step = () => {
         if (token !== scrollAnchorFrameToken || !row.isConnected) return;
-        const top = container.getBoundingClientRect().top;
-        const drift = (row.getBoundingClientRect().top - top) - offset;
+        if (Math.abs(container.scrollTop - expectedTop) >= 1) return;
+        const rect = row.getBoundingClientRect();
+        if (rect.height === 0) return;
+        const drift = (rect.top - container.getBoundingClientRect().top) - offset;
         if (Math.abs(drift) >= 1) {
             container.scrollTop += drift;
+            expectedTop = container.scrollTop;
             still = 0;
         } else {
             still += 1;
@@ -2083,7 +2093,7 @@ function renderLogLines() {
             const spacer = document.createElement('div');
             spacer.className = 'log-blank-line';
             spacer.setAttribute('aria-hidden', 'true');
-            applyRowHeight(spacer, rowHeights, `${index}:${blank}`);
+            applyRowHeight(spacer, rowHeights, `${index}:${blank}`, index);
             container.appendChild(spacer);
         }
         const line = entry.line;
@@ -2234,9 +2244,10 @@ function renderLogLines() {
                 insertLine(line, index);
             }
         });
-        applyRowHeight(lineDiv, rowHeights, String(index));
+        applyRowHeight(lineDiv, rowHeights, String(index), index);
         container.appendChild(lineDiv);
     });
+    renderedLineTexts = analyzedLines.map((entry) => entry.line);
     const anchorRow = restoreScrollAnchor(container, scrollAnchor);
     if (anchorRow) {
         settleScrollAnchor(container, anchorRow, scrollAnchor.offset);
