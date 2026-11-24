@@ -377,11 +377,11 @@
     overflow: auto;
 }
 
+/* Long entries run past the box; the list (overflow: auto) scrolls sideways
+   instead of cutting them off with an ellipsis. */
 .hl-summary-list li {
     margin: 1px 0;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 .hl-summary-list a.hl-jump {
