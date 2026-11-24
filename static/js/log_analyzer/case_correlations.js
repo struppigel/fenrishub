@@ -271,6 +271,8 @@ function jumpToAnalyzerLine(lineNo, trigger, fromLine = '', lineText = '') {
         correlationHint(spot, 'that line is hidden by the legend filter', true);
         return;
     }
+    // A re-render's settle step (analysis.js) must not pull the view back.
+    if (typeof cancelScrollAnchorSettle === 'function') cancelScrollAnchorSettle();
     row.scrollIntoView({ block: 'center' });
     document.querySelectorAll('#logLines .correlation-flash, #logLines .correlation-flash-fade').forEach((el) => {
         el.classList.remove('correlation-flash', 'correlation-flash-fade');

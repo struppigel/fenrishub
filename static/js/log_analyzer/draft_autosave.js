@@ -578,6 +578,7 @@ async function restoreDraft(key, payload) {
 
     const logLinesEl = document.getElementById('logLines');
     if (logLinesEl && Number(payload.scrollTop) > 0) {
+        if (typeof cancelScrollAnchorSettle === 'function') cancelScrollAnchorSettle();
         logLinesEl.scrollTop = Number(payload.scrollTop);
     }
 

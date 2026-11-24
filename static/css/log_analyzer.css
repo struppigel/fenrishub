@@ -449,8 +449,12 @@ body.panel-resizing * {
 
 /* A big log has thousands of rows: the browser skips the layout and paint of
    those out of view, so showing a legend status again or re-rendering costs
-   about a tenth. 21px is one unwrapped row (16px line + padding + border);
-   "auto" remembers a row's real height once it was laid out. Keep the rows
+   about a tenth. The size is the row's content, its padding and border come
+   on top: 16px (one line) makes a row not laid out yet 21px high, like an
+   unwrapped row. With 21px here such rows were 26px, shrank as they came
+   near the view, and the lines in view moved on every re-render (a status
+   change). "auto" remembers a row's real height once it was laid out
+   (renderLogLines carries it over to the rebuilt row). Keep the rows
    free of :has() rules: with them this makes rendering slower, not faster.
    Word wrap on only: with it off, rows are as wide as their text
    (base.html), and rows out of view would not count for the horizontal
@@ -458,7 +462,7 @@ body.panel-resizing * {
 body:not(.no-word-wrap) #logLines > .log-line,
 body:not(.no-word-wrap) #logLines > .log-blank-line {
     content-visibility: auto;
-    contain-intrinsic-size: auto 21px;
+    contain-intrinsic-size: auto 16px;
 }
 
 /* Every part of a row in whole pixels, so the row is too (21px): the badge and

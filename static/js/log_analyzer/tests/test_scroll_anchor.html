@@ -16,6 +16,7 @@
 <head>
 <meta charset="UTF-8">
 <title>log analyzer scroll anchor tests</title>
+<link rel="stylesheet" href="../../../css/theme.css">
 <link rel="stylesheet" href="../../../css/log_analyzer.css">
 <style>
   body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
@@ -24,7 +25,7 @@
   .fail { color: #f66; }
   #summary { margin-top: 12px; font-weight: bold; }
   /* The list sits in a fixed box at the top of the page, always in view. */
-  #listBox { position: fixed; top: 8px; right: 8px; width: 420px; height: 300px; }
+  #listBox { position: fixed; top: 8px; right: 8px; width: 420px; height: 640px; }
   /* Stands in for the status picker, lying over the top edge of the list. */
   #overlay { position: fixed; top: 8px; right: 8px; width: 420px; height: 12px;
              background: rgba(255, 0, 0, 0.3); z-index: 10; }
@@ -37,6 +38,8 @@
 
 <div id="listBox"><div id="logLines" class="log-lines-container"></div></div>
 <div id="overlay"></div>
+<textarea id="logInput" hidden></textarea>
+<div id="statusPicker" class="status-picker" hidden></div>
 
 <script src="../../common.js"></script>
 <script src="../../popup_menu.js"></script>
@@ -112,7 +115,89 @@ function wrappedLog(count) {
     return lines;
 }
 
+// A log as the analyzer gets it: the raw text (blank lines and indents give
+// spacer rows and indented rows) and its entries.
+function setLog(raw) {
+    document.getElementById('logInput').value = raw;
+    analyzedLines = raw.split('\n').map((piece) => piece.trim()).filter(Boolean)
+        .map((line) => ({ line, dominant_status: '?', css_class: 'status-unknown' }));
+    pendingStatusChanges.clear();
+}
+
+function clearLog() {
+    document.getElementById('logInput').value = '';
+    pendingStatusChanges.clear();
+}
+
+const LONG_PATH = 'C:\\Users\\someone\\AppData\\Local\\Vendor Software\\Product Name\\Application\\updater.exe ';
+
+// FRST-like: sections separated by blank lines, short and long wrapping lines.
+function frstLikeLog(sections) {
+    const parts = [];
+    for (let s = 0; s < sections; s++) {
+        parts.push(`==================== Section ${s} (Whitelisted) ====================`);
+        parts.push('');
+        for (let i = 0; i < 25; i++) {
+            const long = (s + i) % 3 === 0;
+            parts.push(long
+                ? `HKLM\\...\\Run: [entry${s}_${i}] => ${LONG_PATH.repeat(1 + ((s + i) % 4))}[${i}]`
+                : `R2 Service${s}_${i}; C:\\Windows\\System32\\svc${i}.exe [${1000 + i} 2026-01-0${1 + (i % 9)}] (Vendor)`);
+        }
+        parts.push('');
+        parts.push('');
+    }
+    return parts.join('\n');
+}
+
+// Spor-like: items with indented, long wrapping sub-lines, blank line between items.
+function sporLikeLog(items) {
+    const parts = [];
+    for (let n = 0; n < items; n++) {
+        parts.push(`Task: \\Microsoft\\Windows\\Item${n}`);
+        parts.push(`    Path: ${LONG_PATH.repeat(1 + (n % 3))}`);
+        parts.push(`    Arguments: --run --id ${n} ${'--flag value '.repeat(3 + (n % 7))}`);
+        parts.push(`    Signer: Vendor ${n}`);
+        parts.push('');
+    }
+    return parts.join('\n');
+}
+
+// After a status change the way the page makes it, the top line of the view
+// stays where it was, in every frame that follows.
+async function checkStatusChangeKeepsView(name, raw, target) {
+    setLog(raw);
+    renderLogLines();
+    await scrollDownTo(target);
+    const before = topLine();
+    const pick = Number(before.index) + 6;
+    await saveStatusSelection(pick, 'B');
+    // Without the settle step's corrections: a jump it puts right a frame
+    // later is still seen for that frame. The rows keeping their heights is
+    // what must hold the view.
+    if (typeof cancelScrollAnchorSettle === "function") cancelScrollAnchorSettle();
+    let worst = 0;
+    let moved = null;
+    for (let frame = 0; frame < 15; frame++) {
+        const now = topLine();
+        const drift = now.index === before.index ? Math.abs(now.offset - before.offset) : Infinity;
+        if (drift > worst) {
+            worst = drift;
+            moved = { frame, now };
+        }
+        await frames(1);
+    }
+    assert(`${name}: after a status change the view stays put for 15 frames`, worst < 1,
+        JSON.stringify({ before, moved }));
+    assert(`${name}: the changed line shows its new status`,
+        rowFor(pick).querySelector('.status-badge').textContent === 'B');
+    clearLog();
+}
+
 async function run() {
+    window.scheduleDraftSave = () => {};
+    await checkStatusChangeKeepsView('FRST-like log', frstLikeLog(110), 40000);
+    await checkStatusChangeKeepsView('Spor-like log', sporLikeLog(700), 40000);
+
     // -----------------------------------------------------------------------
     // A re-render keeps the topmost line where it was, now and a few frames on
     // -----------------------------------------------------------------------
@@ -160,13 +245,24 @@ async function run() {
     await frames(4);
 
     // -----------------------------------------------------------------------
-    // A scroll right after the re-render (a jump to a line) is not undone
+    // A scroll right after the re-render (the user's, a jump to a line) is not undone
     // -----------------------------------------------------------------------
     renderLogLines();
+    container.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -100 }));
     container.scrollTop = 0;
-    await frames(4);
-    assert('a scroll made right after the re-render stands', container.scrollTop === 0,
+    await frames(12);
+    assert('a scroll by the user right after the re-render stands', container.scrollTop === 0,
         String(container.scrollTop));
+
+    await scrollDownTo(9000);
+    renderLogLines();
+    scrollToAnalyzedLine(3);
+    await frames(12);
+    const jumped = rowFor(3).getBoundingClientRect();
+    const box = container.getBoundingClientRect();
+    assert('a jump to a line right after the re-render stands',
+        jumped.top >= box.top && jumped.bottom <= box.bottom,
+        JSON.stringify({ list: [box.top, box.bottom], row: [jumped.top, jumped.bottom] }));
 
     // -----------------------------------------------------------------------
     // At the top of the list nothing moves

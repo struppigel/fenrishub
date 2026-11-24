@@ -702,6 +702,7 @@ function scrollToAnalyzedLine(index) {
     const badge = document.querySelector(`#logLines .status-badge[data-line-index="${index}"]`);
     const row = badge ? badge.closest('.log-line') : null;
     if (!row || row.offsetParent === null) return false;
+    cancelScrollAnchorSettle();
     row.scrollIntoView({ block: 'center' });
     row.classList.remove('correlation-flash', 'correlation-flash-fade');
     void row.offsetWidth;
@@ -1962,29 +1963,105 @@ function restoreScrollAnchor(container, anchor) {
     return row;
 }
 
-// On the next frame the browser lays out the rows near the view at their real
-// height (content-visibility), and rows just above may grow past the estimate.
-// Its own scroll anchoring usually makes up for that; if the line still moved,
-// it is put back. If anything else scrolled the list meanwhile (the user, a
-// jump to a line), that scroll stands.
+// The content height a row not laid out yet gets (contain-intrinsic-size in
+// log_analyzer.css): one line. Its padding and border come on top.
+const ROW_CONTENT_ESTIMATE_PX = 16;
+
+// The vertical padding and border of a row: offsetHeight less these is the
+// content height that contain-intrinsic-size takes.
+function rowFrameHeight(row) {
+    const style = getComputedStyle(row);
+    return ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
+        .reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0);
+}
+
+// The content height of every row whose height is not the estimate, before a
+// rebuild: lines by index, blank spacer rows by the line they stand before and
+// their countdown position in that gap (as renderLogLines builds them). A
+// rebuilt row starts at that height (applyRowHeight). Without it, every row
+// came back at the estimate and took its real (e.g. wrapped) height as it came
+// near the view, and the lines in view moved. Rows at the estimate (one line,
+// or never laid out) and rows hidden by a filter (0) are left out.
+function captureRowHeights(container) {
+    const heights = new Map();
+    if (document.body.classList.contains('no-word-wrap')) return heights;
+    let lineFrame = null;
+    let spacerFrame = null;
+    const contentHeight = (row, frame) => {
+        const height = row.offsetHeight;
+        if (height === 0) return 0;
+        const content = height - frame;
+        return content > 0 && content !== ROW_CONTENT_ESTIMATE_PX ? content : 0;
+    };
+    let spacers = [];
+    for (const child of container.children) {
+        if (child.classList.contains('log-blank-line')) {
+            if (spacerFrame === null) spacerFrame = rowFrameHeight(child);
+            spacers.push(contentHeight(child, spacerFrame));
+            continue;
+        }
+        const lineIndex = child.dataset.lineIndex;
+        if (lineIndex === undefined) continue;
+        spacers.forEach((content, position) => {
+            if (content) heights.set(`${lineIndex}:${spacers.length - position}`, content);
+        });
+        spacers = [];
+        if (lineFrame === null) lineFrame = rowFrameHeight(child);
+        const content = contentHeight(child, lineFrame);
+        if (content) heights.set(lineIndex, content);
+    }
+    return heights;
+}
+
+function applyRowHeight(row, heights, key) {
+    const height = heights.get(key);
+    if (height) row.style.containIntrinsicSize = `auto ${height}px`;
+}
+
+// Backstop for rows whose height did change (the changed line, a line shown
+// anew): for a few frames, while the browser lays out the rows near the view,
+// the anchor line is put back where it was if it moved. It stops once the line
+// stays put, on the next render, or when the list is scrolled on purpose
+// (cancelScrollAnchorSettle: the user's input, a jump to a line).
+const SCROLL_SETTLE_MAX_FRAMES = 10;
 let scrollAnchorFrameToken = 0;
+let scrollSettleInputWatched = false;
+
+function cancelScrollAnchorSettle() {
+    scrollAnchorFrameToken += 1;
+}
 
 function settleScrollAnchor(container, row, offset) {
     const token = ++scrollAnchorFrameToken;
-    const setTop = container.scrollTop;
-    requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!scrollSettleInputWatched) {
+        scrollSettleInputWatched = true;
+        ['wheel', 'pointerdown', 'keydown', 'touchstart'].forEach((type) => {
+            document.addEventListener(type, cancelScrollAnchorSettle, { capture: true, passive: true });
+        });
+    }
+    let frame = 0;
+    let still = 0;
+    const step = () => {
         if (token !== scrollAnchorFrameToken || !row.isConnected) return;
-        if (container.scrollTop !== setTop) return;
         const top = container.getBoundingClientRect().top;
         const drift = (row.getBoundingClientRect().top - top) - offset;
-        if (Math.abs(drift) >= 1) container.scrollTop += drift;
-    }));
+        if (Math.abs(drift) >= 1) {
+            container.scrollTop += drift;
+            still = 0;
+        } else {
+            still += 1;
+        }
+        frame += 1;
+        if (still < 2 && frame < SCROLL_SETTLE_MAX_FRAMES) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
 }
 
 function renderLogLines() {
     const container = document.getElementById('logLines');
     const savedScrollTop = container.scrollTop;
     const scrollAnchor = savedScrollTop > 0 ? captureScrollAnchor(container) : null;
+    const rowHeights = captureRowHeights(container);
     // Lines still waiting to be shown (shared.js queueReveal) are replaced.
     if (typeof dropFromReveal === 'function') dropFromReveal(() => true);
     container.innerHTML = '';
@@ -2006,6 +2083,7 @@ function renderLogLines() {
             const spacer = document.createElement('div');
             spacer.className = 'log-blank-line';
             spacer.setAttribute('aria-hidden', 'true');
+            applyRowHeight(spacer, rowHeights, `${index}:${blank}`);
             container.appendChild(spacer);
         }
         const line = entry.line;
@@ -2156,6 +2234,7 @@ function renderLogLines() {
                 insertLine(line, index);
             }
         });
+        applyRowHeight(lineDiv, rowHeights, String(index));
         container.appendChild(lineDiv);
     });
     const anchorRow = restoreScrollAnchor(container, scrollAnchor);
