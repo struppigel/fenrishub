@@ -889,7 +889,8 @@ function focusStatusPickerButton(targetIndex) {
 function focusStatusBadge(index) {
     const badge = document.querySelector(`.status-badge[data-line-index="${index}"]`);
     if (badge) {
-        badge.focus();
+        // The line was just clicked, so it is in view: focusing must not scroll.
+        badge.focus({ preventScroll: true });
     }
 }
 
@@ -1886,9 +1887,36 @@ function buildLineTooltip(line, reasons, tags = []) {
 // Deeper indentation is shown at this width, so the text stays readable.
 const MAX_LINE_INDENT_CH = 16;
 
+// The topmost line in view and how far it sits below the top of the list.
+// A rebuild keeps that line in place rather than the scroll offset in pixels:
+// with word wrap on, rows off screen (content-visibility) are new elements of
+// the estimated height, not their real one, so the same scrollTop would show
+// other lines and the view would jump a little.
+function captureScrollAnchor(container) {
+    const top = container.getBoundingClientRect().top;
+    for (const child of container.children) {
+        if (!child.dataset.lineIndex) continue;
+        const rect = child.getBoundingClientRect();
+        if (rect.height > 0 && rect.bottom > top) {
+            return { lineIndex: child.dataset.lineIndex, offset: rect.top - top };
+        }
+    }
+    return null;
+}
+
+function restoreScrollAnchor(container, anchor) {
+    if (!anchor) return false;
+    const row = container.querySelector(`:scope > .log-line[data-line-index="${anchor.lineIndex}"]`);
+    if (!row || row.getBoundingClientRect().height === 0) return false;
+    const top = container.getBoundingClientRect().top;
+    container.scrollTop += (row.getBoundingClientRect().top - top) - anchor.offset;
+    return true;
+}
+
 function renderLogLines() {
     const container = document.getElementById('logLines');
     const savedScrollTop = container.scrollTop;
+    const scrollAnchor = savedScrollTop > 0 ? captureScrollAnchor(container) : null;
     // Lines still waiting to be shown (shared.js queueReveal) are replaced.
     if (typeof dropFromReveal === 'function') dropFromReveal(() => true);
     container.innerHTML = '';
@@ -2062,7 +2090,9 @@ function renderLogLines() {
         });
         container.appendChild(lineDiv);
     });
-    container.scrollTop = savedScrollTop;
+    if (!restoreScrollAnchor(container, scrollAnchor)) {
+        container.scrollTop = savedScrollTop;
+    }
 }
 
 // Case correlations or centralbox suggestions arrived (case_correlations.js,
