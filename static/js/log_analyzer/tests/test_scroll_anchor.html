@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<!--
+  Tests that a re-render of the log list (renderLogLines, e.g. after a status
+  change) keeps the view where it was.
+
+  With word wrap on, rows use content-visibility: auto with an estimated height
+  of 21px. A rebuild makes new rows, so rows above the view lose their real
+  (wrapped) height; restoring the old scrollTop in pixels then showed other
+  lines and the view jumped a little. renderLogLines keeps the topmost line in
+  place instead.
+
+  Open this file directly in a browser (no build step needed).
+  Pass = green row, Fail = red row with an error message.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>log analyzer scroll anchor tests</title>
+<link rel="stylesheet" href="../../../css/log_analyzer.css">
+<style>
+  body { font-family: monospace; padding: 16px; background: #1a1a1a; color: #ccc; }
+  h1   { font-size: 1rem; margin-bottom: 12px; }
+  .pass { color: #6f9; }
+  .fail { color: #f66; }
+  #summary { margin-top: 12px; font-weight: bold; }
+  /* The list sits in a fixed box at the top of the page, always in view. */
+  #listBox { position: fixed; top: 8px; right: 8px; width: 420px; height: 300px; }
+  /* Stands in for the status picker, lying over the top edge of the list. */
+  #overlay { position: fixed; top: 8px; right: 8px; width: 420px; height: 12px;
+             background: rgba(255, 0, 0, 0.3); z-index: 10; }
+</style>
+</head>
+<body>
+<h1>log analyzer &ndash; scroll anchor tests</h1>
+<ul id="results" style="margin-right: 460px;"></ul>
+<div id="summary"></div>
+
+<div id="listBox"><div id="logLines" class="log-lines-container"></div></div>
+<div id="overlay"></div>
+
+<script src="../../common.js"></script>
+<script src="../../popup_menu.js"></script>
+<script src="../shared.js"></script>
+<script src="../analysis.js"></script>
+
+<script>
+let passed = 0;
+let failed = 0;
+const list = document.getElementById('results');
+
+function assert(description, condition, detail) {
+    const li = document.createElement('li');
+    if (condition) {
+        li.className = 'pass';
+        li.textContent = '✓ ' + description;
+        passed++;
+    } else {
+        li.className = 'fail';
+        li.textContent = '✗ ' + description + (detail ? ' — ' + detail : '');
+        failed++;
+    }
+    list.appendChild(li);
+}
+
+const container = document.getElementById('logLines');
+
+function frames(n) {
+    return new Promise((resolve) => {
+        const step = () => (n-- <= 0 ? resolve() : requestAnimationFrame(step));
+        step();
+    });
+}
+
+// The topmost shown line and its distance from the top of the list, measured
+// independently of the code under test.
+function topLine() {
+    const top = container.getBoundingClientRect().top;
+    for (const row of container.querySelectorAll(':scope > .log-line')) {
+        const rect = row.getBoundingClientRect();
+        if (rect.height > 0 && rect.bottom > top + container.clientTop) {
+            return { index: row.dataset.lineIndex, offset: rect.top - top };
+        }
+    }
+    return null;
+}
+
+function rowFor(index) {
+    return container.querySelector(`:scope > .log-line[data-line-index="${index}"]`);
+}
+
+// Scrolled down in steps, as a user would: the rows passed are laid out once
+// and keep their real height (contain-intrinsic-size: auto).
+async function scrollDownTo(target) {
+    container.scrollTop = 0;
+    await frames(2);
+    while (container.scrollTop < target) {
+        const before = container.scrollTop;
+        container.scrollTop = Math.min(target, before + 200);
+        await frames(1);
+        if (container.scrollTop <= before) break;
+    }
+    await frames(3);
+}
+
+function wrappedLog(count) {
+    const lines = [];
+    for (let i = 0; i < count; i++) {
+        // Lines of different lengths, so they wrap to different heights.
+        const words = 'C:\\Program Files\\Vendor\\Product\\bin\\tool.exe --argument value '.repeat(1 + (i % 5));
+        lines.push({ line: `line ${i} ${words}`, dominant_status: '?', css_class: 'status-unknown' });
+    }
+    return lines;
+}
+
+async function run() {
+    // -----------------------------------------------------------------------
+    // A re-render keeps the topmost line where it was, now and a few frames on
+    // -----------------------------------------------------------------------
+    analyzedLines = wrappedLog(400);
+    renderLogLines();
+    await scrollDownTo(12000);
+    const before = topLine();
+    assert('the list is scrolled into wrapped lines', before && Number(before.index) > 50,
+        JSON.stringify(before));
+
+    renderLogLines();
+    let after = topLine();
+    assert('right after the re-render the same line is at the top',
+        after && after.index === before.index, JSON.stringify({ before, after }));
+    assert('right after the re-render it is at the same height',
+        after && Math.abs(after.offset - before.offset) < 1, JSON.stringify({ before, after }));
+
+    await frames(4);
+    after = topLine();
+    assert('a few frames later the same line is still at the top',
+        after && after.index === before.index, JSON.stringify({ before, after }));
+    assert('a few frames later it is still at the same height',
+        after && Math.abs(after.offset - before.offset) < 1, JSON.stringify({ before, after }));
+
+    // -----------------------------------------------------------------------
+    // The top line hidden by the re-render: the next shown line takes its place
+    // -----------------------------------------------------------------------
+    container.classList.add('hide-status-c');
+    await frames(2);
+    const shown = topLine();
+    const topIndex = Number(shown.index);
+    analyzedLines[topIndex] = { ...analyzedLines[topIndex], dominant_status: 'C', css_class: 'status-c' };
+    renderLogLines();
+    await frames(4);
+    assert('the line set to a hidden status is hidden',
+        rowFor(topIndex).getBoundingClientRect().height === 0);
+    after = topLine();
+    assert('the next shown line moves up to the top',
+        after && Number(after.index) === topIndex + 1, JSON.stringify({ shown, after }));
+    assert('it sits where the hidden line was',
+        after && Math.abs(after.offset - shown.offset) < 1, JSON.stringify({ shown, after }));
+    container.classList.remove('hide-status-c');
+    analyzedLines[topIndex] = { ...analyzedLines[topIndex], dominant_status: '?', css_class: 'status-unknown' };
+    renderLogLines();
+    await frames(4);
+
+    // -----------------------------------------------------------------------
+    // A scroll right after the re-render (a jump to a line) is not undone
+    // -----------------------------------------------------------------------
+    renderLogLines();
+    container.scrollTop = 0;
+    await frames(4);
+    assert('a scroll made right after the re-render stands', container.scrollTop === 0,
+        String(container.scrollTop));
+
+    // -----------------------------------------------------------------------
+    // At the top of the list nothing moves
+    // -----------------------------------------------------------------------
+    renderLogLines();
+    await frames(4);
+    assert('at the top the list stays at the top', container.scrollTop === 0,
+        String(container.scrollTop));
+
+    // -----------------------------------------------------------------------
+    // focusStatusBadge scrolls only for a badge out of view
+    // -----------------------------------------------------------------------
+    await scrollDownTo(6000);
+    const view = topLine();
+    const scrolled = container.scrollTop;
+    focusStatusBadge(Number(view.index) + 1);
+    assert('a badge in view gets focus', document.activeElement === rowFor(Number(view.index) + 1).querySelector('.status-badge'));
+    assert('a badge in view is focused without scrolling', container.scrollTop === scrolled,
+        `${scrolled} -> ${container.scrollTop}`);
+
+    focusStatusBadge(399);
+    await frames(2);
+    const badge = rowFor(399).querySelector('.status-badge');
+    const listRect = container.getBoundingClientRect();
+    const badgeRect = badge.getBoundingClientRect();
+    assert('a badge out of view gets focus', document.activeElement === badge);
+    assert('a badge out of view is scrolled into the list',
+        badgeRect.top >= listRect.top && badgeRect.bottom <= listRect.bottom,
+        JSON.stringify({ list: [listRect.top, listRect.bottom], badge: [badgeRect.top, badgeRect.bottom] }));
+}
+
+run().catch((error) => assert('the tests ran to the end', false, error && error.stack)).finally(() => {
+    const summary = document.getElementById('summary');
+    summary.textContent = passed + ' passed, ' + failed + ' failed';
+    summary.style.color = failed === 0 ? '#6f9' : '#f66';
+});
+</script>
+</body>
+</html>

@@ -889,8 +889,17 @@ function focusStatusPickerButton(targetIndex) {
 function focusStatusBadge(index) {
     const badge = document.querySelector(`.status-badge[data-line-index="${index}"]`);
     if (badge) {
-        // The line was just clicked, so it is in view: focusing must not scroll.
+        // The re-render kept the line in place: focusing must not scroll it.
+        // Only a badge that still ended up outside the list is brought in.
         badge.focus({ preventScroll: true });
+        const list = document.getElementById('logLines');
+        if (list) {
+            const view = list.getBoundingClientRect();
+            const rect = badge.getBoundingClientRect();
+            if (rect.top < view.top || rect.bottom > view.bottom) {
+                badge.scrollIntoView({ block: 'nearest' });
+            }
+        }
     }
 }
 
@@ -1892,25 +1901,84 @@ const MAX_LINE_INDENT_CH = 16;
 // with word wrap on, rows off screen (content-visibility) are new elements of
 // the estimated height, not their real one, so the same scrollTop would show
 // other lines and the view would jump a little.
-function captureScrollAnchor(container) {
-    const top = container.getBoundingClientRect().top;
-    for (const child of container.children) {
-        if (!child.dataset.lineIndex) continue;
-        const rect = child.getBoundingClientRect();
-        if (rect.height > 0 && rect.bottom > top) {
-            return { lineIndex: child.dataset.lineIndex, offset: rect.top - top };
-        }
+function isShownLogLine(row) {
+    return Boolean(row && row.dataset.lineIndex) && row.getBoundingClientRect().height > 0;
+}
+
+// The shown log line at or after row (blank spacers and lines hidden by a
+// filter are skipped), else the nearest one before it.
+function nearestShownLogLine(row) {
+    for (let r = row; r; r = r.nextElementSibling) {
+        if (isShownLogLine(r)) return r;
+    }
+    for (let r = row && row.previousElementSibling; r; r = r.previousElementSibling) {
+        if (isShownLogLine(r)) return r;
     }
     return null;
 }
 
+// The row at the top edge of the list, asked of the browser (a scan from the
+// first row measures every row above the view: thousands in a big log).
+// elementsFromPoint, not elementFromPoint: the status picker may lie on top.
+function rowAtTopOfList(container) {
+    const view = container.getBoundingClientRect();
+    const x = view.left + container.clientLeft + 1;
+    const y = view.top + container.clientTop + 1;
+    for (const element of document.elementsFromPoint(x, y)) {
+        let row = element;
+        while (row && row.parentElement !== container) row = row.parentElement;
+        if (row) return row;
+    }
+    return null;
+}
+
+function captureScrollAnchor(container) {
+    const top = container.getBoundingClientRect().top;
+    let row = rowAtTopOfList(container);
+    row = row ? nearestShownLogLine(row) : null;
+    if (!row) {
+        // The list's top is off screen (page scrolled): scan for it.
+        for (const child of container.children) {
+            if (isShownLogLine(child) && child.getBoundingClientRect().bottom > top) {
+                row = child;
+                break;
+            }
+        }
+    }
+    if (!row) return null;
+    return { lineIndex: row.dataset.lineIndex, offset: row.getBoundingClientRect().top - top };
+}
+
+// The anchor line, or the nearest shown one if it is hidden now (e.g. set to a
+// status the legend filter hides), goes back to where the anchor line was.
 function restoreScrollAnchor(container, anchor) {
-    if (!anchor) return false;
-    const row = container.querySelector(`:scope > .log-line[data-line-index="${anchor.lineIndex}"]`);
-    if (!row || row.getBoundingClientRect().height === 0) return false;
+    if (!anchor) return null;
+    const row = nearestShownLogLine(
+        container.querySelector(`:scope > .log-line[data-line-index="${anchor.lineIndex}"]`)
+    );
+    if (!row) return null;
     const top = container.getBoundingClientRect().top;
     container.scrollTop += (row.getBoundingClientRect().top - top) - anchor.offset;
-    return true;
+    return row;
+}
+
+// On the next frame the browser lays out the rows near the view at their real
+// height (content-visibility), and rows just above may grow past the estimate.
+// Its own scroll anchoring usually makes up for that; if the line still moved,
+// it is put back. If anything else scrolled the list meanwhile (the user, a
+// jump to a line), that scroll stands.
+let scrollAnchorFrameToken = 0;
+
+function settleScrollAnchor(container, row, offset) {
+    const token = ++scrollAnchorFrameToken;
+    const setTop = container.scrollTop;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (token !== scrollAnchorFrameToken || !row.isConnected) return;
+        if (container.scrollTop !== setTop) return;
+        const top = container.getBoundingClientRect().top;
+        const drift = (row.getBoundingClientRect().top - top) - offset;
+        if (Math.abs(drift) >= 1) container.scrollTop += drift;
+    }));
 }
 
 function renderLogLines() {
@@ -2090,7 +2158,10 @@ function renderLogLines() {
         });
         container.appendChild(lineDiv);
     });
-    if (!restoreScrollAnchor(container, scrollAnchor)) {
+    const anchorRow = restoreScrollAnchor(container, scrollAnchor);
+    if (anchorRow) {
+        settleScrollAnchor(container, anchorRow, scrollAnchor.offset);
+    } else {
         container.scrollTop = savedScrollTop;
     }
 }
