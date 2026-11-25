@@ -97,7 +97,7 @@ def _subs(texts):
     for text in texts:
         m = _SUB_RE.match(text)
         if m:
-            found.append((m.group(1), (m.group(2) or '').strip()))
+            found.append((m.group(1), sl.unquote_tail((m.group(2) or '').strip())))
     return found
 
 
@@ -323,7 +323,7 @@ def line_path(text, *, sub_line=None):
         sub_line = bool(_SUB_RE.match(text))
     if sub_line:
         m = _SUB_RE.match(text)
-        return _clean_path(sl.path_at(m.group(2) or '')) if m else ''
+        return _clean_path(sl.path_at(sl.unquote_tail(m.group(2) or ''))) if m else ''
     if not _is_item_text(text):
         return ''
     return _item_path(split(text))

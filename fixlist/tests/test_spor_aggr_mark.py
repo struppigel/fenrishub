@@ -58,6 +58,29 @@ class StripTests(SimpleTestCase):
         self.assertEqual(mark, plain)
 
 
+class QuotedTailTests(SimpleTestCase):
+    """Spor writes a value that would end its line like the mark in double
+    quotes ("cd ~", "E:\\Backup ~"): no mark, and the value reads without the
+    quotes."""
+
+    def test_only_a_quoted_value_ending_in_a_tilde_is_unquoted(self):
+        self.assertEqual(sl.unquote_tail('"E:\\Backup ~"'), 'E:\\Backup ~')
+        self.assertEqual(sl.unquote_tail('"~"'), '~')
+        for text in ('"C:\\a b\\x.exe"', 'cd ~', '"x', '""', ''):
+            self.assertEqual(sl.unquote_tail(text), text)
+
+    def test_a_quoted_item_is_its_path(self):
+        line = '2026-11-01 10:00:00 [PF] "E:\\Backup ~"'
+        self.assertEqual(sl.strip_aggr_mark(line), line)   # not a mark
+        self.assertEqual(sl.split_item(line).item, 'E:\\Backup ~')
+        self.assertEqual(spor_extractors.line_path(line), 'E:\\Backup ~')
+
+    def test_a_quoted_sub_line_value_keeps_its_tilde(self):
+        self.assertEqual(sl.strip_aggr_mark('    command: "cd ~"'), '    command: "cd ~"')
+        self.assertEqual(sl._sub_line('    command: "cd ~"'), ('command', 'cd ~'))
+        self.assertEqual(spor_extractors.line_path('    loaded: "E:\\Backup ~"', sub_line=True), 'E:\\Backup ~')
+
+
 class RuleFromAMarkedLineTests(SimpleTestCase):
     def test_a_marked_line_makes_the_rule_of_the_unmarked_line(self):
         for line in (FILES_LINE, RUN_BLOCK[0]):

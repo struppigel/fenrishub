@@ -422,7 +422,7 @@ def _split_item(body, known):
         m = STATUS_RE.search(item.rest)
         if m and _is_target_prefix(item.rest[:m.start()]):
             item.status = m.group(1)
-    item.item = normalize_path(head.strip())
+    item.item = normalize_path(unquote_tail(head.strip()))
     return item
 
 
@@ -469,6 +469,15 @@ def strip_aggr_mark(text):
     return body[:-len(AGGR_MARK)] + text[len(body):]
 
 
+def unquote_tail(text):
+    """A value Spor wrote in double quotes because it would end its line like
+    the aggressive-whitelist mark ("E:\\Backup ~" ends with "~"): without the
+    quotes; anything else as it is."""
+    if text and len(text) >= 3 and text[0] == '"' and text[-1] == '"' and text[-2] == '~':
+        return text[1:-1]
+    return text
+
+
 def _body(raw):
     return strip_aggr_mark(raw[:-1] if raw.endswith('\r') else raw)
 
@@ -481,7 +490,7 @@ def _is_item_line(body):
 def _sub_line(body):
     """(key, value) of an indented "key: value" line, else None."""
     m = _SUB_LINE_RE.match(body)
-    return (m.group(2), m.group(3) or '') if m else None
+    return (m.group(2), unquote_tail(m.group(3) or '')) if m else None
 
 
 def _subsection_title(stripped):
