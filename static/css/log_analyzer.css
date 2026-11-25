@@ -1259,6 +1259,17 @@ button.lookup-menu-item {
     .bulk-insert-controls {
         width: 100%;
     }
+
+    /* Stacked, the box is as tall as its panels, so each panel needs its own
+       height: #logLines (contain: strict) has none of its own and would
+       collapse to its borders. The closed right panel is only the « strip. */
+    .textareas-box .left-panel {
+        height: 70vh;
+    }
+
+    .textareas-box:not(.right-panel-closed) .right-panel {
+        height: 45vh;
+    }
 }
 
 
