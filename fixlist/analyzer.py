@@ -10,6 +10,7 @@ from django.db.models import F, Q
 from . import frst_extractors as ex
 from . import log_layout, regex_bench, regex_engine, script_matcher
 from . import spor_extractors
+from .spor_log import strip_aggr_mark
 from .regex_engine import _re2  # noqa: F401 - re-exported: tests check whether re2 is installed
 from .machine_signals import SYSTEM_PROFILE_NAMES
 from .log_types import ANALYZED_LOG_TYPES, LOG_TYPE_SPOR, default_rule_scope, rule_scope_log_type
@@ -762,7 +763,10 @@ def parse_rule_for_line(line: str, status: str, source_name: str = "", *, log_ty
     included; every other line parse_rule_line's rule for it."""
     if rule_scope_log_type(log_type) != LOG_TYPE_SPOR:
         return parse_rule_line(line, status, source_name)
-    line_value = (line or "").strip()
+    # The aggressive-whitelist mark at a line's end is no part of the line's rule.
+    line = strip_aggr_mark((line or "").strip())
+    block_text = strip_aggr_mark(block_text) if block_text else block_text
+    line_value = line
     lines = []
     if block_text:
         text = log_layout.normalize_block_text(block_text)
@@ -2337,12 +2341,13 @@ def single_block_inputs(line: str, log_type=None, block_lines=None, *, read_entr
     reads them, and so is the block's entry when `block_lines` are given and
     `read_entry`: only then is the block one the analysis read an entry from
     (Spor 0.7.0+; the analyzer page says so with `block_entry`)."""
-    line_value = (line or "").strip()
-    texts = [text.strip() for text in (block_lines or ()) if text and text.strip()]
+    spor = rule_scope_log_type(log_type) == LOG_TYPE_SPOR
+    unmark = strip_aggr_mark if spor else (lambda text: text)
+    line_value = unmark((line or "").strip())
+    texts = [unmark(text.strip()) for text in (block_lines or ()) if text and text.strip()]
     if line_value not in texts:
         texts = [line_value]
     position = texts.index(line_value)
-    spor = rule_scope_log_type(log_type) == LOG_TYPE_SPOR
     block_entries = ()
     if spor and block_lines and read_entry:
         entry = spor_extractors.parse_block(texts)
@@ -2372,6 +2377,8 @@ def inspect_line_matches(
     the line alone. Without `block_entry` no Spor entry is read from the
     block (one the analysis read none from, e.g. of a Spor log before 0.7.0)."""
     line_value = (line or "").strip()
+    if rule_scope_log_type(log_type) == LOG_TYPE_SPOR:
+        line_value = strip_aggr_mark(line_value)
     if not line_value:
         return {
             "line": "",
@@ -2463,6 +2470,10 @@ class LogInputs:
     def __init__(self, raw_text, log_type, buckets):
         self.walked = log_layout.analyzed_lines(raw_text)
         self.spor = rule_scope_log_type(log_type) == LOG_TYPE_SPOR
+        # What rules match and features are read from: in a Spor log the line
+        # without the aggressive-whitelist mark (spor_log.AGGR_MARK); the
+        # payload keeps the line as the log has it.
+        self.texts = [strip_aggr_mark(item.text) if self.spor else item.text for item in self.walked]
         conditional = buckets.get("__conditional")
         needs_blocks = buckets.get("__block") is not None or (
             conditional is not None and conditional.get("__block") is not None
@@ -2474,7 +2485,7 @@ class LogInputs:
         spor_lines = spor_extractors.analyze_lines(self.walked, self.structure) if self.spor else None
 
         def compute(index):
-            text = self.walked[index].text
+            text = self.texts[index]
             if spor_lines is None:
                 return line_features(text)
             # Only the lines of a block's entry carry it: a sub-line naming
@@ -2496,7 +2507,7 @@ class LogInputs:
         if found is None:
             indexes = self.members[block]
             found = block_features(
-                [self.walked[index].text for index in indexes],
+                [self.texts[index] for index in indexes],
                 [self.features[index] for index in indexes],
                 [self.walked[index].line_no for index in indexes],
             )
@@ -2508,7 +2519,7 @@ class LogInputs:
         of the block line `index` is in: enough for exact, substring and
         regex block rules, without reading any line's features."""
         indexes = self.members[self.structure.block_of[index]] if self.structure is not None else [index]
-        text = "\n".join(self.walked[member].text for member in indexes)
+        text = "\n".join(self.texts[member] for member in indexes)
         return BlockFeatures(text, (), frozenset(), frozenset(), ""), indexes
 
     def block_entry_at(self, index):
@@ -2524,7 +2535,7 @@ class LogInputs:
         in; without a layout, the line on its own."""
         if self.structure is None:
             item = self.walked[index]
-            return block_features([item.text], [self.features[index]], [item.line_no]), [index]
+            return block_features([self.texts[index]], [self.features[index]], [item.line_no]), [index]
         block = self.structure.block_of[index]
         return self._block(block), self.members[block]
 
@@ -2607,11 +2618,12 @@ def analyze_log_text(
 
     # Pass 1: every line with the rules without conditions; facts are found here.
     for item in walked:
-        line = item.text
+        line = inputs.texts[item.index]
         features = inputs.features[item.index]
         flat = inputs.line_matches(item.index, line, buckets)
         effective, shadowed, matcher_label, top_priority = _split_by_priority(flat)
         entry = _line_result(line, features, buckets, effective, shadowed, matcher_label, top_priority)
+        entry["line"] = item.text    # as the log has it (Spor: with its mark)
         analyzed_lines.append(entry)
         if tag_sources or fact_buckets is not None:
             _record_line_facts(facts, item.index, line, features, buckets, effective + shadowed, entry["rule_ids"])
@@ -2635,11 +2647,12 @@ def analyze_log_text(
                 if explanation is not None:
                     accepted.append((rule, f"{reason}; {explanation}" if explanation else reason, matcher))
             if accepted:
-                line = walked[index].text
+                line = inputs.texts[index]
                 effective, shadowed, matcher_label, top_priority = _split_by_priority(flat + accepted)
                 analyzed_lines[index] = _line_result(
                     line, features, buckets, effective, shadowed, matcher_label, top_priority,
                 )
+                analyzed_lines[index]["line"] = walked[index].text
         for rule in _fired_wholelog_rules(raw_text, conditional_buckets):
             if _conditions_hold(conditions.get(rule.pk, ()), facts, None, None, line_nos) is not None:
                 fired_wholelog.append(rule)
@@ -2718,10 +2731,11 @@ def find_facts(raw_text, buckets, log_type=None):
     walked = inputs.walked
     for item in walked:
         features = inputs.features[item.index]
-        flat = inputs.line_matches(item.index, item.text, buckets)
+        text = inputs.texts[item.index]
+        flat = inputs.line_matches(item.index, text, buckets)
         effective, shadowed, _label, _priority = _split_by_priority(flat)
         _record_line_facts(
-            facts, item.index, item.text, features, buckets, effective + shadowed, _deciding_rule_ids(effective),
+            facts, item.index, text, features, buckets, effective + shadowed, _deciding_rule_ids(effective),
         )
     _record_wholelog_facts(facts, raw_text or "", buckets)
     return facts, walked

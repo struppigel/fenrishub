@@ -295,9 +295,10 @@ def _is_item_text(text):
 def parse_block(lines):
     """The FrstEntry of a Spor block, or None. `lines` are its stripped lines:
     the item line first, then its sub-lines ("program: C:\\x.exe")."""
+    lines = [sl.strip_aggr_mark(line) for line in lines or ()]
     if not lines or not _is_item_text(lines[0]):
         return None
-    return _parse_item(split(lines[0]), list(lines))
+    return _parse_item(split(lines[0]), lines)
 
 
 def _clean_path(path):
@@ -317,7 +318,7 @@ def line_path(text, *, sub_line=None):
     """The one path a stripped Spor line names, '' for none: an item line's
     item, else its target; a sub-line's value ("loaded: C:\\x.dll"). With
     `sub_line` None the "key: value" shape decides."""
-    text = (text or '').strip()
+    text = sl.strip_aggr_mark((text or '').strip())
     if sub_line is None:
         sub_line = bool(_SUB_RE.match(text))
     if sub_line:
@@ -344,7 +345,7 @@ def is_entry_line(text, *, sub_line):
     of its own, with its own path."""
     if not sub_line:
         return True
-    m = _SUB_RE.match((text or '').strip())
+    m = _SUB_RE.match(sl.strip_aggr_mark((text or '').strip()))
     if not m or m.group(1) not in _OTHER_FILE_KEYS:
         return True
     return not line_path(text, sub_line=True)
@@ -378,7 +379,7 @@ def analyze_lines(walked, structure):
         return SporLines(entries, paths, in_entry)
     for block, indexes in log_layout.block_members(structure).items():
         first = indexes[0]
-        texts = [walked[index].text for index in indexes]
+        texts = [sl.strip_aggr_mark(walked[index].text) for index in indexes]
         if _is_item_text(texts[0]) and not walked[first].raw[:1].isspace():
             item = split(texts[0])
             paths[first] = _item_path(item)

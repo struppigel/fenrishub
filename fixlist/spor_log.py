@@ -121,6 +121,10 @@ TAG_GROUP = r'\[(?:[^\[\]\r\n]|\[[^\[\]\r\n]{1,40}\]){1,80}\]'
 _TAGS_RE = re.compile(r'^((?:' + TAG_GROUP + r' ){0,4}' + TAG_GROUP + r')(?: |$)')
 _TAG_GROUP_RE = re.compile(TAG_GROUP)
 FLAGS_MARK = ' <==== '
+# Normal Spor logs (after 0.9.0) end the lines of the records its aggressive
+# whitelist (-aggressive, a command line trial) would hide with " ~". Parsers
+# and rules read the line without it; the log view shows it.
+AGGR_MARK = ' ~'
 _PATH_START_RE = re.compile(r'^(?:[A-Za-z]:\\|\\\\)')
 # Spor writes some service / task targets with forward slashes as the registry
 # holds them ("D:/Program Files (x86)/PlanetVPN/x.exe"): normalize_path makes
@@ -356,7 +360,7 @@ def split_item(body, known=None, profile=''):
 
 def _split_item(body, known):
     item = SporItem()
-    text = body.rstrip()
+    text = strip_aggr_mark(body.rstrip())
     m = _TIME_RE.match(text)
     if m:
         item.time = m.group(0)
@@ -452,8 +456,21 @@ def _is_target_prefix(text):
     return is_path(normalize_path(text.lstrip('"'))) and '; ' not in text and ' => ' not in text
 
 
+def strip_aggr_mark(text):
+    """`text` without the aggressive-whitelist mark (AGGR_MARK) at its end;
+    a block's text ("\\n"-joined lines): each line without it."""
+    if not text or '~' not in text:
+        return text
+    if '\n' in text:
+        return '\n'.join(strip_aggr_mark(line) for line in text.split('\n'))
+    body = text.rstrip('\r')
+    if not body.endswith(AGGR_MARK):
+        return text
+    return body[:-len(AGGR_MARK)] + text[len(body):]
+
+
 def _body(raw):
-    return raw[:-1] if raw.endswith('\r') else raw
+    return strip_aggr_mark(raw[:-1] if raw.endswith('\r') else raw)
 
 
 def _is_item_line(body):
@@ -686,6 +703,7 @@ def _parse_files_details(rest):
 
 
 def _parse_files_line(index, body):
+    body = strip_aggr_mark(body)
     cut = body.find(FLAGS_MARK)
     if cut != -1:
         body = body[:cut]
