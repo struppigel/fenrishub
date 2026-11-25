@@ -121,7 +121,7 @@ TAG_GROUP = r'\[(?:[^\[\]\r\n]|\[[^\[\]\r\n]{1,40}\]){1,80}\]'
 _TAGS_RE = re.compile(r'^((?:' + TAG_GROUP + r' ){0,4}' + TAG_GROUP + r')(?: |$)')
 _TAG_GROUP_RE = re.compile(TAG_GROUP)
 FLAGS_MARK = ' <==== '
-# Normal Spor logs (after 0.9.0) end the lines of the records its aggressive
+# Normal Spor logs (0.10.0+) end the lines of the records its aggressive
 # whitelist (-aggressive, a command line trial) would hide with " ~". Parsers
 # and rules read the line without it; the log view shows it.
 AGGR_MARK = ' ~'
