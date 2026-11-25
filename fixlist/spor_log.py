@@ -69,6 +69,9 @@ MALWARE_FLAGS = frozenset({'!known-malware'})
 INFO_FLAGS = frozenset({
     '!remote-access', '!account-change', '!history-deleted', '!disk-image', '!upload', '!new-service',
     '!task-deleted', '!startup-item', '!drop-group',
+    # Spor 0.9.0: a PC maker's reset hook, a proxy, extension developer mode,
+    # an older custom root certificate, Settings pages hidden by policy
+    '!reset-config', '!proxy', '!dev-mode', '!custom-root', '!settings-changed',
 })
 
 

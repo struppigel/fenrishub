@@ -573,7 +573,8 @@ window.CorrelationInfo = (function () {
     const QUIET_FLAGS = new Set(['!lolbin']);
     // Hints and Spor 0.8.1 context flags (spor_log.INFO_FLAGS): the info colour, never a warning.
     const HINT_FLAGS = new Set(['!renamed-program', '!abused-tld', '!remote-access', '!account-change', '!history-deleted',
-        '!disk-image', '!upload', '!new-service', '!task-deleted', '!startup-item', '!drop-group']);
+        '!disk-image', '!upload', '!new-service', '!task-deleted', '!startup-item', '!drop-group',
+        '!reset-config', '!proxy', '!dev-mode', '!custom-root', '!settings-changed']);
     const MALWARE_FLAGS = new Set(['!known-malware']);
 
     function flagClass(flag) {

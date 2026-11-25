@@ -363,6 +363,10 @@ def _group_entries(upload_id, lines, known, index):
             _add_path_entry(index, path, entry)
 
 
+# "listening: C:\...\node.exe (pid 8728)" in a proxy finding's details (Spor 0.9.0).
+_LISTENING_RE = re.compile(r'(?:^|; )listening: ([A-Za-z]:\\.{1,400})')
+
+
 def _summary_pairs(upload_id, lines, known, index):
     """Index the SUMMARY lines under their file, and pair each with the
     section line it sums up: [(summary entry, detail entry)]. A finding
@@ -377,6 +381,12 @@ def _summary_pairs(upload_id, lines, known, index):
         if not item.trusted:
             continue
         main = _main_key(item, known, volumes)
+        if not main:
+            # no file in the item: the program its details say listens (Spor 0.9.0 "proxy (user x): 127.0.0.1:57352
+            # => listening: C:\...\node.exe (pid 8728)"); not any path of the details (a WMI command's powershell.exe)
+            m = _LISTENING_RE.search(item.rest)
+            path = _text_path(m.group(1), known) if m else ''
+            main = _path_key(path) if path else ''
         # The line as the log shows it, its Spor 0.7.0+ sub-lines ("file:" of a
         # Defender detection, "from:" of a download) as its extra.
         text, extra = spor_log.as_written(lines, no)
