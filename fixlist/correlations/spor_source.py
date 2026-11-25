@@ -209,16 +209,101 @@ def _item_severity(item):
     return evidence_severity(item.flags, item.status)
 
 
-def _main_key(item):
+def _main_key(item, known=None, volumes=None):
     """The key of the file an item line is about, '' for none: the Defender
-    detection's file, the item, else the first file the item names."""
+    detection's file, the item, else the first file the item names
+    (_text_path: "service installed: X: C:\\Program Files\\x.exe")."""
     if spor_log.defender_threat(item.item):
-        paths = spor_log.defender_paths(item.rest)
+        paths = spor_log.defender_paths(item.rest, volumes)
         return normalized_path(paths[0]) if paths else ''
     if spor_log.is_path(item.item):
         return _path_key(item.item)
+    path = _text_path(item.item, known)
+    if path:
+        return _path_key(path)
     found = argument_paths(item.item)
     return found[0] if found else ''
+
+
+# Where a path starts in a SUMMARY finding's text ("service installed: X: C:\...",
+# "DLL side-loading: C:\...", "invalid signature: \\?\C:\..."), and how a path
+# with blanks ends there when FILES does not list it: at a file's extension or a
+# folder's backslash before " (", two blanks, ", " / "; ", " => " or the end.
+_TEXT_PATH_START_RE = re.compile(r'(?:(?<=[\s(:])|^)(?:\\\\\?\\|\\\?\?\\)?[A-Za-z]:\\')
+_TEXT_PATH_END_RE = re.compile(r'^(.+?(?:\.[A-Za-z0-9]{1,8}|\\))(?= \(|  |, |; | => |$)')
+
+
+def _text_path(text, known=None):
+    """The first file or folder path a SUMMARY finding's text names, '' for
+    none: the longest FILES path (`known`, spor_log.known_paths) it starts
+    with, else up to the file's extension or the folder's backslash."""
+    m = _TEXT_PATH_START_RE.search(text or '')
+    if not m:
+        return ''
+    rest = spor_log.strip_device_prefix(text[m.start():])
+    if known:
+        path = spor_log.resolve_item_path(rest, known)
+        if path:
+            return path
+    end = _TEXT_PATH_END_RE.match(rest)
+    return end.group(1) if end else ''
+
+
+# SUMMARY findings and Autodetect lines about a persistence entry or an
+# installed program, not (only) a file: "service installed: <name>: ...",
+# "service <name> (auto): ...", "task \<name>: ...", "installed program X,
+# key HKLM-x32\...\{GUID}", "... product code {GUID}".
+_SERVICE_INSTALLED_RE = re.compile(r'^service installed: (.{1,200}?): ')
+_SERVICE_START_RE = re.compile(r'^service (.{1,200}?) \((?:auto|demand|boot|system|manual|disabled|delayed[^)]{0,20})\): ')
+_TASK_ITEM_RE = re.compile(r'^task (\\.{1,300}?)(?: \(hidden\))?: ')
+_SOFTWARE_KEY_RE = re.compile(r'\bkey (HK[A-Z]{1,4}(?:-x32)?\\\.\.\.\\[^;,\r\n]{1,300}?)(?= => |; |, |$)')
+_PRODUCT_CODE_RE = re.compile(r'\bproduct code (\{[0-9A-Fa-f-]{36}\})')
+# TIMELINE task and service events: "task \<name> created" (details of a file's
+# line, or the item of a line without one: "task \<name> created: <command>"),
+# "service <name> installed" (likewise; "service <name> (auto) changed").
+_TASK_EVENT_RE = re.compile(r'(?:^|; )task (\\.{1,300}?) (?:created|changed)(?=[;:]|$)')
+_SERVICE_EVENT_RE = re.compile(r'(?:^|; )service (.{1,200}?)(?: \([a-z ]{1,20}\))? (?:installed|changed)(?=[;:]|$)')
+
+
+def _entry_keys(text):
+    """The typed keys (svc: / task: / uninstall: / msi:) of a SUMMARY or
+    Autodetect line's text."""
+    keys = []
+    for pattern, kind in ((_SERVICE_INSTALLED_RE, 'svc'), (_SERVICE_START_RE, 'svc'), (_TASK_ITEM_RE, 'task')):
+        m = pattern.match(text)
+        if m:
+            key = identity_key(kind, m.group(1))
+            if key:
+                keys.append(key)
+            break
+    m = _SOFTWARE_KEY_RE.search(text)
+    if m:
+        keys.extend(sorted(software_keys(m.group(1))))
+    m = _PRODUCT_CODE_RE.search(text)
+    if m:
+        key = msi_key(m.group(1))
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _event_keys(item):
+    """The typed keys of a TIMELINE task or service event ([TSK] / [SVC])."""
+    tags = item.tags.split()
+    keys = []
+    if 'TSK' in tags:
+        for text in (item.item, item.rest):
+            m = _TASK_EVENT_RE.search(text)
+            if m:
+                keys.append(identity_key('task', m.group(1)))
+                break
+    if 'SVC' in tags:
+        for text in (item.item, item.rest):
+            m = _SERVICE_EVENT_RE.search(text)
+            if m:
+                keys.append(identity_key('svc', m.group(1)))
+                break
+    return [key for key in keys if key]
 
 
 def _file_of(index, key):
@@ -230,16 +315,32 @@ def _file_of(index, key):
     return ntpath.basename(key.rstrip('\\'))[:120]
 
 
+# SUMMARY and TIMELINE sub-lines that name a file of their own (TIMELINE's
+# "path:" / "script:" are evidence: iter_timeline_evidence): the first folder of
+# a drop folder's group (Spor 0.8.0), a side-loaded DLL (0.8.1). Not a Defender
+# detection's "file:" / "process:" items: they are details of their line (Spor
+# 0.6 wrote them on it; both layouts link the same, test_spor_unfold).
+_SUMMARY_PATH_KEYS = frozenset({'group', 'dll'})
+
+
+def _sub_path(key, value, known, profile):
+    """The path a SUMMARY / TIMELINE sub-line names (_SUMMARY_PATH_KEYS), '' for none."""
+    item = spor_log.split_item(value, known, profile)
+    if not item.trusted:
+        return ''
+    return spor_log.folder_path(item.item) if key == 'group' else item.item
+
+
 def _group_entries(upload_id, lines, known, index):
-    """The "group:" sub-lines of SUMMARY and TIMELINE (Spor 0.8.0: the first
-    folder of a drop folder's group) under that folder, so the members' lines
-    and the first folder's link up. DROP FOLDERS' own group: lines are
+    """The sub-lines of SUMMARY and TIMELINE that name a file (_SUMMARY_PATH_KEYS:
+    "group:", "dll:", "file:", ...) under that file, so the line they belong
+    to and the file's other lines link up. The sections' own sub-lines are
     mentions (iter_mentions)."""
     profile = spor_log.user_profile(lines, known)
     for title, start, end in spor_log.iter_sections(lines):
         if title not in (spor_log.SECTION_SUMMARY, spor_log.SECTION_TIMELINE):
             continue
-        parent = ''   # the item line above, split only when it has a group: line
+        parent = ''   # the item line above, split only when it has such a sub-line
         for at in range(start + 1, end):
             body = lines[at].rstrip('\r')
             sub = spor_log._sub_line(body)
@@ -248,33 +349,34 @@ def _group_entries(upload_id, lines, known, index):
                     parent = body.strip()
                 continue
             key, value = sub
-            if key != 'group' or not value:
+            if key not in _SUMMARY_PATH_KEYS or not value:
                 continue
-            item = spor_log.split_item(value, known, profile)
-            folder = spor_log.folder_path(item.item)
-            if not item.trusted or not spor_log.is_path(folder):
+            path = _sub_path(key, value.strip(), known, profile)
+            if not spor_log.is_path(path):
                 continue
             owner = spor_log.split_item(parent, known, profile) if parent else None
             entry = _plain_mention(
-                upload_id, LOG_TYPE_SPOR, at + 1, body.strip(), 'group', ntpath.basename(folder),
+                upload_id, LOG_TYPE_SPOR, at + 1, body.strip(), key, ntpath.basename(path.rstrip('\\')),
                 section=title, time=owner.time if owner else '', tags=owner.tags if owner else '',
             )
             entry['parent'] = owner.item[:200] if owner else ''
-            _add_path_entry(index, folder, entry)
+            _add_path_entry(index, path, entry)
 
 
 def _summary_pairs(upload_id, lines, known, index):
     """Index the SUMMARY lines under their file, and pair each with the
-    section line it sums up: [(summary entry, detail entry)]."""
+    section line it sums up: [(summary entry, detail entry)]. A finding
+    about a service, task or installed program is under its typed key too."""
+    volumes = spor_log.device_volumes(lines)
     by_time = {}
     for no, title, item in spor_log.iter_section_items(lines, known):
         if item.time and item.trusted:
-            by_time.setdefault(item.time, []).append((no, title, item, _main_key(item)))
+            by_time.setdefault(item.time, []).append((no, title, item, _main_key(item, known, volumes)))
     pairs = []
     for no, item in spor_log.iter_summary_items(lines, known):
         if not item.trusted:
             continue
-        main = _main_key(item)
+        main = _main_key(item, known, volumes)
         # The line as the log shows it, its Spor 0.7.0+ sub-lines ("file:" of a
         # Defender detection, "from:" of a download) as its extra.
         text, extra = spor_log.as_written(lines, no)
@@ -287,6 +389,8 @@ def _summary_pairs(upload_id, lines, known, index):
         entry['file_status'] = item.status
         if main:
             index.setdefault(main, []).append(entry)
+        for key in _entry_keys(item.text):
+            index.setdefault(key, []).append(entry)
         detail = _detail_line(item, main, by_time.get(item.time, ()) if item.time else ())
         if detail is None:
             continue
@@ -356,11 +460,12 @@ def _defender_event_entries(upload_id, lines, known, index):
     (the detection before it) are lines about the file too."""
     indexed = {entry.get('line_no') for entries in index.values() for entry in entries
                if entry.get('kind') == 'detection'}
+    volumes = spor_log.device_volumes(lines)
     for no, title, item in spor_log.iter_section_items(lines, known):
         threat = spor_log.defender_threat(item.item) if title == spor_log.SECTION_DEFENDER else ''
         if not threat or no in indexed:
             continue
-        for path in spor_log.defender_paths(item.rest):
+        for path in spor_log.defender_paths(item.rest, volumes):
             key = normalized_path(path)
             if not key:
                 continue
@@ -396,6 +501,32 @@ def _timeline_entries(upload_id, lines, known, index):
             'extra': extra, 'flags': item.flags[:10], 'severity': evidence_severity(item.flags, item.status),
             'file': file_name(item.item),
         })
+
+
+def _event_entries(upload_id, lines, known, index):
+    """TIMELINE task and service events ("[TSK] ... task \\X created", "[SVC]
+    ... service X installed") under the task's / service's typed key too, so
+    they link to its PERSISTENCE line and SUMMARY finding: the line's own entry
+    when it names a file, else a plain mention of it."""
+    own = {}
+    for entries in index.values():
+        for entry in entries:
+            if entry.get('kind') == 'evidence' and not entry.get('folder'):
+                own.setdefault(entry.get('line_no'), entry)
+    for no, item in spor_log.iter_timeline_items(lines, known):
+        keys = _event_keys(item)
+        if not keys:
+            continue
+        entry = own.get(no)
+        if entry is None:
+            text, extra = spor_log.as_written(lines, no)
+            entry = _plain_mention(
+                upload_id, LOG_TYPE_SPOR, no, text, 'item', '', section=spor_log.SECTION_TIMELINE,
+                time=item.time, tags=item.tags, extra=extra, severity=evidence_severity(item.flags, item.status),
+            )
+            entry['flags'] = item.flags[:10]
+        for key in keys:
+            index.setdefault(key, []).append(entry)
 
 
 def _line_keys(index):
@@ -504,6 +635,7 @@ def build(upload_id, lines, known=None):
     _group_entries(upload_id, lines, known, index)
     pairs = _summary_pairs(upload_id, lines, known, index)
     _install_entries(upload_id, lines, known, index)
+    _event_entries(upload_id, lines, known, index)
     by_line = _line_keys(index)
     names, named_in = _detail_names(lines, known, index, by_line)
     _usb_sub_names(usb_files, index, by_line, names, named_in)

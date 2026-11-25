@@ -32,11 +32,12 @@ import threading
 from collections import OrderedDict
 
 from .. import spor_log
-from ..correlation_keys import MATCH_HOST, is_host_program, is_path_key
+from ..correlation_keys import MATCH_HOST, is_host_of_line, is_host_program, is_path_key
 from ..status_types import dominant_status
 from .collector import MAX_INSIDE_ENTRIES, MAX_RELATED_PER_LINE, LineEntries
 from .entries import (
-    FLAGGED_STATUSES, MATCH_DETAIL, MATCH_INSIDE, MATCH_NAME, MATCH_NAMED_BY, MATCH_SAME_HASH, MATCH_SIBLING,
+    FLAGGED_STATUSES, MATCH_DETAIL, MATCH_INSIDE, MATCH_NAME, MATCH_NAMED_BY, MATCH_NAMED_LIKE, MATCH_SAME_HASH,
+    MATCH_SIBLING,
     MATCH_SUMMARY, finding_status,
 )
 from .folders import is_broad_folder
@@ -53,12 +54,21 @@ RATING_MATCHES = frozenset({None, MATCH_SAME_HASH, MATCH_SUMMARY})
 SELF_STATUSES = frozenset({'B', 'P', '!'})
 
 
-def _key_match(key):
+def _key_match(key, flagged=frozenset()):
     """The match of entries found through `key`: none for a file, 'host' for
-    a host program, the typed match for a typed key ('' for others)."""
+    a host program (see _is_host), the typed match for a typed key ('' for
+    others)."""
     if is_path_key(key):
-        return MATCH_HOST if is_host_program(key) else None
+        return MATCH_HOST if _is_host(key, flagged) else None
     return _TYPED_MATCHES.get(key.split(':', 1)[0], '')
+
+
+def _is_host(key, flagged):
+    """A command-line host (cmd.exe, wscript.exe, ... in its Windows folder:
+    its lines' flags are about what it runs) always; another Windows binary
+    only while no line of the log has a strong finding about it (a fake
+    System32\\x.exe is a file like any other)."""
+    return is_host_of_line(key) or (key not in flagged and is_host_program(key))
 
 
 def _rates(entry, extra):
@@ -211,11 +221,12 @@ def compute(upload_id, content):
     for no, partners in facts.partners.items():
         for partner in partners:
             at(no).add(partner, MATCH_SUMMARY)
+    flagged = _flagged_keys(index)
     # The same file / entry elsewhere in the log.
     for no, keys in facts.by_line.items():
         collector = at(no)
         for key in keys:
-            match = _key_match(key)
+            match = _key_match(key, flagged)
             if match == '':
                 continue
             for entry in index[key]:
@@ -223,10 +234,10 @@ def compute(upload_id, content):
     related = _RelatedIndex(index)
     _add_folders(index, related, at)
     _add_details(facts, at)
-    flagged = _flagged_keys(index)
+    _add_named_like(index, facts.by_line, at)
     for no, keys in facts.by_line.items():
         for key in keys:
-            if is_path_key(key) and not is_host_program(key) and not _is_folder_key(index, key, no):
+            if is_path_key(key) and not _is_host(key, flagged) and not _is_folder_key(index, key, no):
                 _add_related(at(no), related, key, flagged)
 
     notable_lines = {
@@ -277,6 +288,70 @@ def _add_details(facts, at):
                 continue
             for mine in naming:
                 at(entry['line_no']).add(mine, MATCH_NAMED_BY)
+
+
+# A persistence name that links to a folder of the same name: long enough not
+# to be a word every PC has, and not a broad folder ("Microsoft", "Common Files").
+_MIN_NAMED_LIKE = 6
+_NOT_NAMED_LIKE = frozenset({
+    'windows', 'system32', 'syswow64', 'program files', 'program files (x86)', 'programdata', 'appdata',
+    'microsoft', 'common files', 'roaming', 'local', 'locallow', 'temp', 'users', 'public', 'default',
+    'drivers', 'updater', 'update', 'service', 'services', 'launcher',
+})
+
+
+def _identity_name(key):
+    """The name a typed persistence key stands for, as a folder would be
+    named: a task's last part, a service's or Run value's name; '' else."""
+    kind, _sep, value = key.partition(':')
+    if kind == 'task':
+        value = value.rsplit('\\', 1)[-1]
+    elif kind not in ('svc', 'run'):
+        return ''
+    value = value.strip()
+    return value if len(value) >= _MIN_NAMED_LIKE and value not in _NOT_NAMED_LIKE else ''
+
+
+def _add_named_like(index, by_line, at):
+    """A task, service or Run value that runs no file of its own (a bare
+    "powershell", or only a host program: cmd, wscript, ...) and a file in a
+    folder of its name ('named_like', both ways; informational): malware names
+    its folder like its task ("\\Microsoft\\Windows\\Guard\\HealthCheck-x1"
+    runs powershell, which starts "C:\\Windows\\System32\\HealthCheck-x1\\
+    node.exe"). An entry that runs a program in its own folder (a Run value
+    "Discord" and Discord's folder) says nothing new. One file per folder, at
+    most MAX_RELATED_PER_LINE folders."""
+    folders = {}
+    for key, entries in index.items():
+        # only a file with a line of its own (not a folder-only key) can stand for its folder
+        if not is_path_key(key) or not any(not e.get('folder') and e.get('line_no') for e in entries):
+            continue
+        parts = key.split('\\')
+        for depth in range(1, len(parts) - 1):
+            part = parts[depth]
+            if len(part) >= _MIN_NAMED_LIKE and part not in _NOT_NAMED_LIKE:
+                # The folder itself, and the first file the log names in it.
+                folders.setdefault(part, {}).setdefault('\\'.join(parts[:depth + 1]), key)
+    if not folders:
+        return
+    for key, entries in index.items():
+        name = '' if is_path_key(key) else _identity_name(key)
+        found = folders.get(name) if name else None
+        if not found:
+            continue
+        mine = [entry for entry in entries if entry.get('line_no')]
+        if any(is_path_key(other) and not is_host_of_line(other)
+               for entry in mine for other in by_line.get(entry['line_no'], ())):
+            continue
+        for path in list(found.values())[:MAX_RELATED_PER_LINE]:
+            first = next((entry for entry in index[path] if not entry.get('folder') and entry.get('line_no')), None)
+            if first is None:
+                continue
+            for entry in mine:
+                at(entry['line_no']).add(first, MATCH_NAMED_LIKE, other_path=first.get('path') or path)
+            # The file's line gets the entry's lines (a few: a service installed again and again).
+            for entry in mine[:MAX_RELATED_PER_LINE]:
+                at(first['line_no']).add(entry, MATCH_NAMED_LIKE)
 
 
 def _flagged_keys(index):

@@ -571,7 +571,9 @@ window.CorrelationInfo = (function () {
     // on many PCs grey, hints in the info colour, a known malware family
     // (Autodetect) malware, every other flag a warning.
     const QUIET_FLAGS = new Set(['!lolbin']);
-    const HINT_FLAGS = new Set(['!renamed-program']);
+    // Hints and Spor 0.8.1 context flags (spor_log.INFO_FLAGS): the info colour, never a warning.
+    const HINT_FLAGS = new Set(['!renamed-program', '!abused-tld', '!remote-access', '!account-change', '!history-deleted',
+        '!disk-image', '!upload', '!new-service', '!task-deleted', '!startup-item', '!drop-group']);
     const MALWARE_FLAGS = new Set(['!known-malware']);
 
     function flagClass(flag) {
@@ -633,22 +635,91 @@ window.CorrelationInfo = (function () {
         return list.childNodes.length ? list : null;
     }
 
+    // A line's text without the time it starts with ("2026-11-01 10:41:24
+    // [Persistence] service installed: X" -> "[Persistence] service installed: X").
+    const LEADING_TIME_RE = /^\d{4}-\d\d-\d\d \d\d:\d\d(?::\d\d)? +/;
+
+    // Activity rows that say the same in the same log share one row: a
+    // service installed again and again, one Defender threat detected many
+    // times, the same SUMMARY finding repeated. Same kind, section, tags,
+    // role, match, status, flags, extra and text (its time left out); in
+    // time order within a group, the groups newest first (no time last).
+    function activityGroups(items) {
+        const time = Format().entryTime;
+        const groups = new Map();
+        items.forEach((entry) => {
+            const text = entry.kind === 'evidence' ? str(entry.details) : str(entry.text).replace(LEADING_TIME_RE, '');
+            const flags = (Array.isArray(entry.flags) ? entry.flags : []).filter((flag) => typeof flag === 'string').sort();
+            const key = JSON.stringify([str(entry.upload_id), str(entry.log_type), str(entry.system), str(entry.kind),
+                entry.kind === 'evidence' ? str(entry.sources) : Format().mentionWhere(entry), str(entry.tags),
+                entry.kind === 'mention' ? Format().mentionRole(entry) : '', str(entry.match), Boolean(entry.in_folder),
+                str(entry.file_status), str(entry.severity), flags, text, Array.isArray(entry.extra) ? entry.extra : []]);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(entry);
+        });
+        const byTime = (a, b) => time(a).localeCompare(time(b)) || (Number(a.line_no) || 0) - (Number(b.line_no) || 0);
+        const newest = (entries) => entries.reduce((last, entry) => (time(entry) > last ? time(entry) : last), '');
+        return [...groups.values()]
+            .map((entries) => entries.slice().sort(byTime))
+            .sort((a, b) => {
+                const ta = newest(a);
+                const tb = newest(b);
+                if (Boolean(ta) !== Boolean(tb)) return ta ? -1 : 1;
+                return tb.localeCompare(ta);
+            });
+    }
+
+    // How many line links a grouped row shows before "+N more".
+    const GROUP_LINKS = 12;
+
+    // One source label, then a link per line of the group (each target once);
+    // past GROUP_LINKS a button shows the rest.
+    function groupSourceNode(entries) {
+        const wrap = sourceLabel(el('span', 'cinfo-src'), entries[0]);
+        const seen = new Set();
+        const links = [];
+        entries.forEach((entry) => {
+            const target = `${str(entry.upload_id)}:${Number(entry.anchor_line_no || entry.line_no) || 0}`;
+            if (seen.has(target)) return;
+            seen.add(target);
+            const link = lineLink(entry);
+            if (link) links.push(link);
+        });
+        links.slice(0, GROUP_LINKS).forEach((link) => wrap.appendChild(link));
+        const rest = links.slice(GROUP_LINKS);
+        if (rest.length) {
+            const more = el('button', 'cinfo-link cinfo-more', `+${rest.length} more`);
+            more.type = 'button';
+            more.title = 'show the links to all lines';
+            more.addEventListener('click', () => {
+                more.replaceWith(...rest);
+            });
+            wrap.appendChild(more);
+        }
+        return wrap;
+    }
+
     function renderActivity(parent, group) {
         const items = group.entries.filter((entry) => entry.kind === 'evidence' || entry.kind === 'mention');
         if (!items.length) return;
         const time = Format().entryTime;
-        // Newest first; entries without a time last.
-        items.sort((a, b) => {
-            const ta = time(a);
-            const tb = time(b);
-            if (Boolean(ta) !== Boolean(tb)) return ta ? -1 : 1;
-            return tb.localeCompare(ta);
-        });
         const list = section(parent, 'activity');
-        items.forEach((entry) => {
+        activityGroups(items).forEach((entries) => {
+            // The newest line speaks for the group (its text, status and extra are the group's).
+            const entry = entries[entries.length - 1];
             const li = row(sevClass(entry.severity) ? 'cinfo-flagged' : '');
             const head = el('div', 'cinfo-activity-head');
-            if (time(entry)) head.appendChild(el('span', 'cinfo-time', time(entry).slice(0, 16)));
+            const times = entries.map(time).filter(Boolean);
+            if (times.length > 1 && times[0].slice(0, 16) !== times[times.length - 1].slice(0, 16)) {
+                head.appendChild(el('span', 'cinfo-time', `${times[0].slice(0, 16)} … ${times[times.length - 1].slice(0, 16)}`));
+            } else if (time(entry)) {
+                head.appendChild(el('span', 'cinfo-time', time(entry).slice(0, 16)));
+            }
+            if (entries.length > 1) {
+                const count = el('span', 'cinfo-count', `${entries.length}×`);
+                count.title = `${entries.length} lines say this`;
+                head.appendChild(count);
+            }
             if (entry.kind === 'evidence') {
                 head.appendChild(el('span', 'cinfo-key', 'timeline'));
                 if (str(entry.sources)) head.appendChild(el('span', 'cinfo-tags', '[' + entry.sources + ']'));
@@ -666,11 +737,13 @@ window.CorrelationInfo = (function () {
             }
             head.appendChild(flagsNode(entry.flags));
             li.appendChild(head);
-            const detail = entry.kind === 'evidence' ? str(entry.details) : str(entry.text);
+            let detail = entry.kind === 'evidence' ? str(entry.details) : str(entry.text);
+            // A group's lines differ in their time only: the head shows it.
+            if (entries.length > 1 && entry.kind !== 'evidence') detail = detail.replace(LEADING_TIME_RE, '');
             if (detail) li.appendChild(tokenized('div', 'cinfo-text', detail));
             const extra = extraNode(entry.extra);
             if (extra) li.appendChild(extra);
-            li.appendChild(sourceNode(entry));
+            li.appendChild(entries.length > 1 ? groupSourceNode(entries) : sourceNode(entry));
             list.appendChild(li);
         });
     }

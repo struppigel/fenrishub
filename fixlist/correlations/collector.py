@@ -15,8 +15,8 @@ the line's entries are asked for (entries / finish).
 from ..correlation_keys import MATCH_ARGUMENT, MATCH_HOST, MATCH_PATH, installed_program, versions_differ
 from ..machine_signals import SYSTEM_UNKNOWN
 from .entries import (
-    INFO_MATCHES, KIND_RANK, MATCH_DETAIL, MATCH_INSIDE, MATCH_NAME, MATCH_NAMED_BY, MATCH_SAME_HASH, MATCH_SIBLING,
-    MATCH_SUMMARY, MATCH_TIMING, entry_status,
+    INFO_MATCHES, KIND_RANK, MATCH_DETAIL, MATCH_INSIDE, MATCH_NAME, MATCH_NAMED_BY, MATCH_NAMED_LIKE, MATCH_SAME_HASH,
+    MATCH_SIBLING, MATCH_SUMMARY, MATCH_TIMING, entry_status,
 )
 
 
@@ -39,7 +39,7 @@ _ORDER = (
     # 'uninstall' before the MSI product code of the same Uninstall entry:
     # both say "same installed program", by its key first.
     None, MATCH_ARGUMENT, 'uninstall', '*typed*', MATCH_SUMMARY, MATCH_SAME_HASH, IN_FOLDER, MATCH_INSIDE, MATCH_DETAIL,
-    MATCH_NAMED_BY, MATCH_HOST, MATCH_SIBLING, MATCH_NAME, MATCH_TIMING,
+    MATCH_NAMED_BY, MATCH_HOST, MATCH_SIBLING, MATCH_NAMED_LIKE, MATCH_NAME, MATCH_TIMING,
 )
 MATCH_STRENGTH = {match: rank for rank, match in enumerate(_ORDER)}
 

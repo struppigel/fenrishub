@@ -861,7 +861,9 @@ def _spor_marked(text, files=False, defender=False, detection=False):
 # The colour of a Spor flag by its tier (spor_log.flag_tier). Hints have the
 # colour of status I, as in the correlation info box; a known malware family
 # (Autodetect) the colour of B.
-_SPOR_FLAG_TIER_CLASS = {'malware': 'hl-sev-b', 'strong': 'hl-sev-w', 'hint': 'hl-sev-hint', 'quiet': 'hl-sev-g'}
+_SPOR_FLAG_TIER_CLASS = {
+    'malware': 'hl-sev-b', 'strong': 'hl-sev-w', 'info': 'hl-sev-hint', 'hint': 'hl-sev-hint', 'quiet': 'hl-sev-g',
+}
 
 
 def _spor_flag_tokens(flags_text):

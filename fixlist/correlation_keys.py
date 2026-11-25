@@ -76,9 +76,23 @@ _HOST_FOLDER_PREFIXES = ('c:\\windows\\', 'c:\\program files\\powershell\\')
 
 
 def is_host_program(key):
-    """True for a host program in its Windows folder or any Windows binary:
+    """True for a host program in its Windows folder or a Windows binary:
     never what a command-line detection is about."""
-    return is_host_of_line(key) or (key or '').startswith(SYSTEM_DIR_PREFIXES)
+    return is_host_of_line(key) or is_windows_binary(key)
+
+
+def is_windows_binary(key):
+    """True for a program or library of Windows itself: directly in System32 /
+    SysWOW64 (not in a folder below, where malware hides too: "System32\\
+    HealthCheck\\node.exe"; not a driver), or in the .NET Framework folder."""
+    key = key or ''
+    if key.startswith(SYSTEM_DIR_PREFIXES[2]):
+        return True
+    for prefix in SYSTEM_DIR_PREFIXES[:2]:
+        if key.startswith(prefix):
+            rest = key[len(prefix):]
+            return '\\' not in rest and not rest.endswith('.sys')
+    return False
 
 
 def is_host_of_line(key):

@@ -371,6 +371,21 @@
     padding: 0 6px;
 }
 
+/* "+N more" of a grouped activity row: a link-like button. */
+.cinfo-more {
+    font: inherit;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+/* "12×": how many lines a grouped activity row stands for. */
+.cinfo-count {
+    color: var(--la-text-secondary);
+    font-weight: 600;
+}
+
 .cinfo-sev-b { color: var(--la-status-b); }
 .cinfo-sev-p { color: var(--la-status-p); }
 .cinfo-sev-g { color: var(--la-status-g); }

@@ -406,6 +406,59 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
     assert('each line link of a grouped finding jumps to its own line', jumpedTo === 5134, String(jumpedTo));
     CorrelationInfo.close();
 
+    // A service installed again and again: the same SUMMARY finding on many
+    // lines is one activity row (count, time range, a link per line); a line
+    // that says something else stays a row of its own.
+    const installed = (lineNo, time, extra) => Object.assign({ kind: 'mention', upload_id: 'spor-log', log_type: 'Spor',
+        line_no: lineNo, section: 'SUMMARY', tags: 'Persistence', role: 'item', time, file_status: 'gone', flags: [],
+        text: `${time} [Persistence] service installed: wsftprm: C:\\Windows\\System32\\drivers\\kvckiller.sys`,
+        file: 'kvckiller.sys', system: 'same' }, extra || {});
+    const storm = [];
+    for (let day = 1; day <= 15; day++) {
+        storm.push(installed(30 + day, `2026-11-${String(day).padStart(2, '0')} 02:11:27`));
+    }
+    storm.push(installed(60, '2026-11-20 09:00:00', { flags: ['!defender-detected'], severity: 'w' }));
+    storm.push(installed(61, '2026-11-21 09:00:00', { section: 'PERSISTENCE', tags: 'service', text: '2026-11-21 09:00:00 [service] wsftprm => C:\\Windows\\System32\\drivers\\kvckiller.sys [gone]' }));
+    jumpedTo = 0;
+    CorrelationInfo.open({ lineText: 'C:\\Windows\\System32\\drivers\\kvckiller.sys', getEntries: () => storm, isOwn: isSpor,
+        onJump: (lineNo) => { jumpedTo = lineNo; } });
+    const activityRows = [...document.querySelectorAll('.cinfo-activity-head')].map((node) => node.closest('li'));
+    const stormRow = activityRows.find((li) => li.querySelector('.cinfo-count'));
+    assert('the same finding on 15 lines is one row, flags and other sections stay apart',
+        activityRows.length === 3 && stormRow && stormRow.querySelector('.cinfo-count').textContent === '15×',
+        `${activityRows.length} rows`);
+    assert('a grouped row shows its first and last time',
+        stormRow && stormRow.querySelector('.cinfo-time').textContent === '2026-11-01 02:11 … 2026-11-15 02:11',
+        stormRow && stormRow.querySelector('.cinfo-time').textContent);
+    assert('a grouped row shows its text once, without a time',
+        stormRow && stormRow.querySelector('.cinfo-text').textContent.startsWith('[Persistence] service installed: wsftprm'));
+    const firstLinks = stormRow ? [...stormRow.querySelectorAll('.cinfo-jump')].map((node) => node.textContent) : [];
+    assert('a grouped row links its first 12 lines in time order, then "+3 more"',
+        firstLinks.length === 12 && firstLinks[0] === 'L31' && stormRow.querySelector('.cinfo-more').textContent === '+3 more',
+        firstLinks.join(' '));
+    stormRow.querySelector('.cinfo-more').click();
+    const allLinks = [...stormRow.querySelectorAll('.cinfo-jump')].map((node) => node.textContent);
+    assert('"+N more" shows the other links', allLinks.length === 15 && !stormRow.querySelector('.cinfo-more')
+        && allLinks[14] === 'L45', allLinks.join(' '));
+    stormRow.querySelectorAll('.cinfo-jump')[14].click();
+    assert('each line link of a grouped row jumps to its own line', jumpedTo === 45, String(jumpedTo));
+    assert('the newest group comes first', activityRows[0].textContent.includes('[service]'), activityRows[0].textContent);
+    CorrelationInfo.open({ lineText: 'x', getEntries: () => [installed(31, '2026-11-01 02:11:27')], isOwn: isSpor, onJump: () => {} });
+    const single = document.querySelector('.cinfo-activity-head').closest('li');
+    assert('a single line keeps its row as before: its time, no count',
+        !single.querySelector('.cinfo-count') && single.querySelector('.cinfo-time').textContent === '2026-11-01 02:11'
+        && single.querySelector('.cinfo-text').textContent.startsWith('2026-11-01 02:11:27 [Persistence]'));
+    CorrelationInfo.close();
+    CorrelationInfo.open({ lineText: 'x', getEntries: () => [installed(31, '2026-11-01 02:11:27', { flags: ['!new-service', '!sideload'] })],
+        isOwn: isSpor, onJump: () => {} });
+    const flagNodes = [...document.querySelectorAll('.cinfo-flag')];
+    assert('a context flag (Spor 0.8.1) is in the info colour, a strong flag a warning',
+        flagNodes.find((n) => n.textContent === '!new-service').classList.contains('cinfo-sev-i')
+        && flagNodes.find((n) => n.textContent === '!sideload').classList.contains('cinfo-sev-w'));
+    CorrelationInfo.close();
+    assert('a task named like a folder is an informational link',
+        CorrelationFormat.INFO_MATCHES.has('named_like') && CorrelationFormat.MATCH_NOTES.named_like === 'named like its folder');
+
     const summary = document.getElementById('summary');
     summary.textContent = `${passed} passed, ${failed} failed`;
     summary.className = failed ? 'fail' : 'pass';

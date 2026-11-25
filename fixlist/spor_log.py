@@ -58,22 +58,32 @@ QUIET_FLAGS = frozenset({'!lolbin'})
 # Hints (Spor 0.3.0+): weak flags that Spor puts in its SUMMARY only together
 # with a strong flag nearby. On their own they are shown in the info colour and
 # rate a line I, not !; they still get their files looked up.
-HINT_FLAGS = frozenset({'!renamed-program'})
+# Spor 0.8.1: !abused-tld, a download from a cheap TLD campaigns favour.
+HINT_FLAGS = frozenset({'!renamed-program', '!abused-tld'})
 # Spor 0.4.0+ Autodetect: the item matches a known malware family (Spor's
 # curated pattern database). Stronger than any heuristic flag: malware (B).
 MALWARE_FLAGS = frozenset({'!known-malware'})
+# Spor 0.8.1 context flags: not evidence of malware, but part of the case (a
+# remote access tool used, an account created, Defender's history wiped). They
+# put a finding in the SUMMARY; shown in the info colour, never a status.
+INFO_FLAGS = frozenset({
+    '!remote-access', '!account-change', '!history-deleted', '!disk-image', '!upload', '!new-service',
+    '!task-deleted', '!startup-item', '!drop-group',
+})
 
 
-FLAG_TIERS = ('malware', 'strong', 'hint', 'quiet')   # worst first
+FLAG_TIERS = ('malware', 'strong', 'info', 'hint', 'quiet')   # worst first
 
 
 def flag_tier(flag):
-    """'quiet' (normal on many PCs), 'hint' (weak), 'malware' (a known
-    family) or 'strong'."""
+    """'quiet' (normal on many PCs), 'hint' (weak), 'info' (context),
+    'malware' (a known family) or 'strong'."""
     if flag in QUIET_FLAGS:
         return 'quiet'
     if flag in HINT_FLAGS:
         return 'hint'
+    if flag in INFO_FLAGS:
+        return 'info'
     if flag in MALWARE_FLAGS:
         return 'malware'
     return 'strong'
@@ -144,10 +154,11 @@ _SOFTWARE_FOLDER_RE = re.compile(r'(?:^|; )folder ([^;]{1,400})')
 # starts, "icon file:" its icon, "argument file:" a file a shortcut's
 # arguments name (a worm's hidden copy), "item list target:" a shortcut's
 # target from its shell items when it differs; Spor 0.8.0: "group:" the first
-# folder of a drop folder's group, so the members link to it).
+# folder of a drop folder's group, so the members link to it; a task's further
+# actions, "action: C:\x.exe [unsigned] => arguments ...").
 _PATH_SUB_KEYS = frozenset({
     'loaded', 'path', 'target', 'entry', 'files', 'dll', 'module', 'script',
-    'argument file', 'icon file', 'item list target', 'group',
+    'argument file', 'icon file', 'item list target', 'group', 'action',
 })
 # REMOTE ACCESS "[RMM folder]" lines (Spor 0.6.0): "exe: <path>", "file: <time> <path>".
 _REMOTE_PATH_SUB_KEYS = frozenset({'exe', 'file'})
@@ -379,9 +390,16 @@ def _split_item(body, known):
     head, sep, rest = text.partition(' => ')
     item.rest = rest if sep else ''
     m = STATUS_RE.search(head)
+    note = _NOTE_BRACKET_RE.search(head) if not m else None
     if m and not head[m.end():].strip():
         item.status = m.group(1)
         head = head[:m.start()]
+    elif note and is_path(normalize_path(head[:note.start()])) and not status_words(note.group(1)):
+        # A note in brackets after a path, no status word (Spor 0.8.0 USB DRIVES:
+        # "N:\x\<U+0020>a.mp4 [name ends with a space or dot: ...] => ..."): not
+        # part of the path; it goes in front of the details.
+        item.rest = '; '.join(part for part in (note.group(1), item.rest) if part)
+        head = head[:note.start()]
     elif m and not sep and _is_lone_path(head[:m.start()]) and not INLINE_FLAG_RE.search(head):
         # A path's status followed by text without " => " (SUMMARY of Spor
         # 0.6.x: "C:\...\robloxplayerbeta.exe [gone] sent N bytes (...)"); not
@@ -399,6 +417,13 @@ def _split_item(body, known):
             item.status = m.group(1)
     item.item = normalize_path(head.strip())
     return item
+
+
+# A bracket at the end of an item that is a note, not a status: it holds a
+# blank and a colon ("[name ends with a space or dot: Windows programs cannot
+# open it]"). A folder or file name never ends like that ("C:\Games [x]\a.exe"
+# has its bracket inside the path).
+_NOTE_BRACKET_RE = re.compile(r' \[([^\[\]\r\n]{1,40}: [^\[\]\r\n]{1,200})\]$')
 
 
 # Where a second path starts inside a text: " C:\", "(C:\", " \\server".
@@ -733,9 +758,75 @@ def known_paths(lines):
 # Defender
 # ---------------------------------------------------------------------------
 
-def _defender_path(entry):
+# Defender's "resource:" items up to Spor 0.8.0 name a file by its volume
+# device ("\Device\HarddiskVolume3\Users\x\a.exe"): device_volumes maps it to
+# its drive.
+_DEVICE_PATH_RE = re.compile(r'^\\Device\\(HarddiskVolume\d{1,3})(\\.*)$', re.IGNORECASE)
+# Folders only the system drive has: a device path under one is on it when
+# the log pairs the volume with no drive.
+_SYSTEM_DRIVE_FOLDERS = ('\\users\\', '\\windows\\', '\\programdata\\', '\\program files')
+_DRIVE_PATH_RE = re.compile(r'(?<![\w\\])([A-Za-z]:)(\\[^;"|<>\r\n]{1,400})')
+
+
+def device_volumes(lines):
+    r"""{volume device (lowercased, "harddiskvolume3"): drive ("C:")} of the
+    devices a log names, learned from the log itself: a device path and a
+    drive path with the same rest ("process C:\x\a.exe" and "resource:
+    \Device\HarddiskVolume3\x\a.exe" of one Defender detection; a FILES path).
+    A volume paired with several drives is left out. The readers of one log
+    each ask for it: the last result is kept for the same list."""
+    global _last_volumes
+    if _last_volumes[0] is lines and _last_volumes[1] == len(lines):
+        return _last_volumes[2]
+    found = _device_volumes(lines)
+    _last_volumes = (lines, len(lines), found)
+    return found
+
+
+# (lines, their count, device_volumes' result) of the last log read.
+_last_volumes = (None, 0, None)
+
+
+def _device_volumes(lines):
+    rests = {}
+    devices = []
+    for raw in lines:
+        if '\\Device\\' in raw or '\\device\\' in raw:
+            for part in re.split(r'[;,]\s*|:\s+', raw.strip()):
+                m = _DEVICE_PATH_RE.match(part.strip())
+                if m:
+                    devices.append((m.group(1).lower(), m.group(2).rstrip().lower()))
+        if ':\\' in raw:
+            for drive, rest in _DRIVE_PATH_RE.findall(raw):
+                rests.setdefault(rest.rstrip().lower(), set()).add(drive.upper())
+    if not devices:
+        return {}
+    votes = {}
+    for volume, rest in devices:
+        drives = rests.get(rest)
+        if drives and len(drives) == 1:
+            votes.setdefault(volume, set()).update(drives)
+    return {volume: next(iter(drives)) for volume, drives in votes.items() if len(drives) == 1}
+
+
+def device_path(path, volumes=None):
+    r"""A "\Device\HarddiskVolumeN\x" path as a drive path ("C:\x") through
+    `volumes` (device_volumes); a volume the log does not pair is the system
+    drive when the path is under a folder only it has (Users, Windows, ...).
+    Any other text unchanged; '' for a device path it cannot place."""
+    m = _DEVICE_PATH_RE.match(path or '')
+    if not m:
+        return path
+    drive = (volumes or {}).get(m.group(1).lower())
+    if not drive and m.group(2).lower().startswith(_SYSTEM_DRIVE_FOLDERS):
+        drive = 'C:'
+    return drive + m.group(2) if drive else ''
+
+
+def _defender_path(entry, volumes=None):
     entry = _DEFENDER_FILE_PREFIX_RE.sub('', entry.strip(), count=1)
     path = entry.split('|', 1)[0].split('->', 1)[0].strip().strip('"')
+    path = device_path(path, volumes)
     return path if is_path(path) else ''
 
 
@@ -746,9 +837,11 @@ def defender_threat(item_text):
     return m.group(2).strip() if m else ''
 
 
-def defender_paths(rest):
-    """The files a Defender line's details name ("<path>; action ...; process ...")."""
-    return [path for path in (_defender_path(part) for part in (rest or '').split('; ')
+def defender_paths(rest, volumes=None):
+    r"""The files a Defender line's details name ("<path>; action ...; process
+    ..."). `volumes` (device_volumes) places "\Device\HarddiskVolumeN\..."
+    resources on their drive."""
+    return [path for path in (_defender_path(part, volumes) for part in (rest or '').split('; ')
                               if not part.strip().startswith(('action ', 'process '))) if path]
 
 
@@ -761,6 +854,7 @@ def iter_defender_detections(lines):
     if SECTION_DEFENDER not in ranges:
         return []
     start, end = ranges[SECTION_DEFENDER]
+    volumes = device_volumes(lines)   # from the whole log, as its other readers learn them
     found = {}
     for index in range(start + 1, end):
         body = _body(lines[index])
@@ -780,7 +874,7 @@ def iter_defender_detections(lines):
             elif part.startswith('process '):
                 continue
             else:
-                path = _defender_path(part)
+                path = _defender_path(part, volumes)
                 if path:
                     paths.append(path)
         for path in paths:
@@ -1044,7 +1138,9 @@ def iter_mentions(lines, known=None):
             common = dict(section=title, subsection=subsection, time=item.time, tags=item.tags,
                           text=_body(written[index]).strip()[:300], flags=item.flags)
             if is_path(item.item):
-                folder = title == SECTION_DEFENDER and item.tags == 'Paths' and 'exclusion' in subsection.lower()
+                # "[Paths]", and Spor 0.8.1's "[Paths (policy)]" (the Policies key, where malware writes them)
+                folder = (title == SECTION_DEFENDER and item.tags in ('Paths', 'Paths (policy)')
+                          and 'exclusion' in subsection.lower())
                 path = item.item
                 if title in (SECTION_USB, SECTION_DROPS):
                     # Folders end in "\"; a hidden or flagged one speaks for its files.

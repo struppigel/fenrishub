@@ -30,14 +30,15 @@ window.CorrelationFormat = (function () {
         summary: 'summary line',
         detail: 'named in the details',
         named_by: 'names this file in its details',
+        named_like: 'named like its folder',
     };
 
     // Matches that only inform and never give a status
     // (case_correlations.INFO_MATCHES): their groups come last.
-    const INFO_MATCHES = new Set(['host', 'sibling', 'name', 'timing', 'detail', 'named_by']);
+    const INFO_MATCHES = new Set(['host', 'sibling', 'name', 'timing', 'detail', 'named_by', 'named_like']);
     // Matches about another file than the line's (each names it in
     // `other_path`), or about another line: never compared as one file.
-    const OTHER_FILE_MATCHES = new Set(['sibling', 'name', 'same_hash', 'inside', 'timing', 'detail', 'named_by']);
+    const OTHER_FILE_MATCHES = new Set(['sibling', 'name', 'same_hash', 'inside', 'timing', 'detail', 'named_by', 'named_like']);
 
     // Line-verdict status letter -> the marker / icon colour class.
     const STATUS_CLASS = { B: 'b', P: 'p', C: 'c', A: 'a', '!': 'w', G: 'g', S: 's', I: 'i', J: 'j' };

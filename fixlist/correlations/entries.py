@@ -117,14 +117,14 @@ def _add_defender_entries(index, upload_id, log_type, detections, lines=None):
 def evidence_severity(flags, file_status):
     """'b' for a Spor entry of a known malware family (!known-malware); 'w'
     for one with a strong flag (not normal on many PCs, not a hint) or a file
-    whose signature does not hold; 'i' with only a hint (!renamed-program);
-    '' otherwise."""
+    whose signature does not hold; 'i' with only a hint (!renamed-program)
+    or a context flag (!remote-access, ...); '' otherwise."""
     tier = spor_log.worst_tier(flags)
     if tier == 'malware':
         return 'b'
     if tier == 'strong' or spor_log.is_bad_signature(file_status):
         return 'w'
-    return 'i' if tier == 'hint' else ''
+    return 'i' if tier in ('hint', 'info') else ''
 
 
 def original_name_differs(path, original_name):
@@ -233,6 +233,9 @@ MATCH_INSIDE = 'inside'
 MATCH_SUMMARY = 'summary'
 MATCH_DETAIL = 'detail'
 MATCH_NAMED_BY = 'named_by'
+# A task, service or Run value named like a folder of a file in the log
+# (spor_self.py): the task \HealthCheck and C:\Windows\System32\HealthCheck\x.exe.
+MATCH_NAMED_LIKE = 'named_like'
 # The role of the mention that sums up what is said about a folder line's files.
 ROLE_FILES_INSIDE = 'files inside'
 # The statuses an entry found through a match may give its line (all for a
@@ -243,7 +246,8 @@ ROLE_FILES_INSIDE = 'files inside'
 # folder line's folder speaks for the folder only when it is malware or a PUP.
 _MATCH_STATUSES = {
     MATCH_HOST: frozenset(), MATCH_SIBLING: frozenset(), MATCH_NAME: frozenset(), MATCH_TIMING: frozenset(),
-    MATCH_DETAIL: frozenset(), MATCH_NAMED_BY: frozenset(), MATCH_INSIDE: MALWARE_STATUSES,
+    MATCH_DETAIL: frozenset(), MATCH_NAMED_BY: frozenset(), MATCH_NAMED_LIKE: frozenset(),
+    MATCH_INSIDE: MALWARE_STATUSES,
 }
 INFO_MATCHES = frozenset(match for match, statuses in _MATCH_STATUSES.items() if not statuses)
 
@@ -311,6 +315,7 @@ MATCH_NOTES = {
     MATCH_SUMMARY: 'summary line',
     MATCH_DETAIL: 'named in the details',
     MATCH_NAMED_BY: 'names this file in its details',
+    MATCH_NAMED_LIKE: 'named like its folder',
 }
 # Matches whose note names the file the entry is about.
 _NOTE_FILE_MATCHES = frozenset({MATCH_ARGUMENT, MATCH_SIBLING, MATCH_NAME, MATCH_SAME_HASH, MATCH_INSIDE})
