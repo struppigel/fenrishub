@@ -300,6 +300,44 @@
     }
 }
 
+/* The case status as a button in its status color; clicking it toggles open/closed. */
+.case-status-form {
+    display: inline;
+    margin: 0;
+}
+
+.case-status-button {
+    min-width: 0;
+    padding: 1px 8px;
+    font: inherit;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.case-status-button.case-status-open {
+    color: var(--la-status-c);
+    border: 1px solid color-mix(in srgb, var(--la-status-c) 40%, var(--la-border));
+    background: color-mix(in srgb, var(--la-status-c) 10%, var(--la-bg-1));
+}
+
+.case-status-button.case-status-closed {
+    color: var(--la-status-b);
+    border: 1px solid color-mix(in srgb, var(--la-status-b) 40%, var(--la-border));
+    background: color-mix(in srgb, var(--la-status-b) 10%, var(--la-bg-1));
+}
+
+.case-status-button:hover,
+.case-status-button:focus-visible {
+    text-decoration: underline;
+}
+
+.case-status-text.case-status-open {
+    color: var(--la-status-c);
+}
+
+.case-status-text.case-status-closed {
+    color: var(--la-status-b);
+}
 
 </style>
 {% endblock %}
@@ -349,7 +387,7 @@
         <div class="fixlist-item">
             <div style="flex: 1;">
                 <div class="fixlist-title"><span class="timeline-type-badge fixlist">Meta</span>{{ infection_case.case_id }}</div>
-                <div class="fixlist-meta">{{ infection_case.username }}{% for name in extra_usernames %}, {{ name }}{% endfor %} | status {{ infection_case.get_status_display|lower }}{% if infection_case.is_training %} | <span style="color: var(--la-status-i);">observe</span>{% else %} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %}{% endif %} | Metadata</div>
+                <div class="fixlist-meta">{{ infection_case.username }}{% for name in extra_usernames %}, {{ name }}{% endfor %} | status {% if can_edit %}<form method="post" action="{% url 'infection_case_set_status' infection_case.case_id %}" class="case-status-form">{% csrf_token %}<input type="hidden" name="return_to" value="case"><input type="hidden" name="status" value="{% if infection_case.status == 'open' %}closed{% else %}open{% endif %}"><button type="submit" class="case-status-button {% if infection_case.status == 'open' %}case-status-open{% else %}case-status-closed{% endif %}" title="{% if infection_case.status == 'open' %}close{% else %}reopen{% endif %} case">{{ infection_case.get_status_display|lower }}</button></form>{% else %}<span class="case-status-text {% if infection_case.status == 'open' %}case-status-open{% else %}case-status-closed{% endif %}">{{ infection_case.get_status_display|lower }}</span>{% endif %}{% if infection_case.is_training %} | <span style="color: var(--la-status-i);">observe</span>{% else %} | auto-assign new {% if infection_case.auto_assign_new_items %}on{% else %}off{% endif %}{% endif %} | Metadata</div>
                 <div class="fixlist-meta" style="white-space: pre-wrap; word-break: break-word; color: var(--la-text-muted);">{{ infection_case.symptom_description|default:'-' }}</div>
                 <div class="fixlist-meta">{% if infection_case.reference_url %}<a href="{{ infection_case.reference_url }}" target="_blank" rel="noopener noreferrer">{{ infection_case.reference_url|truncatechars:120 }}</a>{% else %}-{% endif %}</div>
                 {% if can_edit %}
@@ -386,12 +424,10 @@
                         </div>
 
                         <div class="form-group">
-                            <label for="status">status</label>
-                            <select id="status" name="status">
-                                {% for status_value, status_label in case_status_choices %}
-                                <option value="{{ status_value }}" {% if infection_case.status == status_value %}selected{% endif %}>{{ status_label|lower }}</option>
-                                {% endfor %}
-                            </select>
+                            <label for="caseStatusToggle">status</label>
+                            {# Clicking flips the status; "save details" stores it. #}
+                            <input type="hidden" id="caseStatusInput" name="status" value="{{ infection_case.status }}">
+                            <div><button type="button" id="caseStatusToggle" class="case-status-button {% if infection_case.status == 'open' %}case-status-open{% else %}case-status-closed{% endif %}" title="click to switch between open and closed">{{ infection_case.get_status_display|lower }}</button></div>
                         </div>
                     </div>
 
@@ -664,6 +700,21 @@
 {% endif %}
 
 <script>
+// The edit form's status button: each click flips open/closed, kept in the
+// hidden input that "save details" submits.
+(function () {
+    const toggle = document.getElementById('caseStatusToggle');
+    const input = document.getElementById('caseStatusInput');
+    if (!toggle || !input) return;
+    toggle.addEventListener('click', function () {
+        const next = input.value === 'open' ? 'closed' : 'open';
+        input.value = next;
+        toggle.textContent = next;
+        toggle.classList.toggle('case-status-open', next === 'open');
+        toggle.classList.toggle('case-status-closed', next === 'closed');
+    });
+})();
+
 // Reads the reply straight off the rendered block, so the text is not duplicated
 // into a data attribute on every response entry.
 function copyResponseText(button) {

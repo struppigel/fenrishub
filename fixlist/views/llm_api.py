@@ -2653,6 +2653,7 @@ def api_rule_test(request):
             rule_set_key=rule_set_key,
             buckets=_get_cached_rule_buckets(rule_set_key),
             line_log_types=_first_log_types(matches, log_type_by_upload),
+            line_inputs=[entry.get('line_inputs') for entry in matches],
             only_entry_types=rule['only_entry_types'],
             match_unit=rule['match_unit'],
             blocks=rule['match_unit'] == ClassificationRule.MATCH_UNIT_BLOCK,

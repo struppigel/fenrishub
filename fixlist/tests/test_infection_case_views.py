@@ -1066,6 +1066,55 @@ class InfectionCaseViewTests(TestCase):
         self.assertNotIn('>close</button>', content)
         self.assertEqual(content.count(reverse('infection_case_set_status', args=[open_case.case_id])), 1)
 
+    def test_case_page_status_is_a_colored_toggle_button(self):
+        open_case = InfectionCase.objects.create(owner=self.user, username='open_user')
+        closed_case = InfectionCase.objects.create(
+            owner=self.user, username='closed_user', status=InfectionCase.STATUS_CLOSED,
+        )
+
+        for case, submits, css_class in (
+            (open_case, 'closed', 'case-status-open'), (closed_case, 'open', 'case-status-closed'),
+        ):
+            content = self.client.get(reverse('view_infection_case', args=[case.case_id])).content.decode()
+            form = content.split(reverse('infection_case_set_status', args=[case.case_id]))[1].split('</form>')[0]
+            self.assertIn('name="return_to" value="case"', form)
+            self.assertIn(f'name="status" value="{submits}"', form)
+            self.assertIn(f'class="case-status-button {css_class}"', form)
+            self.assertIn(f'>{case.status}</button>', form)
+
+    def test_case_page_status_button_returns_to_the_case(self):
+        case = InfectionCase.objects.create(owner=self.user, username='target_user')
+
+        response = self.client.post(
+            reverse('infection_case_set_status', args=[case.case_id]),
+            {'status': InfectionCase.STATUS_CLOSED, 'return_to': 'case'},
+        )
+
+        self.assertRedirects(response, reverse('view_infection_case', args=[case.case_id]))
+        case.refresh_from_db()
+        self.assertEqual(case.status, InfectionCase.STATUS_CLOSED)
+
+    def test_case_page_shows_other_helpers_the_status_without_a_button(self):
+        case = InfectionCase.objects.create(owner=self.other_user, username='target_user')
+
+        content = self.client.get(reverse('view_infection_case', args=[case.case_id])).content.decode()
+
+        self.assertNotIn(reverse('infection_case_set_status', args=[case.case_id]), content)
+        self.assertIn('<span class="case-status-text case-status-open">open</span>', content)
+
+    def test_case_edit_form_status_is_a_toggle_button(self):
+        case = InfectionCase.objects.create(
+            owner=self.user, username='target_user', status=InfectionCase.STATUS_CLOSED,
+        )
+
+        content = self.client.get(
+            reverse('view_infection_case', args=[case.case_id]) + '?edit_meta=1',
+        ).content.decode()
+
+        self.assertIn('id="caseStatusInput" name="status" value="closed"', content)
+        self.assertIn('id="caseStatusToggle" class="case-status-button case-status-closed"', content)
+        self.assertNotIn('<select id="status"', content)
+
     def test_confirm_username_change_updates_mismatched_fixlist_and_links_it(self):
         case = InfectionCase.objects.create(owner=self.user, username='target_user', auto_assign_new_items=False)
         mismatched_fixlist = Fixlist.objects.create(owner=self.user, username='other_user', content='fix')

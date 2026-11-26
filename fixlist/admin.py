@@ -363,6 +363,25 @@ class ClassificationRuleAdmin(admin.ModelAdmin):
         ('Timestamps', {'fields': ('created_at', 'updated_at')}),
     )
 
+    # Every worker keeps the rule buckets until the rules version moves (the
+    # analyzer and the rule editor's previews read them): bump it on each change
+    # here, as the rule editor does. All rule sets, as the owner may change.
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        invalidate_rule_buckets_cache(None)
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        invalidate_rule_buckets_cache(None)
+
+    def delete_model(self, request, obj):
+        super().delete_model(request, obj)
+        invalidate_rule_buckets_cache(None)
+
+    def delete_queryset(self, request, queryset):
+        super().delete_queryset(request, queryset)
+        invalidate_rule_buckets_cache(None)
+
     def short_source(self, obj):
         if len(obj.source_text) <= 80:
             return obj.source_text

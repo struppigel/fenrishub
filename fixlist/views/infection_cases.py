@@ -765,7 +765,6 @@ def view_infection_case(request, case_id):
             'selectable_uploads': selectable_uploads,
             'selectable_fixlists': selectable_fixlists,
             'selectable_responses': selectable_responses,
-            'case_status_choices': InfectionCase.STATUS_CHOICES,
             'show_metadata_edit': show_metadata_edit,
             'can_edit': can_edit,
             'has_logs': bool(case_logs),
@@ -845,14 +844,20 @@ def infection_case_set_status_view(request, case_id):
     infection_case = get_object_or_404(_case_queryset_for_user(request.user), case_id=case_id)
     requested_status = (request.POST.get('status') or '').strip()
 
+    def back():
+        # The case page's status button returns there; the list's to the list.
+        if request.POST.get('return_to') == 'case':
+            return redirect('view_infection_case', case_id=infection_case.case_id)
+        return redirect('infection_cases')
+
     if not infection_case.set_status(requested_status):
         messages.error(request, 'Invalid case status.')
-        return redirect('infection_cases')
+        return back()
 
     infection_case.save(update_fields=['status', 'reopened_at', 'updated_at'])
     verb = 'reopened' if requested_status == InfectionCase.STATUS_OPEN else 'closed'
     messages.success(request, f'Case {infection_case.case_id} {verb}.')
-    return redirect('infection_cases')
+    return back()
 
 
 @login_required

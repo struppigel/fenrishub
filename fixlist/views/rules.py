@@ -23,7 +23,7 @@ from .. import frst_extractors, script_matcher, spor_extractors
 from ..log_layout import normalize_block_text
 from ..analyzer import (
     parse_rule_line, inspect_line_matches, VALID_STATUSES,
-    evaluate_regex_pattern, REPARSE_FIELDS, _load_rule_buckets, fact_rule_ids_matching_line,
+    evaluate_regex_pattern, REPARSE_FIELDS, _get_cached_rule_buckets, fact_rule_ids_matching_line,
 )
 from ..log_types import (
     ALL_LOG_TYPES, DEFAULT_RULE_LOG_TYPES, LOG_TYPE_SPOR, default_rule_scope, normalize_log_type_selection,
@@ -1424,7 +1424,7 @@ def test_rule_api(request):
         preview_log_type = LOG_TYPE_SPOR
     fact_buckets = None
     if rule['conditions']:
-        fact_buckets = _load_rule_buckets(resolve_user_rule_set_key(request.user), preview_log_type)
+        fact_buckets = _get_cached_rule_buckets(resolve_user_rule_set_key(request.user), preview_log_type)
 
     if rule['whole_log']:
         log_text = '\n'.join(str(line) for line in lines)
@@ -1458,6 +1458,7 @@ def test_rule_api(request):
             lines=lines,
             priority=rule['priority'],
             exclude_rule_id=rule['exclude_rule_id'],
+            rule_set_key=resolve_user_rule_set_key(request.user),
             only_entry_types=rule['only_entry_types'],
             condition_check=condition_check,
             match_unit=rule['match_unit'],
@@ -1597,7 +1598,9 @@ def test_rule_logs_api(request):
                 lines=[entry['line'] for entry in matches],
                 priority=rule['priority'],
                 exclude_rule_id=rule['exclude_rule_id'],
+                rule_set_key=resolve_user_rule_set_key(request.user),
                 line_log_types=_first_log_types(matches, log_type_by_upload),
+                line_inputs=[entry.get('line_inputs') for entry in matches],
                 only_entry_types=rule['only_entry_types'],
                 match_unit=rule['match_unit'],
                 blocks=rule['match_unit'] == ClassificationRule.MATCH_UNIT_BLOCK,

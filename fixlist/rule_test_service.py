@@ -15,7 +15,6 @@ from .analyzer import (
     _BLOCK_REGEX_FLAGS,
     _FILEPATH_FALLBACK_EFFECTIVE_PRIORITY,
     _get_cached_rule_buckets,
-    _load_rule_buckets,
     condition_report,
     conditions_for_specs,
     entry_types_allow,
@@ -354,6 +353,11 @@ def _spor_only(compiled_patterns) -> bool:
 
 # Block rules of these match types read only the block's text.
 _TEXT_MATCH_TYPES = frozenset({'exact', 'substring', 'regex'})
+# Line rules of these match types read the line's features (its parsed
+# entries, its path). The others read only its text, so a log view's features
+# (an FRST parse of the line, the most costly part of a Spor scan) are read
+# for them only to check `only_entry_types`, and only on lines they matched.
+_FEATURE_MATCH_TYPES = frozenset({'parsed', 'filepath'})
 
 
 def _is_spor(log_type) -> bool:
@@ -388,6 +392,7 @@ def build_rule_test_results(
     match_unit: str = _LINE,
     log_type=None,
     blocks: bool = False,
+    line_inputs=None,
 ) -> dict:
     """Build per-line rule test results for the rules test API.
 
@@ -403,8 +408,8 @@ def build_rule_test_results(
 
     ``rule_set_key`` picks the rules the existing verdicts come from; the token
     API passes the caller's, so they agree with that caller's analyses, along
-    with the cached ``buckets`` of that rule set; without them the rules are
-    loaded fresh, as the browser preview has always done.
+    with the cached ``buckets`` of that rule set; without them the cached
+    buckets of ``rule_set_key`` are used.
 
     ``line_log_types`` (aligned with ``lines``) names the log type each line
     came from, so its existing verdict uses only the rules scoped to that type,
@@ -424,6 +429,11 @@ def build_rule_test_results(
     block's text already (the stored-log scan), one result per block.
     ``log_type`` also reads Spor lines as the analyzer does (their paths,
     their block's parsed type).
+
+    ``line_inputs`` (aligned with ``lines``, line rules) gives a line's
+    ``(features, block lines)`` as read in its own log, or None: the stored-log
+    scan passes them for Spor lines, which read alone lose their Spor path and
+    parsed type.
     """
     block_rule = match_unit == _BLOCK
     compiled_patterns = [
@@ -436,12 +446,11 @@ def build_rule_test_results(
     else:
         new_priority = max(PRIORITY_MIN, min(PRIORITY_MAX, int(priority)))
 
-    # Load existing rule buckets once for inspect_line_matches. The per-type
-    # ones come the same way: cached when the caller passed cached buckets,
-    # else fresh, so a rule saved a moment ago shows in the browser preview.
-    from_cache = buckets is not None
+    # Existing rule buckets for inspect_line_matches, from the cache: indexing
+    # every rule takes seconds, and the previews run on each edit. A rule saved
+    # a moment ago still shows, as saving bumps the rules version.
     if buckets is None:
-        buckets = _load_rule_buckets(rule_set_key)
+        buckets = _get_cached_rule_buckets(rule_set_key)
     buckets_by_type = {}
 
     def buckets_for(index):
@@ -449,8 +458,7 @@ def build_rule_test_results(
         if log_type is None:
             return buckets
         if log_type not in buckets_by_type:
-            load = _get_cached_rule_buckets if from_cache else _load_rule_buckets
-            buckets_by_type[log_type] = load(rule_set_key, log_type)
+            buckets_by_type[log_type] = _get_cached_rule_buckets(rule_set_key, log_type)
         return buckets_by_type[log_type]
 
     block_hits = {}
@@ -472,6 +480,7 @@ def build_rule_test_results(
         block_lines = None
         features = None
         block = None
+        index = None
         if blocks:
             line = log_layout.normalize_block_text(raw_line or '')
             block_lines = line.split('\n') if line else []
@@ -481,13 +490,16 @@ def build_rule_test_results(
             line = (raw_line or '').strip() if match_type in ('exact', 'parsed', 'filepath') or block_rule else (raw_line or '')
             index = index_of.get(line_index) if index_of is not None else None
             if index is not None:
-                features = view.inputs.features[index]
+                if not block_rule and match_type in _FEATURE_MATCH_TYPES:
+                    features = view.inputs.features[index]
                 if block_rule:
                     block, members = view.block_at(index)
                     block_lines = [view.inputs.walked[member].text for member in members]
                 elif _is_spor(log_type):
                     _block, members = view.block_at(index)
                     block_lines = [view.inputs.walked[member].text for member in members]
+            elif not block_rule and line_inputs and line_inputs[line_index] is not None:
+                features, block_lines = line_inputs[line_index]
         result = {'line': line, 'matched': False, 'parsed': None, 'match_ranges': None}
 
         ranges = []
@@ -507,6 +519,8 @@ def build_rule_test_results(
                     result['parsed'] = outcome['parsed']
                 if outcome['script_error'] and 'script_error' not in result:
                     result['script_error'] = outcome['script_error']
+            if result['matched'] and only_entry_types and features is None and index is not None:
+                features = view.inputs.features[index]
             if result['matched'] and not _line_types_allow(only_entry_types, line, features):
                 result['matched'] = False
                 ranges = []
@@ -666,6 +680,7 @@ def scan_logs_for_rule_matches(
         _compile_pattern(pattern, status, match_type, match_unit) for pattern in patterns
     ]
     strip = match_type in ('exact', 'parsed', 'filepath') or block_rule
+    reads_features = match_type in _FEATURE_MATCH_TYPES
 
     found = {}
     # Distinct lines past the sample, kept only to count them (count_all).
@@ -725,9 +740,11 @@ def scan_logs_for_rule_matches(
                 if line in matched_here:
                     line_hits += 1
                     continue
-                features = view.inputs.features[index] if view is not None else None
+                features = view.inputs.features[index] if view is not None and reads_features else None
                 if not any(_match_line(p, match_type, line, features)['matched'] for p in compiled_patterns):
                     continue
+                if only_entry_types and features is None and view is not None:
+                    features = view.inputs.features[index]
                 if not _line_types_allow(only_entry_types, line, features):
                     continue
             check = line_check(upload_id, index) if line_check is not None else 'hold'
@@ -747,6 +764,14 @@ def scan_logs_for_rule_matches(
                     line_hits += 1
                     continue
                 entry = found[line] = {'line': line, 'logs': [], 'log_count': 0}
+                if view is not None and not block_rule:
+                    # A line read in its log view (Spor): its features and
+                    # block there, so the verdict rebuilt from the line alone
+                    # (build_rule_test_results `line_inputs`) agrees with the scan.
+                    _block, members = view.block_at(index, 'text')
+                    entry['line_inputs'] = (
+                        view.inputs.features[index], [view.inputs.walked[member].text for member in members],
+                    )
             matched_here.add(line)
             line_hits += 1
             entry['log_count'] += 1
@@ -953,14 +978,18 @@ def compare_rule_scans(new_rule: dict, old_rule: dict, logs, *, deadline: float,
         })
     any_block = any(side['block'] for side in sides)
 
-    def side_hits(side, line, features, block):
+    def side_hits(side, line, features_of, block):
+        """`features_of()`: the line's features in its log view (None without one)."""
         if side['block']:
             return block is not None and any(
                 _match_block(p, side['match_type'], block) for p in side['compiled']
             ) and entry_types_allow(side['only_entry_types'], block.entry_types)
-        return any(
-            _match_line(p, side['match_type'], line, features)['matched'] for p in side['compiled']
-        ) and _line_types_allow(side['only_entry_types'], line, features)
+        features = features_of() if side['match_type'] in _FEATURE_MATCH_TYPES else None
+        if not any(_match_line(p, side['match_type'], line, features)['matched'] for p in side['compiled']):
+            return False
+        if side['only_entry_types'] and features is None:
+            features = features_of()
+        return _line_types_allow(side['only_entry_types'], line, features)
 
     seen = {'both': set(), 'only_new': set(), 'only_old': set()}
     samples = {'only_new': {}, 'only_old': {}}
@@ -990,12 +1019,13 @@ def compare_rule_scans(new_rule: dict, old_rule: dict, logs, *, deadline: float,
             if not raw_line.strip() or (raw_line in tested_here and not any_block):
                 continue
             tested_here.add(raw_line)
-            features = view.inputs.features[index] if view is not None else None
+            def features_of(index=index):
+                return view.inputs.features[index] if view is not None else None
             block = view.block_at(index)[0] if any_block else None
             hits = []
             for side, may in zip(sides, may_match):
                 line = raw_line.strip() if side['strip'] else raw_line
-                hits.append(may and side_hits(side, line, features, block))
+                hits.append(may and side_hits(side, line, features_of, block))
             if not any(hits):
                 continue
             kind = 'both' if all(hits) else ('only_new' if hits[0] else 'only_old')
