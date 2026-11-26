@@ -211,3 +211,34 @@ class UsbHighlightTests(SimpleTestCase):
         self.assertIn(('hl-key', 'argument file:'), tokens)
         self.assertIn(('hl-path', COPY), tokens)
         self.assertIn(('hl-sev-w', '<==== !invisible-char'), tokens)
+
+
+class RootProgramFlagTests(SimpleTestCase):
+    """Spor 0.10.x's !root-program: a program, script or shortcut in a drive's
+    root. A hint: the info colour and status I, never a warning by itself."""
+
+    ROOT_LNK = ('E:\\STICK.lnk => attributes archive; created 2026-11-20 14:57:06; modified 2026-11-20 14:57:06;'
+                ' size 1122 bytes <==== !root-program')
+    WORM_LNK = ('E:\\STICK.lnk => attributes archive; created 2026-11-20 14:57:06; modified 2026-11-20 14:57:06;'
+                ' size 1122 bytes <==== !usb-worm-lnk !root-program')
+
+    def test_it_is_a_hint(self):
+        self.assertEqual(spor_log.flag_tier('!root-program'), 'hint')
+        self.assertEqual(spor_log.worst_tier(['!root-program', '!usb-worm-lnk']), 'strong')
+
+    def test_alone_it_rates_i(self):
+        from ..correlations.entries import evidence_severity
+        self.assertEqual(evidence_severity(['!root-program'], ''), 'i')
+        self.assertEqual(evidence_severity(['!root-program', '!usb-worm-lnk'], ''), 'w')
+
+    def test_it_has_the_info_colour(self):
+        self.assertIn(('hl-sev-hint', '<==== !root-program'), lh._spor_item_tokens(self.ROOT_LNK, section=spor_log.SECTION_USB))
+        mixed = lh._spor_item_tokens(self.WORM_LNK, section=spor_log.SECTION_USB)
+        self.assertIn(('hl-sev-w', '!usb-worm-lnk'), mixed)
+        self.assertIn(('hl-sev-hint', '!root-program'), mixed)
+
+    def test_the_item_and_its_flag_split_as_usual(self):
+        item = spor_log.split_item(self.ROOT_LNK)
+        self.assertEqual(item.item, 'E:\\STICK.lnk')
+        self.assertEqual(item.flags, ['!root-program'])
+        self.assertEqual(item.strong_flags, [])

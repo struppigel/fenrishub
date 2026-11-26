@@ -59,7 +59,8 @@ QUIET_FLAGS = frozenset({'!lolbin'})
 # with a strong flag nearby. On their own they are shown in the info colour and
 # rate a line I, not !; they still get their files looked up.
 # Spor 0.8.1: !abused-tld, a download from a cheap TLD campaigns favour.
-HINT_FLAGS = frozenset({'!renamed-program', '!abused-tld'})
+# Spor 0.10.x: !root-program, a program, script or shortcut in a drive's root.
+HINT_FLAGS = frozenset({'!renamed-program', '!abused-tld', '!root-program'})
 # Spor 0.4.0+ Autodetect: the item matches a known malware family (Spor's
 # curated pattern database). Stronger than any heuristic flag: malware (B).
 MALWARE_FLAGS = frozenset({'!known-malware'})
