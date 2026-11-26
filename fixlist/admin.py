@@ -18,7 +18,7 @@ from .analyzer import (
     invalidate_rule_buckets_cache,
     reparse_rules,
 )
-from .rule_sets import invalidate_for_rule_owner
+from .rule_sets import invalidate_for_rule_owner, set_forced_private
 from .tagging import auto_tag_rules
 from .upload_utils import start_reanalysis_process
 from .username_merge import clean_forum_username, rename_forum_usernames, same_user_groups
@@ -53,6 +53,7 @@ from .models import (
     SiteConfig,
     Speech,
     UploadedLog,
+    UserProfile,
 )
 
 
@@ -1152,6 +1153,59 @@ class ParsedFilepathExclusionAdmin(admin.ModelAdmin):
     search_fields = ('normalized_filepath', 'note')
     readonly_fields = ('created_at', 'updated_at')
     fields = ('normalized_filepath', 'note', 'is_enabled', 'created_at', 'updated_at')
+
+
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    """Helper profiles. Superusers only: the forced private rule set (training
+    mode) must not be something a staff helper can switch off themselves."""
+
+    list_display = ('user', 'rule_set_mode', 'force_private_rule_set', 'last_seen')
+    list_filter = ('force_private_rule_set', 'rule_set_mode')
+    search_fields = ('user__username',)
+    autocomplete_fields = ('user',)
+    fields = ('user', 'rule_set_mode', 'force_private_rule_set')
+    actions = ('force_private_rule_set_action', 'release_private_rule_set_action')
+
+    def _is_superuser(self, request):
+        return request.user.is_active and request.user.is_superuser
+
+    def has_module_permission(self, request):
+        return self._is_superuser(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._is_superuser(request)
+
+    def has_add_permission(self, request):
+        return self._is_superuser(request)
+
+    def has_change_permission(self, request, obj=None):
+        return self._is_superuser(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_readonly_fields(self, request, obj=None):
+        return ('user',) if obj is not None else ()
+
+    def save_model(self, request, obj, form, change):
+        set_forced_private(obj, obj.force_private_rule_set)
+
+    @admin.action(description='Force private rule set (training mode)')
+    def force_private_rule_set_action(self, request, queryset):
+        for profile in queryset.select_related('user'):
+            set_forced_private(profile, True)
+        self.message_user(request, f'{queryset.count()} helper(s) now train with their own rules only.', messages.SUCCESS)
+
+    @admin.action(description='Release forced private rule set')
+    def release_private_rule_set_action(self, request, queryset):
+        for profile in queryset.select_related('user'):
+            set_forced_private(profile, False)
+        self.message_user(
+            request,
+            f'Released {queryset.count()} helper(s). Their mode stays private until they change it on their profile.',
+            messages.SUCCESS,
+        )
 
 
 @admin.register(SiteConfig)

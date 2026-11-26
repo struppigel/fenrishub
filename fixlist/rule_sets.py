@@ -74,6 +74,67 @@ def invalidate_for_rule_owner(owner) -> None:
         invalidate_rule_buckets_cache(k)
 
 
+def is_rule_restricted(user) -> bool:
+    """True for a helper a superuser forced into their private rule set
+    (training): they see no other owner's rules, nor verdicts of another
+    rule set. Superusers and guests are never restricted."""
+    if user is None or not getattr(user, 'is_authenticated', False) or user.is_superuser:
+        return False
+    try:
+        profile = user.fenris_profile
+    except Exception:  # RelatedObjectDoesNotExist: no profile row
+        return False
+    return bool(profile.force_private_rule_set)
+
+
+def counts_visible_to(uploaded_log, user) -> bool:
+    """Whether `user` may see `uploaded_log`'s count_* stats: they hold the
+    recipient's verdicts, so a restricted helper sees them only on their own
+    assigned logs (counted with their own rules)."""
+    return not is_rule_restricted(user) or uploaded_log.recipient_user_id == user.id
+
+
+def is_restricted_key(key: str) -> bool:
+    """True when `key` is the private rule set of a restricted helper."""
+    scope, user_id = parse_rule_set_key(key)
+    if scope != 'private':
+        return False
+    from .models import UserProfile
+    return UserProfile.objects.filter(
+        user_id=user_id, force_private_rule_set=True, user__is_superuser=False,
+    ).exists()
+
+
+def set_forced_private(profile, forced: bool) -> None:
+    """Force (or release) `profile`'s helper into their private rule set.
+
+    Forcing makes the mode private and recomputes the stat counts of the
+    helper's assigned logs off the request thread, so their chips show their
+    own verdicts. Releasing leaves the mode private; the helper can switch it
+    back on their profile page. Other unsaved changes to `profile` (an admin
+    form's) are saved along with it."""
+    stored = type(profile).objects.filter(pk=profile.pk).values('rule_set_mode', 'force_private_rule_set').first()
+    old_mode = stored['rule_set_mode'] if stored else SHARED_RULE_SET_KEY
+    was_forced = bool(stored and stored['force_private_rule_set'])
+    profile.force_private_rule_set = forced
+    profile.save()
+    if old_mode != profile.rule_set_mode:
+        on_user_rule_set_mode_changed(profile.user, old_mode, profile.rule_set_mode)
+    if forced and not was_forced:
+        from django.conf import settings
+        from . import background
+        if getattr(settings, 'TESTING', False):
+            _recalculate_assigned_logs(profile.user_id)
+            return
+        background.start(_recalculate_assigned_logs, profile.user_id, name=f'forced-private-stats-{profile.user_id}')
+
+
+def _recalculate_assigned_logs(user_id) -> None:
+    from .models import UploadedLog
+    for uploaded_log in UploadedLog.objects.filter(recipient_user_id=user_id).iterator():
+        uploaded_log.recalculate_analysis_stats()
+
+
 def on_user_rule_set_mode_changed(user, old_mode: str, new_mode: str) -> None:
     """Handle a profile rule_set_mode toggle by flushing in-memory buckets.
 

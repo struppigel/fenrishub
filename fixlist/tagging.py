@@ -59,7 +59,7 @@ from .models import (
     TAG_CATEGORY_COLOR_RE, ClassificationRule, FixlistSnippet, RuleTag, Speech, TagCategory, UploadedLog,
     UploadedLogAnalysis, sync_stat_line_tag_ids,
 )
-from .rule_sets import SHARED_RULE_SET_KEY
+from .rule_sets import SHARED_RULE_SET_KEY, is_restricted_key
 
 logger = logging.getLogger(__name__)
 
@@ -356,8 +356,15 @@ def parse_tag_category_priority(raw, current):
 _RULE_FIELDS = ('pk', 'status', 'entry_type', 'match_type', 'source_text', 'description', 'owner__username')
 
 
-def preview_conditions(conditions, tag=None):
-    """Sort every rule into the groups the tag editor shows.
+def _rules_of(owner):
+    """The rules a tag editor works on: every rule, or only `owner`'s (a
+    helper training with their own rules, rule_sets.is_rule_restricted)."""
+    rules = ClassificationRule.objects.all()
+    return rules if owner is None else rules.filter(owner=owner)
+
+
+def preview_conditions(conditions, tag=None, owner=None):
+    """Sort every rule (with `owner`, only theirs) into the groups the tag editor shows.
 
     - new: matches the conditions, does not carry the tag yet
     - tagged: matches and already carries the tag
@@ -366,7 +373,9 @@ def preview_conditions(conditions, tag=None):
     `suggested_description` is the most common description among the matches,
     offered as a starting point for the tag's own description.
     """
-    tagged_ids = set(tag.rules.values_list('pk', flat=True)) if tag is not None else set()
+    tagged_ids = set(
+        _rules_of(owner).filter(tags=tag).values_list('pk', flat=True)
+    ) if tag is not None else set()
 
     groups = {'new': [], 'tagged': [], 'stale': []}
     counts = {'new': 0, 'tagged': 0, 'stale': 0}
@@ -374,7 +383,7 @@ def preview_conditions(conditions, tag=None):
     matched_ids = set()
 
     if not conditions.is_empty:
-        for row in ClassificationRule.objects.values(*_RULE_FIELDS).iterator():
+        for row in _rules_of(owner).values(*_RULE_FIELDS).iterator():
             matched, field, span = conditions.match(
                 description=row['description'], source_text=row['source_text'],
                 status=row['status'], entry_type=row['entry_type'],
@@ -426,14 +435,14 @@ def _preview_row(row, field, span):
     }
 
 
-def matching_rule_ids(conditions):
-    """Every rule that meets `conditions`, for applying an auto tag to existing rules."""
+def matching_rule_ids(conditions, owner=None):
+    """Every rule (with `owner`, only theirs) that meets `conditions`, for applying an auto tag to existing rules."""
     if conditions.is_empty:
         return []
     fields = ('pk', 'description', 'source_text', 'status', 'entry_type')
     return [
         row['pk']
-        for row in ClassificationRule.objects.values(*fields).iterator()
+        for row in _rules_of(owner).values(*fields).iterator()
         if conditions.match(
             description=row['description'], source_text=row['source_text'],
             status=row['status'], entry_type=row['entry_type'],
@@ -441,26 +450,29 @@ def matching_rule_ids(conditions):
     ]
 
 
-def unmatched_tagged_rule_ids(tag, conditions):
-    """Every rule carrying `tag` that `conditions` do not match - all of them,
-    not only the rows a capped preview showed."""
+def unmatched_tagged_rule_ids(tag, conditions, owner=None):
+    """Every rule (with `owner`, only theirs) carrying `tag` that `conditions`
+    do not match - all of them, not only the rows a capped preview showed."""
     return [
         rule.pk
-        for rule in tag.rules.only('pk', 'description', 'source_text', 'status', 'entry_type')
+        for rule in _rules_of(owner).filter(tags=tag).only('pk', 'description', 'source_text', 'status', 'entry_type')
         if not conditions.matches_rule(rule)
     ]
 
 
-def apply_tag(tag, add_ids, remove_ids):
+def apply_tag(tag, add_ids, remove_ids, owner=None):
     """Add `tag` to the rules in `add_ids` and take it off those in `remove_ids`.
 
-    Unknown ids are ignored. Returns (added, removed) counts of actual changes.
+    Unknown ids are ignored, and with `owner` so are other owners' rules.
+    Returns (added, removed) counts of actual changes.
     """
     through = ClassificationRule.tags.through
     current = set(tag.rules.values_list('pk', flat=True))
+    if owner is not None:
+        remove_ids = list(_rules_of(owner).filter(pk__in=remove_ids).values_list('pk', flat=True))
 
     wanted = set(
-        ClassificationRule.objects.filter(pk__in=add_ids).values_list('pk', flat=True)
+        _rules_of(owner).filter(pk__in=add_ids).values_list('pk', flat=True)
     ) - current
     if wanted:
         through.objects.bulk_create(
@@ -1357,11 +1369,12 @@ def _tag_rows(row_sets, current, need_line_hits=True):
     return result
 
 
-def _searched_rows(candidates, rule_set_key):
+def _searched_rows(candidates, rule_set_key, restricted=False):
     """The querysets of cached analyses a tag search reads: the viewer's rule
-    set first, then the shared one for logs the viewer has none for."""
+    set first, then the shared one for logs the viewer has none for (never
+    for a `restricted` helper training with their own rules)."""
     row_sets = [_fresh_analyses(candidates, rule_set_key)]
-    if rule_set_key != SHARED_RULE_SET_KEY:
+    if rule_set_key != SHARED_RULE_SET_KEY and not restricted:
         row_sets.append(
             _fresh_analyses(candidates, SHARED_RULE_SET_KEY)
             .exclude(upload__in=row_sets[0].values('upload'))
@@ -1424,7 +1437,13 @@ def logs_with_tags(tag_ids, rule_set_key, candidates):
 
     analyzed = set()
     matched = set()
-    rows = _tag_rows(_searched_rows(candidates, rule_set_key), current, need_line_hits=bool(searched_line_tags))
+    # A helper training with their own rules: their own analyses only, and no
+    # line-matching tags (the team's tags would label lines for them).
+    restricted = is_restricted_key(rule_set_key)
+    rows = _tag_rows(
+        _searched_rows(candidates, rule_set_key, restricted), current,
+        need_line_hits=bool(searched_line_tags) and not restricted,
+    )
     for upload_pk, rule_ids, codes, line_hits in rows:
         analyzed.add(upload_pk)
         if has_all_tags(rule_ids, codes, line_hits):
@@ -1499,7 +1518,10 @@ def found_tags_by_upload(upload_pks, rule_set_key):
     rule_ids_by_upload = {}
     codes_by_upload = {}
     line_tag_ids_by_upload = {}
-    for upload_pk, rule_ids, codes, line_hits in _tag_rows(_searched_rows(candidates, rule_set_key), current):
+    restricted = is_restricted_key(rule_set_key)
+    for upload_pk, rule_ids, codes, line_hits in _tag_rows(
+        _searched_rows(candidates, rule_set_key, restricted), current, need_line_hits=not restricted,
+    ):
         rule_ids_by_upload[upload_pk] = rule_ids
         codes_by_upload[upload_pk] = codes
         line_tag_ids_by_upload[upload_pk] = set(line_hits)

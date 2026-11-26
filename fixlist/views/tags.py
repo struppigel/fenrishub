@@ -24,6 +24,7 @@ from django.views.decorators.http import require_http_methods
 from ..analyzer import parse_rule_line
 from ..fact_service import facts_blocking_tag_delete
 from ..models import DEFAULT_TAG_CATEGORY_COLOR, ClassificationRule, HashVerdict, RuleTag, TagCategory
+from ..rule_sets import is_rule_restricted
 from ..tagging import (
     CONDITION_STATUSES,
     TagConditions,
@@ -269,6 +270,12 @@ def _linkable_items_context(user, tag, related_items, linkable):
     }
 
 
+def _restricted_owner(request):
+    """`request.user` when they train with their own rules (the tag editor then
+    shows and tags only their rules), else None: every rule."""
+    return request.user if is_rule_restricted(request.user) else None
+
+
 def _tag_editor(request, tag, prefill=None):
     status_labels = dict(ClassificationRule.STATUS_CHOICES)
     speeches = _linkable_items_context(request.user, tag, tag.speeches if tag else None, linkable_speeches)
@@ -388,11 +395,13 @@ def rule_tag_save_api(request):
         return PayloadValidator.error_response(message)
     conditions = TagConditions.of(tag)
 
+    # A helper training with their own rules tags only those.
+    owner = _restricted_owner(request)
     if payload.get('remove_unmatched'):
-        remove_ids = list(remove_ids) + unmatched_tagged_rule_ids(tag, conditions)
+        remove_ids = list(remove_ids) + unmatched_tagged_rule_ids(tag, conditions, owner=owner)
     if payload.get('apply_to_existing'):
-        add_ids = list(add_ids) + matching_rule_ids(conditions)
-    added, removed = apply_tag(tag, add_ids, remove_ids)
+        add_ids = list(add_ids) + matching_rule_ids(conditions, owner=owner)
+    added, removed = apply_tag(tag, add_ids, remove_ids, owner=owner)
     return JsonResponse({'tag': serialize_tag(tag), 'added': added, 'removed': removed})
 
 
@@ -428,7 +437,7 @@ def rule_tag_preview_api(request):
     if message:
         return PayloadValidator.error_response(message)
 
-    result = preview_conditions(conditions, tag=tag)
+    result = preview_conditions(conditions, tag=tag, owner=_restricted_owner(request))
     if conditions.centralbox:
         result['centralbox'] = preview_centralbox_names(conditions)
     return JsonResponse(result)

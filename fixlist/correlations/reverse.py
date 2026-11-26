@@ -75,6 +75,8 @@ def reverse_correlations(uploaded_log, user=None, compute=False):
         lines = {}
         seen = set()
         own_id = uploaded_log.upload_id
+        from ..rule_sets import is_rule_restricted
+        hide_verdicts = is_rule_restricted(user)
         for frst in analyzed:
             if compute:
                 forward, fresh = correlations_for_upload(frst, user), True
@@ -100,6 +102,9 @@ def reverse_correlations(uploaded_log, user=None, compute=False):
             facts = _frst_line_facts(frst, hits)
             for text, entries in hits.items():
                 frst_no, status = facts.get(text, (0, ''))
+                if hide_verdicts:
+                    # Another rule set's verdict; a helper training with their own rules gets none.
+                    status = ''
                 for entry in entries:
                     no = str(entry['line_no'])
                     slot = (no, frst.upload_id, text)

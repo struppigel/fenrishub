@@ -174,9 +174,29 @@ class UserProfile(models.Model):
     )
     # Uploads / trash lists open on "all channels" instead of "my channel".
     uploads_all_channels_default = models.BooleanField(default=False)
+    # Set by a superuser in the admin only: the helper trains with their own
+    # rules. Their mode is locked to private and they see no other rules or
+    # verdicts of other rule sets (rule_sets.is_rule_restricted).
+    force_private_rule_set = models.BooleanField(
+        default=False,
+        help_text=(
+            'Training mode: the helper is locked to their own private rule set and sees no other '
+            "helpers' rules or verdicts. Only superusers can change this."
+        ),
+    )
 
     def __str__(self):
         return f'Profile for {self.user.username}'
+
+    def save(self, *args, **kwargs):
+        # A forced helper is always private, so every query that reads
+        # rule_set_mode (the shared set's owners) leaves their rules out.
+        if self.force_private_rule_set and self.rule_set_mode != self.RULE_SET_MODE_PRIVATE:
+            self.rule_set_mode = self.RULE_SET_MODE_PRIVATE
+            update_fields = kwargs.get('update_fields')
+            if update_fields is not None and 'rule_set_mode' not in update_fields:
+                kwargs['update_fields'] = [*update_fields, 'rule_set_mode']
+        super().save(*args, **kwargs)
 
 
 class AccessLog(models.Model):

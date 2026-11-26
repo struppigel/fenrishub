@@ -12,6 +12,7 @@ from .analyzer import (
 from .log_layout import normalize_block_text
 from .log_types import default_rule_scope, normalize_log_type_selection, rule_scope_log_type, scope_payload
 from .models import ClassificationRule, known_log_type_names
+from .rule_sets import resolve_user_rule_set_key
 from .tagging import parse_tag_ids
 
 
@@ -323,7 +324,9 @@ def _build_pending_rule_preview(
     create_count = 0
     update_count = 0
 
-    buckets = _load_rule_buckets(log_type=log_type)
+    # The rules the owner's own analysis uses: a private helper's review is
+    # checked against their rules, not the shared set.
+    buckets = _load_rule_buckets(resolve_user_rule_set_key(owner), log_type=log_type)
     # The review saves rules without conditions (upsert_parsed_rule), so only
     # those can be the rule a change updates.
     user_rules_index = {

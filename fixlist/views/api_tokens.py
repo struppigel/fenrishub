@@ -18,6 +18,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from ..models import ApiRequestLog, ApiToken, SiteConfig
+from ..rule_sets import is_rule_restricted
 from .api_auth import api_limits
 from .guest import deny_guests
 
@@ -48,6 +49,7 @@ def _render_tokens_page(request, *, new_token_raw='', new_token=None, error=''):
             'usage': _user_usage(request.user),
             'limits': api_limits(),
             'api_enabled': SiteConfig.api_is_enabled(),
+            'rules_restricted': is_rule_restricted(request.user),
             'api_base_url': request.build_absolute_uri('/api/v1/'),
         },
     )
@@ -64,6 +66,10 @@ def api_tokens_view(request):
 
     action = request.POST.get('action', '')
     if action == 'create':
+        if is_rule_restricted(request.user):
+            return _render_tokens_page(
+                request, error='API tokens are off while you train with your own rule set.',
+            )
         try:
             expiry_days = int(request.POST.get('expiry_days', ApiToken.DEFAULT_EXPIRY_DAYS))
         except ValueError:

@@ -95,6 +95,9 @@ def profile_view(request):
         new_rule_set_mode = request.POST.get('rule_set_mode', UserProfile.RULE_SET_MODE_SHARED)
         if new_rule_set_mode not in dict(UserProfile.RULE_SET_MODE_CHOICES):
             new_rule_set_mode = UserProfile.RULE_SET_MODE_SHARED
+        if profile.force_private_rule_set:
+            # Locked by a superuser (training): the helper cannot leave it.
+            new_rule_set_mode = UserProfile.RULE_SET_MODE_PRIVATE
         profile.rule_set_mode = new_rule_set_mode
         profile.save(update_fields=[
             'word_wrap', 'uploads_all_channels_default', 'analyzer_fixlist_template', 'rule_set_mode',
@@ -118,6 +121,7 @@ def profile_view(request):
             'profile_word_wrap': profile.word_wrap,
             'profile_uploads_all_channels_default': profile.uploads_all_channels_default,
             'profile_rule_set_mode': profile.rule_set_mode,
+            'profile_rule_set_forced': profile.force_private_rule_set,
             'rule_set_mode_choices': UserProfile.RULE_SET_MODE_CHOICES,
         },
     )

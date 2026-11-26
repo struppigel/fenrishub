@@ -54,7 +54,11 @@
                 <strong>shared</strong> — your rules are part of the global rule set used by every "shared" user; your assigned uploads are analyzed against that combined set.<br>
                 <strong>private</strong> — only your own rules apply to your assigned uploads, and your rules are excluded from the global shared rule set.
             </div>
-            <select id="rule_set_mode" name="rule_set_mode">
+            {% if profile_rule_set_forced %}
+                <div class="field-help"><strong>Set by an administrator:</strong> you are training with your own rules only. Other helpers' rules and their verdicts are hidden.</div>
+                <input type="hidden" name="rule_set_mode" value="private">
+            {% endif %}
+            <select id="rule_set_mode" name="rule_set_mode" {% if profile_rule_set_forced %}disabled{% endif %}>
                 {% for value, label in rule_set_mode_choices %}
                     <option value="{{ value }}" {% if value == profile_rule_set_mode %}selected{% endif %}>{{ label|lower }}</option>
                 {% endfor %}

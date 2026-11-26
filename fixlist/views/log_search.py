@@ -23,7 +23,7 @@ from urllib.parse import urlencode
 from .. import regex_engine
 from ..analyzer import evaluate_regex_pattern
 from ..models import UploadedLog
-from ..rule_sets import SHARED_RULE_SET_KEY, resolve_user_rule_set_key
+from ..rule_sets import SHARED_RULE_SET_KEY, is_restricted_key, resolve_user_rule_set_key
 from ..tagging import (
     first_tagged_line, found_tags_by_upload, logs_with_tags, parse_tag_ids, selected_tags_for_picker,
 )
@@ -273,7 +273,8 @@ def _search_query_params(query, use_regex, case_sensitive, log_type, tag_ids=())
 def _searched_analysis(uploaded_log, rule_set_key):
     """The cached analysis a tag search reads for a log: the viewer's, else the shared one."""
     payload = get_fresh_cached_analysis(uploaded_log, rule_set_key)
-    if payload is None and rule_set_key != SHARED_RULE_SET_KEY:
+    # Never the shared analysis for a helper training with their own rules.
+    if payload is None and rule_set_key != SHARED_RULE_SET_KEY and not is_restricted_key(rule_set_key):
         payload = get_fresh_cached_analysis(uploaded_log, SHARED_RULE_SET_KEY)
     return payload
 

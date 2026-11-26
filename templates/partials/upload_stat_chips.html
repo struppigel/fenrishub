@@ -1,11 +1,12 @@
 {% load rule_tags %}{% comment %}
 The stats chips of one uploaded log (as on the case page): status counts with
 % known for FRST types and Spor (UploadedLog.STATUS_CHIP_LOG_TYPES; with
-show_rule_set, also the rule set they were computed with), Fixlog operations,
+show_rule_set, also the rule set they were computed with; hidden from a helper
+training with their own rules unless the log is theirs), Fixlog operations,
 or the stored tool chips. Colours: .upload-stats in base.html.
 {% endcomment %}<div class="fixlist-meta upload-stats">
     lines {{ uploaded_log.total_line_count }}
-    {% if uploaded_log.shows_status_counts %}
+    {% if uploaded_log.shows_status_counts %}{% if uploaded_log|counts_visible_to:request.user %}
     |
     <span class="{{ uploaded_log.count_malware|stat_class:'b' }}">B {{ uploaded_log.count_malware }}</span>
     <span class="{{ uploaded_log.count_pup|stat_class:'p' }}">P {{ uploaded_log.count_pup }}</span>
@@ -28,6 +29,7 @@ or the stored tool chips. Colours: .upload-stats in base.html.
     {% with rule_set_label=uploaded_log.effective_rule_set_label %}
     | <span class="rule-set-tag rule-set-tag-{{ rule_set_label }}" title="stats above were computed using the {{ rule_set_label }} rule set">{{ rule_set_label }} rules</span>
     {% endwith %}
+    {% endif %}
     {% endif %}
     {% elif uploaded_log.log_type == 'Fixlog' %}
     | {{ uploaded_log.fixlog_total }} ops |

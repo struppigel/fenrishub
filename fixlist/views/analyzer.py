@@ -30,6 +30,7 @@ from ..log_types import LOG_TYPE_NAME_RE
 from ..models import ClassificationRule, Fixlist, UploadedLog, known_log_type_names
 from ..rule_sets import (
     SHARED_RULE_SET_KEY,
+    is_rule_restricted,
     resolve_effective_rule_set_key,
     resolve_user_rule_set_key,
 )
@@ -155,6 +156,13 @@ def _same_text(text: str, content: str) -> bool:
     return normalized(text) == normalized(content)
 
 
+def _viewer_line_hits(request):
+    """The `line_hits` attach_rule_tags gets: none for a helper training with
+    their own rules (the team's line-matching tags would label lines for them),
+    else None, matching the current line tags."""
+    return {} if is_rule_restricted(request.user) else None
+
+
 @guest_or_login_required
 @require_http_methods(["POST"])
 def analyze_log_api(request):
@@ -212,7 +220,10 @@ def analyze_log_api(request):
         except Exception:
             logger.exception('Failed to refresh cached analysis for upload_id=%s', upload_id)
     # After the cache write: tags are looked up per request, never cached.
-    return JsonResponse(attach_fact_info(attach_rule_tags(analysis)), json_dumps_params=ANALYSIS_JSON_PARAMS)
+    return JsonResponse(
+        attach_fact_info(attach_rule_tags(analysis, _viewer_line_hits(request))),
+        json_dumps_params=ANALYSIS_JSON_PARAMS,
+    )
 
 
 @deny_guests
@@ -238,7 +249,7 @@ def uploaded_log_cached_analysis_api(request, upload_id):
         return JsonResponse({'has_cache': False, 'payload': None, 'source_content_hash': None})
     return JsonResponse({
         'has_cache': True,
-        'payload': attach_fact_info(attach_rule_tags(payload)),
+        'payload': attach_fact_info(attach_rule_tags(payload, _viewer_line_hits(request))),
         'source_content_hash': uploaded_log.content_hash,
     }, json_dumps_params=ANALYSIS_JSON_PARAMS)
 
@@ -308,7 +319,11 @@ def analyze_line_details_api(request):
         log_type=log_type,
         block_text='\n'.join(block_lines) if block_lines and block_entry else None,
     )
-    inspection = inspect_line_matches(line, log_type=log_type, block_lines=block_lines, block_entry=block_entry)
+    # The viewer's own rule set, as their analysis used (guests: shared).
+    inspection = inspect_line_matches(
+        line, rule_set_key=resolve_user_rule_set_key(request.user),
+        log_type=log_type, block_lines=block_lines, block_entry=block_entry,
+    )
     attach_tags_to_matches(inspection.get('matches'), inspection.get('shadowed_matches'))
 
     return JsonResponse(

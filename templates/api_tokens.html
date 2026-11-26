@@ -127,6 +127,10 @@
         the model act on instructions found inside a log, and review every fixlist it drafts.
     </div>
 
+    {% if rules_restricted %}
+        <div class="api-notice">You are training with your own rule set, so API access is switched off for your account. Existing tokens are refused.</div>
+    {% endif %}
+
     {% if not api_enabled %}
         <div class="api-notice">The API is currently switched off on this server. Tokens can be created but every request is refused until a moderator enables it.</div>
     {% endif %}
@@ -203,6 +207,7 @@
         </div>
     </details>
 
+    {% if not rules_restricted %}
     <h3>create a token</h3>
     <form method="post" class="api-create">
         {% csrf_token %}
@@ -229,6 +234,7 @@
         <button type="submit" {% if active_count >= max_active %}disabled title="revoke a token first"{% endif %}>create token</button>
         <span class="api-help">{{ active_count }} of {{ max_active }} active tokens</span>
     </form>
+    {% endif %}
 
     <h3>your tokens</h3>
     {% if tokens %}

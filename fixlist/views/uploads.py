@@ -34,7 +34,9 @@ from ..machine_signals import KIND_COMPUTER, KIND_PROFILE, extract_signals, syst
 from ..models import LOG_TYPE_UNKNOWN, CorrelationCache, InfectionCaseLog, RuleTag, UploadedLog
 from ..status_types import STATUS_PAINT
 from ..permissions import user_can_delete_uploaded_log, user_can_rename_uploaded_log
-from ..rule_sets import resolve_effective_rule_set_key, resolve_user_rule_set_key, rule_set_label
+from ..rule_sets import (
+    counts_visible_to, is_rule_restricted, resolve_effective_rule_set_key, resolve_user_rule_set_key, rule_set_label,
+)
 from ..tagging import found_tags_by_upload, logs_with_tags, tags_for_listing
 from ..username_merge import rename_logs
 from ..upload_utils import (
@@ -402,7 +404,7 @@ _FRST_STAT_FIELDS = tuple(
 )
 
 
-def _apply_rule_statuses(uploaded_log, highlight):
+def _apply_rule_statuses(uploaded_log, highlight, viewer=None):
     """Colour a highlighted log's lines by their rule verdicts and fill the summary box.
 
     Only the cached analysis is read (the same rule set the uploads list
@@ -414,8 +416,13 @@ def _apply_rule_statuses(uploaded_log, highlight):
     type keeps its highlighter's own colours, title and stats: only lines it
     left unmarked take a rule verdict, and the rules are named in the summary
     title only when they flagged a line.
+
+    A `viewer` training with their own rules (rule_sets.is_rule_restricted)
+    sees their own rule set's verdicts on every log, and stat boxes counted
+    from that analysis, never the recipient's.
     """
-    rule_set_key = resolve_effective_rule_set_key(uploaded_log)
+    restricted = is_rule_restricted(viewer)
+    rule_set_key = resolve_user_rule_set_key(viewer) if restricted else resolve_effective_rule_set_key(uploaded_log)
     label = rule_set_label(rule_set_key)
     payload = get_fresh_cached_analysis(uploaded_log, rule_set_key)
     summary_before = len(highlight.summary)
@@ -435,6 +442,13 @@ def _apply_rule_statuses(uploaded_log, highlight):
         highlight.summary_title = f'{label} rules'
     else:
         highlight.summary_title = f'{label} rules (analysis is being refreshed, reload in a moment)'
+    if restricted:
+        counts = UploadedLog.counts_from_summary(payload.get('summary')) if applied else {}
+        highlight.stats = [
+            Stat(code, str(counts.get(field_name, 0)), severity)
+            for code, field_name, severity in _FRST_STAT_FIELDS
+        ] + highlight.stats
+        return facts_found
     highlight.stats = [
         Stat(code, str(getattr(uploaded_log, field_name)), severity)
         for code, field_name, severity in _FRST_STAT_FIELDS
@@ -507,7 +521,7 @@ def view_uploaded_log(request, upload_id):
     correlation_context = {}
     facts_found = []
     if highlight is not None and is_analyzed_log_type(uploaded_log.log_type):
-        facts_found = _apply_rule_statuses(uploaded_log, highlight)
+        facts_found = _apply_rule_statuses(uploaded_log, highlight, request.user)
     if highlight is not None and uploaded_log.log_type in UploadedLog.ANALYZED_LOG_TYPES:
         # What related logs say about the files of these lines (cached).
         correlation_context = page_correlation_context(uploaded_log, request.user, highlight)
@@ -530,7 +544,7 @@ def view_uploaded_log(request, upload_id):
             highlight = HighlightResult(sections=[], summary=[], summary_title='Fixlog', stats=fixlog_stats)
         else:
             highlight.stats = fixlog_stats + highlight.stats
-    elif uploaded_log.log_type == LOG_TYPE_SPOR and highlight is not None:
+    elif uploaded_log.log_type == LOG_TYPE_SPOR and highlight is not None and counts_visible_to(uploaded_log, request.user):
         # Same numbers as the status chips in the uploads / cases lists.
         highlight.stats = uploaded_log.status_count_stats() + highlight.stats
 

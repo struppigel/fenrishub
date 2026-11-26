@@ -8,6 +8,13 @@ from fixlist.models import log_type_css_slug as _log_type_css_slug
 register = template.Library()
 
 
+@register.filter
+def counts_visible_to(uploaded_log, user):
+    """Whether `user` sees the log's status counts (rule_sets.counts_visible_to)."""
+    from fixlist.rule_sets import counts_visible_to as visible
+    return visible(uploaded_log, user)
+
+
 @register.filter(name='log_type_css_slug')
 def log_type_css_slug(name):
     """CSS class slug for a log_type name. Single source of truth shared with

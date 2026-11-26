@@ -46,7 +46,9 @@ from ..fact_service import (
     DUPLICATE_CONDITIONS_ERROR, condition_key_for, conditions_error, conditions_from_payload,
     rule_condition_specs, set_rule_conditions,
 )
-from ..rule_sets import invalidate_for_rule_owner, resolve_user_rule_set_key
+from ..rule_sets import (
+    SHARED_RULE_SET_KEY, invalidate_for_rule_owner, is_rule_restricted, resolve_user_rule_set_key,
+)
 from ..tagging import auto_tag_rules, parse_tag_ids, selected_tags_for_picker, serialize_tag
 from ..rule_test_service import (
     CachedFactCheck,
@@ -777,6 +779,11 @@ def rules_view(request):
         'priority': ('-priority', 'status', 'match_type', 'source_text'),
     }
 
+    # A helper training with their own rules sees only those: no all/others
+    # tabs, and an id search finds only their own rules.
+    restricted = is_rule_restricted(request.user)
+    if restricted:
+        filter_mode = 'own'
     if filter_mode == 'all':
         owner_q = Q()
     elif filter_mode == 'others':
@@ -790,7 +797,7 @@ def rules_view(request):
     # not hide the one rule asked for. Text search does not look at ids.
     id_search = search_mode == 'id' and bool(search_q)
     search_rule_id = _rule_id_from_query(search_q) if id_search else None
-    if not id_search:
+    if not id_search or restricted:
         rules = rules.filter(owner_q)
 
     # Rules must carry every picked tag. `tag` is the older single-tag param,
@@ -837,7 +844,8 @@ def rules_view(request):
     merge_key = None
     if search_q:
         if search_mode == 'line':
-            inspection = inspect_line_matches(search_q)
+            line_key = resolve_user_rule_set_key(request.user) if restricted else SHARED_RULE_SET_KEY
+            inspection = inspect_line_matches(search_q, rule_set_key=line_key)
             ordered_ids = []
             seen = set()
             for m in inspection['matches'] + inspection.get('shadowed_matches', []):
@@ -847,7 +855,9 @@ def rules_view(request):
             rules = rules.filter(id__in=ordered_ids).order_by(
                 Case(*[When(id=rid, then=pos) for pos, rid in enumerate(ordered_ids)])
             )
-            fact_rules = fact_rules.filter(id__in=fact_rule_ids_matching_line(search_q)).order_by('-updated_at')
+            fact_rules = fact_rules.filter(
+                id__in=fact_rule_ids_matching_line(search_q, line_key),
+            ).order_by('-updated_at')
         elif search_mode == 'id':
             rules = rules.filter(pk=search_rule_id) if search_rule_id is not None else rules.none()
         else:
@@ -872,6 +882,7 @@ def rules_view(request):
     context = {
         'page_obj': page_obj,
         'filter_mode': filter_mode,
+        'rules_restricted': restricted,
         'filter_status': filter_status,
         'filter_match': filter_match,
         'selected_tags': selected_tags,

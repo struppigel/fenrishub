@@ -33,6 +33,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from ..api_params import ParamError
 from ..models import ApiRequestLog, ApiToken, SiteConfig
+from ..rule_sets import is_rule_restricted
 from ..validators import PayloadValidator
 from .utils import get_valid_client_ip
 
@@ -248,6 +249,13 @@ def api_token_required(endpoint, *, cost=1, write=False, methods=None):
             # The token is the only identity; whatever the session says is ignored.
             request.user = token.user
             request.api_token = token
+
+            if is_rule_restricted(token.user):
+                # Training with their own rules: the API would show everyone's rules.
+                response = _error('API access is off while you train with your own rule set.', 403)
+                response['Cache-Control'] = 'no-store'
+                _log_request(request, token, endpoint, kwargs, 403, 0, started, ip, user_agent)
+                return response
 
             if write and not (token.can_write and token.user.is_superuser):
                 response = _error("Write access needs a superuser's write token.", 403)

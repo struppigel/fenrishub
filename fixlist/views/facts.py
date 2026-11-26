@@ -26,7 +26,7 @@ from ..analyzer import REPARSE_FIELDS, invalidate_rule_buckets_cache, parse_rule
 from ..fact_service import fact_delete_error
 from ..log_types import default_rule_scope
 from ..models import ClassificationRule, Fact, FactRule, FactTagSource, RuleTag
-from ..rule_sets import invalidate_for_rule_owner
+from ..rule_sets import invalidate_for_rule_owner, is_rule_restricted
 from .guest import deny_guests
 from .utils import redirect_with_return_q, sanitize_return_q
 
@@ -469,7 +469,11 @@ def _fact_editor(request, fact=None):
 
     fact_rules = []
     if fact is not None and fact.pk:
-        fact_rules = list(FactRule.objects.filter(fact=fact).select_related('owner').order_by('match_type', 'source_text'))
+        fact_rules = FactRule.objects.filter(fact=fact).select_related('owner').order_by('match_type', 'source_text')
+        if is_rule_restricted(request.user):
+            # Training with their own rules: the other helpers' fact rules stay hidden.
+            fact_rules = fact_rules.filter(owner=request.user)
+        fact_rules = list(fact_rules)
     tags = list(RuleTag.objects.order_by('name').values('pk', 'name'))
     return render(request, 'fact_editor.html', {
         'fact': fact if fact is not None and fact.pk else None,
