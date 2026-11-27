@@ -104,7 +104,7 @@
 {% block item_badges %}{% if item.is_fix_message %} <span class="shared-badge" title="your FRST fix message: the same text as in your profile settings and behind &quot;copy fix message&quot; on a fixlist">FRST fix message - also in your profile</span>{% endif %}{% endblock %}
 
 {% block owner_actions %}
-<button type="button" class="action-btn edit-btn" data-pk="{{ item.pk }}" data-name="{{ item.name|escapejs }}" data-category="{{ item.category|escapejs }}" data-content-id="speech-content-{{ item.pk }}" data-is-shared="{% if item.is_shared %}1{% else %}0{% endif %}">edit</button>
+<button type="button" class="action-btn edit-btn" data-pk="{{ item.pk }}" data-name="{{ item.name }}" data-category="{{ item.category }}" data-content-id="speech-content-{{ item.pk }}" data-is-shared="{% if item.is_shared %}1{% else %}0{% endif %}">edit</button>
 {% if not item.is_fix_message %}
 <form method="post" style="display: inline;">
     {% csrf_token %}

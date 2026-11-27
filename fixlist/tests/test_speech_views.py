@@ -326,3 +326,16 @@ class SpeechViewTests(TestCase):
 
         self.assertContains(response, 'analyzer speech')
         self.assertNotContains(response, 'unselected speech')
+
+    def test_view_and_edit_buttons_carry_plain_html_escaped_names(self):
+        # data-name is read through dataset (dialog title, edit form), so it must
+        # be HTML-escaped, never JS-escaped: escapejs turns the apostrophe into a
+        # JS escape sequence, which the edit form would save as the name.
+        Speech.objects.create(owner=self.user, name="Tom's <fix>", content='body')
+
+        response = self.client.get(reverse('speeches'))
+
+        self.assertContains(response, 'data-name="Tom&#x27;s &lt;fix&gt;"', count=2)
+        self.assertNotContains(response, 'data-name="Tom\\u0027s')
+        self.assertContains(response, 'js/view_modal.js')
+        self.assertContains(response, 'class="view-modal-card"')

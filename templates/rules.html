@@ -380,14 +380,16 @@
                 <span class="rule-fact">&rarr; <a href="{% url 'fact_edit' rule.fact_id %}" title="the fact it records">{{ rule.fact.name }}</a></span>
                 <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
                 {% if filter_mode != 'own' or rule.owner_id != request.user.id %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
-                {% if rule.owner_id == request.user.id or request.user.is_superuser %}
                 <div class="rule-actions">
+                    <button type="button" class="rule-act view-btn" data-name="fact rule #{{ rule.pk }} &middot; {{ rule.get_match_type_display }} &rarr; {{ rule.fact.name }}" data-content-id="fact-rule-source-{{ rule.pk }}" title="show the whole source text">view</button>
+                    {% if rule.owner_id == request.user.id or request.user.is_superuser %}
                     <form method="post" action="{% url 'facts' %}"><input type="hidden" name="action" value="fact_rule_toggle"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_to" value="rules"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
                     <a class="rule-act" href="{% url 'edit_fact_rule' rule.pk %}">edit</a>
                     <form method="post" action="{% url 'facts' %}"><input type="hidden" name="action" value="fact_rule_delete"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_to" value="rules"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act rule-act-del" onclick="return confirm('Delete this fact rule?');">delete</button></form>
+                    {% endif %}
                 </div>
-                {% endif %}
             </div>
+            <pre id="fact-rule-source-{{ rule.pk }}" hidden>{{ rule.source_text }}</pre>
             {% if rule.description %}<div class="rule-description">{{ rule.description }}</div>{% endif %}
         </div>
         {% else %}
@@ -403,14 +405,16 @@
                 <span class="rule-priority" title="rule id">#{{ rule.pk }}</span>
                 <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
                 {% if filter_mode != 'own' or rule.owner_id != request.user.id %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
-                {% if rule.owner_id == request.user.id or request.user.is_superuser %}
                 <div class="rule-actions">
+                    <button type="button" class="rule-act view-btn" data-name="rule #{{ rule.pk }} &middot; {{ rule.status }} &middot; {{ rule.get_match_type_display }} &middot; p{{ rule.priority }}" data-content-id="rule-source-{{ rule.pk }}" title="show the whole source text">view</button>
+                    {% if rule.owner_id == request.user.id or request.user.is_superuser %}
                     <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
                     <a class="rule-act" href="{% url 'edit_rule' rule.pk %}?return_q={{ current_query_string|urlencode }}">edit</a>
                     <form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act rule-act-del" onclick="return confirm('Delete this rule?');">delete</button></form>
+                    {% endif %}
                 </div>
-                {% endif %}
             </div>
+            <pre id="rule-source-{{ rule.pk }}" hidden>{{ rule.source_text }}</pre>
             {% if rule.description %}<div class="rule-description">{{ rule.description }}</div>{% endif %}
             {% if rule.tags.all %}<div class="rule-tags">{% for tag in rule.tags.all %}<a class="tag-chip{{ tag|tag_category_class }}" href="?filter=all&amp;tags={{ tag.pk }}" title="{{ tag.description }}">{{ tag.name }}</a> {% endfor %}</div>{% endif %}
         </div>
@@ -443,7 +447,22 @@
     {% endif %}
 </div>
 
+<div id="viewModal" class="modal-backdrop">
+    <div class="view-modal-card" role="dialog" aria-modal="true" aria-labelledby="viewModalTitle">
+        <div class="view-modal-header">
+            <span id="viewModalTitle" class="view-modal-title">rule</span>
+            <button type="button" class="action-btn" id="viewModalClose">close</button>
+        </div>
+        <div class="view-modal-body">
+            <pre id="viewModalContent" class="view-modal-content"></pre>
+        </div>
+    </div>
+</div>
+
+<script src="{% static 'js/view_modal.js' %}"></script>
 <script>
+initViewModal();
+
 function applyFilter(param, value) {
     const url = new URL(window.location);
     if (value) {

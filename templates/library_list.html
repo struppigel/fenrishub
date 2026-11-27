@@ -51,7 +51,7 @@
                     {% else %}
                     <button type="button" class="action-btn analyzer-btn" data-toggle-pk="{{ item.pk }}" title="select {{ library.noun }} to be available in log analyzer">select</button>
                     {% endif %}
-                    <button type="button" class="action-btn view-btn" data-name="{{ item.name|escapejs }}" data-content-id="{{ library.noun }}-content-{{ item.pk }}">view</button>
+                    <button type="button" class="action-btn view-btn" data-name="{{ item.name }}" data-content-id="{{ library.noun }}-content-{{ item.pk }}">view</button>
                     {% if item.owner_id == request.user.id %}{% block owner_actions %}{% endblock %}{% endif %}
                 </div>
             </div>
@@ -84,17 +84,18 @@
 </div>
 
 <div id="viewModal" class="modal-backdrop">
-    <div class="library-modal-card" role="dialog" aria-modal="true" aria-labelledby="viewModalTitle">
-        <div class="library-modal-header">
-            <span id="viewModalTitle" class="library-modal-title">{{ library.noun }}</span>
+    <div class="view-modal-card" role="dialog" aria-modal="true" aria-labelledby="viewModalTitle">
+        <div class="view-modal-header">
+            <span id="viewModalTitle" class="view-modal-title">{{ library.noun }}</span>
             <button type="button" class="action-btn" id="viewModalClose">close</button>
         </div>
-        <div class="library-modal-body">
-            <pre id="viewModalContent" class="library-modal-content"></pre>
+        <div class="view-modal-body">
+            <pre id="viewModalContent" class="view-modal-content"></pre>
         </div>
     </div>
 </div>
 
+<script src="{% static 'js/view_modal.js' %}"></script>
 <script src="{% static 'js/library_page.js' %}"></script>
 <script>
 initLibraryPage({

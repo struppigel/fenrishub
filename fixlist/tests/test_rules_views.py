@@ -566,6 +566,36 @@ class RulesViewTests(TestCase):
         self.assertIn('value="delete"', content)
         self.assertIn("/edit/?return_q=", content)
 
+    # -- View dialog --
+
+    def test_every_rule_has_a_view_button_with_its_whole_source(self):
+        long_source = "C:\\Program Files\\Vendor\\" + "x" * 200 + "\\tool.exe"
+        rule = ClassificationRule.objects.create(
+            owner=self.other, status="B", match_type="exact", source_text=long_source
+        )
+        response = self.client.get(reverse("rules") + "?filter=others")
+        content = response.content.decode()
+        # Not only the owner's rules: viewing changes nothing.
+        self.assertIn(f'data-content-id="rule-source-{rule.pk}"', content)
+        self.assertIn(f'data-name="rule #{rule.pk} &middot; B &middot; Exact line &middot; p{rule.priority}"', content)
+        self.assertIn(f'<pre id="rule-source-{rule.pk}" hidden>{long_source}</pre>', content)
+        self.assertIn('id="viewModal"', content)
+        self.assertIn("js/view_modal.js", content)
+        self.assertIn("initViewModal();", content)
+
+    def test_fact_rules_have_a_view_button(self):
+        from ..models import Fact, FactRule
+
+        fact = Fact.objects.create(name="Vendor tool present")
+        fact_rule = FactRule.objects.create(
+            owner=self.other, fact=fact, match_type=FactRule.MATCH_SUBSTRING, source_text="vendor<tool>"
+        )
+        response = self.client.get(reverse("rules") + "?filter=others")
+        content = response.content.decode()
+        self.assertIn(f'data-content-id="fact-rule-source-{fact_rule.pk}"', content)
+        self.assertIn(f'<pre id="fact-rule-source-{fact_rule.pk}" hidden>vendor&lt;tool&gt;</pre>', content)
+        self.assertNotIn('value="fact_rule_delete"', content)
+
     # -- Pagination --
 
     def test_pagination_limits_per_page(self):

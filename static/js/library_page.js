@@ -1,34 +1,8 @@
 /* Behaviour shared by the snippets and speeches list pages (library_list.html):
  * the "view" dialog, the compact (previews hidden) mode and selecting items
- * for the log analyzer. Needs common.js (Fenris). */
+ * for the log analyzer. Needs common.js (Fenris) and view_modal.js. */
 function initLibraryPage({ noun, compactKey, toggleUrl }) {
-    const modal = document.getElementById('viewModal');
-    const modalTitle = document.getElementById('viewModalTitle');
-    const modalContent = document.getElementById('viewModalContent');
-
-    function openViewModal(name, content) {
-        modalTitle.textContent = name;
-        modalContent.textContent = content;
-        modal.classList.add('show');
-    }
-
-    function closeViewModal() {
-        modal.classList.remove('show');
-    }
-
-    modal.addEventListener('click', (event) => {
-        if (event.target === modal) closeViewModal();
-    });
-    document.getElementById('viewModalClose').addEventListener('click', closeViewModal);
-    document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') closeViewModal();
-    });
-    document.querySelectorAll('.view-btn').forEach((button) => {
-        button.addEventListener('click', () => {
-            const contentElement = document.getElementById(button.dataset.contentId || '');
-            openViewModal(button.dataset.name || '', contentElement ? contentElement.textContent : '');
-        });
-    });
+    initViewModal();
 
     /* Compact mode is remembered in localStorage and mirrored to a cookie of
      * the same name, which the server reads to show more items per page. */

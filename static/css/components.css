@@ -188,6 +188,44 @@ button.action-btn.delete-btn {
     display: flex;
 }
 
+/* "view" dialog showing an item's full text (on a .modal-backdrop, view_modal.js). */
+.view-modal-card {
+    width: min(900px, 100%);
+    max-height: 90vh;
+    background-color: var(--la-bg-1);
+    border: 1px solid var(--la-border-strong);
+    display: flex;
+    flex-direction: column;
+}
+
+.view-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px;
+    border-bottom: 1px solid var(--la-border);
+}
+
+.view-modal-title {
+    font-size: 13px;
+    color: var(--la-text-primary);
+    font-weight: 600;
+}
+
+.view-modal-body {
+    padding: 10px;
+    overflow: auto;
+}
+
+.view-modal-content {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+    color: var(--la-text-primary);
+}
+
+
 /* Loading ring after a status text (status_spinner.js). A transform
    animation runs on the compositor, so it keeps turning while JS is busy. */
 .status-spinner {
