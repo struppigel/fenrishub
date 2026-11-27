@@ -225,6 +225,66 @@ button.action-btn.delete-btn {
     color: var(--la-text-primary);
 }
 
+/* Every field of a rule in the view dialog (partials/rule_details.html):
+ * one labelled row per field, packed tight. */
+.rule-details {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 3px 14px;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.rule-details dt {
+    color: var(--la-text-muted);
+}
+
+.rule-details dd {
+    margin: 0;
+    color: var(--la-text-primary);
+    overflow-wrap: anywhere;
+}
+
+.rule-details .rule-details-pre,
+.rule-details .rule-details-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.rule-details .rule-details-pre {
+    padding: 3px 6px;
+    background-color: var(--la-bg-0);
+    border: 1px solid var(--la-border-muted);
+}
+
+.rule-details .rule-details-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.rule-details dd > span + span::before {
+    content: ", ";
+}
+
+.rule-details .rule-details-muted {
+    color: var(--la-text-muted);
+}
+
+.rule-details strong {
+    color: var(--la-warning-text);
+}
+
+.rule-details .rule-details-actions {
+    margin-top: 4px;
+}
+
+.rule-details a:hover {
+    text-decoration: underline;
+}
+
 
 /* Loading ring after a status text (status_spinner.js). A transform
    animation runs on the compositor, so it keeps turning while JS is busy. */

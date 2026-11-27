@@ -596,6 +596,158 @@ class RulesViewTests(TestCase):
         self.assertIn(f'<pre id="fact-rule-source-{fact_rule.pk}" hidden>vendor&lt;tool&gt;</pre>', content)
         self.assertNotIn('value="fact_rule_delete"', content)
 
+    @staticmethod
+    def _details(content, template_id):
+        """The markup inside the view dialog's <template id=...> for one rule."""
+        start = content.index(f'<template id="{template_id}">')
+        return content[start:content.index("</template>", start)]
+
+    def test_view_dialog_shows_every_field_of_a_rule(self):
+        tag = RuleTag.objects.create(name="VendorFamily")
+        rule = ClassificationRule.objects.create(
+            owner=self.user, status="P", match_type="parsed",
+            source_text='R1 VendorSvc; C:\Vendor\svc.exe [1 2025] (Vendor Ltd -> Vendor)',
+            description="Vendor bundler\nsecond line", source_name="forum import",
+            log_types=["FRST"], only_entry_types=["service"], entry_type="service",
+            name="VendorSvc", filepath="C:\Vendor\svc.exe", filename="svc.exe",
+            company="Vendor Ltd", arguments="--quiet", file_not_signed=True, priority=12,
+        )
+        rule.tags.add(tag)
+        response = self.client.get(reverse("rules"))
+        content = response.content.decode()
+        self.assertIn(f'data-details-id="rule-details-{rule.pk}"', content)
+        details = self._details(content, f"rule-details-{rule.pk}")
+        for expected in (
+            "<dd>enabled</dd>", "<dd>alice</dd>",
+            f"<dd>{rule.log_scope_label}, only lines parsed as service</dd>",
+            "R1 VendorSvc; C:\Vendor\svc.exe", "Vendor bundler\nsecond line",
+            ">service<", ">VendorSvc<", ">C:\Vendor\svc.exe<", ">svc.exe<", ">Vendor Ltd<", ">--quiet<",
+            "file not signed", "VendorFamily", reverse("edit_rule", args=[rule.pk]),
+        ):
+            self.assertIn(expected, details)
+        # The dialog's title already names these; the details do not repeat them.
+        # Where the rule came from is left out.
+        self.assertNotIn("forum import", details)
+        for repeated in ("Potentially unwanted", ">p12<", ">Parsed<", f"#{rule.pk}<"):
+            self.assertNotIn(repeated, details)
+        self.assertNotIn("default priority", details)
+        self.assertNotIn("block rule", details)
+
+    def test_view_dialog_marks_the_default_priority_and_block_rules(self):
+        rule = ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="substring", source_text="evil", match_unit="block",
+            is_enabled=False,
+        )
+        details = self._details(self.client.get(reverse("rules")).content.decode(), f"rule-details-{rule.pk}")
+        self.assertIn("<span>default priority</span>", details)
+        self.assertIn("<span>block rule</span>", details)
+        self.assertIn("<strong>disabled</strong>", details)
+        # Unset optional fields are left out.
+        for absent in ("description", "tags", "entry type", "company", "signature"):
+            self.assertNotIn(f"<dt>{absent}</dt>", details)
+
+    def test_view_dialog_links_urls_in_the_description(self):
+        rule = ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="substring", source_text="evil",
+            description="described in https://example.com/blog/post-1/ <b>bold</b>",
+        )
+        content = self.client.get(reverse("rules")).content.decode()
+        link = (
+            '<a href="https://example.com/blog/post-1/" target="_blank" '
+            'rel="nofollow noopener noreferrer">https://example.com/blog/post-1/</a>'
+        )
+        details = self._details(content, f"rule-details-{rule.pk}")
+        self.assertIn(link, details)
+        self.assertIn("&lt;b&gt;bold&lt;/b&gt;", details)
+        # The description under the row too.
+        self.assertIn(f'<div class="rule-description">described in {link}', content)
+
+    def test_view_dialog_lists_a_rules_conditions(self):
+        from ..fact_service import ConditionSpec, condition_key_for, set_rule_conditions
+        from ..models import Fact, RuleCondition
+
+        installed = Fact.objects.create(name="Kaspersky installed")
+        fake = Fact.objects.create(name="Fake AV seen")
+        specs = [
+            ConditionSpec(installed.pk, RuleCondition.POLARITY_REQUIRE, RuleCondition.SCOPE_LOG),
+            ConditionSpec(fake.pk, RuleCondition.POLARITY_FORBID, RuleCondition.SCOPE_BLOCK),
+        ]
+        rule = ClassificationRule.objects.create(
+            owner=self.user, status="C", match_type="substring", source_text="kav.exe",
+            condition_key=condition_key_for(specs),
+        )
+        set_rule_conditions(rule, specs)
+        details = self._details(self.client.get(reverse("rules")).content.decode(), f"rule-details-{rule.pk}")
+        self.assertIn(
+            f'<dt>require</dt><dd><a href="{reverse("fact_edit", args=[installed.pk])}">Kaspersky installed</a> anywhere in the log</dd>',
+            details,
+        )
+        self.assertIn(
+            f'<dt>forbid</dt><dd><a href="{reverse("fact_edit", args=[fake.pk])}">Fake AV seen</a> in the same block</dd>',
+            details,
+        )
+
+    def test_view_dialog_of_a_fact_rule(self):
+        from ..models import Fact, FactRule
+
+        fact = Fact.objects.create(name="Vendor tool present")
+        fact_rule = FactRule.objects.create(
+            owner=self.user, fact=fact, match_type=FactRule.MATCH_REGEX, source_text="vendor.*tool",
+            whole_log=True, description="seen in vendor logs",
+        )
+        content = self.client.get(reverse("rules")).content.decode()
+        self.assertIn(f'data-details-id="fact-rule-details-{fact_rule.pk}"', content)
+        details = self._details(content, f"fact-rule-details-{fact_rule.pk}")
+        for expected in (
+            "fact rule: records its fact", "<span>whole log</span>", "vendor.*tool", "seen in vendor logs",
+            reverse("edit_fact_rule", args=[fact_rule.pk]),
+        ):
+            self.assertIn(expected, details)
+        for absent in ("default priority", "block rule", "<dt>tags</dt>", "<dt>require</dt>"):
+            self.assertNotIn(absent, details)
+
+    def test_view_dialog_of_another_helpers_rule_has_no_edit_link(self):
+        rule = ClassificationRule.objects.create(
+            owner=self.other, status="B", match_type="exact", source_text="bob-line",
+        )
+        content = self.client.get(reverse("rules") + "?filter=others").content.decode()
+        details = self._details(content, f"rule-details-{rule.pk}")
+        self.assertIn("bob-line", details)
+        self.assertIn("<dd>bob</dd>", details)
+        self.assertNotIn("rule-details-actions", details)
+
+    def test_view_dialog_details_do_not_query_per_rule(self):
+        from ..fact_service import ConditionSpec, condition_key_for, set_rule_conditions
+        from ..models import Fact, RuleCondition
+
+        fact = Fact.objects.create(name="Some fact")
+        tag = RuleTag.objects.create(name="SomeTag")
+
+        def make(n):
+            for i in range(n):
+                specs = [ConditionSpec(fact.pk, RuleCondition.POLARITY_REQUIRE, RuleCondition.SCOPE_LOG)]
+                rule = ClassificationRule.objects.create(
+                    owner=self.user, status="B", match_type="substring", source_text=f"line-{n}-{i}",
+                    condition_key=condition_key_for(specs),
+                )
+                set_rule_conditions(rule, specs)
+                rule.tags.add(tag)
+
+        def count_queries():
+            from django.db import connection
+            from django.test.utils import CaptureQueriesContext
+
+            with CaptureQueriesContext(connection) as ctx:
+                self.client.get(reverse("rules") + "?status=B")
+            return len(ctx.captured_queries)
+
+        # The first request also creates the profile (last_seen middleware).
+        self.client.get(reverse("rules"))
+        make(1)
+        one = count_queries()
+        make(11)
+        self.assertEqual(count_queries(), one)
+
     # -- Pagination --
 
     def test_pagination_limits_per_page(self):

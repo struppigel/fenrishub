@@ -806,7 +806,8 @@ def rules_view(request):
     # One join per tag; each matches at most one row per rule, so no duplicates.
     for tag_id in filter_tag_ids:
         rules = rules.filter(tags=tag_id)
-    rules = rules.prefetch_related('tags')
+    # Conditions for the "view" dialog's details (partials/rule_details.html).
+    rules = rules.prefetch_related('tags', 'conditions__fact')
     selected_tags = selected_tags_for_picker(filter_tag_ids)
 
     filter_priority = request.GET.get('priority', '').strip()

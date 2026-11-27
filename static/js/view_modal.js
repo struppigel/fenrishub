@@ -1,20 +1,48 @@
-/* The "view" dialog showing an item's full text: the #viewModal markup
- * (.view-modal-* in components.css) and .view-btn buttons whose data-name is
- * the title and whose data-content-id names a hidden element holding the
- * text. Used by the snippets / speeches pages and the rules page. */
+/* The "view" dialog: the #viewModal markup (.view-modal-* in components.css)
+ * and .view-btn buttons whose data-name is the title. Two kinds of content:
+ *  - text: data-content-id names a hidden element whose text is shown in the
+ *    <pre> (snippets / speeches pages);
+ *  - details: data-details-id names a <template> whose markup is shown in
+ *    #viewModalDetails (the rules page: every field of the rule). Falls back
+ *    to the text when the page has no #viewModalDetails or no such template. */
 function initViewModal() {
     const modal = document.getElementById('viewModal');
     if (!modal) return;
     const modalTitle = document.getElementById('viewModalTitle');
     const modalContent = document.getElementById('viewModalContent');
+    const modalDetails = document.getElementById('viewModalDetails');
     const closeButton = document.getElementById('viewModalClose');
     let opener = null;
 
-    function openViewModal(name, content, from) {
-        modalTitle.textContent = name;
+    function showText(content) {
         modalContent.textContent = content;
+        modalContent.hidden = false;
+        if (modalDetails) {
+            modalDetails.replaceChildren();
+            modalDetails.hidden = true;
+        }
+    }
+
+    function showDetails(template) {
+        modalDetails.replaceChildren(template.content.cloneNode(true));
+        modalDetails.hidden = false;
+        modalContent.textContent = '';
+        modalContent.hidden = true;
+    }
+
+    function openViewModal(button) {
+        modalTitle.textContent = button.dataset.name || '';
+        const template = modalDetails && button.dataset.detailsId
+            ? document.getElementById(button.dataset.detailsId)
+            : null;
+        if (template && template.content) {
+            showDetails(template);
+        } else {
+            const contentElement = document.getElementById(button.dataset.contentId || '');
+            showText(contentElement ? contentElement.textContent : '');
+        }
         modal.classList.add('show');
-        opener = from || null;
+        opener = button;
         closeButton.focus();
     }
 
@@ -33,9 +61,6 @@ function initViewModal() {
         if (event.key === 'Escape') closeViewModal();
     });
     document.querySelectorAll('.view-btn').forEach((button) => {
-        button.addEventListener('click', () => {
-            const contentElement = document.getElementById(button.dataset.contentId || '');
-            openViewModal(button.dataset.name || '', contentElement ? contentElement.textContent : '', button);
-        });
+        button.addEventListener('click', () => openViewModal(button));
     });
 }

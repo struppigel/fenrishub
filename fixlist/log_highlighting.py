@@ -36,9 +36,10 @@ logger = logging.getLogger(__name__)
 
 LINES_PER_CHUNK = 100
 SUMMARY_LIMIT = 200
-# Highlighted HTML is roughly 3x the log size; huge logs (one Fixlog in the
-# data is 44 MB) keep the plain chunked view instead.
-MAX_HIGHLIGHT_CHARS = 3_000_000
+# Highlighted HTML is roughly 2-3x the log size and highlighting takes about
+# 0.1 s per MB (a 5 MB Fixlog: 0.5 s, 10 MB of HTML, chunked and gzipped).
+# Huge logs (one Fixlog in the data is 44 MB) keep the plain chunked view.
+MAX_HIGHLIGHT_CHARS = 8_000_000
 
 
 # ---------------------------------------------------------------------------

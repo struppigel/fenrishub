@@ -1,5 +1,5 @@
 from django import template
-from django.utils.html import escape
+from django.utils.html import escape, urlize
 from django.utils.safestring import mark_safe
 
 from fixlist import frst_extractors as ex
@@ -44,6 +44,13 @@ def tag_category_class(tag):
     """
     category_id = tag.get('category_id') if isinstance(tag, dict) else getattr(tag, 'category_id', None)
     return f' tag-cat-{int(category_id)}' if category_id else ''
+
+
+@register.filter(name='linked_text', needs_autoescape=True)
+def linked_text(text, autoescape=True):
+    """Escaped text with its URLs as links opening in a new tab (rule descriptions)."""
+    html = urlize(text or '', nofollow=True, autoescape=autoescape)
+    return mark_safe(html.replace(' rel="nofollow"', ' target="_blank" rel="nofollow noopener noreferrer"'))
 
 
 @register.filter(name='chunk_log')

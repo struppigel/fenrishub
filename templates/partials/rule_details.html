@@ -1,0 +1,40 @@
+{% load rule_tags %}
+{% comment %}
+Everything about one rule or fact rule, for the rules page's "view" dialog
+(rules.html puts it in a <template> per row, view_modal.js shows it). The
+dialog's title already names the id, status, match type and priority (or the
+fact), so they are not repeated here. Unset fields are left out. Expects
+`rule.conditions` with their facts prefetched for classification rules.
+{% endcomment %}
+<dl class="rule-details">
+    <dt>pattern</dt><dd><pre class="rule-details-pre">{{ rule.source_text }}</pre></dd>
+    {% if rule.description %}<dt>description</dt><dd class="rule-details-text">{{ rule.description|linked_text }}</dd>{% endif %}
+    {% if not rule.is_fact_rule %}{% with tags=rule.tags.all %}{% if tags %}
+    <dt>tags</dt><dd class="rule-details-tags">{% for tag in tags %}<a class="tag-chip{{ tag|tag_category_class }}" href="?filter=all&amp;tags={{ tag.pk }}" title="{{ tag.description }}">{{ tag.name }}</a> {% endfor %}</dd>
+    {% endif %}{% endwith %}
+    {% for condition in rule.conditions.all %}
+    <dt>{{ condition.get_polarity_display }}</dt><dd><a href="{% url 'fact_edit' condition.fact_id %}">{{ condition.fact.name }}</a> {{ condition.get_scope_display }}</dd>
+    {% endfor %}{% endif %}
+    {% if rule.is_fact_rule %}<dt>kind</dt><dd>fact rule: records its fact, sets no status</dd>{% endif %}
+    {% if rule.whole_log or not rule.is_fact_rule and rule.is_block_rule or not rule.is_fact_rule and rule.shows_whole_line_badge or not rule.is_fact_rule and rule.has_default_priority %}
+    <dt>options</dt><dd>{% if rule.whole_log %}<span>whole log</span>{% endif %}{% if not rule.is_fact_rule %}{% if rule.is_block_rule %}<span>block rule</span>{% endif %}{% if rule.shows_whole_line_badge %}<span>whole line colour</span>{% endif %}{% if rule.has_default_priority %}<span>default priority</span>{% endif %}{% endif %}</dd>
+    {% endif %}
+    <dt>log types</dt><dd>{{ rule.log_scope_label }}{% if rule.only_entry_types %}, only lines parsed as {{ rule.only_entry_types|join:", " }}{% endif %}</dd>
+    <dt>state</dt><dd>{% if rule.is_enabled %}enabled{% else %}<strong>disabled</strong>{% endif %}</dd>
+    <dt>owner</dt><dd>{{ rule.owner.username }}</dd>
+    {% if rule.entry_type %}<dt>entry type</dt><dd class="parsed-entry-type">{{ rule.entry_type }}</dd>{% endif %}
+    {% if rule.clsid %}<dt>clsid</dt><dd class="parsed-clsid">{{ rule.clsid }}</dd>{% endif %}
+    {% if rule.name %}<dt>name</dt><dd class="parsed-name">{{ rule.name }}</dd>{% endif %}
+    {% if rule.filepath %}<dt>file path</dt><dd class="parsed-filepath">{{ rule.filepath }}</dd>{% endif %}
+    {% if rule.normalized_filepath and rule.normalized_filepath != rule.filepath %}<dt>normalized</dt><dd>{{ rule.normalized_filepath }}</dd>{% endif %}
+    {% if rule.filename %}<dt>file name</dt><dd class="parsed-filename">{{ rule.filename }}</dd>{% endif %}
+    {% if rule.company %}<dt>company</dt><dd class="parsed-company">{{ rule.company }}</dd>{% endif %}
+    {% if rule.arguments %}<dt>arguments</dt><dd class="parsed-arguments">{{ rule.arguments }}</dd>{% endif %}
+    {% if rule.attributes %}<dt>attributes</dt><dd>{{ rule.attributes }}</dd>{% endif %}
+    {% if rule.file_not_signed %}<dt>signature</dt><dd>file not signed</dd>{% endif %}
+    {% if rule.is_hidden %}<dt>hidden</dt><dd>yes</dd>{% endif %}
+    <dt>dates</dt><dd>created {{ rule.created_at|date:"Y-m-d H:i" }}{% if rule.updated_at|date:"Y-m-d H:i" != rule.created_at|date:"Y-m-d H:i" %} <span class="rule-details-muted">&middot;</span> updated {{ rule.updated_at|date:"Y-m-d H:i" }}{% endif %}</dd>
+    {% if rule.owner_id == request.user.id or request.user.is_superuser %}
+    <dt></dt><dd class="rule-details-actions">{% if rule.is_fact_rule %}<a href="{% url 'edit_fact_rule' rule.pk %}">edit</a>{% else %}<a href="{% url 'edit_rule' rule.pk %}?return_q={{ current_query_string|urlencode }}">edit</a>{% endif %}</dd>
+    {% endif %}
+</dl>

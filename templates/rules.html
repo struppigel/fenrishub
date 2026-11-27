@@ -111,11 +111,13 @@
         gap: 4px;
     }
 
-    .rule-tags a.tag-chip {
+    .rule-tags a.tag-chip,
+    .rule-details a.tag-chip {
         text-decoration: none;
     }
 
-    .rule-tags a.tag-chip:hover {
+    .rule-tags a.tag-chip:hover,
+    .rule-details a.tag-chip:hover {
         text-decoration: underline;
     }
 
@@ -289,13 +291,13 @@
         color: var(--la-text-muted);
     }
 
-    .rule-source .parsed-entry-type { color: var(--la-parsed-entry-type); }
-    .rule-source .parsed-clsid { color: var(--la-parsed-clsid); }
-    .rule-source .parsed-name { color: var(--la-parsed-name); }
-    .rule-source .parsed-filepath { color: var(--la-parsed-filepath); }
-    .rule-source .parsed-filename { color: var(--la-parsed-filename); }
-    .rule-source .parsed-company { color: var(--la-parsed-company); }
-    .rule-source .parsed-arguments { color: var(--la-parsed-arguments); }
+    .rule-source .parsed-entry-type, .rule-details .parsed-entry-type { color: var(--la-parsed-entry-type); }
+    .rule-source .parsed-clsid, .rule-details .parsed-clsid { color: var(--la-parsed-clsid); }
+    .rule-source .parsed-name, .rule-details .parsed-name { color: var(--la-parsed-name); }
+    .rule-source .parsed-filepath, .rule-details .parsed-filepath { color: var(--la-parsed-filepath); }
+    .rule-source .parsed-filename, .rule-details .parsed-filename { color: var(--la-parsed-filename); }
+    .rule-source .parsed-company, .rule-details .parsed-company { color: var(--la-parsed-company); }
+    .rule-source .parsed-arguments, .rule-details .parsed-arguments { color: var(--la-parsed-arguments); }
 
     .regex-warning {
         margin-top: 6px;
@@ -381,7 +383,7 @@
                 <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
                 {% if filter_mode != 'own' or rule.owner_id != request.user.id %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
                 <div class="rule-actions">
-                    <button type="button" class="rule-act view-btn" data-name="fact rule #{{ rule.pk }} &middot; {{ rule.get_match_type_display }} &rarr; {{ rule.fact.name }}" data-content-id="fact-rule-source-{{ rule.pk }}" title="show the whole source text">view</button>
+                    <button type="button" class="rule-act view-btn" data-name="fact rule #{{ rule.pk }} &middot; {{ rule.get_match_type_display }} &rarr; {{ rule.fact.name }}" data-content-id="fact-rule-source-{{ rule.pk }}" data-details-id="fact-rule-details-{{ rule.pk }}" title="show all details">view</button>
                     {% if rule.owner_id == request.user.id or request.user.is_superuser %}
                     <form method="post" action="{% url 'facts' %}"><input type="hidden" name="action" value="fact_rule_toggle"><input type="hidden" name="pk" value="{{ rule.pk }}"><input type="hidden" name="return_to" value="rules"><input type="hidden" name="return_q" value="{{ current_query_string }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
                     <a class="rule-act" href="{% url 'edit_fact_rule' rule.pk %}">edit</a>
@@ -390,7 +392,8 @@
                 </div>
             </div>
             <pre id="fact-rule-source-{{ rule.pk }}" hidden>{{ rule.source_text }}</pre>
-            {% if rule.description %}<div class="rule-description">{{ rule.description }}</div>{% endif %}
+            <template id="fact-rule-details-{{ rule.pk }}">{% include 'partials/rule_details.html' %}</template>
+            {% if rule.description %}<div class="rule-description">{{ rule.description|linked_text }}</div>{% endif %}
         </div>
         {% else %}
         <div class="rule-item{% if not rule.is_enabled %} disabled{% endif %}">
@@ -406,7 +409,7 @@
                 <span class="rule-source" title="{{ rule.source_text }}">{{ rule|highlight_parsed }}</span>
                 {% if filter_mode != 'own' or rule.owner_id != request.user.id %}<span class="rule-owner">{{ rule.owner.username }}</span>{% endif %}
                 <div class="rule-actions">
-                    <button type="button" class="rule-act view-btn" data-name="rule #{{ rule.pk }} &middot; {{ rule.status }} &middot; {{ rule.get_match_type_display }} &middot; p{{ rule.priority }}" data-content-id="rule-source-{{ rule.pk }}" title="show the whole source text">view</button>
+                    <button type="button" class="rule-act view-btn" data-name="rule #{{ rule.pk }} &middot; {{ rule.status }} &middot; {{ rule.get_match_type_display }} &middot; p{{ rule.priority }}" data-content-id="rule-source-{{ rule.pk }}" data-details-id="rule-details-{{ rule.pk }}" title="show all details">view</button>
                     {% if rule.owner_id == request.user.id or request.user.is_superuser %}
                     <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="pk" value="{{ rule.pk }}">{% csrf_token %}<button type="submit" class="rule-act">{% if rule.is_enabled %}disable{% else %}enable{% endif %}</button></form>
                     <a class="rule-act" href="{% url 'edit_rule' rule.pk %}?return_q={{ current_query_string|urlencode }}">edit</a>
@@ -415,7 +418,8 @@
                 </div>
             </div>
             <pre id="rule-source-{{ rule.pk }}" hidden>{{ rule.source_text }}</pre>
-            {% if rule.description %}<div class="rule-description">{{ rule.description }}</div>{% endif %}
+            <template id="rule-details-{{ rule.pk }}">{% include 'partials/rule_details.html' %}</template>
+            {% if rule.description %}<div class="rule-description">{{ rule.description|linked_text }}</div>{% endif %}
             {% if rule.tags.all %}<div class="rule-tags">{% for tag in rule.tags.all %}<a class="tag-chip{{ tag|tag_category_class }}" href="?filter=all&amp;tags={{ tag.pk }}" title="{{ tag.description }}">{{ tag.name }}</a> {% endfor %}</div>{% endif %}
         </div>
         {% endif %}
@@ -455,6 +459,7 @@
         </div>
         <div class="view-modal-body">
             <pre id="viewModalContent" class="view-modal-content"></pre>
+            <div id="viewModalDetails" hidden></div>
         </div>
     </div>
 </div>

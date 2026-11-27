@@ -703,6 +703,11 @@ class ClassificationRule(RuleMatcherBase):
     def is_block_rule(self) -> bool:
         return self.match_unit == self.MATCH_UNIT_BLOCK
 
+    @property
+    def has_default_priority(self) -> bool:
+        """The priority is the one its match type gets when none is set."""
+        return self.priority == self.default_priority_for(self.match_type)
+
     @classmethod
     def default_priority_for(cls, match_type: str) -> int:
         return DEFAULT_PRIORITY_BY_MATCH_TYPE.get(match_type, 10)
