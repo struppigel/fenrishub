@@ -1272,6 +1272,27 @@ def known_log_type_names() -> list:
     return list(DEFAULT_RULE_LOG_TYPES) + sorted(names, key=str.lower)
 
 
+def delete_orphan_log_type_badges(names) -> int:
+    """Delete the custom badges among `names` that nothing uses any more.
+
+    Saving a detection rule creates a badge for its log type, so deleting the
+    rule (or changing its log type) would otherwise leave the old name in every
+    log type list. A badge stays while it is built-in or a detection rule,
+    upload (trashed included) or statistics row still has its name; migration
+    0121 applies the same test to badges orphaned before this cleanup existed.
+    """
+    names = {name for name in names if name}
+    if not names:
+        return 0
+    used = set(LogTypeDetectionRule.objects.filter(log_type__in=names).values_list('log_type', flat=True))
+    for model in (UploadedLog, UploadedLogStat, AnalysisTiming):
+        used.update(model.objects.filter(log_type__in=names).values_list('log_type', flat=True).distinct())
+    deleted, _ = (
+        LogTypeBadge.objects.filter(name__in=names - used, is_builtin=False).delete()
+    )
+    return deleted
+
+
 @receiver(post_save, sender=LogTypeDetectionRule)
 def _logtype_rule_saved(sender, instance, **kwargs):
     _bump_logtype_rules_version()

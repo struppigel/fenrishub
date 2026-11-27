@@ -18,8 +18,15 @@ strongest match). Kinds of links (`match` of an entry, entries.MATCH_NOTES):
 - in_folder / 'inside': a Defender-excluded folder, an install folder or a
   package folder and the files inside it named in the log;
 - 'sibling' / 'same_hash' / 'name': a detected file in the same folder, a
-  copy with the same SHA256, a file of the same uncommon name.
-'host' marks a host program (cmd.exe, rundll32.exe, ...) named on many lines.
+  copy with the same SHA256, a file of the same uncommon name;
+- 'loads' / 'loaded_by': a program's PREFETCH line and the lines of the files
+  its "loaded:" sub-lines name, and the other way round (a dropper and the
+  Node.js it unpacked, an injected charmap.exe and its malware's library).
+A program a prefetch entry knows by name only ("CHARMAP.EXE") links its
+PREFETCH and TIMELINE lines as 'name' (spor_source.pfname_key; no status:
+the name alone does not make two programs one file).
+'host' marks a host program (cmd.exe, rundll32.exe, ...) named on many lines;
+not one whose lines say malware was injected into it (!injection-host).
 
 Only the same file, a copy and the summary / detail pair give a line a status
 (self_status), and only a strong one: a Defender detection, !known-malware, a
@@ -36,13 +43,12 @@ from ..correlation_keys import MATCH_HOST, is_host_of_line, is_host_program, is_
 from ..status_types import dominant_status
 from .collector import MAX_INSIDE_ENTRIES, MAX_RELATED_PER_LINE, LineEntries
 from .entries import (
-    FLAGGED_STATUSES, MATCH_DETAIL, MATCH_INSIDE, MATCH_NAME, MATCH_NAMED_BY, MATCH_NAMED_LIKE, MATCH_SAME_HASH,
-    MATCH_SIBLING,
-    MATCH_SUMMARY, finding_status,
+    FLAGGED_STATUSES, MATCH_DETAIL, MATCH_INSIDE, MATCH_LOADED_BY, MATCH_LOADS, MATCH_NAME, MATCH_NAMED_BY,
+    MATCH_NAMED_LIKE, MATCH_SAME_HASH, MATCH_SIBLING, MATCH_SUMMARY, finding_status,
 )
 from .folders import is_broad_folder
 from .related import _EMPTY_SHA256, _RelatedIndex, _both_installed
-from .spor_source import build
+from .spor_source import PFNAME_PREFIX, build
 
 logger = logging.getLogger(__name__)
 
@@ -54,21 +60,36 @@ RATING_MATCHES = frozenset({None, MATCH_SAME_HASH, MATCH_SUMMARY})
 SELF_STATUSES = frozenset({'B', 'P', '!'})
 
 
-def _key_match(key, flagged=frozenset()):
+def _key_match(key, flagged=frozenset(), injected=frozenset()):
     """The match of entries found through `key`: none for a file, 'host' for
-    a host program (see _is_host), the typed match for a typed key ('' for
-    others)."""
+    a host program (see _is_host), 'name' for a program known by name only
+    (informational: two programs named SETUP.EXE in different folders are not
+    one file), the typed match for a typed key ('' for others)."""
     if is_path_key(key):
-        return MATCH_HOST if _is_host(key, flagged) else None
+        return MATCH_HOST if _is_host(key, flagged, injected) else None
+    if key.startswith(PFNAME_PREFIX):
+        return MATCH_NAME
     return _TYPED_MATCHES.get(key.split(':', 1)[0], '')
 
 
-def _is_host(key, flagged):
+def _is_host(key, flagged, injected=frozenset()):
     """A command-line host (cmd.exe, wscript.exe, ... in its Windows folder:
-    its lines' flags are about what it runs) always; another Windows binary
-    only while no line of the log has a strong finding about it (a fake
-    System32\\x.exe is a file like any other)."""
+    its lines' flags are about what it runs) always, unless a line says
+    malware was injected into it (dllhost.exe with !injection-host: that is
+    about the process itself); another Windows binary only while no line of
+    the log has a strong finding about it (a fake System32\\x.exe is a file
+    like any other)."""
+    if key in injected:
+        return False
     return is_host_of_line(key) or (key not in flagged and is_host_program(key))
+
+
+def _injected_keys(index):
+    """The path keys of programs a line of the log flags !injection-host."""
+    return {
+        key for key, entries in index.items()
+        if is_path_key(key) and any(spor_log.INJECTION_HOST_FLAG in (entry.get('flags') or ()) for entry in entries)
+    }
 
 
 def _rates(entry, extra):
@@ -222,11 +243,12 @@ def compute(upload_id, content):
         for partner in partners:
             at(no).add(partner, MATCH_SUMMARY)
     flagged = _flagged_keys(index)
+    injected = _injected_keys(index)
     # The same file / entry elsewhere in the log.
     for no, keys in facts.by_line.items():
         collector = at(no)
         for key in keys:
-            match = _key_match(key, flagged)
+            match = _key_match(key, flagged, injected)
             if match == '':
                 continue
             for entry in index[key]:
@@ -234,10 +256,11 @@ def compute(upload_id, content):
     related = _RelatedIndex(index)
     _add_folders(index, related, at)
     _add_details(facts, at)
+    _add_loads(facts, at)
     _add_named_like(index, facts.by_line, at)
     for no, keys in facts.by_line.items():
         for key in keys:
-            if is_path_key(key) and not _is_host(key, flagged) and not _is_folder_key(index, key, no):
+            if is_path_key(key) and not _is_host(key, flagged, injected) and not _is_folder_key(index, key, no):
                 _add_related(at(no), related, key, flagged)
 
     notable_lines = {
@@ -288,6 +311,31 @@ def _add_details(facts, at):
                 continue
             for mine in naming:
                 at(entry['line_no']).add(mine, MATCH_NAMED_BY)
+
+
+def _add_loads(facts, at):
+    """A PREFETCH line and the files its program loaded: the line gets their
+    other lines ('loads', at most MAX_INSIDE_ENTRIES: a fake Python loads a
+    hundred library files), their lines get the program's line ('loaded_by').
+    Not the "loaded:" sub-lines of the same block: they are under the line."""
+    for no, keys in facts.loads.items():
+        own_subs = facts.loaded_subs.get(no, set())
+        added = 0
+        for key in keys:
+            for entry in facts.index[key]:
+                if added >= MAX_INSIDE_ENTRIES:
+                    break
+                if entry.get('folder') or entry.get('line_no') in own_subs:
+                    continue
+                added += at(no).add(entry, MATCH_LOADS, other_path=entry.get('path') or key)
+    for key, owners in facts.loaded_in.items():
+        for entry in facts.index[key]:
+            if entry.get('folder') or not entry.get('line_no'):
+                continue
+            for mine, subs, program in owners:
+                if entry['line_no'] in subs or entry['line_no'] == mine.get('line_no'):
+                    continue
+                at(entry['line_no']).add(mine, MATCH_LOADED_BY, other_path=mine.get('path') or program)
 
 
 # A persistence name that links to a folder of the same name: long enough not

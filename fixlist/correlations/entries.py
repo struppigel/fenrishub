@@ -236,6 +236,11 @@ MATCH_NAMED_BY = 'named_by'
 # A task, service or Run value named like a folder of a file in the log
 # (spor_self.py): the task \HealthCheck and C:\Windows\System32\HealthCheck\x.exe.
 MATCH_NAMED_LIKE = 'named_like'
+# A program's PREFETCH line and the lines of the files it loaded ("loaded:"
+# sub-lines), both ways (spor_self.py): a dropper and the Node.js it unpacked,
+# an injected charmap.exe and its malware's Python library.
+MATCH_LOADS = 'loads'
+MATCH_LOADED_BY = 'loaded_by'
 # The role of the mention that sums up what is said about a folder line's files.
 ROLE_FILES_INSIDE = 'files inside'
 # The statuses an entry found through a match may give its line (all for a
@@ -247,6 +252,7 @@ ROLE_FILES_INSIDE = 'files inside'
 _MATCH_STATUSES = {
     MATCH_HOST: frozenset(), MATCH_SIBLING: frozenset(), MATCH_NAME: frozenset(), MATCH_TIMING: frozenset(),
     MATCH_DETAIL: frozenset(), MATCH_NAMED_BY: frozenset(), MATCH_NAMED_LIKE: frozenset(),
+    MATCH_LOADS: frozenset(), MATCH_LOADED_BY: frozenset(),
     MATCH_INSIDE: MALWARE_STATUSES,
 }
 INFO_MATCHES = frozenset(match for match, statuses in _MATCH_STATUSES.items() if not statuses)
@@ -316,6 +322,8 @@ MATCH_NOTES = {
     MATCH_DETAIL: 'named in the details',
     MATCH_NAMED_BY: 'names this file in its details',
     MATCH_NAMED_LIKE: 'named like its folder',
+    MATCH_LOADS: 'file this program loaded',
+    MATCH_LOADED_BY: 'program that loaded this file',
 }
 # Matches whose note names the file the entry is about.
 _NOTE_FILE_MATCHES = frozenset({MATCH_ARGUMENT, MATCH_SIBLING, MATCH_NAME, MATCH_SAME_HASH, MATCH_INSIDE})

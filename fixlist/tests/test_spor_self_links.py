@@ -109,8 +109,10 @@ class SameFileTests(TestCase):
         timeline = no_of(s.LINES, '2026-11-18 07:48:46 [PF PCA BAM]')
         loaded = no_of(s.LINES, f'loaded: {s.EVIL}')
         summary = no_of(s.LINES, '2026-09-30 03:55:49 [Persistence]')
-        self.assertEqual(linked(links, files), {timeline: None, loaded: None, summary: None})
-        self.assertEqual(set(linked(links, timeline)), {files, loaded, summary})
+        # Spor 0.12.0 correlations: the PREFETCH line of the program that loaded it, too (informational)
+        loader = no_of(s.LINES, '2026-11-18 07:48:44 C:\\Windows\\System32\\consent.exe')
+        self.assertEqual(linked(links, files), {timeline: None, loaded: None, summary: None, loader: 'loaded_by'})
+        self.assertEqual(set(linked(links, timeline)), {files, loaded, summary, loader})
         # Nothing bad about evil.exe in this log but unsigned: no status.
         self.assertEqual(self_status(links[str(files)]), '')
 

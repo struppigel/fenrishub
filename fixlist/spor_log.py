@@ -8,7 +8,8 @@ The format, from Spor's README ("Log format (for parsers)"):
 - an item line: "[time] [tags] item [=> target] [ [status]] [=> | , details; ...]
   [<==== !flag !flag]", each part left out when empty. The time is the first
   19 characters when they are a time ("2026-11-20 12:00:00"; CLICKFIX lines
-  start with a number instead: "1 [suspicious] ..."); "<==== " splits off the
+  start with a number instead: "1 [suspicious] ...", Spor 0.12.0: a command
+  typed again has an "    also: lines 31, 39" sub-line); "<==== " splits off the
   flags; the first " => " splits the item from the rest. Paths cannot
   contain "<". They can contain " => " and text like "[gone]": such paths get
   the flag !log-syntax-in-name, and their line is only trusted when the path
@@ -42,6 +43,7 @@ SECTION_USB = 'USB DRIVES'
 # scripts, .resx), "others:" (other names) and "group:" sub-lines.
 SECTION_DROPS = 'DROP FOLDERS'
 SECTION_REMOTE = 'REMOTE ACCESS'
+SECTION_PREFETCH = 'PREFETCH'
 # Sections read by their own functions, not as mentions (iter_mentions).
 _NOT_MENTION_SECTIONS = frozenset({
     SECTION_SUMMARY, SECTION_TIMELINE, SECTION_FILES, SECTION_AMCACHE_FILES, SECTION_LEGEND,
@@ -64,6 +66,12 @@ HINT_FLAGS = frozenset({'!renamed-program', '!abused-tld', '!root-program'})
 # Spor 0.4.0+ Autodetect: the item matches a known malware family (Spor's
 # curated pattern database). Stronger than any heuristic flag: malware (B).
 MALWARE_FLAGS = frozenset({'!known-malware'})
+# Spor 0.12.0: calc / charmap / dllhost loaded unsigned code from a user folder
+# or runs with arguments it never takes (malware injected into it). A strong
+# flag (the default tier, '!'): the accessory is Windows' own, the malware is
+# what it loaded. Its lines rate the file, also for dllhost, which is a command
+# line host otherwise (correlations/spor_self._is_host).
+INJECTION_HOST_FLAG = '!injection-host'
 # Spor 0.8.1 context flags: not evidence of malware, but part of the case (a
 # remote access tool used, an account created, Defender's history wiped). They
 # put a finding in the SUMMARY; shown in the info colour, never a status.

@@ -119,14 +119,14 @@
         text-decoration: underline;
     }
 
+    /* The whole description, wrapped (line breaks kept, long URLs broken anywhere): never cut off. */
     .rule-description {
         font-size: 11px;
         color: var(--la-text-muted);
         margin-top: 1px;
         padding-left: 108px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        white-space: pre-line;
+        overflow-wrap: anywhere;
     }
 
     .rule-act {

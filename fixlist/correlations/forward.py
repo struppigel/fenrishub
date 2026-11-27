@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 # Part of every cache signature: bump it when what is computed changes.
-CORRELATION_VERSION = 21
+CORRELATION_VERSION = 22
 
 
 def _fresh_payload(uploaded_log):

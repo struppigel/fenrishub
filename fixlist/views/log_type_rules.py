@@ -18,6 +18,7 @@ from ..models import (
     RESERVED_LOG_TYPE_NAMES,
     LogTypeBadge,
     LogTypeDetectionRule,
+    delete_orphan_log_type_badges,
     known_log_type_names,
     detect_log_type,
 )
@@ -197,6 +198,7 @@ def edit_log_type_rule_view(request, pk: int):
     rule = get_object_or_404(LogTypeDetectionRule, pk=pk)
     if request.method == 'POST':
         form = _form_state_from_post(request)
+        old_log_type = rule.log_type
         errors = _apply_form_to_rule(rule, form)
         if errors:
             for err in errors:
@@ -206,6 +208,8 @@ def edit_log_type_rule_view(request, pk: int):
                 rule.full_clean()
                 rule.save()
                 _upsert_badge(rule.log_type, form['color'])
+                if old_log_type != rule.log_type:
+                    delete_orphan_log_type_badges([old_log_type])
             except ValidationError as exc:
                 flash_validation_errors(request, exc)
             else:
@@ -229,6 +233,7 @@ def delete_log_type_rule_view(request, pk: int):
     rule = get_object_or_404(LogTypeDetectionRule, pk=pk)
     name = rule.name
     rule.delete()
+    delete_orphan_log_type_badges([rule.log_type])
     messages.success(request, f'Rule "{name}" deleted.')
     return redirect('log_type_rules')
 

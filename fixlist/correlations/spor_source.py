@@ -125,13 +125,15 @@ def _spor_entries(upload_ids, index, spor_logs=None, facts=None):
 _USB_FILE_SUB_KEYS = frozenset({'target', 'argument file', 'item list target', 'icon file'})
 
 
-def spor_log_entries(upload_id, lines, index, known=None, usb_files=None):
+def spor_log_entries(upload_id, lines, index, known=None, usb_files=None, loaded_files=None):
     """What one Spor log says, into `index` ({key: [entry]}): Defender
     detections, file facts (FILES, AMCACHE FILES), mentions in the module
     sections (under their path and persistence name), SOFTWARE facts and
     timeline evidence. Pure: the log's lines only (spor_self.py reads a
     log's own lines with it too). `usb_files` (a list) gets (item line no,
-    key) of the files USB DRIVES sub-lines name (_USB_FILE_SUB_KEYS)."""
+    key) of the files USB DRIVES sub-lines name (_USB_FILE_SUB_KEYS);
+    `loaded_files` (a list) gets (program line no, key, sub-line no) of
+    PREFETCH's "loaded:" sub-lines."""
     if known is None:
         known = spor_log.known_paths(lines)
     _add_defender_entries(index, upload_id, LOG_TYPE_SPOR, spor_log.iter_defender_detections(lines))
@@ -151,6 +153,11 @@ def spor_log_entries(upload_id, lines, index, known=None, usb_files=None):
             key = _path_key(mention.path)
             if key and is_path_key(key) and not is_host_program(key):
                 usb_files.append((mention.parent_line, key))
+        if (loaded_files is not None and mention.parent_line and mention.role == 'loaded'
+                and mention.section == spor_log.SECTION_PREFETCH):
+            key = _path_key(mention.path)
+            if key and is_path_key(key) and not is_host_program(key):
+                loaded_files.append((mention.parent_line, key, mention.line_no))
         if mention.identity:
             # A persistence entry under its name too: an FRST Run / service /
             # task line whose program differs or is gone still finds it.
@@ -616,19 +623,89 @@ def _usb_sub_names(usb_files, index, by_line, names, named_in):
             named_in.setdefault(key, []).append(mine)
 
 
+# A program a prefetch entry knows by name only (code injected into a suspended
+# calc.exe: the file list lacks its own image), in PREFETCH ("2026-11-26
+# 01:41:37 CHARMAP.EXE") and TIMELINE ("[PF] CALC.EXE"). Spor 0.12.0 gives most
+# of them their path back; older logs have the bare name.
+_BARE_PROGRAM_RE = re.compile(r'^[^\\/:*?"<>|\s][^\\/:*?"<>|]{0,99}\.(?:exe|com|scr)$', re.IGNORECASE)
+PFNAME_PREFIX = 'pfname:'
+
+
+def pfname_key(name):
+    """`pfname:<name>` of a bare program name, '' for anything else. A key of
+    one log's own lines: no FRST line has it, so it never links two logs."""
+    name = (name or '').strip()
+    return PFNAME_PREFIX + name.lower() if _BARE_PROGRAM_RE.match(name) else ''
+
+
+def _pathless_entries(upload_id, lines, known, index):
+    """PREFETCH and TIMELINE lines of a program known by name only, under
+    pfname_key, so its copies in the two sections (and the files it loaded,
+    _loaded_links) link up."""
+    for no, title, item in spor_log.iter_section_items(lines, known):
+        if title not in (spor_log.SECTION_PREFETCH, spor_log.SECTION_TIMELINE) or not item.time:
+            continue
+        if title == spor_log.SECTION_TIMELINE and 'PF' not in item.tags.split():
+            continue
+        key = pfname_key(item.item)
+        if not key or spor_log.is_path(item.item):
+            continue
+        text, extra = spor_log.as_written(lines, no)
+        entry = _plain_mention(
+            upload_id, LOG_TYPE_SPOR, no, text, 'item', item.item, section=title, time=item.time, tags=item.tags,
+            extra=extra, severity=evidence_severity(item.flags, item.status),
+        )
+        entry['flags'] = item.flags[:10]
+        index.setdefault(key, []).append(entry)
+
+
+def _loaded_links(loaded_files, index, by_line):
+    """{program line no: [key]}: the files a PREFETCH line's "loaded:"
+    sub-lines name, {key: [(program entry, {its sub-line nos}, the program's
+    path)]}: the program lines that loaded a file, and {program line no:
+    {sub-line nos}}. `loaded_files`: (program line no, key, sub-line no),
+    spor_log_entries."""
+    subs = {}
+    for prog_no, _key, sub_no in loaded_files:
+        subs.setdefault(prog_no, set()).add(sub_no)
+    loads, loaded_in = {}, {}
+    for prog_no, key, _sub_no in loaded_files:
+        if prog_no not in by_line or key in by_line[prog_no] or key not in index:
+            continue
+        mine = _own_entry(index, by_line, prog_no)
+        if mine is None:
+            continue
+        listed = loads.setdefault(prog_no, [])
+        if key in listed:
+            continue
+        listed.append(key)
+        # the program's full path key (a bare name: the name) for the info box's "other file"
+        program = next((k for k in by_line[prog_no] if is_path_key(k)), '')
+        if not program:
+            program = next((k[len(PFNAME_PREFIX):] for k in by_line[prog_no] if k.startswith(PFNAME_PREFIX)), '')
+        loaded_in.setdefault(key, []).append((mine, subs[prog_no], program))
+    return loads, loaded_in, subs
+
+
 @dataclass
 class SporFacts:
     """What one Spor log says, read once: `index` {key: [entry]} (every line
     about a file or entry under its keys), `by_line` {line no: [keys]},
     `partners` {line no: [entry]} (a SUMMARY line and the line it sums up,
     each the other's), `names` {line no: [keys]} (files a line names in its
-    details) and `named_in` {key: [entry]} (the lines naming a file)."""
+    details), `named_in` {key: [entry]} (the lines naming a file), `loads`
+    {line no: [keys]} (the files a PREFETCH line's program loaded), `loaded_in`
+    {key: [(entry, sub-line nos)]} (the program lines that loaded a file) and
+    `loaded_subs` {line no: {sub-line nos}} (a PREFETCH line's "loaded:" lines)."""
     upload_id: str
     index: dict
     by_line: dict
     partners: dict = field(default_factory=dict)
     names: dict = field(default_factory=dict)
     named_in: dict = field(default_factory=dict)
+    loads: dict = field(default_factory=dict)
+    loaded_in: dict = field(default_factory=dict)
+    loaded_subs: dict = field(default_factory=dict)
 
 
 def build(upload_id, lines, known=None):
@@ -638,10 +715,11 @@ def build(upload_id, lines, known=None):
     if known is None:
         known = spor_log.known_paths(lines)
     index = {}
-    usb_files = []
-    spor_log_entries(upload_id, lines, index, known, usb_files)
+    usb_files, loaded_files = [], []
+    spor_log_entries(upload_id, lines, index, known, usb_files, loaded_files)
     _defender_event_entries(upload_id, lines, known, index)
     _timeline_entries(upload_id, lines, known, index)
+    _pathless_entries(upload_id, lines, known, index)
     _group_entries(upload_id, lines, known, index)
     pairs = _summary_pairs(upload_id, lines, known, index)
     _install_entries(upload_id, lines, known, index)
@@ -649,8 +727,9 @@ def build(upload_id, lines, known=None):
     by_line = _line_keys(index)
     names, named_in = _detail_names(lines, known, index, by_line)
     _usb_sub_names(usb_files, index, by_line, names, named_in)
+    loads, loaded_in, loaded_subs = _loaded_links(loaded_files, index, by_line)
     partners = {}
     for summary, detail in pairs:
         partners.setdefault(summary['line_no'], []).append(detail)
         partners.setdefault(detail['line_no'], []).append(summary)
-    return SporFacts(upload_id, index, by_line, partners, names, named_in)
+    return SporFacts(upload_id, index, by_line, partners, names, named_in, loads, loaded_in, loaded_subs)

@@ -458,6 +458,15 @@ assert('Escape closes the box', !CorrelationInfo.isOpen());
     CorrelationInfo.close();
     assert('a task named like a folder is an informational link',
         CorrelationFormat.INFO_MATCHES.has('named_like') && CorrelationFormat.MATCH_NOTES.named_like === 'named like its folder');
+    assert('a program and the files its prefetch entry loaded are informational links (Spor 0.12.0)',
+        ['loads', 'loaded_by'].every((m) => CorrelationFormat.INFO_MATCHES.has(m))
+        && CorrelationFormat.MATCH_NOTES.loads === 'file this program loaded'
+        && CorrelationFormat.MATCH_NOTES.loaded_by === 'program that loaded this file');
+    CorrelationInfo.open({ lineText: 'x', getEntries: () => [installed(31, '2026-11-01 02:11:27', { flags: ['!injection-host'] })],
+        isOwn: isSpor, onJump: () => {} });
+    assert('an injected Windows accessory (Spor 0.12.0) is a warning',
+        document.querySelector('.cinfo-flag').classList.contains('cinfo-sev-w'));
+    CorrelationInfo.close();
 
     const summary = document.getElementById('summary');
     summary.textContent = `${passed} passed, ${failed} failed`;

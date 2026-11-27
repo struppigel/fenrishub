@@ -157,6 +157,70 @@ class LogTypeRulesCrudTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(LogTypeDetectionRule.objects.filter(pk=builtin.pk).exists())
 
+    def _custom_rule(self, log_type='Scratch', name='Scratch rule'):
+        resp = self.client.post(reverse('add_log_type_rule'), {
+            'name': name,
+            'log_type': log_type,
+            'color': '#b29595',
+            'pattern': r'^Scratch marker',
+            'scope': 'start',
+            'priority': '50',
+            'is_enabled': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        return LogTypeDetectionRule.objects.get(name=name)
+
+    def test_delete_rule_removes_its_unused_badge(self):
+        from fixlist.models import LogTypeBadge, known_log_type_names
+        rule = self._custom_rule()
+        self.assertIn('Scratch', known_log_type_names())
+        self.client.post(reverse('delete_log_type_rule', args=[rule.pk]))
+        self.assertFalse(LogTypeBadge.objects.filter(name='Scratch').exists())
+        self.assertNotIn('Scratch', known_log_type_names())
+
+    def test_delete_rule_keeps_badge_another_rule_uses(self):
+        from fixlist.models import LogTypeBadge
+        rule = self._custom_rule()
+        self._custom_rule(name='Second scratch rule')
+        self.client.post(reverse('delete_log_type_rule', args=[rule.pk]))
+        self.assertTrue(LogTypeBadge.objects.filter(name='Scratch').exists())
+
+    def test_delete_rule_keeps_badge_of_existing_uploads(self):
+        from fixlist.models import LogTypeBadge, UploadedLog
+        rule = self._custom_rule()
+        log = UploadedLog.objects.create(forum_username='u', original_filename='scratch.txt', content='x')
+        UploadedLog.objects.filter(pk=log.pk).update(log_type='Scratch')
+        self.client.post(reverse('delete_log_type_rule', args=[rule.pk]))
+        self.assertTrue(LogTypeBadge.objects.filter(name='Scratch').exists())
+
+    def test_delete_rule_keeps_builtin_badge(self):
+        from fixlist.models import LogTypeBadge
+        builtin = LogTypeBadge.objects.filter(is_builtin=True).first()
+        self.assertIsNotNone(builtin, 'seed migration should have created built-in badges')
+        rule = LogTypeDetectionRule.objects.create(
+            name='Builtin type rule', log_type=builtin.name, pattern='^z', scope='start', priority=10,
+        )
+        LogTypeDetectionRule.objects.filter(log_type=builtin.name).exclude(pk=rule.pk).delete()
+        self.client.post(reverse('delete_log_type_rule', args=[rule.pk]))
+        self.assertTrue(LogTypeBadge.objects.filter(pk=builtin.pk).exists())
+
+    def test_changing_rule_log_type_removes_old_unused_badge(self):
+        from fixlist.models import LogTypeBadge
+        rule = self._custom_rule()
+        resp = self.client.post(reverse('edit_log_type_rule', args=[rule.pk]), {
+            'pk': str(rule.pk),
+            'name': rule.name,
+            'log_type': 'Renamed scratch',
+            'color': '#b29595',
+            'pattern': rule.pattern,
+            'scope': 'start',
+            'priority': '50',
+            'is_enabled': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(LogTypeBadge.objects.filter(name='Scratch').exists())
+        self.assertTrue(LogTypeBadge.objects.filter(name='Renamed scratch').exists())
+
     def test_toggle_rule(self):
         rule = LogTypeDetectionRule.objects.create(
             name='ToggleMe', log_type='ESET', pattern='^y', scope='start', priority=10,
