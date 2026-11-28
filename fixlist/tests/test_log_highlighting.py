@@ -867,6 +867,30 @@ class PerToolHighlightTests(SimpleTestCase):
         self.assertNotIn('found substring', render_highlighted_html(result))
         self.assertEqual(line_reasons(highlight_log('FRST', FRST)), {})
 
+    def test_line_tags_are_kept_for_the_line_tooltips(self):
+        result = highlight_log('FRST', FRST)
+        payload = _frst_payload(FRST)
+        payload['rule_tags'] = [
+            {'id': 1, 'name': 'miner', 'description': 'coin miner'},
+            {'id': 2, 'name': 'boot', 'description': ''},
+        ]
+        reason = 'B: found substring "evil.exe" (by analyst)'
+        for entry in payload['lines']:
+            entry['tag_ids'] = []
+            if 'evil.exe' in entry['line']:
+                entry['reasons'] = [reason]
+                entry['tag_ids'] = [1, 99]   # 99: not in rule_tags, left out
+            elif 'Boot Mode' in entry['line']:
+                entry['tag_ids'] = [2]
+        self.assertTrue(apply_analysis_statuses(result, FRST, payload))
+        self.assertEqual(_line(result, FRST, 'evil.exe').tags, ('tag: miner - coin miner',))
+        # A '?' line gets no status, but keeps its tags.
+        self.assertEqual(_line(result, FRST, 'Boot Mode').tags, ('tag: boot',))
+        found = line_reasons(result)
+        self.assertEqual(found['texts'], ['tag: boot', reason, 'tag: miner - coin miner'])
+        self.assertEqual(found['lines'], {str(_no(FRST, 'evil.exe')): [1]})
+        self.assertEqual(found['tags'], {str(_no(FRST, 'Boot Mode')): [0], str(_no(FRST, 'evil.exe')): [2]})
+
     def test_frst_search_files_folders_and_registry(self):
         result = highlight_log('FRST Search', FRST_SEARCH)
         self.assertEqual(_headers(result), [
@@ -1361,6 +1385,35 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
                          response.content.decode(), re.S)
         self.assertEqual(json.loads(blob.group(1)), response.context['line_reasons'])
         self.assertContains(response, 'setReasonTitle(line);')
+
+    def test_page_gives_the_line_tags_for_the_line_tooltips(self):
+        from ..models import RuleTag, UploadedLogAnalysis
+        from ..rule_sets import SHARED_RULE_SET_KEY
+        from .factories import make_rule
+        upload = UploadedLog.objects.create(
+            upload_id='tagged-forest', forum_username='forum_user', original_filename='FRST.txt',
+            content=FRST, log_type='FRST',
+        )
+        rule = make_rule('evil.exe')
+        miner = RuleTag.objects.create(name='miner', description='coin miner')
+        rule.tags.add(miner)
+        # Matches log lines by itself, without any rule deciding them.
+        RuleTag.objects.create(name='postgres', match_pattern='postgres', match_log_lines=True)
+        payload = _frst_payload(FRST)
+        for entry in payload['lines']:
+            if 'evil.exe' in entry['line']:
+                entry['rule_ids'] = [rule.pk]
+        UploadedLogAnalysis.objects.update_or_create(
+            upload=upload, rule_set_key=SHARED_RULE_SET_KEY,
+            defaults={'payload': payload, 'source_content_hash': upload.content_hash},
+        )
+        found = self._get(upload).context['line_reasons']
+        tooltip = {no: [found['texts'][index] for index in indexes] for no, indexes in found['tags'].items()}
+        self.assertEqual(tooltip[str(_no(FRST, 'evil.exe'))], ['tag: miner - coin miner'])
+        self.assertEqual(tooltip[str(_no(FRST, 'postgres.exe'))], ['tag: postgres'])
+        # The line tag matches were stored with the analysis for the next view.
+        stored = UploadedLogAnalysis.objects.get(upload=upload, rule_set_key=SHARED_RULE_SET_KEY).line_tags
+        self.assertTrue(stored and stored.get('lines'))
 
     def test_frst_upload_uses_cached_rule_statuses(self):
         from ..models import UploadedLogAnalysis

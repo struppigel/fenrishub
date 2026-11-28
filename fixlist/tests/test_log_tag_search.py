@@ -416,6 +416,41 @@ class UploadsListRowTagsTests(TagSearchSetupMixin, TestCase):
         self.assertEqual([tag['name'] for tag in response.context['uploads'][0].rule_tags], ['miner'])
 
 
+class UploadedLogPageTagsTests(TagSearchSetupMixin, TestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.client.login(username='alice', password='pw')
+
+    def test_log_page_shows_its_tags(self):
+        log = self._log('tagged-page')
+        self._cache(log, _payload(lines=[_line('x', [self.miner_rule.pk])]))
+
+        response = self.client.get(reverse('view_uploaded_log', args=[log.upload_id]))
+
+        self.assertEqual([tag['name'] for tag in response.context['rule_tags']], ['miner'])
+        # A row of the summary pane, which opens first.
+        self.assertTrue(response.context['has_summary'])
+        page = response.content.decode()
+        start = page.rindex('<div', 0, page.index('id="highlightSummary"'))
+        summary = page[start:page.rindex('<div', 0, page.index('id="relatedLogs"'))]
+        self.assertInHTML(
+            f'<div class="hl-summary-tags"><span class="hl-stat-label">tags found:</span>'
+            f' <span class="tag-text tag-cat-{self.miner.category_id}" title="">miner</span></div>',
+            summary,
+        )
+        self.assertNotContains(response, 'class="fixlist-meta upload-tags"')
+
+    def test_untagged_log_page_shows_no_tags_row(self):
+        log = self._log('untagged-page')
+        self._cache(log, _payload(lines=[_line('x')]))
+
+        response = self.client.get(reverse('view_uploaded_log', args=[log.upload_id]))
+
+        self.assertEqual(response.context['rule_tags'], [])
+        self.assertNotContains(response, 'class="hl-summary-tags"')
+
+
 class CaseViewLogTagsTests(TagSearchSetupMixin, TestCase):
 
     def setUp(self):

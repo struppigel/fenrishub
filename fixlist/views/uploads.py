@@ -37,7 +37,9 @@ from ..permissions import user_can_delete_uploaded_log, user_can_rename_uploaded
 from ..rule_sets import (
     counts_visible_to, is_rule_restricted, resolve_effective_rule_set_key, resolve_user_rule_set_key, rule_set_label,
 )
-from ..tagging import found_tags_by_upload, logs_with_tags, tags_for_listing
+from ..tagging import (
+    attach_rule_tags, cached_line_hits, found_tags_by_upload, logs_with_tags, tags_for_listing,
+)
 from ..username_merge import rename_logs
 from ..upload_utils import (
     execute_merge, schedule_analysis_stats_recalc, get_fresh_cached_analysis, schedule_cached_analysis_refresh,
@@ -425,6 +427,13 @@ def _apply_rule_statuses(uploaded_log, highlight, viewer=None):
     rule_set_key = resolve_user_rule_set_key(viewer) if restricted else resolve_effective_rule_set_key(uploaded_log)
     label = rule_set_label(rule_set_key)
     payload = get_fresh_cached_analysis(uploaded_log, rule_set_key)
+    if payload is not None:
+        # Each line's tags, for its tooltip. No line-matching tags for a viewer
+        # training with their own rules, as in the analyzer.
+        try:
+            attach_rule_tags(payload, {} if restricted else cached_line_hits(uploaded_log, rule_set_key, payload))
+        except Exception:
+            logger.exception('Attaching the line tags failed for %s', uploaded_log.upload_id)
     summary_before = len(highlight.summary)
     applied = payload is not None and apply_analysis_statuses(highlight, uploaded_log.content, payload)
     if not applied:
@@ -568,6 +577,14 @@ def view_uploaded_log(request, upload_id):
         logger.exception('Counting the related logs failed for %s', upload_id)
         related_count = 0
 
+    # The tags found in the log, as its uploads list row shows them (viewer's rule set).
+    try:
+        found = found_tags_by_upload([uploaded_log.pk], resolve_user_rule_set_key(request.user))
+        rule_tags = tags_for_listing(found.get(uploaded_log.pk, []))
+    except Exception:
+        logger.exception('Finding the tags failed for %s', upload_id)
+        rule_tags = []
+
     return render(request, 'view_uploaded_log.html', {
         'uploaded_log': uploaded_log,
         'converted_response': converted_response,
@@ -578,6 +595,9 @@ def view_uploaded_log(request, upload_id):
         # The rule reasons of the lines' verdicts: their hover tooltips.
         'line_reasons': line_reasons(highlight) if highlight is not None else {},
         'related_count': related_count,
+        'rule_tags': rule_tags,
+        # The summary tab: the highlighter's summary or stats, or the tags found.
+        'has_summary': bool(highlight is not None and highlight.has_summary) or bool(rule_tags),
         'has_info_tabs': True,
         'facts_found': facts_found,
     })

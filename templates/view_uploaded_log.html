@@ -176,7 +176,8 @@
         transform: rotate(180deg);
     }
 </style>
-{% if highlight %}<link rel="stylesheet" href="{% static 'css/log_highlight.css' %}">
+{% if highlight or has_summary %}<link rel="stylesheet" href="{% static 'css/log_highlight.css' %}">{% endif %}
+{% if highlight %}
 <link rel="stylesheet" href="{% static 'css/line_copy_menu.css' %}">
 <link rel="stylesheet" href="{% static 'css/correlation_info.css' %}">{% endif %}
 {% endblock %}
@@ -220,7 +221,6 @@
 <div class="divider"></div>
 
 <h3>upload {{ uploaded_log.upload_id }}</h3>
-{% with has_summary=highlight.has_summary %}
 <div class="log-info-panel{% if has_info_tabs %} has-tabs{% endif %}" id="logInfoPanel">
 {% if has_info_tabs %}
 <div class="panel-tabs log-info-tabs" role="tablist" aria-label="log information">
@@ -235,6 +235,12 @@
         {% if highlight.summary_title %}<span class="hl-summary-title">{{ highlight.summary_title }}</span>{% endif %}
         {% for stat in highlight.stats %}<span class="hl-stat"><span class="hl-stat-label">{{ stat.label }}:</span> <span class="hl-sev-{{ stat.severity }}">{{ stat.value }}</span></span>{% endfor %}
     </div>
+    {% if rule_tags %}
+    <div class="hl-summary-tags">
+        <span class="hl-stat-label">tags found:</span>
+        {% for tag in rule_tags %}<span class="tag-text{{ tag|tag_category_class }}" title="{{ tag.description }}">{{ tag.name }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}
+    </div>
+    {% endif %}
     {% if facts_found %}
     <div class="hl-summary-facts">
         <span class="hl-stat-label">facts found:</span>
@@ -319,7 +325,6 @@
     {% endif %}
 </div>
 </div>
-{% endwith %}
 
 <div class="form-group">
     <div class="log-view-toolbar">
@@ -1795,10 +1800,18 @@ function openTokenMenu(token) {
     function setReasonTitle(line) {
         if (line.dataset.reasons) return;
         line.dataset.reasons = '1';
-        const positions = lineReasons.lines[line.dataset.n || ''];
-        if (!Array.isArray(positions) || line.title) return;
-        const reasons = positions.map(index => lineReasons.texts[index]).filter(text => typeof text === 'string' && text);
-        if (reasons.length) line.title = reasons.join('\n');
+        if (line.title) return;
+        const no = line.dataset.n || '';
+        const rows = map => {
+            const positions = map && map[no];
+            if (!Array.isArray(positions)) return [];
+            return positions.map(index => lineReasons.texts[index]).filter(text => typeof text === 'string' && text);
+        };
+        // The line's tags first, then its reasons, as in the analyzer's tooltip.
+        const parts = [rows(lineReasons.tags), rows(lineReasons.lines)]
+            .filter(part => part.length)
+            .map(part => part.join('\n'));
+        if (parts.length) line.title = parts.join('\n\n');
     }
 
     function menuOpenHere() {

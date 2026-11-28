@@ -56,6 +56,8 @@ class Line:
     paint: str = ''
     # With a rule status: the analyzer's reasons for it (its line tooltip).
     reasons: tuple = ()
+    # The tags the analysis found on the line, as tooltip rows ('tag: name - notes').
+    tags: tuple = ()
 
     @property
     def text(self):
@@ -1756,7 +1758,8 @@ def apply_analysis_statuses(result, content, payload):
     numbers. Walk the content the same way (log_layout.analyzed_lines) and
     check every entry's text, so a stale or mismatched cache is never painted
     onto the wrong lines. Adds B / P / ! lines to the summary, and keeps the
-    reasons of each line given a status (line_reasons).
+    reasons of each line given a status and, when the payload carries them
+    (tagging.attach_rule_tags), every line's tags (line_reasons).
     Returns False (and changes nothing) when the payload doesn't line up.
     """
     entries = payload.get('lines') if isinstance(payload, dict) else None
@@ -1772,10 +1775,14 @@ def apply_analysis_statuses(result, content, payload):
             return False
         matched.append((item.line_no, item.text, entry))
     by_no = {line.no: line for line in iter_lines(result)}
+    tag_rows = _tag_tooltip_rows(payload)
     items = []
     for no, text, entry in matched:
         status = entry.get('dominant_status') or '?'
         line = by_no.get(no)
+        if line is not None and tag_rows and isinstance(entry.get('tag_ids'), list):
+            # Any line, whatever decided its colour: a line tag needs no status.
+            line.tags = tuple(tag_rows[tag_id] for tag_id in entry['tag_ids'] if tag_id in tag_rows)
         if line is None or status == '?' or line.status:
             continue
         paint = (entry.get('css_class') or '').replace('status-', '')
@@ -1792,6 +1799,17 @@ def apply_analysis_statuses(result, content, payload):
     result.summary = items + result.summary
     result.summary.sort(key=lambda item: item.line_no)
     return True
+
+
+def _tag_tooltip_rows(payload):
+    """``{tag id: 'tag: name - notes'}`` for the tags attach_rule_tags put in `payload`,
+    the rows the analyzer's line tooltips start with."""
+    rows = {}
+    for tag in payload.get('rule_tags') or ():
+        if isinstance(tag, dict) and tag.get('name'):
+            description = tag.get('description') or ''
+            rows[tag.get('id')] = f"tag: {tag['name']} - {description}" if description else f"tag: {tag['name']}"
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -2024,19 +2042,30 @@ def line_reasons(result):
     """The rule reasons of the lines apply_analysis_statuses gave a status,
     for the log page's line tooltips: {texts: [reason], lines: {line no:
     [index into texts]}}, each reason once (many lines share one). {} when
-    no line has any."""
-    texts, index, lines = [], {}, {}
-    for line in iter_lines(result):
-        if not line.reasons:
-            continue
+    no line has any. Lines with tags also get `tags` ({line no: [index into
+    texts]}), shown above the reasons; the key is left out when no line has one."""
+    texts, index, lines, tags = [], {}, {}, {}
+
+    def positions_of(rows):
         positions = []
-        for reason in line.reasons:
-            if reason not in index:
-                index[reason] = len(texts)
-                texts.append(reason)
-            positions.append(index[reason])
-        lines[str(line.no)] = positions
-    return {'texts': texts, 'lines': lines} if lines else {}
+        for row in rows:
+            if row not in index:
+                index[row] = len(texts)
+                texts.append(row)
+            positions.append(index[row])
+        return positions
+
+    for line in iter_lines(result):
+        if line.reasons:
+            lines[str(line.no)] = positions_of(line.reasons)
+        if line.tags:
+            tags[str(line.no)] = positions_of(line.tags)
+    if not lines and not tags:
+        return {}
+    found = {'texts': texts, 'lines': lines}
+    if tags:
+        found['tags'] = tags
+    return found
 
 
 def iter_lines(result):

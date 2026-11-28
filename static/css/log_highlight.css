@@ -354,7 +354,9 @@
     margin-bottom: 6px;
 }
 
-/* The facts the rules found in the log, each with links to its first lines. */
+/* The tags found in the log, and the facts the rules found in it (each with
+   links to its first lines). */
+.hl-summary-tags,
 .hl-summary-facts {
     font-size: 12px;
     margin-bottom: 6px;

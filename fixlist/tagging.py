@@ -1073,6 +1073,26 @@ def fresh_line_tags(stored, payload, current, force=()):
     return hits, _stored_line_tags(current, hits)
 
 
+def cached_line_hits(uploaded_log, rule_set_key, payload):
+    """``{tag_id: [line index]}`` for the cached analysis of (upload, rule set) whose payload is `payload`.
+
+    For attach_rule_tags on a page that serves the cached analysis: the stored
+    matches are reused, only changed or new line tags are matched again (and
+    the result stored back), so the whole log is not matched on every view.
+    """
+    row = (
+        UploadedLogAnalysis.objects.filter(upload=uploaded_log, rule_set_key=rule_set_key)
+        .values_list('pk', 'line_tags').first()
+    )
+    if row is None:
+        return LineTagMatcher(current_line_tags()).hits(payload)
+    pk, stored = row
+    hits, updated = fresh_line_tags(stored, payload, current_line_tags())
+    if updated is not None:
+        _write_line_tags({pk: updated})
+    return hits
+
+
 def _write_line_tags(updates):
     """Store recomputed `line_tags`: ``{analysis pk: value}``."""
     for pk, value in updates.items():
