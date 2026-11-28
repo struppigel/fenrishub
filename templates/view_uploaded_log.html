@@ -342,6 +342,7 @@
 {% if converted_response %}{{ converted_response|json_script:"convertedResponse" }}{% endif %}
 {% if centralbox %}{{ centralbox|json_script:"centralboxData" }}{% endif %}
 {% if correlations %}{{ correlations|json_script:"correlationData" }}{% endif %}
+{% if line_reasons %}{{ line_reasons|json_script:"lineReasonsData" }}{% endif %}
 
 {# Lookups of correlated hashes, shared with the analyzer. #}
 <script src="{% static 'js/centralbox_lookup.js' %}"></script>
@@ -1079,6 +1080,9 @@ const CaseCorrelations = (function () {
         // Lines whose linked FILES hashes can still be looked up on centralbox
         // (the lookup icon before their entries are fetched).
         lookup: new Set(Array.isArray(data.self_lookup) ? data.self_lookup.map(String) : []),
+        // Lines with code '' linked to their own file's FILES hash: marked
+        // anyway (neutral), so the hash shows without hovering.
+        hashLines: new Set(Array.isArray(data.self_hash_lines) ? data.self_hash_lines.map(String) : []),
         entries: {},    // line no -> its entries, once fetched
         pending: {},    // line no -> the fetch in flight
         failed: {},     // line no -> the last fetch failed (the next open tries again)
@@ -1284,9 +1288,12 @@ const CaseCorrelations = (function () {
             line.classList.remove('hl-cor-line');
         });
         markers = [];
-        // Self-link lines with code '' have no marker: only the hover icon.
+        // Self-link lines with code '' have no marker (only the hover icon),
+        // unless their own file's FILES hash is linked (hashLines).
         const numbers = new Set(Object.keys(data.lines));
-        Object.keys(selfLinks.codes).forEach(no => { if (selfLinks.codes[no]) numbers.add(no); });
+        Object.keys(selfLinks.codes).forEach(no => {
+            if (selfLinks.codes[no] || selfLinks.hashLines.has(no)) numbers.add(no);
+        });
         numbers.forEach(no => {
             if (!/^\d+$/.test(no)) return;
             const line = document.getElementById('L' + no);
@@ -1771,6 +1778,29 @@ function openTokenMenu(token) {
 
     let currentLine = null;
 
+    // The reasons of a line's rule verdict as its tooltip, as in the log
+    // analyzer (views/uploads.py line_reasons: each reason text once, lines
+    // point at them). Set when the line is first hovered.
+    const lineReasons = (function () {
+        const node = document.getElementById('lineReasonsData');
+        try {
+            const parsed = node ? JSON.parse(node.textContent) : null;
+            if (parsed && Array.isArray(parsed.texts) && parsed.lines && typeof parsed.lines === 'object') return parsed;
+        } catch (error) {
+            // No tooltips rather than a broken page.
+        }
+        return { texts: [], lines: {} };
+    })();
+
+    function setReasonTitle(line) {
+        if (line.dataset.reasons) return;
+        line.dataset.reasons = '1';
+        const positions = lineReasons.lines[line.dataset.n || ''];
+        if (!Array.isArray(positions) || line.title) return;
+        const reasons = positions.map(index => lineReasons.texts[index]).filter(text => typeof text === 'string' && text);
+        if (reasons.length) line.title = reasons.join('\n');
+    }
+
     function menuOpenHere() {
         return TokenMenu.isOpenFor(copyButton) || TokenMenu.isOpenFor(searchButton) || TokenMenu.isOpenFor(infoButton);
     }
@@ -1786,6 +1816,7 @@ function openTokenMenu(token) {
         if (currentLine && currentLine !== line) currentLine.classList.remove('hl-hovered');
         currentLine = line;
         line.classList.add('hl-hovered');
+        setReasonTitle(line);
         infoButton.hidden = !CaseCorrelations.has(line);
         // Same icon as the line's marker underneath (lookup arrow or circled i).
         if (typeof CentralboxLookup === 'object') CentralboxLookup.setIcon(infoButton, CaseCorrelations.canLookup(line));

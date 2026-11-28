@@ -24,7 +24,7 @@ from ..log_types import LOG_TYPE_SPOR, is_analyzed_log_type
 from ..forms import UploadedLogForm
 from ..log_converters import convert_log_to_response
 from ..log_highlighting import (
-    HighlightResult, Stat, apply_analysis_statuses, highlight_log, render_highlighted_html,
+    HighlightResult, Stat, apply_analysis_statuses, highlight_log, line_reasons, render_highlighted_html,
 )
 from ..case_correlations import (
     SYSTEM_DIFFERENT, SYSTEM_SIGNAL_CHARS, SYSTEM_UNKNOWN, correlations_for_upload, related_upload_ids,
@@ -575,6 +575,8 @@ def view_uploaded_log(request, upload_id):
         'highlighted_html': render_highlighted_html(highlight),
         'centralbox': centralbox_context,
         'correlations': correlation_context,
+        # The rule reasons of the lines' verdicts: their hover tooltips.
+        'line_reasons': line_reasons(highlight) if highlight is not None else {},
         'related_count': related_count,
         'has_info_tabs': True,
         'facts_found': facts_found,

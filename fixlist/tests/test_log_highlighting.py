@@ -7,7 +7,7 @@ from django.urls import reverse
 
 from ..log_highlighting import (
     HIGHLIGHTERS, HighlightResult, Stat, SummaryItem, _inline, apply_analysis_statuses, compute_tool_stats, highlight_log, iter_lines,
-    render_highlighted_html, threat_severity,
+    line_reasons, render_highlighted_html, threat_severity,
 )
 from ..templatetags.rule_tags import stat_class
 from ..models import LogTypeDetectionRule, UploadedLog, count_fixlog_results
@@ -842,6 +842,31 @@ class PerToolHighlightTests(SimpleTestCase):
         self.assertEqual(result.summary, [])
         self.assertFalse(any(line.status for line in iter_lines(result)))
 
+    def test_rule_reasons_are_kept_for_the_line_tooltips(self):
+        result = highlight_log('FRST', FRST)
+        payload = _frst_payload(FRST)
+        reason = 'B: found substring "evil.exe" (by analyst)'
+        for entry in payload['lines']:
+            if 'evil.exe' in entry['line'] or 'Creative Cloud.exe' in entry['line']:
+                entry['reasons'] = [reason]
+            elif 'postgres.exe' in entry['line']:
+                entry['reasons'] = [reason, 'P: postgres in a user folder', '', None]
+            elif 'Boot Mode' in entry['line']:
+                entry['reasons'] = ['?: never shown']
+        # A line whose status the highlighter set keeps it, without the rule's reasons.
+        _line(result, FRST, 'Creative Cloud.exe').status = 'I'
+        self.assertTrue(apply_analysis_statuses(result, FRST, payload))
+        self.assertEqual(_line(result, FRST, 'evil.exe').reasons, (reason,))
+        self.assertEqual(_line(result, FRST, 'Creative Cloud.exe').reasons, ())
+        self.assertEqual(_line(result, FRST, 'Boot Mode').reasons, ())   # '?' lines get no status, so no reasons
+        found = line_reasons(result)
+        # Each reason once; lines point at them by index.
+        self.assertEqual(found['texts'], [reason, 'P: postgres in a user folder'])
+        self.assertEqual(found['lines'], {str(_no(FRST, 'postgres.exe')): [0, 1], str(_no(FRST, 'evil.exe')): [0]})
+        # No reasons in the line markup: the page sets the tooltip on hover.
+        self.assertNotIn('found substring', render_highlighted_html(result))
+        self.assertEqual(line_reasons(highlight_log('FRST', FRST)), {})
+
     def test_frst_search_files_folders_and_registry(self):
         result = highlight_log('FRST Search', FRST_SEARCH)
         self.assertEqual(_headers(result), [
@@ -1311,6 +1336,31 @@ class HighlightedDetailViewTests(UploadedLogSharedSetupMixin, TestCase):
         self.assertContains(response, 'class="hl-line"')
         self.assertContains(response, 'hl-bbtag')
         self.assertNotContains(response, 'id="highlightSummary"')
+
+    def test_page_gives_the_rule_reasons_for_the_line_tooltips(self):
+        import json
+        from ..models import UploadedLogAnalysis
+        from ..rule_sets import SHARED_RULE_SET_KEY
+        upload = UploadedLog.objects.create(
+            upload_id='reasoned-forest', forum_username='forum_user', original_filename='FRST.txt',
+            content=FRST, log_type='FRST',
+        )
+        payload = _frst_payload(FRST)
+        reason = 'B: found substring "evil.exe" (by analyst)'
+        for entry in payload['lines']:
+            if 'evil.exe' in entry['line']:
+                entry['reasons'] = [reason]
+        UploadedLogAnalysis.objects.update_or_create(
+            upload=upload, rule_set_key=SHARED_RULE_SET_KEY,
+            defaults={'payload': payload, 'source_content_hash': upload.content_hash},
+        )
+        response = self._get(upload)
+        self.assertEqual(response.context['line_reasons'],
+                         {'texts': [reason], 'lines': {str(_no(FRST, 'evil.exe')): [0]}})
+        blob = re.search(r'<script id="lineReasonsData" type="application/json">(.*?)</script>',
+                         response.content.decode(), re.S)
+        self.assertEqual(json.loads(blob.group(1)), response.context['line_reasons'])
+        self.assertContains(response, 'setReasonTitle(line);')
 
     def test_frst_upload_uses_cached_rule_statuses(self):
         from ..models import UploadedLogAnalysis

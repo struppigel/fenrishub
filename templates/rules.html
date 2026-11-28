@@ -313,6 +313,7 @@
         <a href="?filter=all{% if filter_status %}&status={{ filter_status }}{% endif %}{% if filter_match %}&match={{ filter_match }}{% endif %}{% if search_q %}&q={{ search_q|urlencode }}{% endif %}{% if search_mode != 'text' %}&search_mode={{ search_mode }}{% endif %}{% if sort != 'recent' %}&sort={{ sort }}{% endif %}{{ extra_filter_query }}" {% if filter_mode == 'all' %}class="active"{% endif %}>all</a>
         {% endif %}
         <span class="spacer"></span>
+        {% if not is_guest %}<a href="{% url 'fact_add' %}">add fact</a>{% endif %}
         <a href="{% url 'add_rule' %}">add rule</a>
     </div>
 

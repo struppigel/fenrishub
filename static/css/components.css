@@ -286,7 +286,19 @@ button.action-btn.delete-btn {
 }
 
 .rule-details .rule-details-owner {
+    color: var(--la-parsed-company);
+}
+
+/* Links in rule descriptions, blue like URLs in Spor logs (.hl-url). */
+.rule-details .rule-details-text a,
+.rule-description a {
     color: var(--la-info);
+    text-decoration: none;
+}
+
+.rule-details .rule-details-text a:hover,
+.rule-description a:hover {
+    text-decoration: underline;
 }
 
 .rule-details .rule-details-dates {

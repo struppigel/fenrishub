@@ -54,6 +54,8 @@ class Line:
     # the colour class it paints the line with ('b', 'p', 'w', ...).
     status: str = ''
     paint: str = ''
+    # With a rule status: the analyzer's reasons for it (its line tooltip).
+    reasons: tuple = ()
 
     @property
     def text(self):
@@ -1753,7 +1755,8 @@ def apply_analysis_statuses(result, content, payload):
     The analyzer stores one entry per non-blank line, in order, without line
     numbers. Walk the content the same way (log_layout.analyzed_lines) and
     check every entry's text, so a stale or mismatched cache is never painted
-    onto the wrong lines. Adds B / P / ! lines to the summary.
+    onto the wrong lines. Adds B / P / ! lines to the summary, and keeps the
+    reasons of each line given a status (line_reasons).
     Returns False (and changes nothing) when the payload doesn't line up.
     """
     entries = payload.get('lines') if isinstance(payload, dict) else None
@@ -1780,6 +1783,9 @@ def apply_analysis_statuses(result, content, payload):
             paint = _STATUS_PAINT.get(status, '')
         line.status = status
         line.paint = paint
+        reasons = entry.get('reasons')
+        if isinstance(reasons, list):
+            line.reasons = tuple(reason for reason in reasons if isinstance(reason, str) and reason)
         severity = _STATUS_SUMMARY_SEVERITY.get(status)
         if severity:
             items.append(SummaryItem(no, severity, text, status=status, tokens=line.tokens))
@@ -2012,6 +2018,25 @@ def compute_tool_stats(log_type, content):
                 registry += 1
         return [_chip('files', files, 'i'), _chip('folders', folders, 'i'), _chip('reg', registry, 'i')]
     return []
+
+
+def line_reasons(result):
+    """The rule reasons of the lines apply_analysis_statuses gave a status,
+    for the log page's line tooltips: {texts: [reason], lines: {line no:
+    [index into texts]}}, each reason once (many lines share one). {} when
+    no line has any."""
+    texts, index, lines = [], {}, {}
+    for line in iter_lines(result):
+        if not line.reasons:
+            continue
+        positions = []
+        for reason in line.reasons:
+            if reason not in index:
+                index[reason] = len(texts)
+                texts.append(reason)
+            positions.append(index[reason])
+        lines[str(line.no)] = positions
+    return {'texts': texts, 'lines': lines} if lines else {}
 
 
 def iter_lines(result):

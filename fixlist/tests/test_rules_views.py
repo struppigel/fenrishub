@@ -936,3 +936,8 @@ class RulesViewTests(TestCase):
     def test_add_rule_link_visible_on_all_tab(self):
         response = self.client.get(reverse("rules") + "?filter=all")
         self.assertContains(response, reverse("add_rule"))
+
+    def test_add_fact_link_left_of_add_rule(self):
+        html = self.client.get(reverse("rules")).content.decode()
+        fact = html.index(f'<a href="{reverse("fact_add")}">add fact</a>')
+        self.assertLess(fact, html.index(f'<a href="{reverse("add_rule")}">add rule</a>'))

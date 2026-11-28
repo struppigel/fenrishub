@@ -481,9 +481,11 @@ def add_self_link_context(uploaded_log, context):
     `self_lines` {line no: code} (status letter, 'm' for a neutral marker, ''
     for links from the hover icons only), `self_url`, which gives one line's
     entries when its info box opens (all of them would be too big for the
-    page), and `self_lookup` [line no]: lines whose linked FILES hashes have
-    no centralbox report yet (their icon offers a lookup). Never raises; the
-    context unchanged for other logs."""
+    page), `self_hash_lines` [line no]: lines with code '' that link to their
+    own file's FILES hash (SelfLinks.hash_lines; marked anyway, so the hash
+    shows without hovering), and `self_lookup` [line no]: lines whose linked
+    FILES hashes have no centralbox report yet (their icon offers a lookup).
+    Never raises; the context unchanged for other logs."""
     if uploaded_log.log_type != LOG_TYPE_SPOR:
         return context
     try:
@@ -498,6 +500,9 @@ def add_self_link_context(uploaded_log, context):
                 **_lookup_context(), 'lines': {},
             }
         context['self_lines'] = links.codes
+        context['self_hash_lines'] = sorted(
+            (no for no in links.hash_lines() if not links.codes.get(no)), key=int,
+        )
         context['self_url'] = f"{reverse('spor_self_links_api')}?upload_id={uploaded_log.upload_id}"
         if context.get('can_lookup'):
             context['self_lookup'] = _self_lookup_lines(links.linked_hashes())

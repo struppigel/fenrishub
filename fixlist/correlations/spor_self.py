@@ -144,7 +144,8 @@ class SelfLinks:
     """The links of one Spor log. `codes` ({line no (str): code}) is what the
     log page needs up front: the line's status letter (B / P / !), 'm' for a
     neutral marker (the line or a linked line is notable), '' for a line whose
-    links show from its hover icons only. `entries(no)` gives one line's
+    links show from its hover icons only (the log page still marks the ones
+    in hash_lines). `entries(no)` gives one line's
     entries (the info box asks for them when it opens): a big log links
     thousands of lines, too much to put into its page."""
 
@@ -174,6 +175,18 @@ class SelfLinks:
             if hashes:
                 found[str(no)] = hashes
         return found
+
+    def hash_lines(self):
+        """[line no (str)] of the lines linked to the FILES line of their own
+        file (or of a copy: the links that may rate, _rates) with a hash: the
+        log page gives them a marker even when nothing about them is notable,
+        so a "loaded:" line shows that its file's hash is known and can be
+        looked up. Not through a host, a loaded file, a detail or a folder."""
+        return [
+            str(no) for no, collector in self._links.items()
+            if any(entry.get('kind') == 'file_info' and (entry.get('sha256') or entry.get('md5'))
+                   and _rates(entry, extra) for entry, extra in collector.links)
+        ]
 
     def as_dict(self):
         """{line no (str): [entry]} of every linked line."""
