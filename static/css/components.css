@@ -259,18 +259,42 @@ button.action-btn.delete-btn {
     border: 1px solid var(--la-border-muted);
 }
 
-.rule-details .rule-details-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
+.rule-details .rule-details-text {
+    color: var(--la-text-neutral);
 }
 
-.rule-details dd > span + span::before {
+.rule-details .rule-details-options {
+    color: var(--la-caution);
+}
+
+.rule-details .rule-details-options > span + span::before {
     content: ", ";
 }
 
-.rule-details .rule-details-muted {
+/* Log type names in their badge colour (base.html), without a badge. */
+.log-type-text {
+    color: var(--la-log-type-default);
+}
+
+.rule-details .rule-details-enabled,
+.rule-details .rule-details-require {
+    color: var(--la-success-text);
+}
+
+.rule-details .rule-details-forbid {
+    color: var(--la-error-text);
+}
+
+.rule-details .rule-details-owner {
+    color: var(--la-info);
+}
+
+.rule-details .rule-details-dates {
     color: var(--la-text-muted);
+}
+
+.rule-details a.tag-text {
+    text-decoration: none;
 }
 
 .rule-details strong {

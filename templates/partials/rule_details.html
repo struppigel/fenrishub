@@ -10,18 +10,18 @@ fact), so they are not repeated here. Unset fields are left out. Expects
     <dt>pattern</dt><dd><pre class="rule-details-pre">{{ rule.source_text }}</pre></dd>
     {% if rule.description %}<dt>description</dt><dd class="rule-details-text">{{ rule.description|linked_text }}</dd>{% endif %}
     {% if not rule.is_fact_rule %}{% with tags=rule.tags.all %}{% if tags %}
-    <dt>tags</dt><dd class="rule-details-tags">{% for tag in tags %}<a class="tag-chip{{ tag|tag_category_class }}" href="?filter=all&amp;tags={{ tag.pk }}" title="{{ tag.description }}">{{ tag.name }}</a> {% endfor %}</dd>
+    <dt>tags</dt><dd>{% for tag in tags %}<a class="tag-text{{ tag|tag_category_class }}" href="?filter=all&amp;tags={{ tag.pk }}" title="{{ tag.description }}">{{ tag.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</dd>
     {% endif %}{% endwith %}
     {% for condition in rule.conditions.all %}
-    <dt>{{ condition.get_polarity_display }}</dt><dd><a href="{% url 'fact_edit' condition.fact_id %}">{{ condition.fact.name }}</a> {{ condition.get_scope_display }}</dd>
+    <dt class="rule-details-{{ condition.polarity }}">{{ condition.get_polarity_display }}</dt><dd><a href="{% url 'fact_edit' condition.fact_id %}">{{ condition.fact.name }}</a> {{ condition.get_scope_display }}</dd>
     {% endfor %}{% endif %}
     {% if rule.is_fact_rule %}<dt>kind</dt><dd>fact rule: records its fact, sets no status</dd>{% endif %}
     {% if rule.whole_log or not rule.is_fact_rule and rule.is_block_rule or not rule.is_fact_rule and rule.shows_whole_line_badge or not rule.is_fact_rule and rule.has_default_priority %}
-    <dt>options</dt><dd>{% if rule.whole_log %}<span>whole log</span>{% endif %}{% if not rule.is_fact_rule %}{% if rule.is_block_rule %}<span>block rule</span>{% endif %}{% if rule.shows_whole_line_badge %}<span>whole line colour</span>{% endif %}{% if rule.has_default_priority %}<span>default priority</span>{% endif %}{% endif %}</dd>
+    <dt>options</dt><dd class="rule-details-options">{% if rule.whole_log %}<span>whole log</span>{% endif %}{% if not rule.is_fact_rule %}{% if rule.is_block_rule %}<span>block rule</span>{% endif %}{% if rule.shows_whole_line_badge %}<span>whole line colour</span>{% endif %}{% if rule.has_default_priority %}<span>default priority</span>{% endif %}{% endif %}</dd>
     {% endif %}
-    <dt>log types</dt><dd>{{ rule.log_scope_label }}{% if rule.only_entry_types %}, only lines parsed as {{ rule.only_entry_types|join:", " }}{% endif %}</dd>
-    <dt>state</dt><dd>{% if rule.is_enabled %}enabled{% else %}<strong>disabled</strong>{% endif %}</dd>
-    <dt>owner</dt><dd>{{ rule.owner.username }}</dd>
+    <dt>log types</dt><dd>{% if rule.all_log_types %}<span class="log-type-text">all logs</span>{% else %}{% for name in rule.log_types %}<span class="log-type-text log-type-{{ name|log_type_css_slug }}">{{ name }}</span>{% if not forloop.last %}, {% endif %}{% empty %}no logs{% endfor %}{% endif %}{% if rule.only_entry_types %}, only lines parsed as <span class="parsed-entry-type">{{ rule.only_entry_types|join:", " }}</span>{% endif %}</dd>
+    <dt>state</dt><dd>{% if rule.is_enabled %}<span class="rule-details-enabled">enabled</span>{% else %}<strong>disabled</strong>{% endif %}</dd>
+    <dt>owner</dt><dd class="rule-details-owner">{{ rule.owner.username }}</dd>
     {% if rule.entry_type %}<dt>entry type</dt><dd class="parsed-entry-type">{{ rule.entry_type }}</dd>{% endif %}
     {% if rule.clsid %}<dt>clsid</dt><dd class="parsed-clsid">{{ rule.clsid }}</dd>{% endif %}
     {% if rule.name %}<dt>name</dt><dd class="parsed-name">{{ rule.name }}</dd>{% endif %}
@@ -33,7 +33,7 @@ fact), so they are not repeated here. Unset fields are left out. Expects
     {% if rule.attributes %}<dt>attributes</dt><dd>{{ rule.attributes }}</dd>{% endif %}
     {% if rule.file_not_signed %}<dt>signature</dt><dd>file not signed</dd>{% endif %}
     {% if rule.is_hidden %}<dt>hidden</dt><dd>yes</dd>{% endif %}
-    <dt>dates</dt><dd>created {{ rule.created_at|date:"Y-m-d H:i" }}{% if rule.updated_at|date:"Y-m-d H:i" != rule.created_at|date:"Y-m-d H:i" %} <span class="rule-details-muted">&middot;</span> updated {{ rule.updated_at|date:"Y-m-d H:i" }}{% endif %}</dd>
+    <dt>dates</dt><dd class="rule-details-dates">created {{ rule.created_at|date:"Y-m-d H:i" }}{% if rule.updated_at|date:"Y-m-d H:i" != rule.created_at|date:"Y-m-d H:i" %} &middot; updated {{ rule.updated_at|date:"Y-m-d H:i" }}{% endif %}</dd>
     {% if rule.owner_id == request.user.id or request.user.is_superuser %}
     <dt></dt><dd class="rule-details-actions">{% if rule.is_fact_rule %}<a href="{% url 'edit_fact_rule' rule.pk %}">edit</a>{% else %}<a href="{% url 'edit_rule' rule.pk %}?return_q={{ current_query_string|urlencode }}">edit</a>{% endif %}</dd>
     {% endif %}

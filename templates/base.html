@@ -742,6 +742,7 @@
     <style id="log-type-badge-colors">
     {% for badge in log_type_badges %}.upload-id-link.log-type-{{ badge.slug }} { color: {{ badge.color }} !important; }
     .timeline-type-badge.log.log-type-{{ badge.slug }} { color: {{ badge.color }}; border-color: {{ badge.color }}; }
+    .log-type-text.log-type-{{ badge.slug }} { color: {{ badge.color }}; }
     {% endfor %}
     </style>
     <style id="tag-category-colors">

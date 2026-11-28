@@ -618,14 +618,18 @@ class RulesViewTests(TestCase):
         self.assertIn(f'data-details-id="rule-details-{rule.pk}"', content)
         details = self._details(content, f"rule-details-{rule.pk}")
         for expected in (
-            "<dd>enabled</dd>", "<dd>alice</dd>",
-            f"<dd>{rule.log_scope_label}, only lines parsed as service</dd>",
+            '<span class="rule-details-enabled">enabled</span>', '<dd class="rule-details-owner">alice</dd>',
+            '<dd><span class="log-type-text log-type-frst">FRST</span>, only lines parsed as '
+            '<span class="parsed-entry-type">service</span></dd>',
+            f'<a class="tag-text tag-cat-{tag.category_id}" href="?filter=all&amp;tags={tag.pk}"',
             "R1 VendorSvc; C:\Vendor\svc.exe", "Vendor bundler\nsecond line",
             ">service<", ">VendorSvc<", ">C:\Vendor\svc.exe<", ">svc.exe<", ">Vendor Ltd<", ">--quiet<",
             "file not signed", "VendorFamily", reverse("edit_rule", args=[rule.pk]),
         ):
             self.assertIn(expected, details)
         # The dialog's title already names these; the details do not repeat them.
+        # Tags as coloured text, not chips.
+        self.assertNotIn("tag-chip", details)
         # Where the rule came from is left out.
         self.assertNotIn("forum import", details)
         for repeated in ("Potentially unwanted", ">p12<", ">Parsed<", f"#{rule.pk}<"):
@@ -645,6 +649,25 @@ class RulesViewTests(TestCase):
         # Unset optional fields are left out.
         for absent in ("description", "tags", "entry type", "company", "signature"):
             self.assertNotIn(f"<dt>{absent}</dt>", details)
+
+    def test_view_dialog_colours_log_types_without_badges(self):
+        from ..models import LogTypeBadge
+
+        LogTypeBadge.objects.update_or_create(name="Spor", defaults={"color": "#123abc"})
+        every = ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="substring", source_text="a", all_log_types=True,
+        )
+        some = ClassificationRule.objects.create(
+            owner=self.user, status="B", match_type="substring", source_text="b", log_types=["FRST", "Spor"],
+        )
+        content = self.client.get(reverse("rules")).content.decode()
+        self.assertIn(".log-type-text.log-type-spor { color: #123abc; }", content)
+        self.assertIn('<dd><span class="log-type-text">all logs</span></dd>', self._details(content, f"rule-details-{every.pk}"))
+        self.assertIn(
+            '<dd><span class="log-type-text log-type-frst">FRST</span>, '
+            '<span class="log-type-text log-type-spor">Spor</span></dd>',
+            self._details(content, f"rule-details-{some.pk}"),
+        )
 
     def test_view_dialog_links_urls_in_the_description(self):
         rule = ClassificationRule.objects.create(
@@ -679,11 +702,11 @@ class RulesViewTests(TestCase):
         set_rule_conditions(rule, specs)
         details = self._details(self.client.get(reverse("rules")).content.decode(), f"rule-details-{rule.pk}")
         self.assertIn(
-            f'<dt>require</dt><dd><a href="{reverse("fact_edit", args=[installed.pk])}">Kaspersky installed</a> anywhere in the log</dd>',
+            f'<dt class="rule-details-require">require</dt><dd><a href="{reverse("fact_edit", args=[installed.pk])}">Kaspersky installed</a> anywhere in the log</dd>',
             details,
         )
         self.assertIn(
-            f'<dt>forbid</dt><dd><a href="{reverse("fact_edit", args=[fake.pk])}">Fake AV seen</a> in the same block</dd>',
+            f'<dt class="rule-details-forbid">forbid</dt><dd><a href="{reverse("fact_edit", args=[fake.pk])}">Fake AV seen</a> in the same block</dd>',
             details,
         )
 
@@ -713,7 +736,7 @@ class RulesViewTests(TestCase):
         content = self.client.get(reverse("rules") + "?filter=others").content.decode()
         details = self._details(content, f"rule-details-{rule.pk}")
         self.assertIn("bob-line", details)
-        self.assertIn("<dd>bob</dd>", details)
+        self.assertIn('<dd class="rule-details-owner">bob</dd>', details)
         self.assertNotIn("rule-details-actions", details)
 
     def test_view_dialog_details_do_not_query_per_rule(self):
