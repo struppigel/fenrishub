@@ -8,30 +8,47 @@
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/rule_tags.css' %}">
 <style>
+    /* Search and filters on the left in two rows, the page's buttons on the
+       right with "new tag" last. Below the width that fits both, the buttons
+       wrap under the filters, so nothing hangs past the page. */
     .tags-toolbar {
         display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: flex-start;
         gap: 8px;
         margin-bottom: 10px;
-        align-items: center;
     }
 
-    .tags-toolbar input[type="text"] {
-        /* Gives way first, so the buttons stay on one row as long as possible. */
-        flex: 0 1 240px;
+    .tags-filters {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .tags-filter-row,
+    .tags-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .tags-actions {
+        justify-content: flex-end;
+    }
+
+    /* The search box fills its row, as wide as the selects under it. */
+    .tags-filter-row input[type="text"] {
+        flex: 1 1 120px;
         min-width: 120px;
         width: auto;
         padding: 4px 8px;
     }
 
-    /* Keep every button one line tall: squeezed labels wrapped and made some
-       buttons taller than the rest. The search box shrinks instead. */
     .tags-toolbar button {
         white-space: nowrap;
-    }
-
-    .tags-toolbar > a,
-    .tags-toolbar > button {
-        flex-shrink: 0;
     }
 
     .tags-toolbar .search-filter-clear {
@@ -54,48 +71,44 @@
     .tag-pending {
         color: var(--la-caution);
     }
-
-    /* Below this the controls no longer fit on one row, even with the search box shrunk. */
-    @media (max-width: 1000px) {
-        .tags-toolbar {
-            flex-wrap: wrap;
-        }
-    }
-
-    /* Phone width: the search box takes a row of its own. */
-    @media (max-width: 640px) {
-
-        .tags-toolbar input[type="text"] {
-            width: 100%;
-        }
-
-    }
 </style>
 {% endblock %}
 
 {% block content %}
 <div>
     <form method="get" action="{% url 'rule_tags' %}" class="tags-toolbar">
-        <input type="text" name="q" value="{{ search_query }}" placeholder="search name, notes" aria-label="search tags" class="search-filter-input">
-        <select name="category" onchange="this.form.submit()" class="search-filter-select" aria-label="filter by category">
-            <option value="">all categories</option>
-            {% for category in categories %}
-            <option value="{{ category.pk }}" {% if category_filter == category.pk|stringformat:"d" %}selected{% endif %}>{{ category.name }}</option>
-            {% endfor %}
-        </select>
-        <select name="usage" onchange="this.form.submit()" class="search-filter-select" aria-label="filter by usage">
-            <option value="">all tags</option>
-            {% for value, label in usage_choices %}
-            <option value="{{ value }}" {% if usage_filter == value %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-        </select>
-        <button type="submit">search</button>
-        {% if has_filters %}<a href="{% url 'rule_tags' %}" class="search-filter-clear">clear</a>{% endif %}
-        <span style="flex: 1;"></span>
-        {% if has_line_tags %}<button type="submit" form="recomputeLineTagsForm" title="recompute log tags: match every tag that also matches log lines against all analyzed logs again, stats included" onclick="return confirm('Recompute the log line tags of all logs? This runs in the background.');">recompute</button>{% endif %}
-        <a href="{% url 'tag_categories' %}"><button type="button" title="name categories and give their tags a color">categories</button></a>
-        <a href="{% url 'rule_tag_centralbox_names' %}"><button type="button" title="centralbox families and malware types no tag covers yet">centralbox</button></a>
-        <a href="{% url 'rule_tag_add' %}"><button type="button">new tag</button></a>
+        <div class="tags-filters">
+            <div class="tags-filter-row">
+                <input type="text" name="q" value="{{ search_query }}" placeholder="search name, notes" aria-label="search tags" class="search-filter-input">
+                <button type="submit">search</button>
+                {% if has_filters %}<a href="{% url 'rule_tags' %}" class="search-filter-clear">clear</a>{% endif %}
+            </div>
+            <div class="tags-filter-row">
+                <select name="category" onchange="this.form.submit()" class="search-filter-select" aria-label="filter by category">
+                    <option value="">all categories</option>
+                    {% for category in categories %}
+                    <option value="{{ category.pk }}" {% if category_filter == category.pk|stringformat:"d" %}selected{% endif %}>{{ category.name }}</option>
+                    {% endfor %}
+                </select>
+                <select name="usage" onchange="this.form.submit()" class="search-filter-select" aria-label="filter by usage">
+                    <option value="">all tags</option>
+                    {% for value, label in usage_choices %}
+                    <option value="{{ value }}" {% if usage_filter == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <select name="sort" onchange="this.form.submit()" class="search-filter-select" aria-label="sort tags">
+                    {% for value, label in sort_choices %}
+                    <option value="{{ value }}" {% if sort == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="tags-actions">
+            {% if has_line_tags %}<button type="submit" form="recomputeLineTagsForm" title="recompute log tags: match every tag that also matches log lines against all analyzed logs again, stats included" onclick="return confirm('Recompute the log line tags of all logs? This runs in the background.');">recompute</button>{% endif %}
+            <a href="{% url 'tag_categories' %}"><button type="button" title="name categories and give their tags a color">categories</button></a>
+            <a href="{% url 'rule_tag_centralbox_names' %}"><button type="button" title="centralbox families and malware types no tag covers yet">centralbox</button></a>
+            <a href="{% url 'rule_tag_add' %}"><button type="button">new tag</button></a>
+        </div>
     </form>
     {% if has_line_tags %}
     <form method="post" id="recomputeLineTagsForm" hidden>
@@ -111,7 +124,7 @@
         <div class="tag-row">
             <div class="tag-row-header">
                 <span>
-                    <span class="tag-chip tag-row-name{{ tag|tag_category_class }}">{{ tag.name }}</span>
+                    <a href="?category={{ tag.category_id }}{{ category_link_suffix }}" class="tag-chip tag-row-name{{ tag|tag_category_class }}" title="show only tags in the category {{ tag.category.name }}">{{ tag.name }}</a>
                     <span class="tag-row-meta">
                         {% if tag.builtin_code %}- <span title="also found in a log when the analyzer raises this warning">built-in: <code>{{ tag.builtin_code }}</code></span>{% endif %}
                         - <a href="{% url 'rules' %}?filter=all&amp;tags={{ tag.pk }}">{{ tag.rule_count }} rule{{ tag.rule_count|pluralize }}</a>,

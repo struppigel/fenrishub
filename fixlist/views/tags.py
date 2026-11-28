@@ -62,6 +62,15 @@ TAG_USAGE_FILTERS = {
     'no_rules': ('without rules', {'rule_count': 0}),
 }
 
+# ?sort= on the tag list: {value: (label, order_by with pk breaking ties)}.
+TAG_SORTS = {
+    'edited': ('latest edited first', ('-updated_at', '-pk')),
+    'oldest': ('oldest edited first', ('updated_at', 'pk')),
+    'name': ('name A-Z', (Lower('name').asc(), 'pk')),
+    'name_desc': ('name Z-A', (Lower('name').desc(), '-pk')),
+}
+DEFAULT_TAG_SORT = 'edited'
+
 
 def _id_list(payload, field):
     value = payload.get(field, [])
@@ -118,6 +127,11 @@ def rule_tags_view(request):
     usage_filter = request.GET.get('usage', '').strip()
     if usage_filter not in TAG_USAGE_FILTERS:
         usage_filter = ''
+    sort = request.GET.get('sort', '').strip()
+    if sort not in TAG_SORTS:
+        sort = DEFAULT_TAG_SORT
+    # The default stays out of the links, so the plain page keeps a clean URL.
+    sort_param = '' if sort == DEFAULT_TAG_SORT else sort
 
     has_any_tags = RuleTag.objects.exists()
     tags_qs = RuleTag.objects.annotate(
@@ -135,7 +149,7 @@ def rule_tags_view(request):
         tags_qs = tags_qs.filter(category_id=int(category_filter))
     if usage_filter:
         tags_qs = tags_qs.filter(**TAG_USAGE_FILTERS[usage_filter][1])
-    tags_qs = tags_qs.order_by(Lower('name'), 'pk')
+    tags_qs = tags_qs.order_by(*TAG_SORTS[sort][1])
 
     page_obj = Paginator(tags_qs, TAGS_PER_PAGE).get_page(request.GET.get('page'))
     # The pending/unmatched counts run every tag's conditions over every
@@ -149,6 +163,7 @@ def rule_tags_view(request):
         q=search_query,
         category=category_filter,
         usage=usage_filter,
+        sort=sort_param,
     )
 
     return render(request, 'tags.html', {
@@ -161,6 +176,10 @@ def rule_tags_view(request):
         'usage_filter': usage_filter,
         'categories': TagCategory.objects.order_by(Lower('name')),
         'usage_choices': [(key, label) for key, (label, _filter) in TAG_USAGE_FILTERS.items()],
+        'sort': sort,
+        'sort_choices': [(key, label) for key, (label, _order_by) in TAG_SORTS.items()],
+        # A tag chip lists its category's tags, keeping the chosen sort only.
+        'category_link_suffix': f'&{urlencode({"sort": sort_param})}' if sort_param else '',
         'pagination_query': urlencode(pagination_params),
         'has_filters': bool(pagination_params),
         'current_query_string': request.GET.urlencode(),

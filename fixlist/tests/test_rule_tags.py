@@ -868,18 +868,18 @@ class RuleTagListFilterTests(TestCase):
     def test_twelve_tags_per_page_and_the_links_keep_the_filters(self):
         for index in range(15):
             RuleTag.objects.create(name=f'page tag {index:02d}', category=self.malware)
-        params = {'q': 'page tag', 'category': self.malware.pk}
+        params = {'q': 'page tag', 'category': self.malware.pk, 'sort': 'name'}
         first = self.client.get(reverse('rule_tags'), params)
         self.assertEqual(len(first.context['tags']), 12)
         self.assertEqual(first.context['page_obj'].paginator.count, 15)
-        self.assertContains(first, f'page=2&amp;q=page+tag&amp;category={self.malware.pk}')
+        self.assertContains(first, f'page=2&amp;q=page+tag&amp;category={self.malware.pk}&amp;sort=name')
         second = self.names({**params, 'page': 2})
         self.assertEqual(second, ['page tag 12', 'page tag 13', 'page tag 14'])
 
     def test_names_are_sorted_ignoring_case(self):
         RuleTag.objects.create(name='Zeta')
         RuleTag.objects.create(name='alpha')
-        names = self.names({'usage': 'unused', 'q': 'a'})
+        names = self.names({'usage': 'unused', 'q': 'a', 'sort': 'name'})
         self.assertLess(names.index('alpha'), names.index('Zeta'))
 
     def test_pending_counts_are_right_on_later_pages(self):
@@ -887,9 +887,58 @@ class RuleTagListFilterTests(TestCase):
             RuleTag.objects.create(name=f'aa filler {index:02d}')
         RuleTag.objects.create(name='zz renpy', match_pattern='renpy')
         # Sorted by name, the 13 fillers push "zz renpy" onto page 2.
-        response = self.client.get(reverse('rule_tags'), {'page': 2})
+        response = self.client.get(reverse('rule_tags'), {'page': 2, 'sort': 'name'})
         tags = {tag.name: tag for tag in response.context['tags']}
         self.assertEqual(tags['zz renpy'].pending_count, 1)
+
+    def edited_in_order(self, *tags):
+        """Give `tags` increasing updated_at stamps, oldest first."""
+        from datetime import timedelta
+        from django.utils import timezone
+        start = timezone.now() - timedelta(days=1)
+        for index, tag in enumerate(tags):
+            RuleTag.objects.filter(pk=tag.pk).update(updated_at=start + timedelta(minutes=index))
+
+    def own_names(self, params=None):
+        """names(), without the built-in tags the migrations create."""
+        return [name for name in self.names(params) if name in {'adware', 'renloader', 'Zeta'}]
+
+    def test_latest_edited_first_by_default(self):
+        # Edited after "renloader", though "adware" sorts first by name.
+        self.edited_in_order(self.adware, self.ren)
+        self.assertEqual(self.own_names(), ['renloader', 'adware'])
+        self.assertEqual(self.own_names({'sort': 'oldest'}), ['adware', 'renloader'])
+
+    def test_name_sort_both_directions(self):
+        RuleTag.objects.create(name='Zeta')
+        self.edited_in_order(*RuleTag.objects.order_by('-name'))
+        self.assertEqual(self.own_names({'sort': 'name'}), ['adware', 'renloader', 'Zeta'])
+        self.assertEqual(self.own_names({'sort': 'name_desc'}), ['Zeta', 'renloader', 'adware'])
+
+    def test_an_unknown_sort_falls_back_to_latest_edited(self):
+        self.edited_in_order(self.adware, self.ren)
+        self.assertEqual(self.own_names({'sort': 'bogus'}), ['renloader', 'adware'])
+
+    def test_the_sort_box_offers_both_directions(self):
+        response = self.client.get(reverse('rule_tags'), {'sort': 'name_desc'})
+        for label in ('latest edited first', 'oldest edited first', 'name A-Z'):
+            self.assertContains(response, f'>{label}</option>')
+        self.assertContains(response, '<option value="name_desc" selected>name Z-A</option>')
+
+    def test_a_tag_chip_lists_the_tags_of_its_category(self):
+        response = self.client.get(reverse('rule_tags'), {'q': 'adware', 'usage': 'no_rules'})
+        self.assertContains(response, f'href="?category={self.adware.category_id}"')
+        response = self.client.get(reverse('rule_tags'), {'q': 'ren', 'sort': 'name_desc'})
+        # The chip keeps a chosen sort but not the search.
+        self.assertContains(response, f'href="?category={self.malware.pk}&amp;sort=name_desc"')
+        self.assertEqual(self.names({'category': self.malware.pk}), ['renloader'])
+
+    def test_default_sort_stays_out_of_the_page_links(self):
+        for index in range(13):
+            RuleTag.objects.create(name=f'filler {index:02d}')
+        response = self.client.get(reverse('rule_tags'), {'sort': 'edited'})
+        self.assertContains(response, 'href="?page=2"')
+        self.assertFalse(response.context['has_filters'])
 
     def test_delete_returns_to_the_filtered_page(self):
         response = self.client.post(reverse('rule_tags'), {
